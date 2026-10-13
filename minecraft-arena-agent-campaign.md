@@ -317,8 +317,9 @@ Append one line per execution judgment that a reader would otherwise miss: date,
 - 2026-10-12 — P1: admit parse-only `toml_edit`, `serde`, `serde_json`, and `sha2` for source-aware TOML validation, strict JSON evidence, and SHA-256 identity/checksums; all versions were already locked, so the graph adds no package versions; record release-size and startup budgets for P3 because this offline slice forbids release builds.
 - 2026-10-12 — F0: check in the generated Gradle 9.6.1 wrapper, pin its JAR hash in `versions.lock.toml`, and verify its URL and distribution checksum against that authority before use; require strict dependency verification with the committed lock and metadata.
 - 2026-10-12 — P0: reserve the live stack smoke for one lane after the wrapper build and all offline P1 slices finish; keep other builds idle while the server is running.
-- 2026-10-13 — P0: use Azalea's dedicated tick broadcaster after buffered client ticks let the smoke exit before its attack reached Paper; the rerun passed every stack marker and wrong-protocol control.
-- 2026-10-13 — P1: stage the resolved map plan before Paper starts so its generator can read it during world loading; reserve control frames for scenario rules and roster metadata. Admit JUnit Jupiter 6.1.3 for named Java tests as test-only dependencies.
+- 2026-10-12 — P0: use Azalea's dedicated tick broadcaster after buffered client ticks let the smoke exit before its attack reached Paper; the rerun passed every stack marker and wrong-protocol control.
+- 2026-10-12 — P1: stage the resolved map plan before Paper starts so its generator can read it during world loading; reserve control frames for scenario rules and roster metadata. Admit JUnit Jupiter 6.1.3 for named Java tests as test-only dependencies.
+- 2026-10-12 — P1: cap each chest inventory at 27 one-item entries in the map and resolved-plan contracts because one entry occupies one of the chest's 27 slots; the Rust compiler owns the limit and a drift test checks both schemas and the user-facing docs.
 
 ## 9. Campaign log
 

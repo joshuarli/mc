@@ -1,0 +1,24 @@
+{
+  "schema": 1,
+  "run_id": "fixture-run",
+  "map_semantic_id": "94f1cf73fef47c767b574477350ee7ce59f139e4a680464d88f99c1a25b2eedb",
+  "dimensions": { "width": 4, "depth": 4, "min_y": 0, "max_y": 3 },
+  "blocks": [
+    { "position": { "x": 0, "y": 0, "z": 0 }, "block": "minecraft:stone" },
+    { "position": { "x": 0, "y": 0, "z": 1 }, "block": "minecraft:stone" },
+    { "position": { "x": 0, "y": 0, "z": 2 }, "block": "minecraft:stone" },
+    { "position": { "x": 1, "y": 0, "z": 0 }, "block": "minecraft:stone" },
+    { "position": { "x": 1, "y": 0, "z": 1 }, "block": "minecraft:stone" },
+    { "position": { "x": 1, "y": 0, "z": 2 }, "block": "minecraft:stone" },
+    { "position": { "x": 2, "y": 0, "z": 0 }, "block": "minecraft:stone" },
+    { "position": { "x": 2, "y": 0, "z": 1 }, "block": "minecraft:stone" },
+    { "position": { "x": 2, "y": 0, "z": 2 }, "block": "minecraft:stone" },
+    { "position": { "x": 2, "y": 1, "z": 2 }, "block": "minecraft:chest" }
+  ],
+  "spawns": [
+    { "seat": 0, "position": { "x": 0, "y": 1, "z": 0 } }
+  ],
+  "loot_containers": [
+    { "position": { "x": 2, "y": 1, "z": 2 }, "inventory": ["minecraft:apple"] }
+  ]
+}

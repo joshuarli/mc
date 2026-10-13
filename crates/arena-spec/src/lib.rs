@@ -23,6 +23,9 @@ mod tests {
     const DUEL_MAP: &str = include_str!("../../../maps/duel.toml");
     const UNKNOWN_OPERATION: &str = include_str!("../../../fixtures/spec/unknown-operation.toml");
     const UNKNOWN_FIELD: &str = include_str!("../../../fixtures/spec/unknown-field.toml");
+    const MAP_SCHEMA: &str = include_str!("../../../schemas/map.schema.json");
+    const WORLD_PLAN_SCHEMA: &str = include_str!("../../../schemas/world-plan.schema.json");
+    const SCENARIOS_DOC: &str = include_str!("../../../docs/scenarios.md");
 
     #[test]
     fn scenario_v1_compiles_hunger_six_and_duel() {
@@ -119,6 +122,40 @@ max_y = 8
         let error = compile_map(&overflow).expect_err("unsupported coordinate range is rejected");
         assert_eq!(error.kind(), SpecErrorKind::Range);
         assert_eq!(error.path(), "map.dimensions.width");
+    }
+
+    #[test]
+    fn chest_inventory_limit_matches_cross_language_contracts() {
+        let max_items = super::map::MAX_LOOT_INVENTORY_ITEMS;
+        let inventory = std::iter::repeat_n("\"minecraft:bread\"", max_items)
+            .collect::<Vec<_>>()
+            .join(", ");
+        let source = HUNGER_MAP.replacen(
+            "inventory = [\"minecraft:bread\", \"minecraft:stone_sword\"]",
+            &format!("inventory = [{inventory}]"),
+            1,
+        );
+        assert!(compile_map(&source).is_ok(), "all 27 chest slots can be populated");
+
+        let over_limit = std::iter::repeat_n("\"minecraft:bread\"", max_items + 1)
+            .collect::<Vec<_>>()
+            .join(", ");
+        let source = HUNGER_MAP.replacen(
+            "inventory = [\"minecraft:bread\", \"minecraft:stone_sword\"]",
+            &format!("inventory = [{over_limit}]"),
+            1,
+        );
+        let error = compile_map(&source).expect_err("a chest cannot exceed its slot count");
+        assert_eq!(error.kind(), SpecErrorKind::ResourceLimit);
+        assert_eq!(error.path(), "map.operations[17].inventory");
+
+        let schema_limit = format!("\"maxItems\": {max_items}");
+        let schema_minimum = "\"minItems\": 1";
+        assert!(MAP_SCHEMA.contains(&schema_limit));
+        assert!(MAP_SCHEMA.contains(schema_minimum));
+        assert!(WORLD_PLAN_SCHEMA.contains(&schema_limit));
+        assert!(WORLD_PLAN_SCHEMA.contains(schema_minimum));
+        assert!(SCENARIOS_DOC.contains(&format!("Loot lists contain 1–{max_items} items")));
     }
 
     #[test]

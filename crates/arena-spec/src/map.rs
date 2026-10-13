@@ -5,6 +5,7 @@ use crate::{error::{SpecError, SpecErrorKind}, hash::{CanonicalHasher, SemanticI
 
 const MAX_BLOCK_WRITES: u64 = 1_000_000;
 const MAX_OPERATIONS: usize = 100_000;
+pub(super) const MAX_LOOT_INVENTORY_ITEMS: usize = 27;
 
 /// Inclusive vertical and horizontal bounds for a compiled map.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -238,6 +239,13 @@ pub fn compile_map(source: &str) -> Result<MapIr, SpecError> {
                 raw::check_fields(operation, &["kind", "position", "inventory"], &["kind", "position", "inventory"], &path)?;
                 let position = parse_position(raw::field(operation, "position", &path)?, &format!("{path}.position"), dimensions)?;
                 let inventory_values = raw::as_array(raw::field(operation, "inventory", &path)?, &format!("{path}.inventory"))?;
+                if inventory_values.len() > MAX_LOOT_INVENTORY_ITEMS {
+                    return Err(SpecError::new(
+                        SpecErrorKind::ResourceLimit,
+                        format!("{path}.inventory"),
+                        format!("a chest inventory can contain at most {MAX_LOOT_INVENTORY_ITEMS} items"),
+                    ));
+                }
                 let mut inventory = Vec::with_capacity(inventory_values.len());
                 for (item_index, value) in inventory_values.iter().enumerate() {
                     inventory.push(parse_resource_id(value, &format!("{path}.inventory[{item_index}]"))?);

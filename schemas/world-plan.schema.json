@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://arena.invalid/schemas/world-plan-v1.schema.json",
+  "title": "Arena resolved world plan version 1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "run_id", "map_semantic_id", "dimensions", "blocks", "spawns", "loot_containers"],
+  "properties": {
+    "schema": { "const": 1 },
+    "run_id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$" },
+    "map_semantic_id": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "dimensions": { "$ref": "#/$defs/dimensions" },
+    "blocks": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1000000,
+      "items": { "$ref": "#/$defs/block" }
+    },
+    "spawns": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 6,
+      "items": { "$ref": "#/$defs/spawn" }
+    },
+    "loot_containers": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 100000,
+      "items": { "$ref": "#/$defs/loot_container" }
+    }
+  },
+  "$defs": {
+    "position": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y", "z"],
+      "properties": {
+        "x": { "type": "integer", "minimum": 0, "maximum": 2147483647 },
+        "y": { "type": "integer", "minimum": -2147483648, "maximum": 2147483647 },
+        "z": { "type": "integer", "minimum": 0, "maximum": 2147483647 }
+      }
+    },
+    "resource_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9_.-]+:[a-z0-9_.-]+(/[a-z0-9_.-]+)*$"
+    },
+    "dimensions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["width", "depth", "min_y", "max_y"],
+      "properties": {
+        "width": { "type": "integer", "minimum": 1, "maximum": 2147483648 },
+        "depth": { "type": "integer", "minimum": 1, "maximum": 2147483648 },
+        "min_y": { "type": "integer", "minimum": -2147483648, "maximum": 2147483647 },
+        "max_y": { "type": "integer", "minimum": -2147483648, "maximum": 2147483647 }
+      }
+    },
+    "block": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["position", "block"],
+      "properties": {
+        "position": { "$ref": "#/$defs/position" },
+        "block": { "$ref": "#/$defs/resource_id" }
+      }
+    },
+    "spawn": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["seat", "position"],
+      "properties": {
+        "seat": { "type": "integer", "minimum": 0, "maximum": 5 },
+        "position": { "$ref": "#/$defs/position" }
+      }
+    },
+    "loot_container": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["position", "inventory"],
+      "properties": {
+        "position": { "$ref": "#/$defs/position" },
+        "inventory": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 27,
+          "items": { "$ref": "#/$defs/resource_id" }
+        }
+      }
+    }
+  }
+}
