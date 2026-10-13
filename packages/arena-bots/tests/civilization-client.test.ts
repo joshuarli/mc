@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
+import { createRequire } from 'node:module';
 import test from 'node:test';
 import {
   blockPosition,
@@ -11,6 +12,34 @@ import {
   createMineflayerCivilizationClient,
   type CivilizationRosterMember,
 } from '../src/index.js';
+
+const packageRequire = createRequire(import.meta.url);
+const mineflayerRequire = createRequire(packageRequire.resolve('mineflayer'));
+const loadMinecraftData = mineflayerRequire('minecraft-data') as (version: string) => {
+  readonly version: { readonly version: number };
+  readonly blocksByName: Readonly<Record<string, { readonly id: number; readonly defaultState: number }>>;
+  supportFeature(feature: string): boolean;
+};
+const loadPrismarineBlock = mineflayerRequire('prismarine-block') as (registry: unknown) => {
+  fromStateId(stateId: number, biomeId: number): NonNullable<ReturnType<Bot['blockAt']>>;
+};
+const loadPrismarineWorld = mineflayerRequire('prismarine-world') as (version: string) => new (
+  generator: null,
+) => { readonly sync: PinnedWorld };
+const { Vec3 } = mineflayerRequire('vec3') as {
+  readonly Vec3: new (x: number, y: number, z: number) => Bot['entity']['position'];
+};
+const worldRegistry = loadMinecraftData('26.1.2');
+const worldBlockFactory = loadPrismarineBlock(worldRegistry);
+const PinnedWorldConstructor = loadPrismarineWorld('26.1.2');
+
+interface PinnedWorld extends Bot['world'] {
+  setColumn(
+    chunkX: number,
+    chunkZ: number,
+    column: { getBlock(position: Bot['entity']['position']): NonNullable<ReturnType<Bot['blockAt']>> },
+  ): void;
+}
 
 test('client waits for a received full inventory snapshot and validates reports at their shared tick', async () => {
   const bot = makeBot(0);
@@ -109,6 +138,8 @@ test('invalid civilization context unwinds the already-created base observer', (
 
 test('client preserves protocol 775 setup, exact block navigation, and only releases owned listeners', async () => {
   const bot = makeBot(0);
+  const baseSupportFeature = bot.supportFeature;
+  const nativeStateIdUsed = baseSupportFeature('stateIdUsed');
   const externalHealthListener = () => undefined;
   const externalSnapshotListener = () => undefined;
   bot.on('health', externalHealthListener);
@@ -118,7 +149,7 @@ test('client preserves protocol 775 setup, exact block navigation, and only rele
   try {
     assert.equal(bot.physics.playerHalfWidth, Math.fround(0.6) / 2);
     assert.equal(bot.supportFeature('entityActionUsesStringMapper'), true);
-    assert.equal(bot.supportFeature('stateIdUsed'), false);
+    assert.equal(bot.supportFeature('stateIdUsed'), nativeStateIdUsed);
 
     bot._client.emit('initialize_world_border', {
       x: 0,
@@ -164,11 +195,7 @@ function makeBot(seat: number) {
     supportFeature(feature: string): boolean;
   };
   const client = new EventEmitter();
-  const blockNames = [
-    'chest', 'trapped_chest', 'stone', 'oak_log', 'oak_planks', 'air', 'fire', 'cobweb',
-    'web', 'lava', 'water', 'sand', 'gravel', 'ladder',
-  ];
-  const blocksByName = Object.fromEntries(blockNames.map((name, id) => [name, { id }]));
+  const world = makeLocalWorld();
   const pathfinder = {
     goal: null as unknown,
     thinkTimeout: 0,
@@ -189,16 +216,8 @@ function makeBot(seat: number) {
     version: '26.1.2',
     username: member.username,
     player: { uuid: member.offlineUuid },
-    registry: {
-      version: { type: 'pc', minecraftVersion: '26.1.2', version: 775, '>=': () => true },
-      supportFeature: () => false,
-      blocksByName,
-      blocksArray: [],
-      blocksByStateId: {},
-      blocks: {},
-      itemsByName: { oak_log: { id: 10 }, oak_planks: { id: 11 }, dirt: { id: 12 }, cobblestone: { id: 13 } },
-      foodsByName: {},
-    },
+    registry: worldRegistry,
+    world,
     inventory: {
       slots: new Array(46).fill(null),
       inventoryStart: 9,
@@ -208,7 +227,7 @@ function makeBot(seat: number) {
       firstEmptySlotRange: () => null,
     },
     physics: { playerHalfWidth: 0.3 },
-    supportFeature: (_feature: string) => false,
+    supportFeature: worldRegistry.supportFeature,
     pathfinder,
     health: 20,
     food: 10,
@@ -226,17 +245,35 @@ function makeBot(seat: number) {
     },
     entities: {},
     players: {},
-    world: { getColumn: () => ({}) },
     hasPlugin: () => true,
     setQuickBarSlot: (slot: number) => Object.assign(bot, { quickBarSlot: slot }),
     clearControlStates: () => undefined,
     deactivateItem: () => Object.assign(bot, { usingHeldItem: false }),
     getEquipmentDestSlot: (slot: string) => ({ head: 5, torso: 6, legs: 7, feet: 8 })[slot as 'head' | 'torso' | 'legs' | 'feet'] ?? 0,
     findBlocks: () => [],
-    blockAt: () => null,
-    canSeeBlock: () => true,
+    blockAt: (position: Bot['entity']['position']) => world.getBlock(position),
   });
   return bot;
+}
+
+function makeLocalWorld(): PinnedWorld {
+  const world = new PinnedWorldConstructor(null).sync;
+  const blockStates = new Map<string, number>();
+  const airState = worldRegistry.blocksByName.air?.defaultState;
+  if (airState === undefined) throw new Error('pinned registry has no air block state');
+  for (let chunkX = -1; chunkX <= 0; chunkX += 1) {
+    for (let chunkZ = -1; chunkZ <= 0; chunkZ += 1) {
+      world.setColumn(chunkX, chunkZ, {
+        getBlock: (position) => {
+          const x = chunkX * 16 + Math.floor(position.x);
+          const y = Math.floor(position.y);
+          const z = chunkZ * 16 + Math.floor(position.z);
+          return worldBlockFactory.fromStateId(blockStates.get(`${x},${y},${z}`) ?? airState, 0);
+        },
+      });
+    }
+  }
+  return world;
 }
 
 function options(seat: number) {
@@ -282,11 +319,5 @@ function emitInventorySnapshot(bot: ReturnType<typeof makeBot>): void {
 }
 
 function vector(x: number, y: number, z: number) {
-  return {
-    x,
-    y,
-    z,
-    offset: (dx: number, dy: number, dz: number) => vector(x + dx, y + dy, z + dz),
-    floored: () => ({ x: Math.floor(x), y: Math.floor(y), z: Math.floor(z) }),
-  };
+  return new Vec3(x, y, z);
 }

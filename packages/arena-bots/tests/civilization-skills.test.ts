@@ -26,6 +26,29 @@ const loadPrismarineItem = mineflayerRequire('prismarine-item') as (registry: un
 const loadPrismarineWindows = mineflayerRequire('prismarine-windows') as (registry: unknown) => {
   createWindow: (id: number, type: string, title: string) => MineflayerWindow | null;
 };
+const loadMinecraftData = mineflayerRequire('minecraft-data') as (version: string) => {
+  readonly blocksByName: Readonly<Record<string, { readonly defaultState: number }>>;
+};
+const loadPrismarineBlock = mineflayerRequire('prismarine-block') as (registry: unknown) => {
+  fromStateId(stateId: number, biomeId: number): NonNullable<ReturnType<Bot['blockAt']>>;
+};
+const loadPrismarineWorld = mineflayerRequire('prismarine-world') as (version: string) => new (
+  generator: null,
+) => { readonly sync: PinnedWorld };
+const { Vec3 } = mineflayerRequire('vec3') as {
+  readonly Vec3: new (x: number, y: number, z: number) => Bot['entity']['position'];
+};
+const worldRegistry = loadMinecraftData(MINECRAFT_VERSION);
+const worldBlockFactory = loadPrismarineBlock(worldRegistry);
+const PinnedWorldConstructor = loadPrismarineWorld(MINECRAFT_VERSION);
+
+interface PinnedWorld extends Bot['world'] {
+  setColumn(
+    chunkX: number,
+    chunkZ: number,
+    column: { getBlock(position: Bot['entity']['position']): NonNullable<ReturnType<Bot['blockAt']>> },
+  ): void;
+}
 
 test('craft spends four observed oak logs for sixteen observed oak planks', async () => {
   const harness = makeHarness();
@@ -65,7 +88,7 @@ test('mine succeeds only after the local block update removes the oak log', asyn
     pitch: -Math.PI / 2,
   });
   const logPosition = new TestVector(0, 64, 0);
-  harness.blocks.set(key(logPosition), block('oak_log', logPosition));
+  harness.setBlock(logPosition, block('oak_log', logPosition));
   let finishDig!: () => void;
   let reportDigStarted!: () => void;
   const digStarted = new Promise<void>((resolve) => { reportDigStarted = resolve; });
@@ -85,7 +108,7 @@ test('mine succeeds only after the local block update removes the oak log', asyn
     finishDig();
     await new Promise<void>((resolve) => setImmediate(resolve));
     assert.equal(miningSettled, false);
-    harness.blocks.set(key(logPosition), block('air', logPosition));
+    harness.setBlock(logPosition, block('air', logPosition));
     harness.bot.emit('physicsTick');
     assert.deepEqual(await mining, { kind: 'succeeded' });
     assert.equal(harness.blocks.get(key(logPosition))?.name, 'air');
@@ -105,7 +128,7 @@ test('cancelling a pending mining skill stops digging and waits for settlement',
     pitch: -Math.PI / 2,
   });
   const logPosition = new TestVector(0, 64, 0);
-  harness.blocks.set(key(logPosition), block('oak_log', logPosition));
+  harness.setBlock(logPosition, block('oak_log', logPosition));
   let finishDig!: () => void;
   let reportDigStarted!: () => void;
   let reportStopRequested!: () => void;
@@ -151,7 +174,7 @@ test('cancellation preserves a dig stop failure after the dig settles', async ()
     pitch: -Math.PI / 2,
   });
   const logPosition = new TestVector(0, 64, 0);
-  harness.blocks.set(key(logPosition), block('oak_log', logPosition));
+  harness.setBlock(logPosition, block('oak_log', logPosition));
   const stopFailure = new Error('stop digging failed');
   let finishDig!: () => void;
   let reportDigStarted!: () => void;
@@ -197,7 +220,7 @@ test('container transfer uses the received chest window and confirms both invent
   const planks = item('oak_planks', 11, 16, 9);
   harness.inventory.slots[9] = planks;
   const chestPosition = new TestVector(1, 64, 0);
-  harness.blocks.set(key(chestPosition), block('chest', chestPosition));
+  harness.setBlock(chestPosition, block('chest', chestPosition));
   const chestWindow = makeChestWindow();
   chestWindow.slots[27] = planks;
   Object.assign(harness.bot, {
@@ -243,7 +266,7 @@ test('container transfer moves an exact partial stack and returns the remainder 
   const planks = item('oak_planks', 11, 32, 9);
   harness.inventory.slots[9] = planks;
   const chestPosition = new TestVector(1, 64, 0);
-  harness.blocks.set(key(chestPosition), block('chest', chestPosition));
+  harness.setBlock(chestPosition, block('chest', chestPosition));
   const chestWindow = makePinnedChestWindow(32);
   Object.assign(harness.bot, {
     lookAt: async () => undefined,
@@ -297,14 +320,14 @@ test('place spends a plank only when the received target and inventory both chan
   harness.inventory.slots[9] = planks;
   const supportPosition = new TestVector(1, 64, 0);
   const targetPosition = new TestVector(1, 65, 0);
-  harness.blocks.set(key(supportPosition), block('stone', supportPosition));
-  harness.blocks.set(key(targetPosition), block('air', targetPosition));
+  harness.setBlock(supportPosition, block('stone', supportPosition));
+  harness.setBlock(targetPosition, block('air', targetPosition));
   Object.assign(harness.bot, {
     equip: async (stack: typeof planks) => { Object.assign(harness.bot, { heldItem: stack }); },
     placeBlock: async (support: { readonly position: TestVector }, face: TestVector) => {
       assert.deepEqual(face, new TestVector(0, 1, 0));
       const placedPosition = support.position.offset(face.x, face.y, face.z);
-      harness.blocks.set(key(placedPosition), block('oak_planks', placedPosition));
+      harness.setBlock(placedPosition, block('oak_planks', placedPosition));
       planks.count = 15;
     },
   });
@@ -332,8 +355,6 @@ test('C2 skills reject a nearby teammate and still allow a rostered enemy target
   const roster = civilizationRoster();
   const teammate = playerEntity(2, 0, 64, -2);
   const enemy = playerEntity(3, 1, 64, -2);
-  harness.blocks.set(key(teammate.position), block('stone', teammate.position));
-  harness.blocks.set(key(enemy.position), block('stone', enemy.position));
   Object.assign(harness.bot, {
     players: {
       [roster[1]?.username ?? '']: rosterPlayer(roster[1]!, teammate),
@@ -360,6 +381,11 @@ function makeHarness() {
   const emitter = new EventEmitter();
   const client = new EventEmitter();
   const blocks = new Map<string, ReturnType<typeof block>>();
+  const localWorld = makeLocalWorld();
+  const setBlock = (position: TestVector, value: ReturnType<typeof block>): void => {
+    blocks.set(key(position), value);
+    localWorld.setBlock(position, value.name);
+  };
   const names = ['chest', 'trapped_chest', 'stone', 'oak_log', 'oak_planks', 'air', 'fire', 'cobweb', 'web', 'lava', 'water', 'sand', 'gravel', 'ladder'];
   const registry = {
     version: { type: 'pc', minecraftVersion: MINECRAFT_VERSION, '>=': () => true },
@@ -412,6 +438,7 @@ function makeHarness() {
     entity,
     entities: {},
     players: {},
+    world: localWorld.world,
     health: 20,
     food: 10,
     quickBarSlot: 0,
@@ -422,8 +449,7 @@ function makeHarness() {
     setQuickBarSlot: (slot: number) => Object.assign(emitter, { quickBarSlot: slot }),
     clearControlStates: () => undefined,
     deactivateItem: () => Object.assign(emitter, { usingHeldItem: false }),
-    blockAt: (position: TestVector) => blocks.get(key(position)) ?? null,
-    canSeeBlock: () => true,
+    blockAt: (position: TestVector) => blocks.get(key(position)) ?? localWorld.world.getBlock(position) ?? null,
     findBlocks: () => [],
   });
   const bot = emitter as unknown as Bot;
@@ -438,7 +464,37 @@ function makeHarness() {
   const civilization = new MineflayerCivilizationObserver(bot, context(), civilizationRoster());
   client.emit('window_items', { windowId: 0 });
   const owner = new SkillOwner(bot, observer, civilization);
-  return { bot, inventory, blocks, owner, observer, civilization };
+  return { bot, inventory, blocks, setBlock, owner, observer, civilization };
+}
+
+function makeLocalWorld(): {
+  readonly world: PinnedWorld;
+  setBlock(position: TestVector, name: string): void;
+} {
+  const world = new PinnedWorldConstructor(null).sync;
+  const blockStates = new Map<string, number>();
+  const airState = worldRegistry.blocksByName.air?.defaultState;
+  if (airState === undefined) throw new Error('pinned registry has no air block state');
+  for (let chunkX = -1; chunkX <= 0; chunkX += 1) {
+    for (let chunkZ = -1; chunkZ <= 0; chunkZ += 1) {
+      world.setColumn(chunkX, chunkZ, {
+        getBlock: (position) => {
+          const x = chunkX * 16 + Math.floor(position.x);
+          const y = Math.floor(position.y);
+          const z = chunkZ * 16 + Math.floor(position.z);
+          return worldBlockFactory.fromStateId(blockStates.get(keyXYZ(x, y, z)) ?? airState, 0);
+        },
+      });
+    }
+  }
+  return {
+    world,
+    setBlock: (position, name) => {
+      const state = worldRegistry.blocksByName[name]?.defaultState;
+      if (state === undefined) throw new Error(`pinned registry has no ${name} block state`);
+      blockStates.set(key(position), state);
+    },
+  };
 }
 
 function context(): CivilizationPolicyContextInput {
@@ -546,18 +602,8 @@ function key(position: { readonly x: number; readonly y: number; readonly z: num
   return `${Math.floor(position.x)},${Math.floor(position.y)},${Math.floor(position.z)}`;
 }
 
-class TestVector {
-  constructor(readonly x: number, readonly y: number, readonly z: number) {}
-
-  floored(): TestVector {
-    return new TestVector(Math.floor(this.x), Math.floor(this.y), Math.floor(this.z));
-  }
-
-  offset(x: number, y: number, z: number): TestVector {
-    return new TestVector(this.x + x, this.y + y, this.z + z);
-  }
-
-  minus(other: TestVector): TestVector {
-    return new TestVector(this.x - other.x, this.y - other.y, this.z - other.z);
-  }
+function keyXYZ(x: number, y: number, z: number): string {
+  return `${Math.floor(x)},${Math.floor(y)},${Math.floor(z)}`;
 }
+
+class TestVector extends Vec3 {}

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
+import { createRequire } from 'node:module';
 import test from 'node:test';
 import {
   CIVILIZATION_TEAM_MESSAGE_MAX_BYTES,
@@ -10,6 +11,33 @@ import type { Bot } from 'mineflayer';
 import { Buffer } from 'node:buffer';
 import { MineflayerCivilizationObserver } from '../src/civilization-observer.js';
 import { MineflayerObserver } from '../src/observer.js';
+
+const packageRequire = createRequire(import.meta.url);
+const mineflayerRequire = createRequire(packageRequire.resolve('mineflayer'));
+const loadRegistry = mineflayerRequire('minecraft-data') as (version: string) => {
+  readonly blocksByName: Readonly<Record<string, { readonly id: number; readonly defaultState: number }>>;
+};
+const loadBlockFactory = mineflayerRequire('prismarine-block') as (registry: unknown) => {
+  fromStateId(stateId: number, biomeId: number): NonNullable<ReturnType<Bot['blockAt']>>;
+};
+const loadWorld = mineflayerRequire('prismarine-world') as (version: string) => new (
+  generator: null,
+) => { readonly sync: PinnedWorld };
+const { Vec3 } = mineflayerRequire('vec3') as {
+  readonly Vec3: new (x: number, y: number, z: number) => Bot['entity']['position'];
+};
+const pinnedRegistry = loadRegistry('26.1.2');
+const pinnedBlockFactory = loadBlockFactory(pinnedRegistry);
+const PinnedWorldConstructor = loadWorld('26.1.2');
+
+interface PinnedWorld extends Bot['world'] {
+  setColumn(
+    chunkX: number,
+    chunkZ: number,
+    column: { getBlock(position: Bot['entity']['position']): NonNullable<ReturnType<Bot['blockAt']>> },
+  ): void;
+  unloadColumn(chunkX: number, chunkZ: number): void;
+}
 
 test('own materials stay unknown until this client receives a full inventory snapshot', () => {
   const bot = makeBot();
@@ -141,7 +169,7 @@ test('team reports reject stale, future, malformed, over-rate, and over-capacity
 });
 
 test('civilization observations exclude rostered teammates and retain rostered enemies', () => {
-  const bot = makeBot();
+  const bot = makeBot(true);
   const teammate = { id: 2, type: 'player', position: vector(0, 64, -2), height: 1.8 };
   const enemy = { id: 3, type: 'player', position: vector(1, 64, -2), height: 1.8 };
   const roster = publicRoster();
@@ -170,12 +198,7 @@ test('civilization observations exclude rostered teammates and retain rostered e
       },
     },
     registry: { blocksByName: { oak_log: { id: 1 }, chest: { id: 2 }, trapped_chest: { id: 3 } } },
-    world: { getColumn: () => ({}) },
     findBlocks: () => [],
-    blockAt: (position: { readonly x: number; readonly y: number; readonly z: number }) => ({
-      name: 'stone', position: vector(position.x, position.y, position.z), boundingBox: 'block',
-    }),
-    canSeeBlock: () => true,
   });
   const base = new MineflayerObserver(bot as unknown as Bot);
   const observer = new MineflayerCivilizationObserver(bot as unknown as Bot, context(), roster);
@@ -199,6 +222,7 @@ test('civilization observations exclude rostered teammates and retain rostered e
 
 test('unloaded outpost cells are omitted instead of reported as air', () => {
   const bot = makeBot();
+  bot.unloadColumn(0, 0);
   Object.assign(bot, {
     entity: { id: 1, position: vector(0, 64, 0), yaw: 0, pitch: 0, eyeHeight: 1.62, height: 1.8 },
     registry: {
@@ -210,8 +234,6 @@ test('unloaded outpost cells are omitted instead of reported as air', () => {
     },
     entities: {},
     findBlocks: () => [],
-    blockAt: () => null,
-    canSeeBlock: () => true,
   });
   const base = new MineflayerObserver(bot as unknown as Bot);
   const observer = new MineflayerCivilizationObserver(bot as unknown as Bot, context(), publicRoster());
@@ -228,7 +250,7 @@ test('unloaded outpost cells are omitted instead of reported as air', () => {
 test('container contents become current only for this client’s synchronized open window', () => {
   const bot = makeBot();
   const chestPosition = blockPosition(1, 64, 0);
-  const chestBlock = { name: 'chest', position: vector(1, 64, 0), boundingBox: 'block' };
+  bot.setBlock(vector(1, 64, 0), 'chest');
   const chestWindow = {
     id: 1,
     inventoryStart: 27,
@@ -255,9 +277,6 @@ test('container contents become current only for this client’s synchronized op
     },
     entities: {},
     findBlocks: ({ matching }: { matching: number }) => matching === 2 ? [vector(1, 64, 0)] : [],
-    blockAt: (position: { x: number; y: number; z: number }) =>
-      position.x === 1 && position.y === 64 && position.z === 0 ? chestBlock : null,
-    canSeeBlock: () => true,
   });
   const base = new MineflayerObserver(bot as unknown as Bot);
   const observer = new MineflayerCivilizationObserver(bot as unknown as Bot, context(), publicRoster());
@@ -315,16 +334,40 @@ function publicRoster() {
   }));
 }
 
-function makeBot(): EventEmitter & {
+function makeBot(fullView = false): EventEmitter & {
   readonly _client: EventEmitter;
   readonly inventory: { readonly slots: (null | { name: string; type: number; metadata: number; count: number; slot: number })[] };
+  readonly world: PinnedWorld;
+  setBlock(position: Bot['entity']['position'], name: string): void;
+  unloadColumn(chunkX: number, chunkZ: number): void;
   currentWindow: unknown;
 } {
   const bot = new EventEmitter() as EventEmitter & {
     _client: EventEmitter;
     inventory: { slots: (null | { name: string; type: number; metadata: number; count: number; slot: number })[] };
+    world: PinnedWorld;
+    setBlock(position: Bot['entity']['position'], name: string): void;
+    unloadColumn(chunkX: number, chunkZ: number): void;
     currentWindow: unknown;
   };
+  const world = new PinnedWorldConstructor(null).sync;
+  const blockStates = new Map<string, number>();
+  const airState = pinnedRegistry.blocksByName.air?.defaultState;
+  if (airState === undefined) throw new Error('pinned registry has no air block state');
+  const minimumChunk = fullView ? -3 : -1;
+  const maximumChunk = fullView ? 2 : 0;
+  for (let chunkX = minimumChunk; chunkX <= maximumChunk; chunkX += 1) {
+    for (let chunkZ = minimumChunk; chunkZ <= maximumChunk; chunkZ += 1) {
+      world.setColumn(chunkX, chunkZ, {
+        getBlock: (position) => {
+          const x = chunkX * 16 + Math.floor(position.x);
+          const y = Math.floor(position.y);
+          const z = chunkZ * 16 + Math.floor(position.z);
+          return pinnedBlockFactory.fromStateId(blockStates.get(positionKey(x, y, z)) ?? airState, 0);
+        },
+      });
+    }
+  }
   bot._client = new EventEmitter();
   bot.inventory = { slots: Array.from({ length: 46 }, () => null) };
   Object.assign(bot, {
@@ -332,28 +375,27 @@ function makeBot(): EventEmitter & {
     player: { uuid: publicRoster()[0]?.offlineUuid },
     players: {},
     entities: {},
-    world: { getColumn: () => ({}) },
+    world,
     registry: { blocksByName: { chest: { id: 1 }, trapped_chest: { id: 2 } } },
     findBlocks: () => [],
+    blockAt: (position: Bot['entity']['position']) => world.getBlock(position),
   });
   bot.currentWindow = null;
+  bot.setBlock = (position, name) => {
+    const state = pinnedRegistry.blocksByName[name]?.defaultState;
+    if (state === undefined) throw new Error(`pinned registry has no ${name} block state`);
+    blockStates.set(positionKey(position.x, position.y, position.z), state);
+  };
+  bot.unloadColumn = (chunkX, chunkZ) => world.unloadColumn(chunkX, chunkZ);
   return bot;
 }
 
-function vector(x: number, y: number, z: number): {
-  readonly x: number;
-  readonly y: number;
-  readonly z: number;
-  offset(dx: number, dy: number, dz: number): ReturnType<typeof vector>;
-  floored(): { readonly x: number; readonly y: number; readonly z: number };
-} {
-  return {
-    x,
-    y,
-    z,
-    offset: (dx, dy, dz) => vector(x + dx, y + dy, z + dz),
-    floored: () => ({ x: Math.floor(x), y: Math.floor(y), z: Math.floor(z) }),
-  };
+function vector(x: number, y: number, z: number): Bot['entity']['position'] {
+  return new Vec3(x, y, z);
+}
+
+function positionKey(x: number, y: number, z: number): string {
+  return `${Math.floor(x)},${Math.floor(y)},${Math.floor(z)}`;
 }
 
 function resourceContainer(resources: { readonly kind: string; readonly value?: readonly unknown[] }): {
