@@ -11,11 +11,11 @@ const viewer = {
 
 test('applies range, horizontal field of view, and vertical field of view', () => {
   assert.equal(isInsidePerceptionCone(viewer, {
-    position: { x: 0, y: 0, z: 39 },
+    position: { x: 0, y: 0, z: -39 },
     height: 1.8,
   }), true);
   assert.equal(isInsidePerceptionCone(viewer, {
-    position: { x: 0, y: 0, z: 41 },
+    position: { x: 0, y: 0, z: -41 },
     height: 1.8,
   }), false);
   assert.equal(isInsidePerceptionCone(viewer, {
@@ -23,11 +23,11 @@ test('applies range, horizontal field of view, and vertical field of view', () =
     height: 1.8,
   }), false);
   assert.equal(isInsidePerceptionCone(viewer, {
-    position: { x: 0, y: 0, z: -10 },
+    position: { x: 0, y: 0, z: 10 },
     height: 1.8,
   }), false);
   assert.equal(isInsidePerceptionCone(viewer, {
-    position: { x: 0, y: 20, z: 10 },
+    position: { x: 0, y: 20, z: -10 },
     height: 1.8,
   }), false);
 });

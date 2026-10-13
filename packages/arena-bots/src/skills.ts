@@ -1,4 +1,5 @@
 import { performance } from 'node:perf_hooks';
+import { createRequire } from 'node:module';
 import {
   blockPosition,
   isOutsideBorder,
@@ -10,11 +11,12 @@ import {
   type SkillOutcome,
 } from '@arena/core';
 import type { Bot, BotEvents } from 'mineflayer';
-import { Movements, goals, pathfinder } from 'mineflayer-pathfinder';
 import { classifyItem, mineflayerEquipmentDestination } from './items.js';
 import { MineflayerObserver } from './observer.js';
 import { isTargetablePlayer, isVisibleEntity, toBlockPosition } from './perception.js';
 import { hasLocalVoxelLineOfSight } from './visibility.js';
+
+const { Movements, goals, pathfinder } = createRequire(import.meta.url)('mineflayer-pathfinder') as typeof import('mineflayer-pathfinder');
 
 const MAX_PATH_SEARCH_RADIUS_BLOCKS = 16;
 /** Keep long routes inside the pathfinder's fixed search horizon. */
@@ -23,6 +25,7 @@ const MAX_NAVIGATION_LEGS = 128;
 const MAX_PATH_THINK_MS = 1_000;
 const MAX_PATH_SLICE_PER_CLIENT_MS = 3;
 const MAX_WORKER_PATH_SLICE_MS = 10;
+const MAX_ACTIVE_PATH_SEARCHES = Math.floor(MAX_WORKER_PATH_SLICE_MS / MAX_PATH_SLICE_PER_CLIENT_MS);
 const PATH_TIMEOUT_MS = 20_000;
 const ACTION_TIMEOUT_MS = 5_000;
 const PICKUP_RANGE_BLOCKS = 1.25;
@@ -34,6 +37,7 @@ type MineflayerWindow = NonNullable<Bot['currentWindow']>;
 type MineflayerChest = Awaited<ReturnType<Bot['openContainer']>>;
 type MineflayerEntity = Bot['entity'];
 type BoundedPathfinder = Bot['pathfinder'] & { searchRadius: number };
+type PathfinderGoal = import('mineflayer-pathfinder').goals.Goal;
 
 interface ActiveSkill {
   readonly controller: AbortController;
@@ -48,6 +52,17 @@ interface SkillResources {
   inventoryTouched: boolean;
   window: MineflayerChest | null;
   originalQuickBarSlot: number;
+}
+
+interface PathSearchWaiter {
+  readonly pathfinder: Bot['pathfinder'];
+  readonly signal: AbortSignal;
+  readonly deadline: number;
+  readonly resolve: (release: () => void) => void;
+  readonly reject: (error: Error) => void;
+  timeout: NodeJS.Timeout | null;
+  onAbort: (() => void) | null;
+  settled: boolean;
 }
 
 class SkillFault extends Error {
@@ -68,25 +83,96 @@ class SkillInterrupted extends Error {
 }
 
 const activePathfinders = new Set<Bot['pathfinder']>();
+const queuedPathfinders: PathSearchWaiter[] = [];
 
-/** Shares a fixed main-thread search allowance across every active bot path in this worker. */
-function acquirePathSearchShare(pathfinderInstance: Bot['pathfinder']): () => void {
-  activePathfinders.add(pathfinderInstance);
-  updatePathSearchShares();
-  let released = false;
-  return () => {
-    if (released) return;
-    released = true;
-    activePathfinders.delete(pathfinderInstance);
-    updatePathSearchShares();
-  };
+/** Reserves only as many concurrent contexts as fit inside the worker path-search budget. */
+function acquirePathSearchShare(
+  pathfinderInstance: Bot['pathfinder'],
+  signal: AbortSignal,
+  deadline: number,
+): Promise<() => void> {
+  if (signal.aborted) return Promise.reject(new SkillInterrupted());
+  if (performance.now() >= deadline) {
+    return Promise.reject(new SkillFault('timedOut', 'bounded navigation exceeded its deadline while waiting for a path search'));
+  }
+
+  return new Promise<() => void>((resolve, reject) => {
+    const waiter: PathSearchWaiter = {
+      pathfinder: pathfinderInstance,
+      signal,
+      deadline,
+      resolve,
+      reject,
+      timeout: null,
+      onAbort: null,
+      settled: false,
+    };
+    if (activePathfinders.size < MAX_ACTIVE_PATH_SEARCHES && queuedPathfinders.length === 0) {
+      grantPathSearchShare(waiter);
+      return;
+    }
+
+    waiter.onAbort = () => removePathSearchWaiter(waiter, new SkillInterrupted());
+    waiter.timeout = setTimeout(
+      () => removePathSearchWaiter(waiter, new SkillFault('timedOut', 'bounded navigation expired while waiting for a path search')),
+      Math.max(0, deadline - performance.now()),
+    );
+    signal.addEventListener('abort', waiter.onAbort, { once: true });
+    queuedPathfinders.push(waiter);
+    if (signal.aborted) waiter.onAbort();
+  });
 }
 
-function updatePathSearchShares(): void {
-  if (activePathfinders.size === 0) return;
-  const shareMs = Math.min(MAX_PATH_SLICE_PER_CLIENT_MS, MAX_WORKER_PATH_SLICE_MS / activePathfinders.size);
-  for (const pathfinderInstance of activePathfinders) {
-    pathfinderInstance.tickTimeout = shareMs;
+function grantPathSearchShare(waiter: PathSearchWaiter): void {
+  if (waiter.settled) return;
+  if (waiter.signal.aborted) {
+    rejectPathSearchWaiter(waiter, new SkillInterrupted());
+    return;
+  }
+  if (performance.now() >= waiter.deadline) {
+    rejectPathSearchWaiter(waiter, new SkillFault('timedOut', 'bounded navigation expired while waiting for a path search'));
+    return;
+  }
+  waiter.settled = true;
+  clearPathSearchWaiter(waiter);
+  activePathfinders.add(waiter.pathfinder);
+  let released = false;
+  waiter.resolve(() => {
+    if (released) return;
+    released = true;
+    activePathfinders.delete(waiter.pathfinder);
+    grantQueuedPathSearches();
+  });
+}
+
+function removePathSearchWaiter(waiter: PathSearchWaiter, error: Error): void {
+  if (waiter.settled) return;
+  waiter.settled = true;
+  const index = queuedPathfinders.indexOf(waiter);
+  if (index >= 0) queuedPathfinders.splice(index, 1);
+  clearPathSearchWaiter(waiter);
+  waiter.reject(error);
+  grantQueuedPathSearches();
+}
+
+function rejectPathSearchWaiter(waiter: PathSearchWaiter, error: Error): void {
+  if (waiter.settled) return;
+  waiter.settled = true;
+  clearPathSearchWaiter(waiter);
+  waiter.reject(error);
+}
+
+function clearPathSearchWaiter(waiter: PathSearchWaiter): void {
+  if (waiter.timeout !== null) clearTimeout(waiter.timeout);
+  if (waiter.onAbort !== null) waiter.signal.removeEventListener('abort', waiter.onAbort);
+  waiter.timeout = null;
+  waiter.onAbort = null;
+}
+
+function grantQueuedPathSearches(): void {
+  while (activePathfinders.size < MAX_ACTIVE_PATH_SEARCHES && queuedPathfinders.length > 0) {
+    const waiter = queuedPathfinders.shift();
+    if (waiter !== undefined) grantPathSearchShare(waiter);
   }
 }
 
@@ -98,6 +184,7 @@ export class SkillOwner {
   #active: ActiveSkill | null = null;
   #transition: Promise<void> = Promise.resolve();
   #cleanupFailure: Error | null = null;
+  #quarantinedOperation: Promise<void> | null = null;
   #closed = false;
 
   constructor(bot: Bot, observer: MineflayerObserver) {
@@ -116,7 +203,9 @@ export class SkillOwner {
   run(intent: Intent): Promise<SkillOutcome> {
     const started = this.#enqueue(async () => {
       if (this.#closed) throw new Error('Mineflayer skill owner is closed');
-      if (this.#cleanupFailure !== null) throw this.#cleanupFailure;
+      if (this.#cleanupFailure !== null || this.#quarantinedOperation !== null) {
+        throw this.#cleanupFailure ?? new Error('Mineflayer inventory operation is still pending; this client is quarantined');
+      }
       await this.#cancelActive('replaced');
       const active: ActiveSkill = {
         controller: new AbortController(),
@@ -257,13 +346,18 @@ export class SkillOwner {
         : waypointToward(current, position, MAX_PATH_LEG_BLOCKS);
       const goalRange = waypoint === position ? range : 2;
       const goal = new goals.GoalNear(waypoint.x, waypoint.y, waypoint.z, goalRange);
+      const releaseBudget = await acquirePathSearchShare(this.#bot.pathfinder, active.controller.signal, deadline);
+      const searchRemainingMs = deadline - performance.now();
+      if (searchRemainingMs <= 0) {
+        releaseBudget();
+        throw new SkillFault('timedOut', 'bounded navigation exceeded its deadline while waiting for a path search');
+      }
       const stopWaits = new AbortController();
       const relayAbort = () => stopWaits.abort();
       active.controller.signal.addEventListener('abort', relayAbort, { once: true });
-      const reached = waitForGoal(this.#bot, goal, stopWaits.signal, remainingMs);
-      const pathFailure = waitForPathFailure(this.#bot, stopWaits.signal, remainingMs);
+      const reached = waitForGoal(this.#bot, goal, stopWaits.signal, searchRemainingMs);
+      const pathFailure = waitForPathFailure(this.#bot, stopWaits.signal, searchRemainingMs);
       active.resources.navigationActive = true;
-      const releaseBudget = acquirePathSearchShare(this.#bot.pathfinder);
       try {
         this.#bot.pathfinder.setGoal(goal, false);
         await Promise.race([reached, pathFailure]);
@@ -275,7 +369,12 @@ export class SkillOwner {
       } finally {
         active.controller.signal.removeEventListener('abort', relayAbort);
         stopWaits.abort();
-        releaseBudget();
+        try {
+          await waitForPathStop(this.#bot, ACTION_TIMEOUT_MS);
+          active.resources.navigationActive = false;
+        } finally {
+          releaseBudget();
+        }
       }
     }
     throw new Error('bounded navigation loop exited unexpectedly');
@@ -408,18 +507,30 @@ export class SkillOwner {
   async #collectKnownContainerItems(window: MineflayerChest, active: ActiveSkill): Promise<void> {
     for (let slot = 0; slot < window.inventoryStart; slot += 1) {
       throwIfInterrupted(active.controller.signal);
+      if (this.#bot.currentWindow !== window) {
+        throw new SkillFault('serverRejected', 'container window closed before the client received the item transfer');
+      }
       const item = window.slots[slot];
       if (item === null || item === undefined || classifyItem(this.#bot, item) === null) continue;
       if (this.#bot.inventory.emptySlotCount() === 0) continue;
       const before = countInventoryItem(this.#bot, item);
-      active.resources.inventoryTouched = true;
       try {
-        await window.withdraw(item.type, item.metadata, item.count);
+        await this.#awaitInventoryOperation(
+          active,
+          `withdraw ${item.name}`,
+          () => this.#bot.clickWindow(slot, 0, 1),
+        );
       } catch (error) {
         if (active.controller.signal.aborted) throw new SkillInterrupted();
         throw new SkillFault('serverRejected', errorMessage(error));
       }
       throwIfInterrupted(active.controller.signal);
+      await waitForCondition(
+        this.#bot,
+        () => countInventoryItem(this.#bot, item) > before,
+        active.controller.signal,
+        ACTION_TIMEOUT_MS,
+      );
       if (countInventoryItem(this.#bot, item) <= before) {
         throw new SkillFault('noProgress', `container item ${item.name} did not enter the player inventory`);
       }
@@ -436,10 +547,10 @@ export class SkillOwner {
     }
     const beforeFood = this.#bot.food;
     const beforeCount = item.count;
-    active.resources.inventoryTouched = true;
     try {
-      await this.#bot.equip(item, 'hand');
+      await this.#awaitInventoryOperation(active, 'equip food', () => this.#bot.equip(item, 'hand'));
     } catch (error) {
+      if (error instanceof SkillInterrupted) throw error;
       throw new SkillFault('serverRejected', errorMessage(error));
     }
     throwIfInterrupted(active.controller.signal);
@@ -450,7 +561,13 @@ export class SkillOwner {
     const heldSlot = heldItem.slot;
     active.resources.eating = true;
     try {
-      await this.#bot.consume();
+      await this.#awaitInventoryOperation(
+        active,
+        'consume held food',
+        () => this.#bot.consume(),
+        ACTION_TIMEOUT_MS,
+        null,
+      );
     } catch (error) {
       if (active.controller.signal.aborted) throw new SkillInterrupted();
       throw new SkillFault('serverRejected', errorMessage(error));
@@ -479,10 +596,10 @@ export class SkillOwner {
       throw new SkillFault('preconditionsNotMet', 'inventory cursor is occupied before equipping');
     }
     const destination = mineflayerEquipmentDestination(equipmentSlot);
-    active.resources.inventoryTouched = true;
     try {
-      await this.#bot.equip(item, destination);
+      await this.#awaitInventoryOperation(active, `equip ${equipmentSlot}`, () => this.#bot.equip(item, destination));
     } catch (error) {
+      if (error instanceof SkillInterrupted) throw error;
       throw new SkillFault('serverRejected', errorMessage(error));
     }
     throwIfInterrupted(active.controller.signal);
@@ -528,16 +645,28 @@ export class SkillOwner {
       active.resources.navigationActive = false;
     }
     if (active.resources.inventoryTouched) {
-      try {
-        await this.#restoreCursor(active.resources.window);
-      } catch (error) {
+      if (this.#cleanupFailure !== null) {
         cursorRestored = false;
-        failures.push(error);
+        failures.push(this.#cleanupFailure);
+      } else {
+        try {
+          await this.#restoreCursor(active, active.resources.window);
+        } catch (error) {
+          cursorRestored = false;
+          failures.push(error);
+        }
       }
     }
-    if (cursorRestored && active.resources.window !== null && this.#bot.currentWindow === active.resources.window) {
+    if (cursorRestored && this.#cleanupFailure === null
+      && active.resources.window !== null && this.#bot.currentWindow === active.resources.window) {
       try {
-        await closeOwnedWindow(this.#bot, active.resources.window, ACTION_TIMEOUT_MS);
+        await this.#awaitInventoryOperation(
+          active,
+          'close owned container',
+          () => closeOwnedWindow(this.#bot, active.resources.window as MineflayerChest, ACTION_TIMEOUT_MS),
+          ACTION_TIMEOUT_MS + 100,
+          null,
+        );
         active.resources.window = null;
       } catch (error) {
         failures.push(error);
@@ -556,8 +685,8 @@ export class SkillOwner {
     if (failures.length > 1) throw new AggregateError(failures, 'Mineflayer skill cleanup failed');
   }
 
-  async #restoreCursor(window: MineflayerWindow | null): Promise<void> {
-    const selected = window?.selectedItem ?? this.#bot.inventory.selectedItem;
+  async #restoreCursor(active: ActiveSkill, window: MineflayerWindow | null): Promise<void> {
+    const selected = window === null ? this.#bot.inventory.selectedItem : window.selectedItem;
     if (selected === null) return;
     const destination = window === null
       ? this.#bot.inventory.firstEmptySlotRange(
@@ -569,9 +698,51 @@ export class SkillOwner {
     if (destination === null) {
       throw new Error('cancelled inventory action left an item cursor with no observed empty slot');
     }
-    await this.#bot.clickWindow(destination, 0, 0);
-    if ((window?.selectedItem ?? this.#bot.inventory.selectedItem) !== null) {
+    await this.#awaitInventoryOperation(
+      active,
+      'restore inventory cursor',
+      () => this.#bot.clickWindow(destination, 0, 0),
+      ACTION_TIMEOUT_MS,
+      null,
+    );
+    if ((window === null ? this.#bot.inventory.selectedItem : window.selectedItem) !== null) {
       throw new Error('Mineflayer did not clear the selected inventory cursor');
+    }
+  }
+
+  async #awaitInventoryOperation(
+    active: ActiveSkill,
+    name: string,
+    action: () => Promise<void>,
+    timeoutMs = ACTION_TIMEOUT_MS,
+    signal: AbortSignal | null = active.controller.signal,
+  ): Promise<void> {
+    if (signal !== null) throwIfInterrupted(signal);
+    if (signal?.aborted) throw new SkillInterrupted();
+    active.resources.inventoryTouched = true;
+    let settled = false;
+    const pendingOperation = action();
+    const operation = Promise.resolve(pendingOperation)
+      .then(
+        () => { settled = true; },
+        (error: unknown) => {
+          settled = true;
+          throw error;
+        },
+      );
+    try {
+      await waitForBoundedOperation(operation, signal, timeoutMs, name);
+    } catch (error) {
+      if (!settled) {
+        const quarantineFailure = new Error(`Mineflayer inventory operation "${name}" did not settle; this client is quarantined`);
+        this.#cleanupFailure ??= quarantineFailure;
+        this.#quarantinedOperation = operation;
+        void operation.then(
+          () => { if (this.#quarantinedOperation === operation) this.#quarantinedOperation = null; },
+          () => { if (this.#quarantinedOperation === operation) this.#quarantinedOperation = null; },
+        );
+      }
+      throw error;
     }
   }
 }
@@ -591,14 +762,14 @@ function configurePathfinder(bot: Bot): void {
 
 async function waitForGoal(
   bot: Bot,
-  target: goals.Goal,
+  target: PathfinderGoal,
   signal: AbortSignal,
   timeoutMs: number,
 ): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     const timeout = setTimeout(() => finish(new SkillFault('timedOut', 'pathfinder did not reach the requested position')), timeoutMs);
     const onAbort = () => finish(new SkillInterrupted());
-    const onGoal = (goal: goals.Goal) => {
+    const onGoal = (goal: PathfinderGoal) => {
       if (goal === target) finish();
     };
     const finish = (error?: Error) => {
@@ -611,6 +782,36 @@ async function waitForGoal(
     bot.on('goal_reached', onGoal);
     signal.addEventListener('abort', onAbort, { once: true });
     if (signal.aborted) onAbort();
+  });
+}
+
+async function waitForBoundedOperation(
+  operation: Promise<void>,
+  signal: AbortSignal | null,
+  timeoutMs: number,
+  name: string,
+): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    let settled = false;
+    const timeout = setTimeout(
+      () => finish(new SkillFault('timedOut', `inventory operation ${name} did not settle before its deadline`)),
+      timeoutMs,
+    );
+    const onAbort = () => finish(new SkillInterrupted());
+    const finish = (error?: unknown) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      if (signal !== null) signal.removeEventListener('abort', onAbort);
+      if (error === undefined) resolve();
+      else reject(error);
+    };
+    operation.then(
+      () => finish(),
+      (error: unknown) => finish(error ?? new Error(`inventory operation ${name} rejected without an error`)),
+    );
+    signal?.addEventListener('abort', onAbort, { once: true });
+    if (signal?.aborted) onAbort();
   });
 }
 
