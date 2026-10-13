@@ -1,25 +1,22 @@
 # Compatibility and foundation
 
+`versions.lock.toml`, the npm package manifests, and `package-lock.json` own the exact identities. This table is a reader-facing summary; `./arena check compatibility` verifies that it stays in sync.
+
 | Component | Locked identity |
 | --- | --- |
-| Minecraft protocol | Java 26.2, protocol 776 |
-| Azalea | `0bd22cbcdd30b611b112fc1c0a3d78535fd493a1` |
-| Rust | `nightly-2026-10-07`, rustc `1.101.0-nightly (8d1a76430 2026-10-06)` |
-| Paper server | Stable 26.2 build 133, `paper-26.2-133.jar` |
-| Paper API | `io.papermc.paper:paper-api:26.2.build.133-stable`, plugin API version `26.2` |
+| Minecraft | 26.1.2, protocol 775 |
+| Node.js and npm | Node.js 24.21.0, npm 11.19.0 |
+| TypeScript | 5.9.3 |
+| Mineflayer | 4.39.0 with mineflayer-pathfinder 2.4.5; its published version list includes Minecraft 26.1 |
+| Paper server | Stable 26.1.2 build 74, `paper-26.1.2-74.jar` |
+| Paper API | `io.papermc.paper:paper-api:26.1.2.build.74-stable`, plugin API version `26.1.2` |
 | Java | Eclipse Temurin JDK 25.0.4.1+1; runtime build `25.0.4.1+1-LTS` |
 | Gradle | 9.6.1 wrapper; wrapper JAR and distribution SHA-256 are checked against `versions.lock.toml` |
 
-The Paper server artifact was downloaded from the official Fill v3 URL with `Arena/0.1 (dankmeme133769@proton.me)`. Its 64,525,509 bytes match the official SHA-256 in `versions.lock.toml`. The Paper API 133 coordinate is published. The server and API use the same build number; the API docs page inspected during research showed build 130, so API Javadocs were not treated as evidence for build 133.
+Mineflayer 4.39.0 and `minecraft-protocol` 1.68.0 advertise Minecraft 26.1 support, and the protocol data maps Minecraft 26.1.2 to protocol 775. These upstream declarations justify the selected pairing; they do not establish Arena's gameplay compatibility. The exact server artifact and matching Paper API are pinned in `versions.lock.toml`.
 
-The pinned Azalea repository's upstream `echo` example compiled with:
+**Arena live compatibility status: pending.** The required two-client Mineflayer smoke must verify login, chunks, movement, chest transfer, an ordinary hit observed by the server, disconnect, and rejection of a wrong-version client against the locked Paper build. No live Mineflayer/Paper proof is recorded yet.
 
-```sh
-cargo +nightly-2026-10-07 check --locked --offline -p azalea --example echo
-```
+The pinned Node and npm bootstrap completed on macOS arm64. Linux x86_64 is the other supported native target and still needs a host run. A 26.2 graphical client through ViaVersion is optional and is not part of the bot protocol path; its actual play path remains unverified.
 
-The same check failed on nightly 2026-09-24 because the revision uses `min_generic_const_args` features that that nightly did not recognize. Nightly 2026-10-07 is the first tested toolchain pin. On this macOS arm64 host the successful cold check took 118.72 seconds wall time and 165.95 seconds CPU time, with 1,416,085,504 bytes peak RSS and no swapping. A warmed check and the live protocol smoke remain unmeasured.
-
-The direct `Client::join` smoke runs inside a Tokio `LocalSet`: Azalea's client ECS runner starts local tasks and panics if initialized outside one. Tick waits use Azalea's dedicated tick broadcaster because pathfinding can leave stale tick events buffered on the general client event stream.
-
-The prepared `./arena test --suite integration --case stack` passed on macOS arm64 in 17.34 seconds of test time. It verified the locked Paper server and plugin build, two Azalea clients through login, chunk receipt and movement, a chest transfer of two diamonds, a server-observed swing and damage event, clean disconnects, and rejection of the wrong protocol. The runner materializes the locked Temurin archive for macOS arm64 or Linux x86_64; Linux x86_64 remains unverified.
+Sources: [Mineflayer 4.39.0 supported versions](https://raw.githubusercontent.com/PrismarineJS/mineflayer/4.39.0/lib/version.js), [Mineflayer 4.39.0 package metadata](https://raw.githubusercontent.com/PrismarineJS/mineflayer/4.39.0/package.json), [minecraft-protocol 1.68.0 protocol versions](https://raw.githubusercontent.com/PrismarineJS/node-minecraft-protocol/1.68.0/src/version.js), [Minecraft 26.1.2 protocol mapping](https://raw.githubusercontent.com/PrismarineJS/minecraft-data/master/data/pc/common/protocolVersions.json), [Node.js release schedule](https://nodejs.org/en/about/previous-releases), [Paper Java requirements](https://docs.papermc.io/paper/getting-started/).

@@ -44,14 +44,14 @@ runtime_build = "25.0.4.1+1-LTS"
 [java.macos_arm64]
 archive_file = "OpenJDK25U-jdk_aarch64_mac_hotspot_25.0.4.1_1.tar.gz"
 archive_root = "jdk-25.0.4.1+1"
-archive_url = "https://github.com/adoptium/temurin25-binaries/releases/download/25.0.4.1%2B1/OpenJDK25U-jdk_aarch64_mac_hotspot_25.0.4.1_1.tar.gz"
+archive_url = "https://github.com/adoptium/temurin25-binaries/releases/download/jdk-25.0.4.1%2B1/OpenJDK25U-jdk_aarch64_mac_hotspot_25.0.4.1_1.tar.gz"
 archive_size_bytes = 136355078
 archive_sha256 = "61979887f7506a24a57439ff99adb8b3a7fc89977d9cfe3b8984f58a981b7b9d"
 
 [java.linux_x86_64]
 archive_file = "OpenJDK25U-jdk_x64_linux_hotspot_25.0.4.1_1.tar.gz"
 archive_root = "jdk-25.0.4.1+1"
-archive_url = "https://github.com/adoptium/temurin25-binaries/releases/download/25.0.4.1%2B1/OpenJDK25U-jdk_x64_linux_hotspot_25.0.4.1_1.tar.gz"
+archive_url = "https://github.com/adoptium/temurin25-binaries/releases/download/jdk-25.0.4.1%2B1/OpenJDK25U-jdk_x64_linux_hotspot_25.0.4.1_1.tar.gz"
 archive_size_bytes = 141329719
 archive_sha256 = "dbb698396d478e7fa2b1e50f4103324b2a99b90569ee27c33f2261f9215cf41e"
 

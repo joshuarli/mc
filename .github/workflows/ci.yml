@@ -4,7 +4,12 @@ on:
   workflow_dispatch:
     inputs:
       confirm_stack_prerequisites:
-        description: Confirm the self-hosted Linux x64 runner has at least 4 GiB free in .work, can keep Paper plus clients under 8 GiB RSS, and may start the disposable loopback Paper stack
+        description: Confirm the self-hosted Linux x64 runner has at least 4 GiB free in .work and may start the disposable loopback Paper stack
+        required: false
+        default: false
+        type: boolean
+      confirm_acceptance_prerequisites:
+        description: Confirm the self-hosted Linux x64 runner has at least 8 GiB free in .work and may run the six-client acceptance cases
         required: false
         default: false
         type: boolean
@@ -17,9 +22,6 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  CARGO_HOME: ${{ github.workspace }}/.work/arena/cargo
-  CARGO_TARGET_DIR: ${{ github.workspace }}/.work/arena/target
-  RUSTUP_HOME: ${{ github.workspace }}/.work/arena/rustup
   GRADLE_USER_HOME: ${{ github.workspace }}/.work/arena/gradle
   TMPDIR: ${{ github.workspace }}/.work/tmp
 
@@ -29,16 +31,16 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-      - name: Install pinned Rust toolchain and kache
-        run: sh scripts/ci-prepare-rust.sh
-      - name: Fetch locked crates
+      - name: Bootstrap the pinned TypeScript workspace
+        run: ./arena bootstrap
+      - name: Check compatibility documentation against locks
+        run: ./arena check compatibility
+      - name: Exercise build helper dispatch errors
+        run: ./arena check build-script
+      - name: Typecheck core and scenario compiler
         run: |
-          rust_toolchain=$(awk -F '"' '$1 ~ /^rust_toolchain = / { print $2 }' versions.lock.toml)
-          cargo "+$rust_toolchain" fetch --locked
-      - name: Test core and specs offline
-        run: |
-          rust_toolchain=$(awk -F '"' '$1 ~ /^rust_toolchain = / { print $2 }' versions.lock.toml)
-          cargo "+$rust_toolchain" test --locked --offline -p arena-core -p arena-spec
+          ./arena build --package core
+          ./arena build --package spec
 
   java-plugin:
     needs: offline-core-spec
@@ -50,18 +52,15 @@ jobs:
         run: ./arena test --suite java --case plugin
 
   protocol-client:
-    needs: java-plugin
+    needs: offline-core-spec
     runs-on: [self-hosted, linux, x64]
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-      - name: Install pinned Rust toolchain and kache
-        run: sh scripts/ci-prepare-rust.sh
-      - name: Check the pinned Azalea protocol client
-        run: |
-          rust_toolchain=$(awk -F '"' '$1 ~ /^rust_toolchain = / { print $2 }' versions.lock.toml)
-          cargo "+$rust_toolchain" fetch --locked
-          cargo "+$rust_toolchain" check --locked --offline -p arena-bots
+      - name: Bootstrap the pinned TypeScript workspace
+        run: ./arena bootstrap
+      - name: Typecheck the Mineflayer client package
+        run: ./arena build --package bots
 
   stack:
     if: ${{ inputs.confirm_stack_prerequisites }}
@@ -70,11 +69,21 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-      - name: Install pinned Rust toolchain and kache
-        run: sh scripts/ci-prepare-rust.sh
-      - name: Fetch locked crates
-        run: |
-          rust_toolchain=$(awk -F '"' '$1 ~ /^rust_toolchain = / { print $2 }' versions.lock.toml)
-          cargo "+$rust_toolchain" fetch --locked
+      - name: Bootstrap the pinned TypeScript workspace
+        run: ./arena bootstrap
       - name: Run the loopback Paper and two-client smoke
         run: ./arena test --suite integration --case stack
+
+  acceptance:
+    if: ${{ inputs.confirm_acceptance_prerequisites }}
+    needs: [java-plugin, protocol-client]
+    runs-on: [self-hosted, linux, x64]
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Bootstrap the pinned TypeScript workspace
+        run: ./arena bootstrap
+      - name: Run six-seat gameplay acceptance
+        run: ./arena test --suite acceptance --case hunger-six
+      - name: Run seat and spectator acceptance
+        run: ./arena test --suite acceptance --case play-seats

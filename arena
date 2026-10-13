@@ -429,22 +429,16 @@ usage() {
 usage:
   ./arena bootstrap
   ./arena build [--package core|spec|bots|runner|all]
-  ./arena test --suite <core|spec|bots|runner|integration|java> --case <name>
-  ./arena run <runner arguments...>
+  ./arena check <compatibility|build-script>
+  ./arena test --suite <core|spec|bots|runner|integration|acceptance|java> --case <name>
+  ./arena <report|inspect|compare|prepare|validate|doctor|run|play|replay-policy> <arguments...>
 EOF
-}
-
-verify_typescript() {
-    npm_workspace="$root/.work/arena/npm-workspace"
-    compiler_output=$("$NODE_HOME/bin/node" "$npm_workspace/node_modules/typescript/bin/tsc" --version) || fail "pinned TypeScript compiler does not start"
-    [ "$compiler_output" = "Version 5.9.3" ] || fail "TypeScript compiler mismatch: expected Version 5.9.3, got $compiler_output"
 }
 
 bootstrap() {
     [ "$#" -eq 0 ] || fail "bootstrap accepts no arguments"
     prepare_node
     install_npm_workspace
-    verify_typescript
     printf '%s\n' "Node $(locked_section_value node version) and npm $(locked_section_value node npm_version) are installed under .work/arena/toolchains." \
         "The locked TypeScript workspace is installed under .work/arena/npm-workspace."
 }
@@ -461,19 +455,29 @@ build_command() {
     esac
     prepare_node
     ensure_workspace_dependencies
-    verify_typescript
     build_typescript "$target"
 }
 
-run_command() {
-    [ "$#" -gt 0 ] || fail "usage: ./arena run <runner arguments...>"
+launch_runner() {
+    cli_command=$1
+    shift
     prepare_node
     ensure_workspace_dependencies
-    verify_typescript
     build_typescript runner
     cli="$root/.work/build/packages/arena-runner/src/cli.js"
     [ -f "$cli" ] || fail "runner CLI is not built at $cli"
-    "$NODE_HOME/bin/node" "$cli" "$@"
+    fs_helper="$root/.work/build/native/arena-fs-helper"
+    (cd "$root" && ARENA_FS_HELPER="$fs_helper" "$NODE_HOME/bin/node" "$cli" "$cli_command" "$@")
+}
+
+check_command() {
+    [ "$#" -eq 1 ] || fail "usage: ./arena check <compatibility|build-script>"
+    prepare_node
+    case "$1" in
+        compatibility) "$NODE_HOME/bin/node" "$root/scripts/check-compatibility-doc.mjs" ;;
+        build-script) run_named_tests tooling "typescript build rejects an unknown target" ;;
+        *) fail "unknown check: $1" ;;
+    esac
 }
 
 test_command() {
@@ -507,20 +511,38 @@ test_command() {
         core:*|spec:*|bots:*|runner:*)
             prepare_node
             ensure_workspace_dependencies
-            verify_typescript
             build_typescript "$suite"
             run_named_tests "$suite" "$case_name"
             ;;
-        integration:stack)
-            [ -f "$root/tests/integration/stack.ts" ] || fail "blocked: Mineflayer stack smoke harness is not ready"
+        integration:stack|integration:maps-reset|integration:match-rules|integration:legal-player|integration:fairness)
+            [ -f "$root/tests/integration/$case_name.ts" ] || fail "blocked: integration case is not ready: $case_name"
             prepare_node
             ensure_workspace_dependencies
-            verify_typescript
+            build_typescript stack
             prepare_jdk
             build_plugin
             ensure_paper_artifact
+            run_named_tests integration "$case_name"
+            ;;
+        acceptance:hunger-six)
+            [ -f "$root/tests/acceptance/hunger.ts" ] || fail "blocked: acceptance case is not ready: hunger-six"
+            prepare_node
+            ensure_workspace_dependencies
             build_typescript stack
-            run_named_tests integration stack
+            prepare_jdk
+            build_plugin
+            ensure_paper_artifact
+            run_named_tests acceptance hunger-six
+            ;;
+        acceptance:play-seats)
+            [ -f "$root/tests/acceptance/seats.ts" ] || fail "blocked: acceptance case is not ready: play-seats"
+            prepare_node
+            ensure_workspace_dependencies
+            build_typescript stack
+            prepare_jdk
+            build_plugin
+            ensure_paper_artifact
+            run_named_tests acceptance play-seats
             ;;
         *)
             fail "unknown or blocked test selector: $suite / $case_name"
@@ -537,8 +559,11 @@ shift
 case "$command" in
     bootstrap) bootstrap "$@" ;;
     build) build_command "$@" ;;
+    check) check_command "$@" ;;
     test) test_command "$@" ;;
-    run) run_command "$@" ;;
+    report|inspect|compare|prepare|validate|doctor|run|play|replay-policy)
+        launch_runner "$command" "$@"
+        ;;
     help|-h|--help)
         [ "$#" -eq 0 ] || fail "help accepts no arguments"
         usage
