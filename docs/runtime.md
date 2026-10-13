@@ -4,6 +4,8 @@
 
 The runtime authenticates the plugin over a loopback control socket, validates its ready identity against the repository plugin descriptor, sends the compiled prepare command, waits for all clients, and then starts the match or passes control to an evaluator. The plugin owns player modes. After a terminal event, the runtime stops issuing policy decisions, joins active skills, stops and reaps Paper, finalizes the v2 trace, reads stopped player stats, and releases the run lease.
 
+`RunPreparedRunOptions` requires `acceptMinecraftEula: true`; the runtime rejects missing acceptance before reading run inputs. The CLI likewise requires `--accept-minecraft-eula` before artifact lookup or preparation. Optional `onRosterReady` runs after the authenticated server and complete automated roster are ready, before match start or evaluation. It reports the loopback host, game port, and server Minecraft/protocol versions; callback failure fails the run. The CLI uses it to print spectator connection details to stderr while keeping final JSON on stdout.
+
 The CLI applies a 180 second cold-start deadline, a 60 second per-server readiness deadline, and a 600 second wall deadline. Deadlines fail with a structured runtime timeout. Cleanup preserves the initiating error and reports cleanup failure separately. An interrupted run retains its structured failure artifact and any completed trace checkpoints; cancellation does not invent a terminal outcome. A genuine operator-abort outcome may be emitted during cleanup after cancellation when backed by its preceding recorded runner operator-abort command and independently validated authority events; it cannot be replaced by a winner, draw, or fabricated outcome.
 
 ## Integration selectors

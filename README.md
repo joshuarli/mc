@@ -1,6 +1,6 @@
 # Arena
 
-Arena is a headless Minecraft competition stack. Mineflayer bots are the only clients; the Paper plugin owns authoritative world and match rules. Toolchain versions are pinned in [`versions.lock.toml`](versions.lock.toml), while package versions are pinned in the npm manifests and lockfile. See [compatibility](docs/compatibility.md) for the full matrix.
+Arena is a headless Minecraft competition stack. Mineflayer bots compete; an external native Minecraft client may join as a spectator. The Paper plugin owns authoritative world and match rules. Toolchain versions are pinned in [`versions.lock.toml`](versions.lock.toml), while package versions are pinned in the npm manifests and lockfile. See [compatibility](docs/compatibility.md) for the full matrix.
 
 The TypeScript runner supports configured Paper runs, scenario preparation, stopped-run inspection and cleanup, and trace inspection, policy replay, reporting, and comparison. Runtime lifecycle and authority behavior have focused live proofs; full gameplay acceptance remains in progress.
 
@@ -31,6 +31,12 @@ Use `./arena help` for launcher syntax. The implemented runner commands are:
 ```
 
 `prepare` compiles a scenario and stages its world plan. `inspect` and `report` read complete trace segments; `compare` checks two single-segment streams. These evidence commands do not start Paper or run a match. See [runner operations](docs/operations.md) for input and output details.
+
+## Watch a local match
+
+Run `make server` from the repository (or the installed parent workspace shortcut). Explicit EULA acceptance is required: use `make server ACCEPT_MINECRAFT_EULA=1`, or set `ACCEPT_MINECRAFT_EULA := 1` in the ignored `.work/arena/server.mk` after accepting the Minecraft EULA. No acceptance is shipped by default.
+
+The target starts `scenarios/hunger-six.toml` and prints the actual Minecraft Java Edition version and connection address after server and bot readiness. Use a matching native client and connect to `127.0.0.1:25565` as a spectator. The server stops when the match ends or when you press Ctrl-C. Plain `make` only shows help.
 
 ## Current proof
 

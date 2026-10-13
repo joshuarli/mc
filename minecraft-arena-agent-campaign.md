@@ -318,6 +318,7 @@ Use exact locked source/API for implementation. Mutable links below are research
 Append one line per execution judgment that a reader would otherwise miss: date, item, decision and reason. Owner decisions and prescribed choices above are already recorded; do not duplicate them here.
 
 - 2026-10-13 — Java diagnostic loop: a clean Gradle cache exposed missing verification metadata for the already resolved JUnit 5.7.1 BOM module. Add only its SHA-256 after comparing the downloaded bytes with Maven Central's published checksum; keep strict verification and all dependency versions unchanged.
+- 2026-10-13 — owner spectator access: add a top-level `make server` for the ordinary six-bot scenario, with actual ready connection details and explicit local EULA acceptance. An external native graphical client may observe; competitors remain bots and no renderer or protocol bridge is added. The parent workspace shortcut and ignored local consent file are operator setup, not shipped defaults.
 
 Decisions dated 2026-10-12 are historical and are superseded where they select Rust, Azalea, or Paper 26.2 for bots. Their evidence remains valid only for the exact earlier stack.
 
