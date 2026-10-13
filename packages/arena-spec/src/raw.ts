@@ -189,7 +189,7 @@ function tableAtPath(
       if (current.kind !== "array") {
         throw new SpecError(SpecErrorKind.Syntax, document, "array table index conflicts with a non-array value", location);
       }
-      const entry = current.value[segment];
+      const entry: RawValue | undefined = current.value[segment];
       if (entry === undefined || entry.kind !== "table") {
         throw new SpecError(SpecErrorKind.Syntax, document, "array table index does not identify a table", location);
       }
