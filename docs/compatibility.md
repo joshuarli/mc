@@ -17,6 +17,6 @@ Mineflayer 4.39.0 and `minecraft-protocol` 1.68.0 advertise Minecraft 26.1 suppo
 
 **Arena live compatibility status: pending.** The required two-client Mineflayer smoke must verify login, chunks, movement, chest transfer, an ordinary hit observed by the server, disconnect, and rejection of a wrong-version client against the locked Paper build. No live Mineflayer/Paper proof is recorded yet.
 
-The pinned Node and npm bootstrap completed on macOS arm64. Linux x86_64 is the other supported native target and still needs a host run. A 26.2 graphical client through ViaVersion is optional and is not part of the bot protocol path; its actual play path remains unverified.
+The pinned Node and npm bootstrap completed on macOS arm64. Linux x86_64 is the other supported native target and still needs a host run.
 
 Sources: [Mineflayer 4.39.0 supported versions](https://raw.githubusercontent.com/PrismarineJS/mineflayer/4.39.0/lib/version.js), [Mineflayer 4.39.0 package metadata](https://raw.githubusercontent.com/PrismarineJS/mineflayer/4.39.0/package.json), [minecraft-protocol 1.68.0 protocol versions](https://raw.githubusercontent.com/PrismarineJS/node-minecraft-protocol/1.68.0/src/version.js), [Minecraft 26.1.2 protocol mapping](https://raw.githubusercontent.com/PrismarineJS/minecraft-data/master/data/pc/common/protocolVersions.json), [Node.js release schedule](https://nodejs.org/en/about/previous-releases), [Paper Java requirements](https://docs.papermc.io/paper/getting-started/).

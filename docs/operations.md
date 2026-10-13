@@ -19,4 +19,4 @@ The supported native targets are macOS arm64 and Linux x86_64. Other target pair
 
 Errors are one JSON object on stderr. Exit codes are 0 for success, 2 for invalid input, 3 for a missing resource or prerequisite, 5 for corrupt or incomplete evidence, and 6 for runtime failures. Error output carries a category, a generic resource label, and structured source details; it omits parser text and file contents.
 
-World cloning/reset, child supervision, control handshake, `run`/`play`, `replay-policy`, and event-derived outcomes remain follow-up work. Live lifecycle tests require the prepared Paper/Azalea stack and J1 handshake/event sources. D2 policy execution requires B1's policy and recorded-input contracts. D3 requires the authoritative ordered event schema.
+World cloning/reset, child supervision, control handshake, `run`, `replay-policy`, and event-derived outcomes remain follow-up work. Live lifecycle tests require the prepared Paper stack and J1 handshake/event sources. D2 policy execution requires B1's policy and recorded-input contracts. D3 requires the authoritative ordered event schema.

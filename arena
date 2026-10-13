@@ -29,8 +29,6 @@ ensure_work_directory "$root/.work"
 ensure_work_directory "$root/.work/tmp"
 ensure_work_directory "$root/.work/arena"
 export TMPDIR="$root/.work/tmp"
-export GRADLE_USER_HOME="$root/.work/arena/gradle"
-ensure_work_directory "$GRADLE_USER_HOME"
 download_tmp=
 jdk_stage=
 node_stage=
@@ -243,6 +241,9 @@ run_named_tests() {
 }
 
 prepare_jdk() {
+    GRADLE_USER_HOME="$root/.work/arena/gradle"
+    ensure_work_directory "$GRADLE_USER_HOME"
+    export GRADLE_USER_HOME
     jdk_version=$(locked_section_value java version)
     runtime_build=$(locked_section_value java runtime_build)
     download_limit=$(locked_section_number limits max_download_bytes)
@@ -357,20 +358,31 @@ verify_gradle_wrapper() {
     [ "$wrapper_distribution_sha" = "$distribution_sha" ] || fail "Gradle wrapper checksum does not match versions.lock.toml"
 }
 
-build_plugin() {
+run_plugin_gradle() {
+    task=$1
     api_group=$(locked_section_value paper api_group)
     api_artifact=$(locked_section_value paper api_artifact)
     api_version=$(locked_section_value paper api_version)
     plugin_api_version=$(locked_section_value paper plugin_api_version)
     project_cache="$root/.work/arena/gradle-project"
     ensure_work_directory "$project_cache"
+    ensure_work_directory "$root/.work/arena/gradle-build"
+    ensure_work_directory "$root/.work/arena/gradle-build/libs"
     verify_gradle_wrapper
     (cd "$root/server/arena-plugin" && ./gradlew --dependency-verification=strict --project-cache-dir "$project_cache" --no-daemon \
         -PpaperApiGroup="$api_group" \
         -PpaperApiArtifact="$api_artifact" \
         -PpaperApiVersion="$api_version" \
         -PpluginApiVersion="$plugin_api_version" \
-        build)
+        "$task") 1>&2
+}
+
+build_plugin() {
+    run_plugin_gradle jar
+}
+
+test_plugin() {
+    run_plugin_gradle test
 }
 
 sha256_file() {
@@ -431,7 +443,7 @@ usage:
   ./arena build [--package core|spec|bots|control|runner|all]
   ./arena check <compatibility|build-script>
   ./arena test --suite <core|spec|bots|runner|protocol|integration|acceptance|java> --case <name>
-  ./arena <report|inspect|compare|prepare|validate|doctor|run|play|replay-policy> <arguments...>
+  ./arena <report|inspect|compare|prepare|validate|doctor|run|replay-policy> <arguments...>
 EOF
 }
 
@@ -468,7 +480,25 @@ launch_runner() {
     fs_helper="$root/.work/arena-fs/arena-fs"
     cli="$root/.work/build/packages/arena-runner/src/cli.js"
     [ -f "$cli" ] || fail "runner CLI is not built at $cli"
-    (cd "$root" && ARENA_FS_HELPER="$fs_helper" "$NODE_HOME/bin/node" "$cli" "$cli_command" "$@")
+    if [ "$cli_command" = run ]; then
+        prepare_jdk
+        build_plugin
+        ensure_paper_artifact
+        runtime_java_home=$JAVA_HOME
+        runtime_paper_jar="$root/.work/arena/downloads/$paper_file"
+        runtime_plugin_jar="$root/.work/arena/gradle-build/libs/arena-plugin-0.1.0.jar"
+        [ -f "$runtime_plugin_jar" ] && [ ! -L "$runtime_plugin_jar" ] || fail "locked Paper plugin JAR is unavailable: $runtime_plugin_jar"
+        (cd "$root" && ARENA_FS_HELPER="$fs_helper" ARENA_JAVA_HOME="$runtime_java_home" \
+            ARENA_PAPER_JAR="$runtime_paper_jar" ARENA_PLUGIN_JAR="$runtime_plugin_jar" \
+            "$fs_helper" launch-node "$NODE_HOME/bin/node" "$cli" "$cli_command" "$@")
+    else
+        (
+            cd "$root"
+            unset ARENA_JAVA_HOME ARENA_PAPER_JAR ARENA_PLUGIN_JAR
+            ARENA_FS_HELPER="$fs_helper" \
+                "$fs_helper" launch-node "$NODE_HOME/bin/node" "$cli" "$cli_command" "$@"
+        )
+    fi
 }
 
 build_fs_helper() {
@@ -476,7 +506,7 @@ build_fs_helper() {
     ensure_work_directory "$fs_root"
     helper="$fs_root/arena-fs"
     [ ! -L "$helper" ] || fail "filesystem helper path must not be a symlink"
-    make -C "$root/native/arena-fs" build || fail "build the native filesystem helper"
+    make -C "$root/native/arena-fs" build 1>&2 || fail "build the native filesystem helper"
     [ -f "$helper" ] && [ -x "$helper" ] && [ ! -L "$helper" ] || fail "native filesystem helper is not executable at $helper"
 }
 
@@ -521,6 +551,10 @@ test_command() {
             prepare_jdk
             build_plugin
             ;;
+        java:unit)
+            prepare_jdk
+            test_plugin
+            ;;
         core:*|spec:*|bots:*|runner:*)
             prepare_node
             ensure_workspace_dependencies
@@ -553,16 +587,6 @@ test_command() {
             ensure_paper_artifact
             run_named_tests acceptance hunger-six
             ;;
-        acceptance:play-seats)
-            [ -f "$root/tests/acceptance/seats.ts" ] || fail "blocked: acceptance case is not ready: play-seats"
-            prepare_node
-            ensure_workspace_dependencies
-            build_typescript stack
-            prepare_jdk
-            build_plugin
-            ensure_paper_artifact
-            run_named_tests acceptance play-seats
-            ;;
         *)
             fail "unknown or blocked test selector: $suite / $case_name"
             ;;
@@ -580,7 +604,7 @@ case "$command" in
     build) build_command "$@" ;;
     check) check_command "$@" ;;
     test) test_command "$@" ;;
-    report|inspect|compare|prepare|validate|doctor|run|play|replay-policy)
+    report|inspect|compare|prepare|validate|doctor|run|replay-policy)
         launch_runner "$command" "$@"
         ;;
     help|-h|--help)

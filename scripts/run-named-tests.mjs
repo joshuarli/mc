@@ -19,8 +19,7 @@ const integrationCases = new Map([
   ["fairness", "fairness.js"]
 ]);
 const acceptanceCases = new Map([
-  ["hunger-six", "hunger.js"],
-  ["play-seats", "seats.js"]
+  ["hunger-six", "hunger.js"]
 ]);
 
 function fail(message) {

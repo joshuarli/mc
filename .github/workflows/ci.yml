@@ -9,7 +9,7 @@ on:
         default: false
         type: boolean
       confirm_acceptance_prerequisites:
-        description: Confirm the self-hosted Linux x64 runner has at least 8 GiB free in .work and may run the six-client acceptance cases
+        description: Confirm the self-hosted Linux x64 runner has at least 8 GiB free in .work and may run six bot clients with an automated spectator
         required: false
         default: false
         type: boolean
@@ -50,6 +50,8 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Run Paper plugin unit tests with locked Java and Gradle
+        run: ./arena test --suite java --case unit
       - name: Build Paper plugin with locked Java and Gradle
         run: ./arena test --suite java --case plugin
 
@@ -85,7 +87,5 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - name: Bootstrap the pinned TypeScript workspace
         run: ./arena bootstrap
-      - name: Run six-seat gameplay acceptance
+      - name: Run six-bot and automated-spectator acceptance
         run: ./arena test --suite acceptance --case hunger-six
-      - name: Run seat and spectator acceptance
-        run: ./arena test --suite acceptance --case play-seats
