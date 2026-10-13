@@ -13,6 +13,7 @@ import {
   assertDeathWinner,
   competitorForSeat,
   eliminateOpponentWithSkillAttacks,
+  runEvaluatorSkill,
   waitForActivePhase,
 } from "./support/duel.js";
 import { observePlayerInventory } from "./support/mineflayer-world.js";
@@ -81,12 +82,12 @@ test("legal-player", { timeout: 300_000 }, async (t) => {
         diagnostics.close();
       }
       assert.deepStrictEqual(
-        await seatZero.client.run({ kind: "navigate", target: chest.position }),
+        await runEvaluatorSkill(seatZero.client, { kind: "navigate", target: chest.position }, signal),
         { kind: "succeeded" },
         "the Mineflayer pathfinder skill must reach the declared chest route",
       );
       assert.deepStrictEqual(
-        await seatZero.client.run({ kind: "containerOpen", position: chest.position }),
+        await runEvaluatorSkill(seatZero.client, { kind: "containerOpen", position: chest.position }, signal),
         { kind: "succeeded" },
         "the ordinary container skill must collect the declared chest contents",
       );
@@ -105,7 +106,7 @@ test("legal-player", { timeout: 300_000 }, async (t) => {
       assert.ok(bread, "the player inventory must identify a bread slot for the ordinary eating skill");
       const foodBeforeEating = seatZero.bot.food;
       assert.deepStrictEqual(
-        await seatZero.client.run({ kind: "eat", inventorySlot: inventorySlot(bread.slot) }),
+        await runEvaluatorSkill(seatZero.client, { kind: "eat", inventorySlot: inventorySlot(bread.slot) }, signal),
         { kind: "succeeded" },
         "the ordinary eating skill must consume the looted bread after sprint-jump food loss",
       );
@@ -124,12 +125,12 @@ test("legal-player", { timeout: 300_000 }, async (t) => {
       const weapon = observation.agent.value.upgrades.find((upgrade) => upgrade.equipmentSlot === "weapon");
       assert.ok(weapon, "the complete client observation must recognize the received sword as an upgrade");
       assert.deepStrictEqual(
-        await seatZero.client.run({
+        await runEvaluatorSkill(seatZero.client, {
           kind: "equip",
           inventorySlot: weapon.inventorySlot,
           equipmentSlot: "weapon",
           rating: weapon.rating,
-        }),
+        }, signal),
         { kind: "succeeded" },
         "the ordinary equip skill must place the received sword in the weapon slot",
       );
@@ -324,7 +325,7 @@ async function navigateOverRamp(
     if (route.approach !== undefined) {
       signal.throwIfAborted();
       assert.deepStrictEqual(
-        await client.run({ kind: "navigateToBlock", target: route.approach }),
+        await runEvaluatorSkill(client, { kind: "navigateToBlock", target: route.approach }, signal),
         { kind: "succeeded" },
         "the pathfinder skill must reach the west-adjacent floor block before the ramp",
       );
@@ -339,7 +340,7 @@ async function navigateOverRamp(
     observer.on("entityMoved", observeRemotePosition);
     signal.throwIfAborted();
     assert.deepStrictEqual(
-      await client.run({ kind: "navigateToBlock", target }),
+      await runEvaluatorSkill(client, { kind: "navigateToBlock", target }, signal),
       { kind: "succeeded" },
       "the pathfinder skill must climb onto the existing ramp",
     );
@@ -357,7 +358,7 @@ async function navigateOverRamp(
     if (route.beyond !== undefined) {
       signal.throwIfAborted();
       assert.deepStrictEqual(
-        await client.run({ kind: "navigate", target: route.beyond }),
+        await runEvaluatorSkill(client, { kind: "navigate", target: route.beyond }, signal),
         { kind: "succeeded" },
         "the pathfinder skill must continue along the route beyond the existing ramp",
       );

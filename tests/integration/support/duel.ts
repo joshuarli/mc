@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { setTimeout as delay } from "node:timers/promises";
+import type { ArenaSkillIntent, MineflayerArenaClient } from "@arena/bots";
+import type { SkillOutcome } from "@arena/core";
 
 import { runOwnedAcceptanceScenario } from "./owned-run.js";
 import type { AcceptanceRunContext } from "./owned-run.js";
@@ -10,6 +12,18 @@ const OPPONENT_VISIBILITY_TIMEOUT_MS = 20_000;
 const ELIMINATION_TIMEOUT_MS = 3_000;
 const MAX_ATTACKS = 20;
 const ATTACK_COOLDOWN_MS = 700;
+
+/** Runtime shutdown can settle a skill as cancelled; keep its initiating failure ahead of success assertions. */
+export async function runEvaluatorSkill(
+  client: Pick<MineflayerArenaClient, "run">,
+  intent: ArenaSkillIntent,
+  signal: AbortSignal,
+): Promise<SkillOutcome> {
+  signal.throwIfAborted();
+  const outcome = await client.run(intent);
+  signal.throwIfAborted();
+  return outcome;
+}
 
 export function competitorForSeat(active: AcceptanceRunContext, seat: number) {
   assert.equal(active.prepare.type, "prepare");
@@ -91,12 +105,12 @@ export async function eliminateOpponentWithSkillAttacks(
   const weaponUpgrade = agent.value.upgrades.find(({ equipmentSlot }) => equipmentSlot === "weapon");
   if (weaponUpgrade) {
     assert.deepStrictEqual(
-      await attacker.client.run({
+      await runEvaluatorSkill(attacker.client, {
         kind: "equip",
         inventorySlot: weaponUpgrade.inventorySlot,
         equipmentSlot: weaponUpgrade.equipmentSlot,
         rating: weaponUpgrade.rating,
-      }),
+      }, signal),
       { kind: "succeeded" },
       "the Mineflayer skill client must equip its currently observed weapon upgrade",
     );
@@ -112,14 +126,14 @@ export async function eliminateOpponentWithSkillAttacks(
     const visibleTarget = observation.opponents.value.find(({ id }) => id === currentTargetEntity.id);
     assert.ok(visibleTarget, "the attacker's complete current perception must identify its opponent before each attack");
     assert.deepStrictEqual(
-      await attacker.client.run({ kind: "approach", target: visibleTarget.id }),
+      await runEvaluatorSkill(attacker.client, { kind: "approach", target: visibleTarget.id }, signal),
       { kind: "succeeded" },
       `the Mineflayer skill client must approach the currently visible opponent before attack ${attack + 1}`,
     );
     const currentTarget = targetEntityFor(attacker.bot, target.identity.username);
     await attacker.bot.lookAt(currentTarget.position.offset(0, currentTarget.height * 0.6, 0), true);
     assert.deepStrictEqual(
-      await attacker.client.run({ kind: "attack", target: visibleTarget.id }),
+      await runEvaluatorSkill(attacker.client, { kind: "attack", target: visibleTarget.id }, signal),
       { kind: "succeeded" },
       `ordinary Mineflayer attack ${attack + 1} must produce server-observed damage`,
     );
