@@ -5,9 +5,9 @@ import type { Bot } from 'mineflayer';
 import {
   agentObservation, agentState, blockPosition, currentKnowledge, emptyEquipment,
   observationSequence, PolicyParams, tick, unknownKnowledge, worldBorder,
-  visibleOpponent, entityId, type SkillOutcome,
+  visibleOpponent, entityId, type SkillOutcome, civilizationPolicyContext, civilizationProfileForSeat, civilizationObservation,
 } from '@arena/core';
-import type { MineflayerArenaClient } from '@arena/bots';
+import type { MineflayerArenaClient, MineflayerCivilizationClient } from '@arena/bots';
 import { LivePolicyLoop, type PolicyActivityEvent } from '../src/runtime/live-policy-loop.js';
 import type { PolicyEffectRecordV1, PolicyReplayRecord } from '../src/policy-replay.js';
 
@@ -34,7 +34,7 @@ function competitor(seat: number, run: MineflayerArenaClient['run'], hold = fals
     cancel: async () => {},
     close: async () => {},
   };
-  return { seat, bot, client };
+  return { seat, bot, client, gameplay: { mode: 'hunger_games' as const, client } };
 }
 
 async function settle() {
@@ -49,8 +49,8 @@ function fixture(competitors: ReturnType<typeof competitor>[], onActivity?: (eve
   const failures: unknown[] = [];
   const loop = new LivePolicyLoop({
     trace: {
-      recordPolicyDecision: async (record) => { decisions.push(record); },
-      recordPolicyEffect: async (record) => { effects.push(record); },
+      recordPolicyDecision: async (record) => { assert.ok(record.schema === 'policy-replay-v1' || record.schema === 'policy-replay-v2'); decisions.push(record); },
+      recordPolicyEffect: async (record) => { assert.equal(record.schema, 'policy-effect-v1'); if (record.schema !== 'policy-effect-v1') assert.fail('expected Hunger Games effect'); effects.push(record); },
       checkpoint: async (count) => { checkpoints.push({ count, decisions: decisions.length, effects: effects.length }); },
     },
     params: PolicyParams.baseline(), seed: 1n, strategyIntervalTicks: 1n,
@@ -337,8 +337,8 @@ test('live policy releases a settled action before its effect persistence finish
   const seat = competitor(0, async () => ({ kind: 'succeeded' }));
   const loop = new LivePolicyLoop({
     trace: {
-      recordPolicyDecision: async (record) => { decisions.push(record); },
-      recordPolicyEffect: async (record) => { effects.push(record); await persistence.promise; },
+      recordPolicyDecision: async (record) => { assert.ok(record.schema === 'policy-replay-v1' || record.schema === 'policy-replay-v2'); decisions.push(record); },
+      recordPolicyEffect: async (record) => { assert.equal(record.schema, 'policy-effect-v1'); if (record.schema !== 'policy-effect-v1') assert.fail('expected Hunger Games effect'); effects.push(record); await persistence.promise; },
       checkpoint: async () => {},
     },
     params: PolicyParams.baseline(), seed: 1n, strategyIntervalTicks: 1n, recordPolicy: true,
@@ -407,4 +407,61 @@ test('live policy preserves a pending exploration route across fresh random prop
     assert.ok(later.every((record) => record.schema === 'policy-replay-v2'
       && (record.disposition.kind === 'continue' || record.disposition.kind === 'defer')));
   } finally { await state.loop.stopAndJoin(); }
+});
+
+
+test('civilization loop isolates received reports by faction, throttles channels and joins cancellation', async () => {
+  const receipts: { recipient: number; sender: number; currentTick: number; report: unknown }[] = [];
+  const skill = pending<SkillOutcome>();
+  const cancelled: number[] = [];
+  const seats = Array.from({ length: 6 }, (_, seat) => {
+    const profile = civilizationProfileForSeat(seat)!;
+    const context = civilizationPolicyContext({ ...profile, objective: {
+      captureBox: { min: blockPosition(10, 64, 10), max: blockPosition(12, 66, 12) },
+      outpost: { blueprintId: 'oak-outpost-v1', anchor: blockPosition(20, 64, 20), rotationDegrees: 0 },
+    } });
+    const baseline = competitor(seat, async () => ({ kind: 'succeeded' }), false, 0);
+    const client: MineflayerCivilizationClient = {
+      observe: (value) => civilizationObservation({ base: baseline.client.observe(value),
+        ownMaterials: currentKnowledge([]),
+        observedResources: currentKnowledge([{ kind: 'logBlock', position: blockPosition(1, 64, 0) }]),
+        teamMessages: [],
+      }, context),
+      run: async () => ({ kind: 'succeeded' }),
+      runCivilization: () => skill.promise,
+      receiveTeamReport: ({ authenticatedSenderSeat, decodedReport, currentTick }) => {
+        receipts.push({ recipient: seat, sender: authenticatedSenderSeat, currentTick, report: decodedReport });
+      },
+      cancel: async (reason) => { cancelled.push(seat); skill.resolve({ kind: 'cancelled', reason }); },
+      close: async () => {},
+    };
+    return { seat, bot: baseline.bot, client, gameplay: { mode: 'civilization' as const, context, client } };
+  });
+  const failures: unknown[] = [];
+  const loop = new LivePolicyLoop({
+    trace: { recordPolicyDecision: async () => {}, recordPolicyEffect: async () => {}, checkpoint: async () => {} },
+    params: PolicyParams.baseline(), seed: 1n, strategyIntervalTicks: 1n,
+    recordPolicy: true, competitors: () => seats, fail: (error) => failures.push(error),
+  });
+  loop.onTick(0);
+  await settle();
+  assert.equal(receipts.length, 12);
+  for (const receipt of receipts) {
+    assert.notEqual(receipt.recipient, receipt.sender);
+    assert.equal(Math.floor(receipt.recipient / 3), Math.floor(receipt.sender / 3));
+    assert.equal(receipt.currentTick, 0);
+    assert.equal('sender' in (receipt.report as object), false);
+  }
+  loop.onTick(19);
+  await settle();
+  assert.equal(receipts.length, 12);
+  loop.onTick(20);
+  await settle();
+  assert.equal(receipts.length, 24);
+  assert.equal(receipts.slice(12).every((receipt) => receipt.currentTick === 20), true);
+  await loop.stopAndJoin();
+  assert.ok(cancelled.includes(0));
+  assert.ok(cancelled.includes(3));
+  assert.deepEqual(failures, []);
+  for (const seat of seats) assert.equal(seat.bot.listenerCount('death'), 0);
 });

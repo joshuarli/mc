@@ -1,4 +1,4 @@
-import type { Intent, SkillOutcome } from '@arena/core';
+import type { CivilizationPolicyContext, Intent, SkillOutcome } from '@arena/core';
 import type { Bot } from 'mineflayer';
 import type { OutcomePayload, ControlMessage, PreparePayload } from '../control/index.js';
 import type { FileIdentity } from '../owned-files/index.js';
@@ -7,7 +7,7 @@ import type { RunnerCommandEnvelope } from './session.js';
 import type { PlayerIdentity, StoppedPlayerStats } from './observations.js';
 
 export type RuntimeAuthorityEvent = Extract<ControlMessage, {
-  readonly type: 'public_clock' | 'public_state' | 'elimination' | 'outcome';
+  readonly type: 'public_clock' | 'public_state' | 'civilization_state' | 'elimination' | 'outcome';
 }>;
 
 export interface ChunkReceipt {
@@ -26,11 +26,17 @@ export interface MineflayerReceiptSnapshot {
   readonly entities: readonly EntityReceipt[];
 }
 
+export type RuntimeGameplay =
+  | { readonly mode: 'hunger_games'; readonly client: import('@arena/bots').MineflayerArenaClient }
+  | { readonly mode: 'civilization'; readonly context: CivilizationPolicyContext;
+      readonly client: import('@arena/bots').MineflayerCivilizationClient };
+
 export interface RuntimeCompetitorHandle {
   readonly seat: number;
   readonly identity: PlayerIdentity;
   readonly bot: Bot;
-  readonly client: import('@arena/bots').MineflayerArenaClient;
+  readonly client: import('@arena/bots').MineflayerArenaClient | import('@arena/bots').MineflayerCivilizationClient;
+  readonly gameplay: RuntimeGameplay;
   chunkReceipts(): MineflayerReceiptSnapshot;
 }
 

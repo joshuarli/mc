@@ -80,7 +80,7 @@ test('Mineflayer cleanup after a peer half-close releases the child process', ()
     '  const address = server.address();',
     "  assert.ok(address && typeof address === 'object', 'local listener must have a TCP address');",
     '  const connection = new RuntimeCompetitorClient(0, identity, {',
-    "    host: '127.0.0.1', port: address.port, scenario, signal: new AbortController().signal,",
+    "    host: '127.0.0.1', port: address.port, scenario, publicRoster: [], signal: new AbortController().signal,",
     '  });',
     '  await assert.rejects(connection.connect());',
     "  assert.equal(peerSentFin, true, 'the server must receive protocol bytes and send FIN');",
@@ -115,6 +115,7 @@ function createCompetitor(port: number, signal: AbortSignal): RuntimeCompetitorC
     host: '127.0.0.1',
     port,
     scenario,
+    publicRoster: roster.competitors.map((entry) => ({ seat: entry.seat, username: entry.username, offlineUuid: entry.offline_uuid })),
     signal,
   });
 }

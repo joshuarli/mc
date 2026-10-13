@@ -74,3 +74,26 @@ function compileHungerSixScenario(spectatorCapacity: number) {
   const mapSource = readFileSync(join(repositoryRoot, 'maps/hunger-six.toml'), 'utf8');
   return compileScenario(scenarioSource, mapSource);
 }
+
+
+test('civilization preparation preserves fixed border, canonical factions and public objectives', () => {
+  const scenario = compileScenario(
+    readFileSync(join(repositoryRoot, 'scenarios/civilization-six.toml'), 'utf8'),
+    readFileSync(join(repositoryRoot, 'maps/civilization-six.toml'), 'utf8'),
+  );
+  assert.equal(scenario.mode, 'civilization');
+  const roster = createRuntimeRoster(scenario);
+  const prepare = createPreparePayload(scenario, roster.competitors);
+  assert.equal(prepare.mode, 'civilization');
+  if (prepare.mode !== 'civilization' || scenario.mode !== 'civilization') assert.fail('civilization mode lost');
+  assert.deepEqual(prepare.settings.border, { kind: 'fixed', diameter_blocks: 192 });
+  assert.deepEqual(prepare.settings.civilization.factions.map((faction) => ({
+    id: faction.id, members: faction.members.map((member) => ({ ...member })),
+  })), scenario.civilization.factions);
+  assert.deepEqual(prepare.settings.civilization.starting_kit, scenario.civilization.startingKit);
+  assert.deepEqual(prepare.settings.civilization.capture_zone.min, scenario.civilization.captureZone.min);
+  assert.deepEqual(prepare.settings.civilization.blueprint.anchors.tide,
+    { position: scenario.civilization.blueprint.anchors.tide.position, rotation_degrees: 180 });
+  assert.equal(roster.competitors.length, 6);
+  assert.equal('shrink_start_tick' in prepare.settings.border, false);
+});

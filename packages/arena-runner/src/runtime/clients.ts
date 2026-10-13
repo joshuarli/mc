@@ -1,6 +1,7 @@
+import { civilizationPolicyContext, civilizationProfileForSeat } from '@arena/core';
 import { createBot, type Bot } from 'mineflayer';
 import type { PartiallyComputedPath } from 'mineflayer-pathfinder';
-import { createMineflayerArenaClient, type MineflayerArenaClient } from '@arena/bots';
+import { createMineflayerArenaClient, createMineflayerCivilizationClient, type CivilizationRosterMember, type MineflayerArenaClient, type MineflayerCivilizationClient } from '@arena/bots';
 import { performance } from 'node:perf_hooks';
 import { RunnerError } from '../errors.js';
 import type { ScenarioIr } from '@arena/spec';
@@ -9,6 +10,7 @@ import type {
   EntityReceipt,
   MineflayerReceiptSnapshot,
   RuntimeCompetitorHandle,
+  RuntimeGameplay,
   RuntimeSpectatorHandle,
 } from './types.js';
 import type { PlayerIdentity } from './observations.js';
@@ -21,6 +23,7 @@ export interface RuntimeClientOptions {
   readonly port: number;
   readonly scenario: ScenarioIr;
   readonly signal: AbortSignal;
+  readonly publicRoster: readonly CivilizationRosterMember[];
 }
 
 export class RuntimeCompetitorClient implements RuntimeCompetitorHandle {
@@ -43,8 +46,14 @@ export class RuntimeCompetitorClient implements RuntimeCompetitorHandle {
     return this.#requireConnection().bot;
   }
 
-  get client(): MineflayerArenaClient {
+  get client(): MineflayerArenaClient | MineflayerCivilizationClient {
     return this.#requireConnection().client;
+  }
+
+  get gameplay(): RuntimeGameplay {
+    const gameplay = this.#requireConnection().gameplay;
+    if (gameplay === undefined) throw new RunnerError('runtime_failure', 'competitor client', { kind: 'missing_gameplay_adapter' });
+    return gameplay;
   }
 
   async connect(): Promise<void> {
@@ -74,7 +83,7 @@ export class RuntimeCompetitorClient implements RuntimeCompetitorHandle {
   async #replaceConnection(): Promise<void> {
     await this.#replaceQueued(async () => {
       if (this.#connection !== undefined) await this.#connection.close();
-      const connection = await connectRuntimeBot(this.identity, this.#connectionOptions);
+      const connection = await connectRuntimeBot(this.identity, this.#connectionOptions, this.seat);
       this.#connections.push(connection);
       this.#connection = connection;
     });
@@ -138,7 +147,8 @@ export class RuntimeSpectatorClient implements RuntimeSpectatorHandle {
 
 interface RuntimeBotConnection {
   readonly bot: Bot;
-  readonly client: MineflayerArenaClient;
+  readonly client: MineflayerArenaClient | MineflayerCivilizationClient;
+  readonly gameplay: RuntimeGameplay | undefined;
   readonly ended: Promise<void>;
   readonly receipts: ReceiptRecorder;
   readonly failure: RunnerError | undefined;
@@ -156,7 +166,8 @@ class OwnedBotConnection implements RuntimeBotConnection {
   readonly #rejectInjectionAllowed: (error: RunnerError) => void;
   readonly #resolveSpawned: () => void;
   readonly #rejectSpawned: (error: RunnerError) => void;
-  #client: MineflayerArenaClient | undefined;
+  #client: MineflayerArenaClient | MineflayerCivilizationClient | undefined;
+  #gameplay: RuntimeGameplay | undefined;
   #failure: RunnerError | undefined;
   #closePromise: Promise<void> | undefined;
   #injectionWasAllowed = false;
@@ -193,18 +204,21 @@ class OwnedBotConnection implements RuntimeBotConnection {
     bot.on('end', this.#onEnd);
   }
 
-  get client(): MineflayerArenaClient {
+  get client(): MineflayerArenaClient | MineflayerCivilizationClient {
     if (this.#client === undefined) {
       throw new RunnerError('runtime_failure', 'Mineflayer client', { kind: 'client_adapter_not_ready' });
     }
     return this.#client;
   }
 
-  setClient(client: MineflayerArenaClient): void {
+  get gameplay(): RuntimeGameplay | undefined { return this.#gameplay; }
+
+  setClient(client: MineflayerArenaClient | MineflayerCivilizationClient, gameplay?: RuntimeGameplay): void {
     if (this.#client !== undefined) {
       throw new RunnerError('runtime_failure', 'Mineflayer client', { kind: 'client_adapter_already_ready' });
     }
     this.#client = client;
+    this.#gameplay = gameplay;
   }
 
   /** Mineflayer's plugin loader runs before this listener so adapter setup sees injected plugins. */
@@ -308,6 +322,7 @@ export function collectClientFailures(
 async function connectRuntimeBot(
   identity: PlayerIdentity,
   options: RuntimeClientOptions,
+  seat?: number,
 ): Promise<RuntimeBotConnection> {
   if (options.signal.aborted) throw cancelledClient();
   let bot: Bot;
@@ -334,16 +349,31 @@ async function connectRuntimeBot(
   try {
     await connection.waitForInjectionAllowed(options.signal, deadline);
     if (connection.failure !== undefined) throw connection.failure;
-    let client: MineflayerArenaClient;
+    let client: MineflayerArenaClient | MineflayerCivilizationClient;
+    let gameplay: RuntimeGameplay | undefined;
     try {
-      client = createMineflayerArenaClient(bot);
+      if (options.scenario.mode === 'civilization' && seat !== undefined) {
+        const profile = civilizationProfileForSeat(seat);
+        if (profile === null) throw new RangeError('civilization competitor seat is outside the canonical roster');
+        const rules = options.scenario.civilization;
+        const anchor = rules.blueprint.anchors[profile.faction];
+        const context = civilizationPolicyContext({ ...profile, objective: {
+          captureBox: { min: rules.captureZone.min, max: rules.captureZone.max },
+          outpost: { blueprintId: rules.blueprint.id, anchor: anchor.position, rotationDegrees: anchor.rotationDegrees },
+        } });
+        client = createMineflayerCivilizationClient(bot, { context, publicRoster: options.publicRoster });
+        gameplay = { mode: 'civilization', context, client };
+      } else {
+        client = createMineflayerArenaClient(bot);
+        if (seat !== undefined) gameplay = { mode: 'hunger_games', client };
+      }
     } catch (error) {
       throw new RunnerError('runtime_failure', 'Mineflayer client', {
         kind: 'client_adapter_failed',
         reason: errorReason(error),
       });
     }
-    connection.setClient(client);
+    connection.setClient(client, gameplay);
     await connection.waitForSpawn(options.signal, deadline);
     if (connection.failure !== undefined) throw connection.failure;
     return connection;

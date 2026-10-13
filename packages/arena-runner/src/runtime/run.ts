@@ -1,5 +1,5 @@
 import { compilePolicy, MAX_SOURCE_BYTES, SpecError } from '@arena/spec';
-import type { AbortReason, ControlMessage, OutcomePayload } from '../control/index.js';
+import type { AbortReason, ControlCapability, ControlMessage, OutcomePayload } from '../control/index.js';
 import { reconstructEventResult } from '../event-report.js';
 import { RunnerError } from '../errors.js';
 import {
@@ -59,7 +59,9 @@ import { startOwnedResourceMonitor, type OwnedResourceMonitor, type ResourceMoni
 import type { OperationalFailurePrimaryV1 } from './failure-artifact.js';
 import { TextDecoder } from 'node:util';
 
-const CONTROL_CAPABILITIES = Object.freeze(['hunger_games_v1'] as const);
+function controlCapabilities(mode: PreparedRun['scenario']['mode']): readonly ControlCapability[] {
+  return Object.freeze([mode === 'civilization' ? 'civilization_v1' : 'hunger_games_v1']);
+}
 const SERVER_DIRECTORY = Buffer.from('/server', 'ascii');
 const CLIENT_HOST = '127.0.0.1' as const;
 const GAME_PORT = 25565;
@@ -215,7 +217,7 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
     listener = await bindControlListener({
       runId: options.preparedRun.runId,
       token,
-      capabilities: CONTROL_CAPABILITIES,
+      capabilities: controlCapabilities(scenario.mode),
     });
     serverProcess = await startPaper(options, serverInputs, listener.address.port, token, runSignal);
     resourceMonitor = observeResourceMonitor(await startOwnedResourceMonitor({
@@ -259,7 +261,8 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
     if (prepareEnvelope.type !== 'prepare') {
       throw new RunnerError('runtime_failure', 'prepare command', { kind: 'invalid_prepare_envelope' });
     }
-    const clientOptions = { host: CLIENT_HOST, port: GAME_PORT, scenario, signal: runSignal } as const;
+    const clientOptions = { host: CLIENT_HOST, port: GAME_PORT, scenario, signal: runSignal,
+      publicRoster: roster.competitors.map((entry) => ({ seat: entry.seat, username: entry.username, offlineUuid: entry.offline_uuid })) } as const;
     clients = roster.competitors.map((competitor) => new RuntimeCompetitorClient(
       competitor.seat,
       roster.competitorIdentities[competitor.seat]!,
@@ -700,7 +703,7 @@ async function createBootstrapWorld(options: Readonly<{
   const listener = await bindControlListener({
     runId: options.options.preparedRun.runId,
     token,
-    capabilities: CONTROL_CAPABILITIES,
+    capabilities: controlCapabilities(options.options.preparedRun.scenario.mode),
   });
   let server: OwnedServerProcess | undefined;
   let resourceMonitor: ObservedResourceMonitor | undefined;
@@ -875,7 +878,7 @@ async function cleanupOwnedRun(options: Readonly<{
 }
 
 function isAuthorityEvent(message: ControlMessage): message is RuntimeAuthorityEvent {
-  return message.type === 'public_clock' || message.type === 'public_state'
+  return message.type === 'public_clock' || message.type === 'public_state' || message.type === 'civilization_state'
     || message.type === 'elimination' || message.type === 'outcome';
 }
 

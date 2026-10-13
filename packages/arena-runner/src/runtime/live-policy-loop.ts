@@ -1,8 +1,8 @@
-import { DeterministicRandom, RandomStream, emptyPolicyMemory, seatId, type PolicyMemory, type Decision, type SkillCancellation, type SkillOutcome, createPolicyFeedback, policyFeedbackBatch, type PolicyFeedbackBatch, type AgentObservation } from '@arena/core';
+import { DeterministicRandom, RandomStream, emptyPolicyMemory, seatId, type PolicyMemory, type Decision, type SkillCancellation, type SkillOutcome, createPolicyFeedback, policyFeedbackBatch, type PolicyFeedbackBatch, type AgentObservation, decideCivilization, type CivilizationDecision, type PolicyFeedbackSource, CIVILIZATION_TEAM_MESSAGE_MAX_BYTES, CIVILIZATION_TEAM_MESSAGE_MIN_INTERVAL_TICKS, type CivilizationObservation } from '@arena/core';
 import type { compilePolicy } from '@arena/spec';
 import type { PartiallyComputedPath } from 'mineflayer-pathfinder';
 import { RunnerError } from '../errors.js';
-import { makePolicyEffectRecord, makePolicyReplayRecord, type PolicyPathUpdate, type PolicyDisposition } from '../policy-replay.js';
+import { makeCivilizationPolicyEffectRecord, makeCivilizationPolicyReplayRecord, normalizeCivilizationPolicyReplayInput, makePolicyEffectRecord, makePolicyReplayRecord, type PolicyPathUpdate, type PolicyDisposition } from '../policy-replay.js';
 import { canonicalJson } from '../canonical.js';
 import type { RuntimeTraceBuilder } from './trace.js';
 import { mapRuntimeFailure } from './failures.js';
@@ -10,22 +10,23 @@ import { decideRuntimePolicy, isStrategyDecisionTick } from './policy-decision.j
 import { PolicyCompetitorGate } from './policy-gate.js';
 import type { RuntimeCompetitorClient } from './clients.js';
 
-type PolicyCompetitor = Pick<RuntimeCompetitorClient, 'seat' | 'client' | 'bot'>;
+type PolicyCompetitor = Pick<RuntimeCompetitorClient, 'seat' | 'client' | 'gameplay' | 'bot'>;
+type GameplayDecision = Decision | CivilizationDecision;
 type PolicyTrace = Pick<RuntimeTraceBuilder, 'recordPolicyDecision' | 'recordPolicyEffect' | 'checkpoint'>;
 const ACTION_CLEANUP_TIMEOUT_MS = 5_000;
 
 export type PolicyActivityEvent =
   | { readonly kind: 'decision'; readonly seat: number; readonly tick: number; readonly sequence: string;
-      readonly disposition: PolicyDisposition; readonly goal: Decision['goal']; readonly intent: Decision['intent'];
+      readonly disposition: PolicyDisposition; readonly goal: GameplayDecision['goal']; readonly intent: GameplayDecision['intent'];
       readonly tickReceivedAtNs: bigint; readonly decisionStartedAtNs: bigint; readonly acceptedAtNs: bigint }
-  | { readonly kind: 'action'; readonly seat: number; readonly actionSequence: string; readonly intent: Decision['intent'];
+  | { readonly kind: 'action'; readonly seat: number; readonly actionSequence: string; readonly intent: GameplayDecision['intent'];
       readonly startedAtNs: bigint | null; readonly settledAtNs: bigint; readonly outcome: SkillOutcome; readonly cleanupIncluded: true }
-  | { readonly kind: 'actionFailed'; readonly seat: number; readonly actionSequence: string; readonly intent: Decision['intent'];
+  | { readonly kind: 'actionFailed'; readonly seat: number; readonly actionSequence: string; readonly intent: GameplayDecision['intent'];
       readonly startedAtNs: bigint | null; readonly settledAtNs: bigint; readonly error: unknown };
 
 interface OwnedAction {
   readonly sequence: bigint;
-  readonly decision: Decision;
+  readonly decision: GameplayDecision;
   readonly initiatingObservation: AgentObservation;
   readonly acceptedTick: number;
   readonly competitor: PolicyCompetitor;
@@ -50,6 +51,7 @@ export class LivePolicyLoop {
   readonly #onActivity: ((event: PolicyActivityEvent) => void) | undefined;
   readonly #memories = new Map<number, PolicyMemory>();
   readonly #feedback = new Map<number, PolicyFeedbackBatch>();
+  readonly #lastReportTicks = new Map<number, number>();
   readonly #randoms = new Map<number, DeterministicRandom>();
   readonly #tasks = new Set<Promise<void>>();
   readonly #actions = new Map<number, OwnedAction>();
@@ -115,12 +117,25 @@ export class LivePolicyLoop {
   #decide(competitor: PolicyCompetitor, tick: number, tickReceivedAtNs?: bigint): void {
     const decisionStartedAtNs = this.#onActivity === undefined ? undefined : process.hrtime.bigint();
     const seat = competitor.seat;
-    const observation = competitor.client.observe(tick);
+    const gameplay = competitor.gameplay;
     const memory = this.#memories.get(seat) ?? emptyPolicyMemory();
     const random = this.#randoms.get(seat) ?? DeterministicRandom.forStream(this.#seed, RandomStream.policy(seatId(seat)));
     const feedback = this.#feedback.get(seat) ?? [];
     this.#feedback.delete(seat);
-    const step = decideRuntimePolicy(observation, memory, this.#params, random, feedback);
+    const step = gameplay.mode === 'hunger_games'
+      ? (() => {
+        const inputObservation = gameplay.client.observe(tick);
+        const result = decideRuntimePolicy(inputObservation, memory, this.#params, random, feedback);
+        return { mode: 'hunger_games' as const, observation: inputObservation, ...result };
+      })()
+      : (() => {
+        const inputObservation = gameplay.client.observe(tick);
+        this.#relayTeamReport(competitor, inputObservation, tick);
+        const input = normalizeCivilizationPolicyReplayInput({ context: gameplay.context, observation: inputObservation,
+          memory, feedback, params: this.#params, random });
+        const decision = decideCivilization(gameplay.context, inputObservation, memory, this.#params, random, feedback);
+        return { mode: 'civilization' as const, observation: inputObservation.base, input, decision, rngStateAfter: random.snapshotState() };
+      })();
     const { decision } = step;
     this.#memories.set(seat, decision.memory);
     this.#randoms.set(seat, random);
@@ -129,7 +144,9 @@ export class LivePolicyLoop {
     const disposition = Object.freeze(this.#disposition(previous, decision, tick, sequence));
     let recorded = Promise.resolve();
     if (this.#recordPolicy) {
-      const frame = this.#trace.recordPolicyDecision(makePolicyReplayRecord({ sequence, seat, input: step.input, decision, rngStateAfter: step.rngStateAfter, disposition }));
+      const frame = this.#trace.recordPolicyDecision(step.mode === 'hunger_games'
+        ? makePolicyReplayRecord({ sequence, seat, input: step.input, decision: step.decision, rngStateAfter: step.rngStateAfter, disposition })
+        : makeCivilizationPolicyReplayRecord({ sequence, seat, input: step.input, decision: step.decision, rngStateAfter: step.rngStateAfter, disposition }));
       this.#observationCount += 1;
       // The decision watermark does not assert that its owned effect has completed.
       if (this.#observationCount % 200 === 0) this.#checkpointTail = this.#trace.checkpoint(this.#observationCount);
@@ -140,7 +157,7 @@ export class LivePolicyLoop {
     if (disposition.kind === 'start' || disposition.kind === 'replace') {
       const barrier = previous === undefined ? Promise.resolve() : this.#cancel(previous, 'replaced');
       const action: OwnedAction = {
-        sequence, decision, initiatingObservation: observation, acceptedTick: tick, competitor, barrier,
+        sequence, decision, initiatingObservation: step.observation, acceptedTick: tick, competitor, barrier,
         cancellation: deferred<SkillCancellation>(), task: Promise.resolve(), state: 'reserved', priority: goalPriority(decision), startedAtNs: null,
       };
       this.#actions.set(seat, action);
@@ -152,7 +169,34 @@ export class LivePolicyLoop {
       tickReceivedAtNs: tickReceivedAtNs ?? decisionStartedAtNs!, decisionStartedAtNs: decisionStartedAtNs!, acceptedAtNs: process.hrtime.bigint() });
   }
 
-  #disposition(previous: OwnedAction | undefined, decision: Decision, tick: number, sequence: bigint): PolicyDisposition {
+  #relayTeamReport(sender: PolicyCompetitor, observation: CivilizationObservation, tick: number): void {
+    if (sender.gameplay.mode !== 'civilization' || sender.gameplay.context.seat !== sender.seat) {
+      throw new RunnerError('runtime_failure', 'civilization team channel', { kind: 'sender_identity_mismatch' });
+    }
+    const previous = this.#lastReportTicks.get(sender.seat);
+    if (previous !== undefined && tick - previous < CIVILIZATION_TEAM_MESSAGE_MIN_INTERVAL_TICKS) return;
+    if (observation.observedResources.kind !== 'current') return;
+    const resource = observation.observedResources.value.find((value) => value.kind !== 'outpostCell');
+    if (resource === undefined || resource.kind === 'outpostCell') return;
+    const report = { sourceTick: tick, declaredStale: false, kind: 'resourceSighting',
+      resource: resource.kind === 'logBlock' ? 'oakLogBlock' : resource.kind === 'container' ? 'container'
+        : resource.item === 'oak_log' ? 'oakLogDrop' : 'oakPlankDrop', position: resource.position };
+    // The sender is bound by the owned competitor channel; payloads carry no sender identity.
+    const frame = Buffer.from(canonicalJson(report), 'utf8');
+    if (frame.byteLength > CIVILIZATION_TEAM_MESSAGE_MAX_BYTES) {
+      throw new RunnerError('runtime_failure', 'civilization team channel', { kind: 'team_frame_too_large' });
+    }
+    const decodedReport: unknown = JSON.parse(frame.toString('utf8'));
+    for (const recipient of this.#competitors()) {
+      if (recipient.seat === sender.seat || this.#disabledSeats.has(recipient.seat)
+          || recipient.gameplay.mode !== 'civilization'
+          || recipient.gameplay.context.faction !== sender.gameplay.context.faction) continue;
+      recipient.gameplay.client.receiveTeamReport({ authenticatedSenderSeat: sender.seat, decodedReport, currentTick: tick });
+    }
+    this.#lastReportTicks.set(sender.seat, tick);
+  }
+
+  #disposition(previous: OwnedAction | undefined, decision: GameplayDecision, tick: number, sequence: bigint): PolicyDisposition {
     const action_sequence = sequence.toString();
     if (previous === undefined) return decision.intent.kind === 'hold' ? { kind: 'hold' } : { kind: 'start', action_sequence };
     const activeSequence = previous.sequence.toString();
@@ -200,7 +244,10 @@ export class LivePolicyLoop {
         action.state = 'running';
         if (this.#onActivity !== undefined) action.startedAtNs = process.hrtime.bigint();
         capture = this.#recordPolicy ? capturePathUpdates(action.competitor.bot) : undefined;
-        outcome = await action.competitor.client.run(action.decision.intent);
+        const gameplay = action.competitor.gameplay;
+        outcome = gameplay.mode === 'civilization' && isCivilizationIntent(action.decision.intent)
+          ? await gameplay.client.runCivilization(action.decision.intent)
+          : await gameplay.client.run(sharedIntent(action.decision.intent));
       }
       const settledAtNs = this.#onActivity === undefined ? undefined : process.hrtime.bigint();
       capture?.close();
@@ -211,13 +258,14 @@ export class LivePolicyLoop {
       // a later observation cannot claim to continue an already settled action.
       action.state = 'settled';
       if (this.#actions.get(action.competitor.seat) === action) this.#actions.delete(action.competitor.seat);
-      const feedback = createPolicyFeedback({ initiatingObservation: action.initiatingObservation,
-        goal: action.decision.goal, intent: action.decision.intent, outcome });
+      const source = sharedFeedbackSource(action, outcome);
+      const feedback = source === null ? null : createPolicyFeedback(source);
       if (feedback !== null) {
         const pending = this.#feedback.get(action.competitor.seat) ?? [];
         this.#feedback.set(action.competitor.seat, policyFeedbackBatch([...pending, feedback]));
       }
-      if (this.#recordPolicy) await this.#trace.recordPolicyEffect(makePolicyEffectRecord(action.sequence, outcome, pathUpdates));
+      if (this.#recordPolicy) await this.#trace.recordPolicyEffect(action.competitor.gameplay.mode === 'civilization'
+        ? makeCivilizationPolicyEffectRecord(action.sequence, outcome, pathUpdates) : makePolicyEffectRecord(action.sequence, outcome, pathUpdates));
       effectRecorded = true;
       deliveringActivity = true;
       this.#onActivity?.({ kind: 'action', seat: action.competitor.seat, actionSequence: action.sequence.toString(),
@@ -226,7 +274,9 @@ export class LivePolicyLoop {
       // A failed cleanup never transfers control to a successor. The seat remains quarantined.
       this.#disabledSeats.add(action.competitor.seat);
       if (action.state === 'reserved' && decisionRecorded && !effectRecorded && this.#recordPolicy) {
-        await this.#trace.recordPolicyEffect(makePolicyEffectRecord(action.sequence, { kind: 'cancelled', reason: 'shutdown' }, []));
+        await this.#trace.recordPolicyEffect(action.competitor.gameplay.mode === 'civilization'
+          ? makeCivilizationPolicyEffectRecord(action.sequence, { kind: 'cancelled', reason: 'shutdown' }, [])
+          : makePolicyEffectRecord(action.sequence, { kind: 'cancelled', reason: 'shutdown' }, []));
       }
       if (!deliveringActivity) this.#onActivity?.({ kind: 'actionFailed', seat: action.competitor.seat, actionSequence: action.sequence.toString(),
         intent: action.decision.intent, startedAtNs: action.startedAtNs, settledAtNs: process.hrtime.bigint(), error });
@@ -286,7 +336,7 @@ export class LivePolicyLoop {
   }
 }
 
-function goalPriority(decision: Decision): number {
+function goalPriority(decision: GameplayDecision): number {
   switch (decision.goal.kind) {
     case 'escapeBorder': return 7;
     case 'retreatFromOpponent': return 6;
@@ -296,7 +346,32 @@ function goalPriority(decision: Decision): number {
     case 'loot': return 2;
     case 'searchLastKnown': return 1;
     case 'explore': return 0;
-    case 'wait': return -1;
+    case 'gatherMaterial': case 'craftMaterial': case 'transferMaterial': case 'buildOutpost': return 2;
+    case 'captureZone': return 1;
+    case 'holdCaptureZone': case 'outpostComplete': case 'wait': return -1;
+  }
+}
+
+function isCivilizationIntent(intent: GameplayDecision['intent']): intent is import('@arena/core').CivIntent {
+  return intent.kind === 'mineBlock' || intent.kind === 'craft' || intent.kind === 'containerTransfer'
+    || intent.kind === 'placeBlock' || (intent.kind === 'hold' && (intent.reason === 'materialsUnknown' || intent.reason === 'resourcesUnknown'
+      || intent.reason === 'blueprintObstructed' || intent.reason === 'blueprintComplete'
+      || intent.reason === 'materialsUnavailable' || intent.reason === 'captureZoneOccupied'));
+}
+
+function sharedIntent(intent: GameplayDecision['intent']): Decision['intent'] {
+  if (isCivilizationIntent(intent)) throw new RunnerError('runtime_failure', 'policy intent', { kind: 'civilization_intent_in_hunger_games' });
+  return intent;
+}
+
+function sharedFeedbackSource(action: OwnedAction, outcome: SkillOutcome): PolicyFeedbackSource | null {
+  if (isCivilizationIntent(action.decision.intent)) return null;
+  const goal = action.decision.goal;
+  switch (goal.kind) {
+    case 'escapeBorder': case 'retreatFromOpponent': case 'recoverHunger': case 'improveEquipment':
+    case 'engageVisibleOpponent': case 'loot': case 'searchLastKnown': case 'explore':
+      return { initiatingObservation: action.initiatingObservation, goal, intent: action.decision.intent, outcome };
+    default: return null;
   }
 }
 

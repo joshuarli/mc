@@ -50,3 +50,12 @@ Registered path searches detach returned `Move` nodes and action arrays from ASt
 Checkpoints at 200, 400, and subsequent decision counts are ordered beside the recorded decisions. The checkpoint watermark counts recorded observations and decisions, rather than completed effects. A skill still running at a checkpoint has no completed effect in that segment. Its real outcome may appear in a later segment, including after the authoritative outcome during shutdown.
 
 Internal acceptance evaluators may provide `onPolicyActivity` and `onResourceSample` callbacks. Decision timing measures from the runtime's receipt of a public clock through acceptance, separately from action execution and cleanup settlement. Action samples identify the initiating decision, report a null start time for reservations that never execute, and describe thrown failures separately from skill outcomes. Callbacks receive diagnostic events and cannot add policy observations. Callback errors fail the run.
+
+
+## Civilization adapter
+
+Civilization preparation uses the scenario's fixed border, canonical six-seat faction roles, starting kit, capture zone, and outpost anchors. Each competitor owns one Civilization client adapter and receives its public roster and faction objective. Policies consume that client's received inventory, blocks, entities, and permitted team reports. The shared policy loop forwards completed shared-action feedback to Civilization decisions and preserves action cancellation barriers, death quarantine, and checkpoint settlement behavior.
+
+Resource reports originate from the sender's current local resource observation. The runtime binds sender identity to its owned competitor handle, encodes one bounded local frame, and delivers only to other seats in the same faction. It admits at most one report per sender per 20 match ticks and measures the encoded frame against the 1 KiB limit before decoding. The client observer enforces its 16-message queue and 200-tick age limit at the current match tick. These local frames do not establish a network transport proof. Civilization skills retain their actual terminal outcomes in the mode-specific effect records; the existing shared policy feedback contract has no Civilization material-action target variants.
+
+The Civilization runtime adapter is prepared for integration. Its source tests and real Paper acceptance remain gated on the campaign's Hunger Games milestone and the assigned verification slot.
