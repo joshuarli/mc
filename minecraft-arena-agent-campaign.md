@@ -313,6 +313,8 @@ Use exact locked source/API for implementation. Mutable links below are research
 
 Append one line per execution judgment that a reader would otherwise miss: date, item, decision and reason. Owner decisions and prescribed choices above are already recorded; do not duplicate them here.
 
+- 2026-10-12 — P1: start independent S1, B1, and R1 offline halves after the F0 workspace/schema seam merged, because these paths can progress without the still-pending live stack proof; defer their proof-dependent integrations.
+
 ## 9. Campaign log
 
 Append one line per phase end: date, merged checkpoint, checks passed, parked items and reason. No continuous progress diary. A blocked milestone is explicitly blocked, never a passed gate with prose caveats.
