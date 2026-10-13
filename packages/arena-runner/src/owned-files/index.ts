@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { constants as osConstants } from 'node:os';
 import { consumeRawArgv, RawArgvError } from './raw-argv.js';
+import { isValidRunId } from '../run-id.js';
 
 export const MAX_WORLD_PLAN_BYTES = 128 * 1024 * 1024;
 export const MAX_OWNED_FILE_BYTES = 256 * 1024 * 1024;
@@ -39,6 +40,35 @@ export interface OwnedRunLease {
   release(): Promise<void>;
 }
 
+type OwnedRunLeaseProvenance = {
+  readonly ownedRoot: Buffer;
+  readonly relativePath: Buffer;
+  readonly lockIdentity: FileIdentity;
+  readonly runDirectoryIdentity: FileIdentity;
+  state: 'held' | 'releasing' | 'closed';
+  activeOperations: number;
+  readonly releaseWaiters: Set<() => void>;
+};
+
+const ownedRunLeaseProvenance = new WeakMap<OwnedRunLease, OwnedRunLeaseProvenance>();
+
+function markOwnedRunLeaseClosed(lease: OwnedRunLease): void {
+  const provenance = ownedRunLeaseProvenance.get(lease);
+  if (provenance !== undefined) provenance.state = 'closed';
+}
+
+function waitForOwnedRunLeaseOperations(provenance: OwnedRunLeaseProvenance): Promise<void> {
+  if (provenance.activeOperations === 0) return Promise.resolve();
+  return new Promise((resolve) => provenance.releaseWaiters.add(resolve));
+}
+
+function finishOwnedRunLeaseOperation(provenance: OwnedRunLeaseProvenance): void {
+  provenance.activeOperations--;
+  if (provenance.activeOperations !== 0) return;
+  for (const resolve of provenance.releaseWaiters) resolve();
+  provenance.releaseWaiters.clear();
+}
+
 type NativeOperation =
   | 'create-run'
   | 'create-owned-directory'
@@ -46,6 +76,8 @@ type NativeOperation =
   | 'stage-owned-file'
   | 'clone-owned-tree'
   | 'inspect-owned-resources'
+  | 'list-owned-runs'
+  | 'remove-owned-run-tree'
   | 'hold-run-lease'
   | 'read-owned-file'
   | 'unlink-created-file'
@@ -69,6 +101,9 @@ type NativeSuccess = Readonly<{
   work_bytes?: string;
   dependency_bytes?: string;
   run_count?: number;
+  runs?: unknown;
+  run_device?: string;
+  run_inode?: string;
 }>;
 
 export type OwnedResourceSnapshot = Readonly<{
@@ -76,6 +111,15 @@ export type OwnedResourceSnapshot = Readonly<{
   workBytes: bigint;
   dependencyBytes: bigint;
   runCount: number;
+}>;
+
+export type OwnedRunSnapshot = Readonly<{
+  runId: string;
+  identity: FileIdentity;
+  modifiedTimeNs: bigint;
+  failureArtifactModifiedTimeNs?: bigint;
+  terminalTraceSequence?: number;
+  terminalTraceModifiedTimeNs?: bigint;
 }>;
 
 type NativeFailure = Readonly<{
@@ -106,6 +150,7 @@ const nativeErrorCategories: ReadonlySet<string> = new Set([
 const maxStdoutBytes = 24 * 1024 * 1024;
 const maxStderrBytes = 64 * 1024;
 const childTerminationGraceMs = 5000;
+const maxOwnedRunListEntries = 10_000;
 
 export class OwnedFilesError extends Error {
   readonly category: NativeErrorCategory;
@@ -707,6 +752,7 @@ class HelperRunLease implements OwnedRunLease {
             operation: 'hold-run-lease',
             diagnostic: this.#diagnostic() || undefined,
           })));
+      markOwnedRunLeaseClosed(this);
       this.#resolveClosed(failure === undefined ? { kind: 'released' } : { kind: 'lost', error: failure });
     });
     child.on('error', (cause: Error) => {
@@ -733,6 +779,9 @@ class HelperRunLease implements OwnedRunLease {
   }
 
   private async releaseOnce(): Promise<void> {
+    const provenance = ownedRunLeaseProvenance.get(this);
+    if (provenance !== undefined && provenance.state === 'held') provenance.state = 'releasing';
+    if (provenance !== undefined) await waitForOwnedRunLeaseOperations(provenance);
     this.#releaseRequested = true;
     this.#child.stdin.end();
     const result = await this.closed;
@@ -896,7 +945,18 @@ function startOwnedRunLease(helperPath: string, ownedRoot: Buffer, relativePath:
         return;
       }
       try {
-        lease = new HelperRunLease(child, resultIdentity(record, operation), relativePath, diagnostic);
+        const lockIdentity = resultIdentity(record, operation);
+        const runDirectoryIdentity = identityFrom(record.run_device, record.run_inode, operation);
+        lease = new HelperRunLease(child, lockIdentity, relativePath, diagnostic);
+        ownedRunLeaseProvenance.set(lease, {
+          ownedRoot: Buffer.from(ownedRoot),
+          relativePath: Buffer.from(relativePath),
+          lockIdentity,
+          runDirectoryIdentity,
+          state: 'held',
+          activeOperations: 0,
+          releaseWaiters: new Set(),
+        });
         signal?.removeEventListener('abort', onAbort);
         resolve(lease);
       } catch (error) {
@@ -1314,14 +1374,177 @@ function resourceByteCount(value: unknown, field: string): bigint {
   return byteCount;
 }
 
+function ownedRunTimestamp(value: unknown, field: string, optional: boolean): bigint | undefined {
+  if (optional && value === null) return undefined;
+  if (typeof value !== 'string' || !/^(?:0|-?[1-9][0-9]*)$/.test(value)) {
+    throw new OwnedFilesError({
+      message: `native list-owned-runs result has invalid ${field}`,
+      category: 'protocol_error',
+      operation: 'list-owned-runs',
+    });
+  }
+  const timestamp = BigInt(value);
+  if (timestamp < -(1n << 63n) || timestamp > (1n << 63n) - 1n) {
+    throw new OwnedFilesError({
+      message: `native list-owned-runs result has invalid ${field}`,
+      category: 'protocol_error',
+      operation: 'list-owned-runs',
+    });
+  }
+  return timestamp;
+}
+
+function ownedRunSequence(value: unknown): number | undefined {
+  if (value === null) return undefined;
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 1) {
+    throw new OwnedFilesError({
+      message: 'native list-owned-runs result has invalid terminal_trace_sequence',
+      category: 'protocol_error',
+      operation: 'list-owned-runs',
+    });
+  }
+  return value;
+}
+
+function validateOwnedRunSnapshots(value: unknown): readonly OwnedRunSnapshot[] {
+  if (!Array.isArray(value) || value.length > maxOwnedRunListEntries) {
+    throw new OwnedFilesError({
+      message: 'native list-owned-runs result has an invalid runs array',
+      category: 'protocol_error',
+      operation: 'list-owned-runs',
+    });
+  }
+  const snapshots: OwnedRunSnapshot[] = [];
+  let previousRunId: string | undefined;
+  for (const candidate of value) {
+    if (candidate === null || typeof candidate !== 'object' || Array.isArray(candidate)) {
+      throw new OwnedFilesError({
+        message: 'native list-owned-runs result has an invalid run entry',
+        category: 'protocol_error',
+        operation: 'list-owned-runs',
+      });
+    }
+    const entry = candidate as Record<string, unknown>;
+    if (typeof entry.run_id !== 'string' || !isValidRunId(entry.run_id) ||
+        (previousRunId !== undefined && entry.run_id <= previousRunId)) {
+      throw new OwnedFilesError({
+        message: 'native list-owned-runs result has invalid or unsorted run ids',
+        category: 'protocol_error',
+        operation: 'list-owned-runs',
+      });
+    }
+    const failureArtifactModifiedTimeNs = ownedRunTimestamp(
+      entry.failure_artifact_modified_time_ns, 'failure_artifact_modified_time_ns', true,
+    );
+    const terminalTraceModifiedTimeNs = ownedRunTimestamp(
+      entry.terminal_trace_modified_time_ns, 'terminal_trace_modified_time_ns', true,
+    );
+    const terminalTraceSequence = ownedRunSequence(entry.terminal_trace_sequence);
+    if ((terminalTraceSequence === undefined) !== (terminalTraceModifiedTimeNs === undefined)) {
+      throw new OwnedFilesError({
+        message: 'native list-owned-runs result has inconsistent terminal trace metadata',
+        category: 'protocol_error',
+        operation: 'list-owned-runs',
+      });
+    }
+    snapshots.push(Object.freeze({
+      runId: entry.run_id,
+      identity: identityFrom(entry.device, entry.inode, 'list-owned-runs'),
+      modifiedTimeNs: ownedRunTimestamp(entry.modified_time_ns, 'modified_time_ns', false)!,
+      ...(failureArtifactModifiedTimeNs === undefined ? {} : { failureArtifactModifiedTimeNs }),
+      ...(terminalTraceSequence === undefined ? {} : { terminalTraceSequence }),
+      ...(terminalTraceModifiedTimeNs === undefined ? {} : { terminalTraceModifiedTimeNs }),
+    }));
+    previousRunId = entry.run_id;
+  }
+  return Object.freeze(snapshots);
+}
+
+export async function listOwnedRuns(options: Readonly<{
+  helperPath: string;
+  ownedRoot: Buffer;
+  signal?: AbortSignal;
+}>): Promise<readonly OwnedRunSnapshot[]> {
+  const { helperPath, ownedRoot, signal } = options;
+  const { result } = await spawnHelper(helperPath, 'list-owned-runs', [
+    encodePath(ownedRoot, 'owned root', 'list-owned-runs'),
+  ], undefined, signal);
+  return validateOwnedRunSnapshots(result.runs);
+}
+
+function invalidOwnedRunRemoval(message: string, runId: string): OwnedFilesError {
+  return new OwnedFilesError({
+    message,
+    category: 'invalid_argument',
+    operation: 'remove-owned-run-tree',
+    relativePath: Buffer.from(`.work/arena/runs/${runId}`, 'ascii'),
+  });
+}
+
+function validateRunIdentity(identity: FileIdentity): FileIdentity {
+  if (identity === null || typeof identity !== 'object' ||
+      typeof identity.device !== 'string' || !/^(?:0|[1-9][0-9]*)$/.test(identity.device) ||
+      typeof identity.inode !== 'string' || !/^(?:0|[1-9][0-9]*)$/.test(identity.inode)) {
+    throw invalidOwnedRunRemoval('run removal requires a valid directory identity', '');
+  }
+  return identityFrom(identity.device, identity.inode, 'remove-owned-run-tree');
+}
+
+export async function removeOwnedRun(options: Readonly<{
+  helperPath: string;
+  ownedRoot: Buffer;
+  runId: string;
+  identity: FileIdentity;
+  lease: OwnedRunLease;
+  signal?: AbortSignal;
+}>): Promise<void> {
+  const { helperPath, ownedRoot, runId, identity, lease, signal } = options;
+  const operation: NativeOperation = 'remove-owned-run-tree';
+  if (!isValidRunId(runId)) throw invalidOwnedRunRemoval('run removal requires a valid run id', runId);
+  const expectedIdentity = validateRunIdentity(identity);
+  const runPath = Buffer.from(`.work/arena/runs/${runId}`, 'ascii');
+  const provenance = ownedRunLeaseProvenance.get(lease);
+  if (provenance === undefined || provenance.state !== 'held' ||
+      !provenance.ownedRoot.equals(ownedRoot) || !provenance.relativePath.equals(runPath) ||
+      provenance.lockIdentity.device !== lease.identity.device ||
+      provenance.lockIdentity.inode !== lease.identity.inode ||
+      provenance.runDirectoryIdentity.device !== expectedIdentity.device ||
+      provenance.runDirectoryIdentity.inode !== expectedIdentity.inode) {
+    throw new OwnedFilesError({
+      message: 'run removal requires an active lease for the matching owned run directory',
+      category: 'conflict',
+      operation,
+      relativePath: runPath,
+      identity: expectedIdentity,
+    });
+  }
+
+  const leaseAbort = new AbortController();
+  void lease.closed.then(() => leaseAbort.abort());
+  const helperSignal = signal === undefined
+    ? leaseAbort.signal
+    : AbortSignal.any([signal, leaseAbort.signal]);
+  provenance.activeOperations++;
+  try {
+    await spawnHelper(helperPath, operation, [
+      encodePath(ownedRoot, 'owned root', operation),
+      runId,
+      ...nativeIdentityArguments(expectedIdentity),
+    ], undefined, helperSignal);
+  } finally {
+    finishOwnedRunLeaseOperation(provenance);
+  }
+}
+
 export async function inspectOwnedResources(options: Readonly<{
   helperPath: string;
   ownedRoot: Buffer;
+  signal?: AbortSignal;
 }>): Promise<OwnedResourceSnapshot> {
-  const { helperPath, ownedRoot } = options;
+  const { helperPath, ownedRoot, signal } = options;
   const { result } = await spawnHelper(helperPath, 'inspect-owned-resources', [
     encodePath(ownedRoot, 'owned root', 'inspect-owned-resources'),
-  ], undefined, undefined);
+  ], undefined, signal);
   if (!Number.isSafeInteger(result.run_count) || (result.run_count as number) < 0) {
     throw new OwnedFilesError({
       message: 'native inspect-owned-resources result has invalid run_count',

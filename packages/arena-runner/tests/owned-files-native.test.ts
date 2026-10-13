@@ -12,6 +12,7 @@ import {
   createOwnedDirectory,
   createRunDirectory,
   inspectOwnedResources,
+  listOwnedRuns,
   MAX_OWNED_FILE_BYTES,
   MAX_OWNED_TREE_BYTES,
   MAX_OWNED_TREE_FILES,
@@ -19,10 +20,11 @@ import {
   readOwnedFile,
   removeCreatedDirectory,
   removeCreatedFile,
+  removeOwnedRun,
   stageOwnedFile,
   stageWorldPlan,
 } from '../src/owned-files/index.js';
-import type { FileIdentity } from '../src/owned-files/index.js';
+import type { FileIdentity, OwnedRunLease } from '../src/owned-files/index.js';
 import { decodeRawArgvChannel, rawArgumentText, RawArgvError } from '../src/owned-files/raw-argv.js';
 
 const packageDirectory = basename(process.cwd()) === 'arena-runner';
@@ -127,6 +129,150 @@ test('rejects a symlink in the fixed work-root path', async () => {
     await mkdir(externalDirectory);
     await symlink(externalDirectory, join(rootText, '.work'), 'dir');
     await assert.rejects(inspectOwnedResources({ helperPath, ownedRoot: root }), nativeFailure('symlink_rejected'));
+  });
+});
+
+test('lists owned runs in ASCII order without modifying the run tree', async () => {
+  await withOwnedRoot(async (root, rootText) => {
+    const runsRoot = join(rootText, '.work/arena/runs');
+    const zPath = Buffer.from('.work/arena/runs/run-z');
+    const aPath = Buffer.from('.work/arena/runs/run-a');
+    const zIdentity = await createRunDirectory({ helperPath, ownedRoot: root, relativePath: zPath });
+    const aIdentity = await createRunDirectory({ helperPath, ownedRoot: root, relativePath: aPath });
+    const failurePath = join(rootText, '.work/arena/runs/run-a/operational-failure-v1.json');
+    const firstTracePath = join(rootText, '.work/arena/runs/run-a/trace-v2-000001.json');
+    const terminalTracePath = join(rootText, '.work/arena/runs/run-a/trace-v2-000002.json');
+    await writeFile(failurePath, Buffer.from('{"schema":1}'));
+    await writeFile(firstTracePath, Buffer.from('first'));
+    await writeFile(terminalTracePath, Buffer.from('terminal'));
+    const failureTime = (await lstat(failurePath, { bigint: true })).mtimeNs;
+    const terminalTraceTime = (await lstat(terminalTracePath, { bigint: true })).mtimeNs;
+    const runEntriesBefore = await readdir(runsRoot);
+    const aEntriesBefore = await readdir(join(runsRoot, 'run-a'));
+
+    const runs = await listOwnedRuns({ helperPath, ownedRoot: root });
+
+    assert.deepEqual(runs.map((run) => run.runId), ['run-a', 'run-z']);
+    assert.deepEqual(runs[0]!.identity, aIdentity);
+    assert.deepEqual(runs[1]!.identity, zIdentity);
+    assert.equal(runs[0]!.failureArtifactModifiedTimeNs, failureTime);
+    assert.equal(runs[0]!.terminalTraceSequence, 2);
+    assert.equal(runs[0]!.terminalTraceModifiedTimeNs, terminalTraceTime);
+    assert.equal(runs[0]!.modifiedTimeNs >= 0n, true);
+    assert.deepEqual(await readdir(runsRoot), runEntriesBefore);
+    assert.deepEqual(await readdir(join(runsRoot, 'run-a')), aEntriesBefore);
+  });
+});
+
+test('creates at most ten immediate owned runs under concurrent creation', async () => {
+  await withOwnedRoot(async (root) => {
+    for (let index = 0; index < 9; index++) {
+      await createRunDirectory({
+        helperPath,
+        ownedRoot: root,
+        relativePath: Buffer.from(`.work/arena/runs/retained-${index}`),
+      });
+    }
+    const results = await Promise.allSettled([
+      createRunDirectory({
+        helperPath,
+        ownedRoot: root,
+        relativePath: Buffer.from('.work/arena/runs/concurrent-a'),
+      }),
+      createRunDirectory({
+        helperPath,
+        ownedRoot: root,
+        relativePath: Buffer.from('.work/arena/runs/concurrent-b'),
+      }),
+    ]);
+
+    assert.equal(results.filter((result) => result.status === 'fulfilled').length, 1);
+    const failure = results.find((result) => result.status === 'rejected');
+    assert.equal(failure?.status, 'rejected');
+    if (failure?.status !== 'rejected') throw new Error('one concurrent creation must fail at capacity');
+    assert.equal(failure.reason instanceof OwnedFilesError, true);
+    assert.equal((failure.reason as OwnedFilesError).category, 'too_large');
+    assert.equal((await listOwnedRuns({ helperPath, ownedRoot: root })).length, 10);
+  });
+});
+
+test('removes only the leased run tree and unlinks nested symlinks without following them', async () => {
+  await withOwnedRoot(async (root, rootText) => {
+    const runId = 'remove-nested-link';
+    const runPath = Buffer.from(`.work/arena/runs/${runId}`);
+    await createRunDirectory({ helperPath, ownedRoot: root, relativePath: runPath });
+    const externalDirectory = join(rootText, 'external');
+    const nestedDirectory = join(rootText, '.work/arena/runs', runId, 'nested');
+    await mkdir(externalDirectory);
+    await writeFile(join(externalDirectory, 'keep.txt'), Buffer.from('outside the run'));
+    await mkdir(nestedDirectory);
+    await writeFile(join(nestedDirectory, 'remove.txt'), Buffer.from('inside the run'));
+    const linkPath = join(nestedDirectory, 'external-link');
+    await symlink(externalDirectory, linkPath, 'dir');
+    const run = (await listOwnedRuns({ helperPath, ownedRoot: root }))[0]!;
+    const lease = await acquireOwnedRunLease({ helperPath, ownedRoot: root, relativePath: runPath });
+
+    await removeOwnedRun({ helperPath, ownedRoot: root, runId, identity: run.identity, lease });
+    await lease.release();
+
+    await assert.rejects(access(join(rootText, '.work/arena/runs', runId)));
+    await assert.rejects(lstat(linkPath));
+    assert.deepEqual(await readFile(join(externalDirectory, 'keep.txt')), Buffer.from('outside the run'));
+  });
+});
+
+test('rejects run removal for swapped names, forged leases, released leases, or mismatched identity', async () => {
+  await withOwnedRoot(async (root, rootText) => {
+    const runId = 'remove-swap-check';
+    const runPath = Buffer.from(`.work/arena/runs/${runId}`);
+    await createRunDirectory({ helperPath, ownedRoot: root, relativePath: runPath });
+    const run = (await listOwnedRuns({ helperPath, ownedRoot: root }))[0]!;
+    const lease = await acquireOwnedRunLease({ helperPath, ownedRoot: root, relativePath: runPath });
+    const otherRunPath = Buffer.from('.work/arena/runs/remove-other');
+    await createRunDirectory({ helperPath, ownedRoot: root, relativePath: otherRunPath });
+    const otherLease = await acquireOwnedRunLease({ helperPath, ownedRoot: root, relativePath: otherRunPath });
+    const forgedLease = {
+      identity: lease.identity,
+      closed: Promise.resolve({ kind: 'released' as const }),
+      release: async () => {},
+    } as OwnedRunLease;
+    try {
+      await assert.rejects(removeOwnedRun({
+        helperPath, ownedRoot: root, runId, identity: run.identity, lease: forgedLease,
+      }), nativeFailure('conflict'));
+      await assert.rejects(removeOwnedRun({
+        helperPath,
+        ownedRoot: root,
+        runId,
+        identity: otherLease.identity,
+        lease,
+      }), nativeFailure('conflict'));
+      await assert.rejects(removeOwnedRun({
+        helperPath,
+        ownedRoot: root,
+        runId,
+        identity: run.identity,
+        lease: otherLease,
+      }), nativeFailure('conflict'));
+
+      const externalDirectory = join(rootText, 'external-swap-target');
+      await mkdir(externalDirectory);
+      await writeFile(join(externalDirectory, 'keep.txt'), Buffer.from('must survive'));
+      const runDirectory = join(rootText, '.work/arena/runs', runId);
+      await rename(runDirectory, join(rootText, 'moved-run'));
+      await symlink(externalDirectory, runDirectory, 'dir');
+      await assert.rejects(removeOwnedRun({
+        helperPath, ownedRoot: root, runId, identity: run.identity, lease,
+      }), nativeFailure('symlink_rejected'));
+      assert.deepEqual(await readFile(join(externalDirectory, 'keep.txt')), Buffer.from('must survive'));
+
+      await lease.release();
+      await assert.rejects(removeOwnedRun({
+        helperPath, ownedRoot: root, runId, identity: run.identity, lease,
+      }), nativeFailure('conflict'));
+    } finally {
+      await Promise.all([lease.release(), otherLease.release()]);
+    }
   });
 });
 

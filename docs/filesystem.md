@@ -18,7 +18,9 @@ library dependency.
 requested run directory with mode `0700`, and syncs each changed directory.
 It returns the created directory's device and inode. On failure, it removes
 directories created by that call in reverse order when their type and identity
-still match.
+still match. Creating an immediate run directory under `.work/arena/runs`
+serializes against other owned-run creators and removals, and the helper caps
+that directory at 10 real run directories.
 
 `stageWorldPlan` accepts at most 128 MiB. It creates a random, exclusive,
 same-directory temporary file with mode `0600`, writes at most the caller's
@@ -42,6 +44,20 @@ closes its control pipe and waits for the helper to exit. The lock file stays
 in place after release so concurrent processes never lock different inodes.
 The optional signal cancels acquisition; use `release()` to end an acquired
 lease. If the owning process exits, its closed control pipe releases the lock.
+
+`listOwnedRuns` returns a read-only snapshot of valid immediate run directories
+under `.work/arena/runs`, sorted by ASCII run ID. Each entry contains the
+directory identity and modification time, plus modification times for the
+terminal consecutive trace segment and `operational-failure-v1.json` when
+present. The terminal trace sequence is included with its modification time.
+It does not create the runs directory or acquire run leases.
+`removeOwnedRun` removes only `.work/arena/runs/<run-id>` and requires the
+matching active lease and directory identity from that owned root. The helper
+checks the run identity before each detach, never follows nested symlinks, and
+preflights a maximum of 1,000,000 entries, 64 directory levels, and 64 GiB of
+logical leaf data. Nested symlinks are removed as links, leaving their targets
+untouched. Cancellation or an I/O failure can leave a partially removed tree;
+the error is returned to the caller.
 
 `cloneOwnedTree` copies a stopped, pristine tree from one relative path under
 the owned root to a fresh destination. It copies bytes into private files and
@@ -81,7 +97,7 @@ excludes only the top-level `runs` and `traces` trees. Symlinks count by their
 own link size and are never followed. `runCount` counts immediate real
 directories in `runs`. The scan fails on special files, filesystem crossings,
 more than 1,000,000 entries, nesting beyond 64 directories, or more than 64
-GiB of logical leaf data.
+GiB of logical leaf data. An optional `AbortSignal` cancels the inspection.
 
 The owned root is a private, single-owner runtime namespace. Only its owning
 runner may mutate it, and it must serialize operations that can change the same

@@ -48,6 +48,11 @@ extern char **environ;
 #define MAX_RESOURCE_SCAN_ENTRIES 1000000U
 #define MAX_RESOURCE_SCAN_DEPTH 64U
 #define MAX_RESOURCE_SCAN_BYTES (UINT64_C(64) * 1024U * 1024U * 1024U)
+#define MAX_OWNED_RUN_LIST_ENTRIES 10000U
+#define MAX_OWNED_RUN_CAPACITY 10U
+#define MAX_OWNED_TRACE_SEGMENTS 100000U
+#define OWNED_RUNS_DIRECTORY ".work/arena/runs"
+#define OWNED_FAILURE_ARTIFACT "operational-failure-v1.json"
 #define RAW_ARGV_ENV "ARENA_RAW_ARGV_V1="
 
 static volatile sig_atomic_t cancellation_requested = 0;
@@ -66,6 +71,39 @@ struct created_directory {
     dev_t device;
     ino_t inode;
 };
+
+struct owned_run_record {
+    char run_id[65];
+    dev_t device;
+    ino_t inode;
+    int64_t modified_time_ns;
+    bool has_failure_artifact;
+    int64_t failure_artifact_modified_time_ns;
+    bool has_terminal_trace;
+    unsigned int terminal_trace_sequence;
+    int64_t terminal_trace_modified_time_ns;
+};
+
+enum owned_tree_entry_type {
+    OWNED_TREE_REGULAR,
+    OWNED_TREE_DIRECTORY,
+    OWNED_TREE_SYMLINK,
+};
+
+struct owned_tree_entry {
+    char *name;
+    dev_t device;
+    ino_t inode;
+    enum owned_tree_entry_type type;
+};
+
+struct owned_tree_usage {
+    dev_t device;
+    uint64_t entries;
+    uint64_t bytes;
+};
+
+static int lock_owned_runs_directory(int directory_fd);
 
 static void on_signal(int signal_number) {
     (void)signal_number;
@@ -555,6 +593,305 @@ static int open_relative_directory(int root_fd, const char *path, size_t length,
     return 0;
 }
 
+static bool valid_owned_run_id(const char *run_id) {
+    size_t length = strlen(run_id);
+    if (length == 0 || length > 64U) return false;
+    unsigned char first = (unsigned char)run_id[0];
+    if (!((first >= 'A' && first <= 'Z') || (first >= 'a' && first <= 'z') ||
+          (first >= '0' && first <= '9'))) return false;
+    for (size_t index = 1; index < length; index++) {
+        unsigned char byte = (unsigned char)run_id[index];
+        if (!((byte >= 'A' && byte <= 'Z') || (byte >= 'a' && byte <= 'z') ||
+              (byte >= '0' && byte <= '9') || byte == '_' || byte == '-')) return false;
+    }
+    return true;
+}
+
+static int stat_modified_time_ns(const struct stat *status, int64_t *modified_time_ns) {
+#if defined(__APPLE__)
+    intmax_t seconds = (intmax_t)status->st_mtimespec.tv_sec;
+    long nanoseconds = status->st_mtimespec.tv_nsec;
+#else
+    intmax_t seconds = (intmax_t)status->st_mtim.tv_sec;
+    long nanoseconds = status->st_mtim.tv_nsec;
+#endif
+    if (seconds > INT64_MAX / INT64_C(1000000000) ||
+        seconds < INT64_MIN / INT64_C(1000000000) ||
+        nanoseconds < 0 || nanoseconds >= 1000000000L) return EOVERFLOW;
+    int64_t base = (int64_t)seconds * INT64_C(1000000000);
+    if (base > INT64_MAX - (int64_t)nanoseconds) return EOVERFLOW;
+    *modified_time_ns = base + (int64_t)nanoseconds;
+    return 0;
+}
+
+static int optional_regular_file_mtime(int directory_fd, const char *name, dev_t device,
+                                       bool *present, int64_t *modified_time_ns) {
+    struct stat status;
+    if (fstatat(directory_fd, name, &status, AT_SYMLINK_NOFOLLOW) != 0) {
+        if (errno == ENOENT) {
+            *present = false;
+            return 0;
+        }
+        return errno;
+    }
+    if (S_ISLNK(status.st_mode)) return ELOOP;
+    if (!S_ISREG(status.st_mode)) return ENOTSUP;
+    if (status.st_dev != device) return EXDEV;
+    int error = stat_modified_time_ns(&status, modified_time_ns);
+    if (error == 0) *present = true;
+    return error;
+}
+
+static bool parse_owned_trace_segment_name(const char *name, unsigned int *sequence) {
+    static const char prefix[] = "trace-v2-";
+    static const char suffix[] = ".json";
+    size_t length = strlen(name);
+    if (length != sizeof(prefix) - 1U + 6U + sizeof(suffix) - 1U ||
+        memcmp(name, prefix, sizeof(prefix) - 1U) != 0 ||
+        memcmp(name + length - (sizeof(suffix) - 1U), suffix, sizeof(suffix) - 1U) != 0) {
+        return false;
+    }
+    unsigned int value = 0;
+    const char *digits = name + sizeof(prefix) - 1U;
+    for (size_t index = 0; index < 6U; index++) {
+        if (digits[index] < '0' || digits[index] > '9') return false;
+        value = value * 10U + (unsigned int)(digits[index] - '0');
+    }
+    if (value == 0) return false;
+    *sequence = value;
+    return true;
+}
+
+static int terminal_trace_mtime(int run_fd, dev_t device, bool *present,
+                                unsigned int *sequence_out, int64_t *modified_time_ns) {
+    unsigned char *segments = calloc((MAX_OWNED_TRACE_SEGMENTS + 8U) / 8U, 1U);
+    if (segments == NULL) return ENOMEM;
+    int scan_fd = fcntl(run_fd, F_DUPFD_CLOEXEC, 0);
+    if (scan_fd < 0) {
+        free(segments);
+        return errno;
+    }
+    DIR *directory = fdopendir(scan_fd);
+    if (directory == NULL) {
+        int error = errno;
+        close(scan_fd);
+        free(segments);
+        return error;
+    }
+
+    int error = 0;
+    uint64_t entries = 0;
+    errno = 0;
+    struct dirent *entry;
+    while ((entry = readdir(directory)) != NULL) {
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) continue;
+        if (++entries > MAX_RESOURCE_SCAN_ENTRIES) {
+            error = EFBIG;
+            break;
+        }
+        unsigned int sequence = 0;
+        if (!parse_owned_trace_segment_name(entry->d_name, &sequence)) {
+            errno = 0;
+            continue;
+        }
+        if (sequence > MAX_OWNED_TRACE_SEGMENTS) {
+            error = EFBIG;
+            break;
+        }
+        struct stat status;
+        if (fstatat(run_fd, entry->d_name, &status, AT_SYMLINK_NOFOLLOW) != 0) {
+            error = errno;
+            break;
+        }
+        if (S_ISLNK(status.st_mode)) {
+            error = ELOOP;
+            break;
+        }
+        if (!S_ISREG(status.st_mode)) {
+            error = ENOTSUP;
+            break;
+        }
+        if (status.st_dev != device) {
+            error = EXDEV;
+            break;
+        }
+        size_t byte = (size_t)(sequence / 8U);
+        unsigned int bit = sequence % 8U;
+        segments[byte] = (unsigned char)(segments[byte] | (unsigned char)(1U << bit));
+        errno = 0;
+    }
+    if (error == 0 && errno != 0) error = errno;
+    if (closedir(directory) != 0 && error == 0) error = errno;
+
+    unsigned int terminal = 0;
+    if (error == 0) {
+        while (terminal < MAX_OWNED_TRACE_SEGMENTS) {
+            unsigned int next = terminal + 1U;
+            size_t byte = (size_t)(next / 8U);
+            unsigned int bit = next % 8U;
+            if ((segments[byte] & (unsigned char)(1U << bit)) == 0) break;
+            terminal = next;
+        }
+    }
+    free(segments);
+    if (error != 0) return error;
+    if (terminal == 0) {
+        *present = false;
+        *sequence_out = 0;
+        return 0;
+    }
+    char name[32];
+    int length = snprintf(name, sizeof(name), "trace-v2-%06u.json", terminal);
+    if (length < 0 || (size_t)length >= sizeof(name)) return EOVERFLOW;
+    struct stat status;
+    if (fstatat(run_fd, name, &status, AT_SYMLINK_NOFOLLOW) != 0) return errno;
+    if (S_ISLNK(status.st_mode)) return ELOOP;
+    if (!S_ISREG(status.st_mode)) return ENOTSUP;
+    if (status.st_dev != device) return EXDEV;
+    error = stat_modified_time_ns(&status, modified_time_ns);
+    if (error == 0) {
+        *present = true;
+        *sequence_out = terminal;
+    }
+    return error;
+}
+
+static int compare_owned_run_records(const void *left_value, const void *right_value) {
+    const struct owned_run_record *left = left_value;
+    const struct owned_run_record *right = right_value;
+    return strcmp(left->run_id, right->run_id);
+}
+
+/* Return one sorted snapshot of real immediate run directories under the fixed runs path. */
+static int list_owned_runs(const char *root, struct fs_error *failure,
+                           struct owned_run_record **records_out, size_t *count_out) {
+    *records_out = NULL;
+    *count_out = 0;
+    int root_fd = open_owned_root(root);
+    if (root_fd < 0) {
+        failure->code = -root_fd;
+        return failure->code;
+    }
+    int runs_fd = -1;
+    int error = open_relative_directory(root_fd, OWNED_RUNS_DIRECTORY,
+                                        sizeof(OWNED_RUNS_DIRECTORY) - 1U, &runs_fd);
+    close(root_fd);
+    if (error == ENOENT) return 0;
+    if (error != 0) {
+        failure->code = error;
+        return error;
+    }
+    struct stat runs_status;
+    if (fstat(runs_fd, &runs_status) != 0) error = errno;
+    struct owned_run_record *records = NULL;
+    if (error == 0) {
+        records = calloc(MAX_OWNED_RUN_LIST_ENTRIES, sizeof(*records));
+        if (records == NULL) error = ENOMEM;
+    }
+    int scan_fd = -1;
+    DIR *directory = NULL;
+    if (error == 0) {
+        scan_fd = fcntl(runs_fd, F_DUPFD_CLOEXEC, 0);
+        if (scan_fd < 0) error = errno;
+    }
+    if (error == 0) {
+        directory = fdopendir(scan_fd);
+        if (directory == NULL) error = errno;
+    }
+    if (error != 0 && scan_fd >= 0 && directory == NULL) close(scan_fd);
+
+    size_t count = 0;
+    uint64_t scanned_entries = 0;
+    if (error == 0) {
+        errno = 0;
+        struct dirent *entry;
+        while ((entry = readdir(directory)) != NULL) {
+            if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) continue;
+            if (++scanned_entries > MAX_RESOURCE_SCAN_ENTRIES) {
+                error = EFBIG;
+                break;
+            }
+            struct stat status;
+            if (fstatat(runs_fd, entry->d_name, &status, AT_SYMLINK_NOFOLLOW) != 0) {
+                error = errno;
+                break;
+            }
+            if (S_ISLNK(status.st_mode)) {
+                error = ELOOP;
+                break;
+            }
+            if (S_ISREG(status.st_mode)) {
+                errno = 0;
+                continue;
+            }
+            if (!S_ISDIR(status.st_mode)) {
+                error = ENOTSUP;
+                break;
+            }
+            if (!valid_owned_run_id(entry->d_name)) {
+                error = EINVAL;
+                break;
+            }
+            if (count >= MAX_OWNED_RUN_LIST_ENTRIES) {
+                error = EFBIG;
+                break;
+            }
+            if (status.st_dev != runs_status.st_dev) {
+                error = EXDEV;
+                break;
+            }
+            int run_fd = openat(runs_fd, entry->d_name,
+                                O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+            if (run_fd < 0) {
+                error = errno;
+                break;
+            }
+            struct stat opened_status;
+            if (fstat(run_fd, &opened_status) != 0) {
+                error = errno;
+            } else if (!S_ISDIR(opened_status.st_mode) ||
+                       opened_status.st_dev != status.st_dev || opened_status.st_ino != status.st_ino) {
+                error = ESTALE;
+            }
+            struct owned_run_record record = {0};
+            if (error == 0) {
+                memcpy(record.run_id, entry->d_name, strlen(entry->d_name) + 1U);
+                record.device = opened_status.st_dev;
+                record.inode = opened_status.st_ino;
+                error = stat_modified_time_ns(&opened_status, &record.modified_time_ns);
+            }
+            if (error == 0) {
+                error = optional_regular_file_mtime(run_fd, OWNED_FAILURE_ARTIFACT,
+                                                    opened_status.st_dev,
+                                                    &record.has_failure_artifact,
+                                                    &record.failure_artifact_modified_time_ns);
+            }
+            if (error == 0) {
+                error = terminal_trace_mtime(run_fd, opened_status.st_dev,
+                                             &record.has_terminal_trace,
+                                             &record.terminal_trace_sequence,
+                                             &record.terminal_trace_modified_time_ns);
+            }
+            if (close(run_fd) != 0 && error == 0) error = errno;
+            if (error != 0) break;
+            records[count++] = record;
+            errno = 0;
+        }
+        if (error == 0 && errno != 0) error = errno;
+        if (closedir(directory) != 0 && error == 0) error = errno;
+    }
+    if (close(runs_fd) != 0 && error == 0) error = errno;
+    if (error != 0) {
+        free(records);
+        failure->code = error;
+        return error;
+    }
+    if (count > 1U) qsort(records, count, sizeof(*records), compare_owned_run_records);
+    *records_out = records;
+    *count_out = count;
+    return 0;
+}
+
 static const char *error_category(int error) {
     if (error == EINVAL || error == ENAMETOOLONG || error == E2BIG || error == ENOTDIR) return "invalid_path";
     if (error == EEXIST || error == ENOTEMPTY || error == ESTALE || error == EAGAIN) return "conflict";
@@ -629,6 +966,48 @@ static void print_resource_success(const struct resource_usage *usage) {
     fflush(stdout);
 }
 
+static void print_owned_runs_success(const struct owned_run_record *records, size_t count) {
+    printf("{\"v\":1,\"ok\":true,\"operation\":\"list-owned-runs\",\"runs\":[");
+    for (size_t index = 0; index < count; index++) {
+        const struct owned_run_record *record = &records[index];
+        if (index > 0) putchar(',');
+        printf("{\"run_id\":\"%s\",\"device\":\"%ju\",\"inode\":\"%ju\","
+               "\"modified_time_ns\":\"%" PRId64 "\",\"failure_artifact_modified_time_ns\":",
+               record->run_id, (uintmax_t)record->device, (uintmax_t)record->inode,
+               record->modified_time_ns);
+        if (record->has_failure_artifact) {
+            printf("\"%" PRId64 "\"", record->failure_artifact_modified_time_ns);
+        } else {
+            printf("null");
+        }
+        printf(",\"terminal_trace_sequence\":");
+        if (record->has_terminal_trace) {
+            printf("%u", record->terminal_trace_sequence);
+        } else {
+            printf("null");
+        }
+        printf(",\"terminal_trace_modified_time_ns\":");
+        if (record->has_terminal_trace) {
+            printf("\"%" PRId64 "\"", record->terminal_trace_modified_time_ns);
+        } else {
+            printf("null");
+        }
+        putchar('}');
+    }
+    puts("]}");
+    fflush(stdout);
+}
+
+static void print_run_lease_success(const struct stat *lease_status,
+                                    const struct stat *run_directory_status) {
+    printf("{\"v\":1,\"ok\":true,\"operation\":\"hold-run-lease\","
+           "\"device\":\"%ju\",\"inode\":\"%ju\","
+           "\"run_device\":\"%ju\",\"run_inode\":\"%ju\"}\n",
+           (uintmax_t)lease_status->st_dev, (uintmax_t)lease_status->st_ino,
+           (uintmax_t)run_directory_status->st_dev, (uintmax_t)run_directory_status->st_ino);
+    fflush(stdout);
+}
+
 static int sync_directory(int fd) {
     if (fsync(fd) == 0) return 0;
     return errno;
@@ -691,6 +1070,350 @@ static int unlink_if_identity(int parent_fd, const char *name, dev_t device, ino
     return sync_directory(parent_fd);
 }
 
+static int verify_owned_run_name(int runs_fd, const char *run_id, dev_t device, ino_t inode) {
+    struct stat status;
+    if (fstatat(runs_fd, run_id, &status, AT_SYMLINK_NOFOLLOW) != 0) return errno;
+    if (S_ISLNK(status.st_mode)) return ELOOP;
+    if (!S_ISDIR(status.st_mode)) return ENOTDIR;
+    if (status.st_dev != device || status.st_ino != inode) return ESTALE;
+    return 0;
+}
+
+/* A duplicated directory descriptor shares its readdir offset with the original. */
+static int open_owned_tree_stream(int directory_fd) {
+    return openat(directory_fd, ".", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+}
+
+/* Inspect the whole selected run before mutation, opening directories without following links. */
+static int scan_owned_tree(int directory_fd, unsigned int depth, struct owned_tree_usage *usage) {
+    int scan_fd = open_owned_tree_stream(directory_fd);
+    if (scan_fd < 0) return errno;
+    DIR *directory = fdopendir(scan_fd);
+    if (directory == NULL) {
+        int error = errno;
+        close(scan_fd);
+        return error;
+    }
+    int error = 0;
+    errno = 0;
+    struct dirent *entry;
+    while ((entry = readdir(directory)) != NULL) {
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) continue;
+        if (cancelled()) {
+            error = ECANCELED;
+            break;
+        }
+        struct stat status;
+        if (fstatat(directory_fd, entry->d_name, &status, AT_SYMLINK_NOFOLLOW) != 0) {
+            error = errno;
+            break;
+        }
+        if (usage->entries >= MAX_RESOURCE_SCAN_ENTRIES) {
+            error = EFBIG;
+            break;
+        }
+        usage->entries++;
+        if (status.st_dev != usage->device) {
+            error = EXDEV;
+            break;
+        }
+        if (S_ISDIR(status.st_mode)) {
+            if (depth >= MAX_RESOURCE_SCAN_DEPTH) {
+                error = EFBIG;
+                break;
+            }
+            int child_fd = openat(directory_fd, entry->d_name,
+                                  O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+            if (child_fd < 0) {
+                error = errno;
+                break;
+            }
+            struct stat opened_status;
+            if (fstat(child_fd, &opened_status) != 0) {
+                error = errno;
+            } else if (!S_ISDIR(opened_status.st_mode) || opened_status.st_dev != status.st_dev ||
+                       opened_status.st_ino != status.st_ino) {
+                error = ESTALE;
+            } else {
+                error = scan_owned_tree(child_fd, depth + 1U, usage);
+            }
+            if (close(child_fd) != 0 && error == 0) error = errno;
+            if (error != 0) break;
+        } else if (S_ISREG(status.st_mode) || S_ISLNK(status.st_mode)) {
+            if (status.st_size < 0) {
+                error = EOVERFLOW;
+                break;
+            }
+            uint64_t bytes = (uint64_t)status.st_size;
+            if (bytes > MAX_RESOURCE_SCAN_BYTES - usage->bytes) {
+                error = EFBIG;
+                break;
+            }
+            usage->bytes += bytes;
+        } else {
+            error = ENOTSUP;
+            break;
+        }
+        errno = 0;
+    }
+    if (error == 0 && errno != 0) error = errno;
+    if (closedir(directory) != 0 && error == 0) error = errno;
+    return error;
+}
+
+static void free_owned_tree_entries(struct owned_tree_entry *entries, size_t count) {
+    for (size_t index = 0; index < count; index++) free(entries[index].name);
+    free(entries);
+}
+
+static int collect_owned_tree_entries(int directory_fd, struct owned_tree_usage *usage,
+                                      struct owned_tree_entry **entries_out, size_t *count_out) {
+    int scan_fd = open_owned_tree_stream(directory_fd);
+    if (scan_fd < 0) return errno;
+    DIR *directory = fdopendir(scan_fd);
+    if (directory == NULL) {
+        int error = errno;
+        close(scan_fd);
+        return error;
+    }
+    struct owned_tree_entry *entries = NULL;
+    size_t count = 0;
+    size_t capacity = 0;
+    int error = 0;
+    errno = 0;
+    struct dirent *entry;
+    while ((entry = readdir(directory)) != NULL) {
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) continue;
+        if (cancelled()) {
+            error = ECANCELED;
+            break;
+        }
+        struct stat status;
+        if (fstatat(directory_fd, entry->d_name, &status, AT_SYMLINK_NOFOLLOW) != 0) {
+            error = errno;
+            break;
+        }
+        if (usage->entries >= MAX_RESOURCE_SCAN_ENTRIES) {
+            error = EFBIG;
+            break;
+        }
+        usage->entries++;
+        if (status.st_dev != usage->device) {
+            error = EXDEV;
+            break;
+        }
+        enum owned_tree_entry_type type;
+        if (S_ISDIR(status.st_mode)) type = OWNED_TREE_DIRECTORY;
+        else if (S_ISREG(status.st_mode)) type = OWNED_TREE_REGULAR;
+        else if (S_ISLNK(status.st_mode)) type = OWNED_TREE_SYMLINK;
+        else {
+            error = ENOTSUP;
+            break;
+        }
+        if (type != OWNED_TREE_DIRECTORY) {
+            if (status.st_size < 0) {
+                error = EOVERFLOW;
+                break;
+            }
+            uint64_t bytes = (uint64_t)status.st_size;
+            if (bytes > MAX_RESOURCE_SCAN_BYTES - usage->bytes) {
+                error = EFBIG;
+                break;
+            }
+            usage->bytes += bytes;
+        }
+        if (count == capacity) {
+            size_t next_capacity = capacity == 0 ? 32U : capacity * 2U;
+            if (next_capacity > MAX_RESOURCE_SCAN_ENTRIES) next_capacity = MAX_RESOURCE_SCAN_ENTRIES;
+            if (next_capacity > SIZE_MAX / sizeof(*entries)) {
+                error = EOVERFLOW;
+                break;
+            }
+            struct owned_tree_entry *next_entries = realloc(entries, next_capacity * sizeof(*entries));
+            if (next_entries == NULL) {
+                error = ENOMEM;
+                break;
+            }
+            entries = next_entries;
+            capacity = next_capacity;
+        }
+        size_t name_length = strlen(entry->d_name);
+        entries[count].name = malloc(name_length + 1U);
+        if (entries[count].name == NULL) {
+            error = ENOMEM;
+            break;
+        }
+        memcpy(entries[count].name, entry->d_name, name_length + 1U);
+        entries[count].device = status.st_dev;
+        entries[count].inode = status.st_ino;
+        entries[count].type = type;
+        count++;
+        errno = 0;
+    }
+    if (error == 0 && errno != 0) error = errno;
+    if (closedir(directory) != 0 && error == 0) error = errno;
+    if (error != 0) {
+        free_owned_tree_entries(entries, count);
+        return error;
+    }
+    *entries_out = entries;
+    *count_out = count;
+    return 0;
+}
+
+static bool owned_tree_type_matches(mode_t mode, enum owned_tree_entry_type type) {
+    if (type == OWNED_TREE_DIRECTORY) return S_ISDIR(mode);
+    if (type == OWNED_TREE_REGULAR) return S_ISREG(mode);
+    return S_ISLNK(mode);
+}
+
+/* Quarantine one no-follow entry and verify its recorded type and identity before unlinking. */
+static int unlink_owned_tree_entry(int parent_fd, const char *name, dev_t device, ino_t inode,
+                                   enum owned_tree_entry_type type, int runs_fd,
+                                   const char *run_id, dev_t run_device, ino_t run_inode,
+                                   bool root_entry) {
+    int error = verify_owned_run_name(runs_fd, run_id, run_device, run_inode);
+    if (error != 0) return error;
+    char quarantine[NAME_MAX + 1U];
+    error = EEXIST;
+    for (unsigned int attempt = 0; attempt < 32U; attempt++) {
+        error = create_random_temp_name(quarantine, sizeof(quarantine), ".arena-remove-");
+        if (error != 0) return error;
+        error = rename_noreplace(parent_fd, name, parent_fd, quarantine);
+        if (error != EEXIST) break;
+    }
+    if (error != 0) return error;
+    struct stat found;
+    if (fstatat(parent_fd, quarantine, &found, AT_SYMLINK_NOFOLLOW) != 0) {
+        error = errno;
+    } else if (!owned_tree_type_matches(found.st_mode, type) ||
+               found.st_dev != device || found.st_ino != inode) {
+        error = ESTALE;
+    }
+    if (error == 0 && !root_entry) {
+        error = verify_owned_run_name(runs_fd, run_id, run_device, run_inode);
+    }
+    if (error != 0) {
+        int restore_error = rename_noreplace(parent_fd, quarantine, parent_fd, name);
+        return restore_error == 0 ? error : restore_error;
+    }
+    if (unlinkat(parent_fd, quarantine, type == OWNED_TREE_DIRECTORY ? AT_REMOVEDIR : 0) != 0) {
+        error = errno;
+        int restore_error = rename_noreplace(parent_fd, quarantine, parent_fd, name);
+        return restore_error == 0 ? error : restore_error;
+    }
+    return sync_directory(parent_fd);
+}
+
+static int remove_owned_tree_directory(int directory_fd, unsigned int depth,
+                                       struct owned_tree_usage *usage, int runs_fd,
+                                       const char *run_id, dev_t run_device, ino_t run_inode) {
+    struct owned_tree_entry *entries = NULL;
+    size_t count = 0;
+    int error = collect_owned_tree_entries(directory_fd, usage, &entries, &count);
+    for (size_t index = 0; error == 0 && index < count; index++) {
+        struct owned_tree_entry *entry = &entries[index];
+        error = verify_owned_run_name(runs_fd, run_id, run_device, run_inode);
+        if (error != 0) break;
+        if (cancelled()) {
+            error = ECANCELED;
+            break;
+        }
+        if (entry->type == OWNED_TREE_DIRECTORY) {
+            if (depth >= MAX_RESOURCE_SCAN_DEPTH) {
+                error = EFBIG;
+                break;
+            }
+            int child_fd = openat(directory_fd, entry->name,
+                                  O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+            if (child_fd < 0) {
+                error = errno;
+                break;
+            }
+            struct stat opened_status;
+            if (fstat(child_fd, &opened_status) != 0) {
+                error = errno;
+            } else if (!S_ISDIR(opened_status.st_mode) || opened_status.st_dev != entry->device ||
+                       opened_status.st_ino != entry->inode) {
+                error = ESTALE;
+            } else {
+                error = remove_owned_tree_directory(child_fd, depth + 1U, usage, runs_fd,
+                                                    run_id, run_device, run_inode);
+            }
+            if (close(child_fd) != 0 && error == 0) error = errno;
+            if (error != 0) break;
+        }
+        error = unlink_owned_tree_entry(directory_fd, entry->name, entry->device, entry->inode,
+                                        entry->type, runs_fd, run_id, run_device, run_inode, false);
+    }
+    free_owned_tree_entries(entries, count);
+    if (error == 0) error = sync_directory(directory_fd);
+    return error;
+}
+
+static int remove_owned_run_tree(const char *root, const char *run_id,
+                                 uintmax_t expected_device, uintmax_t expected_inode,
+                                 struct fs_error *failure) {
+    if (!valid_owned_run_id(run_id)) {
+        failure->code = EINVAL;
+        return failure->code;
+    }
+    int root_fd = open_owned_root(root);
+    if (root_fd < 0) {
+        failure->code = -root_fd;
+        return failure->code;
+    }
+    int runs_fd = -1;
+    int error = open_relative_directory(root_fd, OWNED_RUNS_DIRECTORY,
+                                        sizeof(OWNED_RUNS_DIRECTORY) - 1U, &runs_fd);
+    close(root_fd);
+    if (error != 0) {
+        failure->code = error;
+        return error;
+    }
+    error = lock_owned_runs_directory(runs_fd);
+    struct stat runs_status;
+    if (error == 0 && fstat(runs_fd, &runs_status) != 0) error = errno;
+    struct stat named_status;
+    if (error == 0 && fstatat(runs_fd, run_id, &named_status, AT_SYMLINK_NOFOLLOW) != 0) {
+        error = errno;
+    }
+    if (error == 0 && S_ISLNK(named_status.st_mode)) error = ELOOP;
+    if (error == 0 && !S_ISDIR(named_status.st_mode)) error = ENOTDIR;
+    if (error == 0 && (named_status.st_dev != (dev_t)expected_device ||
+                       named_status.st_ino != (ino_t)expected_inode)) error = ESTALE;
+    if (error == 0 && named_status.st_dev != runs_status.st_dev) error = EXDEV;
+    int run_fd = -1;
+    if (error == 0) {
+        run_fd = openat(runs_fd, run_id, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+        if (run_fd < 0) error = errno;
+    }
+    struct stat opened_status;
+    if (error == 0 && fstat(run_fd, &opened_status) != 0) error = errno;
+    if (error == 0 && (!S_ISDIR(opened_status.st_mode) ||
+                       opened_status.st_dev != (dev_t)expected_device ||
+                       opened_status.st_ino != (ino_t)expected_inode)) error = ESTALE;
+    struct owned_tree_usage preflight = {.device = (dev_t)expected_device};
+    if (error == 0) error = scan_owned_tree(run_fd, 0U, &preflight);
+    if (error == 0) error = verify_owned_run_name(runs_fd, run_id,
+                                                   (dev_t)expected_device, (ino_t)expected_inode);
+    struct owned_tree_usage deletion = {.device = (dev_t)expected_device};
+    if (error == 0) {
+        error = remove_owned_tree_directory(run_fd, 0U, &deletion, runs_fd, run_id,
+                                            (dev_t)expected_device, (ino_t)expected_inode);
+    }
+    if (run_fd >= 0 && close(run_fd) != 0 && error == 0) error = errno;
+    if (error == 0) {
+        error = unlink_owned_tree_entry(runs_fd, run_id, (dev_t)expected_device,
+                                        (ino_t)expected_inode, OWNED_TREE_DIRECTORY,
+                                        runs_fd, run_id, (dev_t)expected_device,
+                                        (ino_t)expected_inode, true);
+    }
+    if (close(runs_fd) != 0 && error == 0) error = errno;
+    if (error != 0) failure->code = error;
+    return error;
+}
+
 static void cleanup_created_directories(struct created_directory *created, size_t count,
                                         struct fs_error *error) {
     for (size_t index = count; index > 0; index--) {
@@ -737,6 +1460,87 @@ static int validate_existing_parent(int fd) {
     return 0;
 }
 
+static bool is_owned_runs_child_component(const char *relative, size_t relative_length,
+                                          size_t component_index) {
+    static const char prefix[] = OWNED_RUNS_DIRECTORY "/";
+    size_t prefix_length = sizeof(prefix) - 1U;
+    return component_index == 3U && relative_length > prefix_length &&
+           memcmp(relative, prefix, prefix_length) == 0;
+}
+
+static int lock_owned_runs_directory(int directory_fd) {
+    for (;;) {
+        if (cancelled()) return ECANCELED;
+        if (flock(directory_fd, LOCK_EX) == 0) return 0;
+        if (errno == EINTR) {
+            if (cancelled()) return ECANCELED;
+            continue;
+        }
+        return errno;
+    }
+}
+
+/* Count only while holding the runs-directory lock shared with create and remove operations. */
+static int count_owned_run_directories(int directory_fd, size_t *run_count) {
+    struct stat directory_status;
+    if (fstat(directory_fd, &directory_status) != 0) return errno;
+    int scan_fd = fcntl(directory_fd, F_DUPFD_CLOEXEC, 0);
+    if (scan_fd < 0) return errno;
+    DIR *directory = fdopendir(scan_fd);
+    if (directory == NULL) {
+        int error = errno;
+        close(scan_fd);
+        return error;
+    }
+    int error = 0;
+    size_t count = 0;
+    uint64_t entries = 0;
+    errno = 0;
+    struct dirent *entry;
+    while ((entry = readdir(directory)) != NULL) {
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) continue;
+        if (++entries > MAX_RESOURCE_SCAN_ENTRIES) {
+            error = EFBIG;
+            break;
+        }
+        struct stat status;
+        if (fstatat(directory_fd, entry->d_name, &status, AT_SYMLINK_NOFOLLOW) != 0) {
+            error = errno;
+            break;
+        }
+        if (S_ISLNK(status.st_mode)) {
+            error = ELOOP;
+            break;
+        }
+        if (S_ISREG(status.st_mode)) {
+            errno = 0;
+            continue;
+        }
+        if (!S_ISDIR(status.st_mode)) {
+            error = ENOTSUP;
+            break;
+        }
+        if (!valid_owned_run_id(entry->d_name)) {
+            error = EINVAL;
+            break;
+        }
+        if (status.st_dev != directory_status.st_dev) {
+            error = EXDEV;
+            break;
+        }
+        count++;
+        if (count > MAX_OWNED_RUN_CAPACITY) {
+            error = EFBIG;
+            break;
+        }
+        errno = 0;
+    }
+    if (error == 0 && errno != 0) error = errno;
+    if (closedir(directory) != 0 && error == 0) error = errno;
+    if (error == 0) *run_count = count;
+    return error;
+}
+
 /* Create only the final run leaf; missing ancestors are private and removed on failure. */
 static int create_owned_directory(const char *root, const char *relative, size_t relative_length,
                                   struct fs_error *failure, struct stat *created_status) {
@@ -780,6 +1584,28 @@ static int create_owned_directory(const char *root, const char *relative, size_t
         component[component_length] = '\0';
         bool final_component = component_index + 1U == component_total;
         int next_fd = -1;
+        if (is_owned_runs_child_component(relative, relative_length, component_index)) {
+            if (!valid_owned_run_id(component)) {
+                error = EINVAL;
+                goto fail;
+            }
+            error = lock_owned_runs_directory(current_fd);
+            if (error != 0) goto fail;
+            struct stat existing_status;
+            if (fstatat(current_fd, component, &existing_status, AT_SYMLINK_NOFOLLOW) != 0) {
+                if (errno != ENOENT) {
+                    error = errno;
+                    goto fail;
+                }
+                size_t run_count = 0;
+                error = count_owned_run_directories(current_fd, &run_count);
+                if (error != 0) goto fail;
+                if (run_count >= MAX_OWNED_RUN_CAPACITY) {
+                    error = EFBIG;
+                    goto fail;
+                }
+            }
+        }
         if (final_component) {
             if (mkdirat(current_fd, component, 0700) != 0) {
                 error = errno;
@@ -1694,7 +2520,8 @@ clone_done:
 
 /* Keep the per-run advisory lock alive in this helper until its owner closes stdin. */
 static int hold_run_lease(const char *root, const char *relative, size_t relative_length,
-                          struct fs_error *failure, struct stat *lease_status) {
+                          struct fs_error *failure, struct stat *lease_status,
+                          struct stat *run_directory_status) {
     int root_fd = open_owned_root(root);
     if (root_fd < 0) {
         failure->code = -root_fd;
@@ -1736,7 +2563,20 @@ static int hold_run_lease(const char *root, const char *relative, size_t relativ
         failure->code = error;
         return error;
     }
-    print_success("hold-run-lease", lease_status);
+    if (fstat(run_fd, run_directory_status) != 0) {
+        error = errno;
+        close(lock_fd);
+        close(run_fd);
+        failure->code = error;
+        return error;
+    }
+    if (!S_ISDIR(run_directory_status->st_mode)) {
+        close(lock_fd);
+        close(run_fd);
+        failure->code = ENOTDIR;
+        return ENOTDIR;
+    }
+    print_run_lease_success(lease_status, run_directory_status);
     for (;;) {
         if (cancelled()) break;
         unsigned char byte;
@@ -2127,6 +2967,48 @@ static int run_inspect_resources(int argc, char **argv) {
     return error == 0 ? 0 : 1;
 }
 
+static int run_list_owned_runs(int argc, char **argv) {
+    struct fs_error failure = {0};
+    char *root = NULL;
+    size_t root_length = 0;
+    struct owned_run_record *records = NULL;
+    size_t count = 0;
+    int error = decode_path_argument(argv[2], &root, &root_length);
+    if (error == 0 && (root_length == 0 || root[0] != '/')) error = EINVAL;
+    if (error == 0) error = list_owned_runs(root, &failure, &records, &count);
+    else failure.code = error;
+    if (error == 0) print_owned_runs_success(records, count);
+    else print_error("list-owned-runs", &failure);
+    free(records);
+    free(root);
+    (void)argc;
+    return error == 0 ? 0 : 1;
+}
+
+static int run_remove_owned_tree(int argc, char **argv) {
+    struct fs_error failure = {0};
+    char *root = NULL;
+    size_t root_length = 0;
+    uint64_t device = 0;
+    uint64_t inode = 0;
+    int error = parse_u64(argv[4], &device);
+    if (error == 0) error = parse_u64(argv[5], &inode);
+    if (error == 0) error = decode_path_argument(argv[2], &root, &root_length);
+    if (error == 0 && (root_length == 0 || root[0] != '/')) error = EINVAL;
+    if (error == 0) error = remove_owned_run_tree(root, argv[3], (uintmax_t)device,
+                                                  (uintmax_t)inode, &failure);
+    else failure.code = error;
+    if (error == 0) {
+        printf("{\"v\":1,\"ok\":true,\"operation\":\"remove-owned-run-tree\"}\n");
+        fflush(stdout);
+    } else {
+        print_error("remove-owned-run-tree", &failure);
+    }
+    free(root);
+    (void)argc;
+    return error == 0 ? 0 : 1;
+}
+
 static int run_unlink(int argc, char **argv) {
     struct fs_error failure = {0};
     char *root = NULL;
@@ -2198,8 +3080,10 @@ static int run_hold_lease(int argc, char **argv) {
     int error = decode_root_and_relative(argv[2], argv[3], &root, &relative,
                                          &relative_length, &failure);
     if (error == 0) {
-        struct stat status;
-        error = hold_run_lease(root, relative, relative_length, &failure, &status);
+        struct stat lease_status;
+        struct stat run_directory_status;
+        error = hold_run_lease(root, relative, relative_length, &failure,
+                               &lease_status, &run_directory_status);
     }
     if (error != 0) print_error("hold-run-lease", &failure);
     free(root);
@@ -2226,6 +3110,12 @@ int main(int argc, char **argv) {
     if (argc == 5 && strcmp(argv[1], "read-owned-file") == 0) return run_read(argc, argv);
     if (argc == 3 && strcmp(argv[1], "inspect-owned-resources") == 0) {
         return run_inspect_resources(argc, argv);
+    }
+    if (argc == 3 && strcmp(argv[1], "list-owned-runs") == 0) {
+        return run_list_owned_runs(argc, argv);
+    }
+    if (argc == 6 && strcmp(argv[1], "remove-owned-run-tree") == 0) {
+        return run_remove_owned_tree(argc, argv);
     }
     if (argc == 5 && strcmp(argv[1], "stage-world-plan") == 0) {
         return run_stage(argc, argv, "stage-world-plan");
