@@ -1,5 +1,6 @@
 import { deepStrictEqual, equal, ok, throws } from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { test } from 'node:test';
 
 import {
@@ -62,7 +63,7 @@ interface CurriculumScenario {
 }
 
 const scenarios = JSON.parse(readFileSync(
-  new URL('./fixtures/policy-curriculum/observations.json', import.meta.url),
+  resolve(process.cwd(), 'fixtures/policy-curriculum/observations.json'),
   'utf8',
 )) as Record<string, CurriculumScenario>;
 
