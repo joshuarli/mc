@@ -93,19 +93,19 @@ async function captureFairnessRun(active: AcceptanceRunContext, signal: AbortSig
     x: Math.floor(chest.position.x / 16) * 16,
     z: Math.floor(chest.position.z / 16) * 16,
   };
-  const seatZeroReceipts = seatZero.chunkReceipts();
-  const seatOneReceipts = seatOne.chunkReceipts();
+  const seatZeroInitialReceipts = seatZero.chunkReceipts();
+  const seatOneInitialReceipts = seatOne.chunkReceipts();
   assert.ok(
-    seatOneReceipts.chunkColumns.some(({ x, z }) => x === chestColumn.x && z === chestColumn.z),
+    seatOneInitialReceipts.chunkColumns.some(({ x, z }) => x === chestColumn.x && z === chestColumn.z),
     "seat one must receive the chunk column containing its chest",
   );
   assert.ok(
-    !seatZeroReceipts.chunkColumns.some(({ x, z }) => x === chestColumn.x && z === chestColumn.z),
+    !seatZeroInitialReceipts.chunkColumns.some(({ x, z }) => x === chestColumn.x && z === chestColumn.z),
     "seat zero must not receive the chunk column containing seat one's chest",
   );
   assert.notDeepStrictEqual(
-    seatZeroReceipts.chunkColumns,
-    seatOneReceipts.chunkColumns,
+    seatZeroInitialReceipts.chunkColumns,
+    seatOneInitialReceipts.chunkColumns,
     "each competitor must retain its own distinct received chunk history",
   );
 
@@ -122,18 +122,32 @@ async function captureFairnessRun(active: AcceptanceRunContext, signal: AbortSig
 
   const seatZeroObservation = await waitForCompleteObservation(seatZero.client, signal);
   const seatOneEntityId = seatOne.bot.entity.id;
-  assert.equal(seatZeroObservation.opponents.kind, "current");
+  if (seatZeroObservation.opponents.kind !== "current") {
+    throw new Error("seat zero's complete observation must include current opponents");
+  }
   assert.ok(
     !seatZeroObservation.opponents.value.some(({ id }) => id === seatOneEntityId),
     "seat zero's current observation must not contain seat one's hidden entity",
   );
-  assert.equal(seatZeroObservation.loot.kind, "current");
+  if (seatZeroObservation.loot.kind !== "current") {
+    throw new Error("seat zero's complete observation must include current loot");
+  }
   assert.ok(
     !seatZeroObservation.loot.value.some((opportunity) => opportunity.kind === "unopenedContainer"
       && opportunity.position.x === chest.position.x
       && opportunity.position.y === chest.position.y
       && opportunity.position.z === chest.position.z),
     "seat zero's current observation must not contain a loot target at seat one's hidden chest",
+  );
+  const seatZeroReceipts = seatZero.chunkReceipts();
+  const seatOneReceipts = seatOne.chunkReceipts();
+  assert.ok(
+    !seatZeroReceipts.chunkColumns.some(({ x, z }) => x === chestColumn.x && z === chestColumn.z),
+    "seat zero must not receive the hidden chest column during observation capture",
+  );
+  assert.ok(
+    seatOneReceipts.chunkColumns.some(({ x, z }) => x === chestColumn.x && z === chestColumn.z),
+    "seat one must retain its chest column in the raw observation receipt history",
   );
   assert.ok(
     !seatZeroReceipts.entities.some(({ id }) => id === seatOneEntityId),
