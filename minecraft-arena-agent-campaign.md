@@ -316,6 +316,7 @@ Append one line per execution judgment that a reader would otherwise miss: date,
 - 2026-10-12 — P1: start independent S1, B1, and R1 offline halves after the F0 workspace/schema seam merged, because these paths can progress without the still-pending live stack proof; defer their proof-dependent integrations.
 - 2026-10-12 — P1: admit parse-only `toml_edit`, `serde`, `serde_json`, and `sha2` for source-aware TOML validation, strict JSON evidence, and SHA-256 identity/checksums; all versions were already locked, so the graph adds no package versions; record release-size and startup budgets for P3 because this offline slice forbids release builds.
 - 2026-10-12 — F0: check in the generated Gradle 9.6.1 wrapper, pin its JAR hash in `versions.lock.toml`, and verify its URL and distribution checksum against that authority before use; require strict dependency verification with the committed lock and metadata.
+- 2026-10-12 — P0: reserve the live stack smoke for one lane after the wrapper build and all offline P1 slices finish; keep other builds idle while the server is running.
 
 ## 9. Campaign log
 
