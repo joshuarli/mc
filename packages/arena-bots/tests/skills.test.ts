@@ -32,6 +32,18 @@ const PathMove = createRequire(import.meta.url)('mineflayer-pathfinder/lib/move'
 };
 const packageRequire = createRequire(import.meta.url);
 const mineflayerRequire = createRequire(packageRequire.resolve('mineflayer'));
+const { Vec3 } = mineflayerRequire('vec3') as {
+  readonly Vec3: new (x: number, y: number, z: number) => Bot['entity']['position'];
+};
+const createPrismarineWorld = mineflayerRequire('prismarine-world') as (
+  version: string,
+) => new (chunkGenerator: null) => { readonly sync: Bot['world'] };
+const minecraftData = mineflayerRequire('minecraft-data') as (version: string) => {
+  readonly blocksByName: { readonly air: { readonly defaultState: number } };
+};
+const createPrismarineBlock = mineflayerRequire('prismarine-block') as (registry: unknown) => {
+  fromStateId(stateId: number, biomeId: number): unknown;
+};
 const protocol = mineflayerRequire('minecraft-protocol') as {
   readonly states: { readonly PLAY: string };
   createSerializer(options: { readonly state: string; readonly isServer: boolean; readonly version: string }): {
@@ -1038,7 +1050,6 @@ test('attack waits for tick-driven non-forced look before launching', async () =
     entities: { 2: opponent },
     players: { rival: { entity: opponent, gamemode: 0 } },
     blockAt: () => targetBlock,
-    canSeeBlock: () => true,
     lookAt: async (_point: unknown, force?: boolean) => {
       lookCalls += 1;
       lookForces.push(force);
@@ -1391,6 +1402,7 @@ function makeHarness(
     pathfinder,
     inventory,
     entity: { id: 1, position: { x: 0, y: 64, z: 0 } },
+    world: makeSkillWorld(),
     health: 20,
     food: 10,
     quickBarSlot: 0,
@@ -1464,27 +1476,43 @@ function prepareChest(bot: Bot): void {
     position: new TestPosition(1, 64, 0),
   } as NonNullable<ReturnType<Bot['blockAt']>>;
   Object.assign(bot, {
-    entity: { id: 1, position: new TestPosition(0, 64, 0) },
+    entity: {
+      id: 1,
+      position: new TestPosition(0, 64, 0),
+      eyeHeight: 1.62,
+      yaw: 0,
+      pitch: 0,
+    },
     blockAt: () => block,
-    canSeeBlock: () => true,
   });
 }
 
-class TestPosition {
-  constructor(
-    readonly x: number,
-    readonly y: number,
-    readonly z: number,
-  ) {}
+function makeSkillWorld(): Bot['world'] {
+  const World = createPrismarineWorld('26.1.2');
+  const world = new World(null);
+  const registry = minecraftData('26.1.2');
+  const blockFactory = createPrismarineBlock(registry);
+  const airState = registry.blocksByName.air.defaultState;
+  const setColumn = (world.sync as unknown as {
+    setColumn(
+      chunkX: number,
+      chunkZ: number,
+      column: { getBlock(position: Bot['entity']['position']): unknown },
+    ): void;
+  }).setColumn.bind(world.sync);
 
-  floored(): TestPosition {
-    return new TestPosition(Math.floor(this.x), Math.floor(this.y), Math.floor(this.z));
+  for (let chunkX = -1; chunkX <= 0; chunkX += 1) {
+    for (let chunkZ = -1; chunkZ <= 0; chunkZ += 1) {
+      setColumn(chunkX, chunkZ, {
+        getBlock: () => blockFactory.fromStateId(airState, 0),
+      });
+    }
   }
 
-  offset(x: number, y: number, z: number): TestPosition {
-    return new TestPosition(this.x + x, this.y + y, this.z + z);
-  }
+  return world.sync;
 }
+
+class TestPosition extends Vec3 {}
 
 async function waitUntil(predicate: () => boolean): Promise<void> {
   for (let attempt = 0; attempt < 100; attempt += 1) {
