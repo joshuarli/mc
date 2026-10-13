@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { createServer, type Server, type Socket } from 'node:net';
 import { performance } from 'node:perf_hooks';
@@ -53,6 +54,55 @@ test('Mineflayer disconnect during startup performs bounded cleanup', async (t) 
   await assert.rejects(operation, (error: unknown) => error instanceof RunnerError
     && error.source.kind !== 'client_adapter_failed');
   assert.ok(performance.now() - started < 6_000, 'disconnect cleanup should not wait for the spawn deadline');
+});
+
+test('Mineflayer cleanup after a peer half-close releases the child process', () => {
+  const source = [
+    "const assert = require('node:assert/strict');",
+    "const fs = require('node:fs');",
+    "const net = require('node:net');",
+    "const path = require('node:path');",
+    `const { compileScenario } = require(${JSON.stringify(join(repositoryRoot, '.work/build/packages/arena-spec/src/index.js'))});`,
+    `const { createRuntimeRoster } = require(${JSON.stringify(join(repositoryRoot, '.work/build/packages/arena-runner/src/runtime/roster.js'))});`,
+    `const { RuntimeCompetitorClient } = require(${JSON.stringify(join(repositoryRoot, '.work/build/packages/arena-runner/src/runtime/clients.js'))});`,
+    '(async () => {',
+    '  const root = process.cwd();',
+    "  const scenario = compileScenario(fs.readFileSync(path.join(root, 'scenarios/duel.toml'), 'utf8'), fs.readFileSync(path.join(root, 'maps/duel.toml'), 'utf8'));",
+    '  const identity = createRuntimeRoster(scenario).competitorIdentities[0];',
+    '  const peers = new Set();',
+    '  let peerSentFin = false;',
+    "  const server = net.createServer({ allowHalfOpen: true }, (socket) => {",
+    '    peers.add(socket);',
+    "    socket.once('close', () => peers.delete(socket));",
+    "    socket.once('data', () => { peerSentFin = true; socket.end(); });",
+    '  });',
+    "  await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });",
+    '  const address = server.address();',
+    "  assert.ok(address && typeof address === 'object', 'local listener must have a TCP address');",
+    '  const connection = new RuntimeCompetitorClient(0, identity, {',
+    "    host: '127.0.0.1', port: address.port, scenario, signal: new AbortController().signal,",
+    '  });',
+    '  await assert.rejects(connection.connect());',
+    "  assert.equal(peerSentFin, true, 'the server must receive protocol bytes and send FIN');",
+    '  for (const peer of peers) peer.destroy();',
+    '  await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));',
+    '})().catch((error) => { console.error(error); process.exitCode = 1; });',
+  ].join('\n');
+  const child = spawnSync(process.execPath, ['--input-type=commonjs', '-e', source], {
+    cwd: repositoryRoot,
+    env: { ...process.env, TMPDIR: join(repositoryRoot, '.work/tmp') },
+    encoding: 'utf8',
+    maxBuffer: 1024 * 1024,
+    timeout: 8_000,
+  });
+  const childErrorCode = (child.error as NodeJS.ErrnoException | undefined)?.code;
+
+  assert.equal(
+    childErrorCode,
+    undefined,
+    `Mineflayer cleanup kept its child alive: ${childErrorCode ?? ''}\n${child.stderr}`,
+  );
+  assert.equal(child.status, 0, `Mineflayer child failed: ${child.stderr}`);
 });
 
 function createCompetitor(port: number, signal: AbortSignal): RuntimeCompetitorClient {
