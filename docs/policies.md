@@ -55,6 +55,8 @@ Callers provide named `PolicyParamValues` and receive `PolicyParams` only after 
 | Loot hysteresis | 2 blocks | 0–16 blocks |
 | Search radius | 8 blocks | 1–16 blocks |
 
+The fallback exploration target selects one of eight horizontal directions and caps each horizontal coordinate offset at `searchRadiusBlocks`; a diagonal target may therefore have a Manhattan distance greater than that value.
+
 `PolicyParams.baseline()` is the sole typed baseline default. Arbitrary code or unvalidated parameter values are not accepted by `decide`.
 
 ## Determinism and outcomes

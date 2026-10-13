@@ -14,7 +14,6 @@ import {
   entityId,
   equipmentUpgrade,
   foodStack,
-  manhattanDistance,
   observationSequence,
   PolicyParams,
   policyMemory,
@@ -143,7 +142,9 @@ test('initial search navigates to a bounded replayable target', () => {
   deepStrictEqual(first.intent, { kind: 'navigate', target: blockPosition(4, 64, -8) });
   deepStrictEqual([replay.goal, replay.intent], [first.goal, first.intent]);
   ok(first.intent.kind === 'navigate');
-  ok(manhattanDistance(position(scenario('initialSearch').position), first.intent.target) <= 8n);
+  const [originX, , originZ] = scenario('initialSearch').position;
+  ok(Math.abs(first.intent.target.x - originX) <= params.values.searchRadiusBlocks);
+  ok(Math.abs(first.intent.target.z - originZ) <= params.values.searchRadiusBlocks);
 });
 
 test('identical local views choose the same unopened container without shared reservations', () => {
@@ -339,7 +340,9 @@ test('seat 255 has a replayable search stream and seat 256 is rejected', () => {
   deepStrictEqual([replay.goal, replay.intent], [first.goal, first.intent]);
   equal(first.goal.kind, 'explore');
   ok(first.intent.kind === 'navigate');
-  ok(manhattanDistance(position(scenario('initialSearch').position), first.intent.target) <= 8n);
+  const [originX, , originZ] = scenario('initialSearch').position;
+  ok(Math.abs(first.intent.target.x - originX) <= params.values.searchRadiusBlocks);
+  ok(Math.abs(first.intent.target.z - originZ) <= params.values.searchRadiusBlocks);
   throws(() => seatId(256), RangeError);
 });
 
