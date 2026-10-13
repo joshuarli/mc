@@ -682,6 +682,8 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
         world.setTime(1000);
         world.setStorm(false);
         world.setThundering(false);
+        // Keep fixture clients at the declared spawn; server.properties does not control this world rule.
+        world.setGameRule(GameRule.SPAWN_RADIUS, 0);
         world.setSpawnLocation(0, FLOOR_Y + 1, 0);
 
         for (int x = -4; x <= 4; x++) {
