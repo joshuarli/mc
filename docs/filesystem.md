@@ -28,6 +28,41 @@ directory before reporting success. A failed or cancelled operation attempts
 to remove only temporary or published entries whose device and inode match
 the identity returned by the helper.
 
+`stageOwnedFile` uses the same atomic no-overwrite protocol for runtime-owned
+files such as `server.properties`, `eula.txt`, and plugin JARs. Its hard limit
+is 256 MiB, with a smaller per-call limit available. `createOwnedDirectory`
+creates private `0700` directories for runtime-owned content such as
+`plugins/`; like `createRunDirectory`, it creates missing ancestors and
+returns the leaf identity.
+
+`acquireOwnedRunLease` keeps a native helper alive while it holds an exclusive
+`flock` on the persistent `.arena-run.lock` file inside a run directory. A
+second lease for that run fails while the first is held. Releasing the lease
+closes its control pipe and waits for the helper to exit. The lock file stays
+in place after release so concurrent processes never lock different inodes.
+The optional signal cancels acquisition; use `release()` to end an acquired
+lease. If the owning process exits, its closed control pipe releases the lock.
+
+`cloneOwnedTree` copies a stopped, pristine tree from one relative path under
+the owned root to a fresh destination. It copies bytes into private files and
+directories; it creates no hardlinks or symlinks. It rejects symlinks,
+non-regular files, non-directories, and mount/device crossings, and checks
+source file and directory metadata before and after copying. Callers provide
+limits up to 100,000 regular files and 16 GiB total file data. The helper also
+bounds its internal entry list and stored path data. The source and destination
+cannot overlap.
+
+The clone is assembled in a random, private sibling directory. Once every
+copied file and directory is synced, Darwin publishes it with
+`renameatx_np(RENAME_EXCL)` and Linux with `renameat2(RENAME_NOREPLACE)`; a
+destination that already exists is never replaced. Cancellation before
+publication removes identity-matched staging entries. If cancellation arrives
+after publication, the helper attempts identity-matched cleanup. If the helper
+or host is killed before cleanup completes, the destination may be absent,
+present, or unknown to the caller; `OwnedFilesError.clonePublication` reports
+that state when it can be established. A leftover staging directory after a
+process or host crash is not reused as a completed clone.
+
 `readOwnedFile` opens the leaf without following symlinks, requires a regular
 file, and reads at most 16 MiB or the smaller caller limit. It checks the
 opened handle while reading, so growth during the read cannot exceed the
@@ -40,9 +75,9 @@ stdin, bounds helper output, and uses an `AbortSignal` for cancellation. It
 retains native creation events and attempts identity-checked cleanup after an
 operation fails or is cancelled. `OwnedFilesError` reports the operation,
 category, errno, cleanup errno, whether a published file remains, the relative
-path when known, and any known identity. Each exported operation takes one
-named request object so the root, relative path, size limit, and cancellation
-signal stay distinct at the call site.
+path when known, any known identity, and clone publication state when relevant.
+Each exported operation takes one named request object so the root, relative
+path, size limit, and cancellation signal stay distinct at the call site.
 
 ## Raw command-line arguments
 

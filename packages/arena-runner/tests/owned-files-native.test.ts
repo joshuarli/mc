@@ -1,16 +1,24 @@
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
 import { constants as osConstants } from 'node:os';
 import { randomBytes } from 'node:crypto';
-import { access, lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, unlink, writeFile } from 'node:fs/promises';
+import { access, link as linkFile, lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, unlink, writeFile } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
 import { setImmediate as nextTurn } from 'node:timers/promises';
 import { test } from 'node:test';
 import {
+  acquireOwnedRunLease,
+  cloneOwnedTree,
+  createOwnedDirectory,
   createRunDirectory,
+  MAX_OWNED_FILE_BYTES,
+  MAX_OWNED_TREE_BYTES,
+  MAX_OWNED_TREE_FILES,
   OwnedFilesError,
   readOwnedFile,
   removeCreatedDirectory,
   removeCreatedFile,
+  stageOwnedFile,
   stageWorldPlan,
 } from '../src/owned-files/index.js';
 import type { FileIdentity } from '../src/owned-files/index.js';
@@ -31,9 +39,11 @@ async function withOwnedRoot(run: (root: Buffer, rootText: string) => Promise<vo
   }
 }
 
-function nativeFailure(category: string, relativePath?: Buffer): (error: unknown) => boolean {
+function nativeFailure(category: string, relativePath?: Buffer,
+                       sourceRelativePath?: Buffer): (error: unknown) => boolean {
   return (error: unknown): boolean => error instanceof OwnedFilesError && error.category === category &&
-    (relativePath === undefined || error.relativePath?.equals(relativePath) === true);
+    (relativePath === undefined || error.relativePath?.equals(relativePath) === true) &&
+    (sourceRelativePath === undefined || error.sourceRelativePath?.equals(sourceRelativePath) === true);
 }
 
 test('creates a fresh run, stages without overwrite, reads, and removes by identity', async () => {
@@ -67,6 +77,132 @@ test('creates a fresh run, stages without overwrite, reads, and removes by ident
   });
 });
 
+test('stages runtime files, creates private plugin directories, and locks a run exclusively', async () => {
+  await withOwnedRoot(async (root, rootText) => {
+    const runPath = Buffer.from('server/run');
+    const runIdentity = await createRunDirectory({ helperPath, ownedRoot: root, relativePath: runPath });
+    const pluginDirectory = Buffer.from('server/plugins');
+    const pluginDirectoryIdentity = await createOwnedDirectory({
+      helperPath, ownedRoot: root, relativePath: pluginDirectory,
+    });
+    assert.equal((await lstat(join(rootText, 'server/plugins'))).mode & 0o777, 0o700);
+    assert.equal(pluginDirectoryIdentity.inode.length > 0, true);
+
+    const configPath = Buffer.from('server/run/server.properties');
+    const config = Buffer.from('server-port=25565\n');
+    const configIdentity = await stageOwnedFile({
+      helperPath, ownedRoot: root, relativePath: configPath, contents: config, maxBytes: 128,
+    });
+    const eulaPath = Buffer.from('server/run/eula.txt');
+    const eulaIdentity = await stageOwnedFile({
+      helperPath, ownedRoot: root, relativePath: eulaPath,
+      contents: Buffer.from('eula=true\n'), maxBytes: 32,
+    });
+    const pluginPath = Buffer.from('server/plugins/ArenaFoundation.jar');
+    const pluginBytes = Buffer.alloc(1024, 0x4a);
+    const pluginIdentity = await stageOwnedFile({
+      helperPath, ownedRoot: root, relativePath: pluginPath,
+      contents: pluginBytes, maxBytes: MAX_OWNED_FILE_BYTES,
+    });
+    assert.deepEqual(await readOwnedFile({
+      helperPath, ownedRoot: root, relativePath: configPath, maxBytes: 128,
+    }), config);
+    assert.deepEqual(await readOwnedFile({
+      helperPath, ownedRoot: root, relativePath: eulaPath, maxBytes: 32,
+    }), Buffer.from('eula=true\n'));
+    assert.deepEqual(await readOwnedFile({
+      helperPath, ownedRoot: root, relativePath: pluginPath, maxBytes: 2048,
+    }), pluginBytes);
+    await assert.rejects(stageOwnedFile({
+      helperPath, ownedRoot: root, relativePath: configPath,
+      contents: Buffer.from('replacement'), maxBytes: 128,
+    }), nativeFailure('conflict', configPath));
+
+    const lease = await acquireOwnedRunLease({ helperPath, ownedRoot: root, relativePath: runPath });
+    assert.equal(lease.identity.inode.length > 0, true);
+    await assert.rejects(acquireOwnedRunLease({
+      helperPath, ownedRoot: root, relativePath: runPath,
+    }), nativeFailure('conflict', runPath));
+    await lease.release();
+    assert.deepEqual(await lease.closed, { kind: 'released' });
+    const nextLease = await acquireOwnedRunLease({ helperPath, ownedRoot: root, relativePath: runPath });
+    await nextLease.release();
+
+    await removeCreatedFile({ helperPath, ownedRoot: root, relativePath: configPath, identity: configIdentity });
+    await removeCreatedFile({ helperPath, ownedRoot: root, relativePath: eulaPath, identity: eulaIdentity });
+    await removeCreatedFile({ helperPath, ownedRoot: root, relativePath: pluginPath, identity: pluginIdentity });
+    await removeCreatedDirectory({
+      helperPath, ownedRoot: root, relativePath: pluginDirectory, identity: pluginDirectoryIdentity,
+    });
+    assert.deepEqual(await readFile(join(rootText, 'server/run/.arena-run.lock')), Buffer.alloc(0));
+    assert.equal(runIdentity.inode.length > 0, true);
+  });
+});
+
+test('releases a run lease when its owning process exits', async () => {
+  await withOwnedRoot(async (root) => {
+    const runPath = Buffer.from('server/run');
+    await createRunDirectory({ helperPath, ownedRoot: root, relativePath: runPath });
+    const moduleUrl = new URL('../src/owned-files/index.js', import.meta.url).href;
+    const childCode = [
+      `import { acquireOwnedRunLease } from ${JSON.stringify(moduleUrl)};`,
+      `await acquireOwnedRunLease({ helperPath: ${JSON.stringify(helperPath)}, ` +
+        `ownedRoot: Buffer.from(${JSON.stringify(root.toString('base64'))}, 'base64'), ` +
+        `relativePath: Buffer.from('server/run') });`,
+      "process.stdout.write('lease-held\\n');",
+    ].join('\n');
+    const owner = spawn(process.execPath, ['--input-type=module', '-e', childCode], {
+      cwd: repoRoot,
+      shell: false,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let ready = false;
+    let output = Buffer.alloc(0);
+    let resolveReady!: () => void;
+    let rejectReady!: (error: Error) => void;
+    const readySignal = new Promise<void>((resolveReadySignal, rejectReadySignal) => {
+      resolveReady = resolveReadySignal;
+      rejectReady = rejectReadySignal;
+    });
+    const closed = new Promise<{ exitCode: number | null; exitSignal: NodeJS.Signals | null }>((resolveClose) => {
+      owner.once('close', (exitCode, exitSignal) => {
+        resolveClose({ exitCode, exitSignal });
+        if (!ready) rejectReady(new Error('lease owner exited before acquiring the lease'));
+      });
+    });
+    owner.once('error', rejectReady);
+    owner.stdout.on('data', (chunk: Buffer) => {
+      output = Buffer.concat([output, chunk]);
+      if (!output.includes(0x0a)) return;
+      ready = true;
+      resolveReady();
+    });
+
+    try {
+      await readySignal;
+      assert.equal(output.toString('utf8').trim(), 'lease-held');
+      owner.kill('SIGKILL');
+      const ownerExit = await closed;
+      assert.equal(ownerExit.exitSignal, 'SIGKILL');
+
+      let lease: Awaited<ReturnType<typeof acquireOwnedRunLease>> | undefined;
+      for (let attempt = 0; attempt < 32 && lease === undefined; attempt++) {
+        try {
+          lease = await acquireOwnedRunLease({ helperPath, ownedRoot: root, relativePath: runPath });
+        } catch (error) {
+          if (!(error instanceof OwnedFilesError) || error.category !== 'conflict') throw error;
+          await nextTurn();
+        }
+      }
+      assert.ok(lease, 'the owner process closing its pipe must release the run lock');
+      await lease.release();
+    } finally {
+      if (owner.exitCode === null && owner.signalCode === null) owner.kill('SIGKILL');
+      await closed;
+    }
+  });
+});
+
 test('rejects traversal, symlink components, and reads beyond the bound', async () => {
   await withOwnedRoot(async (root, rootText) => {
     await assert.rejects(createRunDirectory({
@@ -90,6 +226,145 @@ test('rejects traversal, symlink components, and reads beyond the bound', async 
       helperPath, ownedRoot: root, relativePath: Buffer.from('source/oversize.toml'), maxBytes: 4,
     }),
                          nativeFailure('too_large'));
+  });
+});
+
+test('copies a stopped tree into a fresh directory without carrying source hard links', async () => {
+  await withOwnedRoot(async (root, rootText) => {
+    const sourcePath = Buffer.from('pristine/world');
+    await mkdir(join(rootText, 'pristine/world/region'), { recursive: true });
+    const sourceFile = join(rootText, 'pristine/world/level.dat');
+    const aliasFile = join(rootText, 'pristine/world/level-copy.dat');
+    const regionFile = join(rootText, 'pristine/world/region/chunk.dat');
+    const levelBytes = Buffer.from([0, 0x41, 0xff, 0x7f]);
+    await writeFile(sourceFile, levelBytes);
+    await linkFile(sourceFile, aliasFile);
+    await writeFile(regionFile, Buffer.from('chunk data'));
+
+    const targetParent = Buffer.from('runs/session');
+    await createOwnedDirectory({ helperPath, ownedRoot: root, relativePath: targetParent });
+    const destinationPath = Buffer.from('runs/session/world');
+    const identity = await cloneOwnedTree({
+      helperPath, ownedRoot: root, sourceRelativePath: sourcePath,
+      destinationRelativePath: destinationPath,
+      maxFiles: MAX_OWNED_TREE_FILES, maxBytes: MAX_OWNED_TREE_BYTES,
+    });
+    const destinationRoot = join(rootText, 'runs/session/world');
+    const destinationStatus = await lstat(destinationRoot);
+    assert.equal(String(destinationStatus.dev), identity.device);
+    assert.equal(String(destinationStatus.ino), identity.inode);
+    assert.deepEqual(await readFile(join(destinationRoot, 'level.dat')), levelBytes);
+    assert.deepEqual(await readFile(join(destinationRoot, 'region/chunk.dat')), Buffer.from('chunk data'));
+
+    const firstCopy = await lstat(join(destinationRoot, 'level.dat'));
+    const secondCopy = await lstat(join(destinationRoot, 'level-copy.dat'));
+    const original = await lstat(sourceFile);
+    assert.equal(firstCopy.nlink, 1);
+    assert.equal(secondCopy.nlink, 1);
+    assert.notEqual(firstCopy.ino, secondCopy.ino);
+    assert.notEqual(firstCopy.ino, original.ino);
+
+    await assert.rejects(cloneOwnedTree({
+      helperPath, ownedRoot: root, sourceRelativePath: sourcePath,
+      destinationRelativePath: destinationPath,
+      maxFiles: MAX_OWNED_TREE_FILES, maxBytes: MAX_OWNED_TREE_BYTES,
+    }), nativeFailure('conflict', destinationPath, sourcePath));
+  });
+});
+
+test('rejects symlinks and over-limit trees without publishing a clone', async () => {
+  await withOwnedRoot(async (root, rootText) => {
+    const sourcePath = Buffer.from('snapshot/world');
+    const destinationParent = Buffer.from('runs/session');
+    const symlinkDestination = Buffer.from('runs/session/symlink-copy');
+    const fileLimitDestination = Buffer.from('runs/session/file-limit-copy');
+    const limitedDestination = Buffer.from('runs/session/limited-copy');
+    await mkdir(join(rootText, 'snapshot/world'), { recursive: true });
+    await createOwnedDirectory({ helperPath, ownedRoot: root, relativePath: destinationParent });
+    await writeFile(join(rootText, 'snapshot/world/large.dat'), Buffer.from('five!'));
+    await symlink(join(rootText, 'outside'), join(rootText, 'snapshot/world/linked'));
+
+    await assert.rejects(cloneOwnedTree({
+      helperPath, ownedRoot: root, sourceRelativePath: sourcePath,
+      destinationRelativePath: symlinkDestination, maxFiles: 4, maxBytes: 128,
+    }), nativeFailure('symlink_rejected', symlinkDestination, sourcePath));
+    await assert.rejects(access(join(rootText, 'runs/session/symlink-copy')));
+
+    await unlink(join(rootText, 'snapshot/world/linked'));
+    await assert.rejects(cloneOwnedTree({
+      helperPath, ownedRoot: root, sourceRelativePath: sourcePath,
+      destinationRelativePath: fileLimitDestination, maxFiles: 0, maxBytes: 128,
+    }), nativeFailure('too_large', fileLimitDestination, sourcePath));
+    await assert.rejects(access(join(rootText, 'runs/session/file-limit-copy')));
+    await assert.rejects(cloneOwnedTree({
+      helperPath, ownedRoot: root, sourceRelativePath: sourcePath,
+      destinationRelativePath: limitedDestination, maxFiles: 4, maxBytes: 4,
+    }), (error: unknown) => error instanceof OwnedFilesError && error.category === 'too_large' &&
+      error.relativePath?.equals(limitedDestination) === true &&
+      error.sourceRelativePath?.equals(sourcePath) === true && error.clonePublication === 'absent');
+    await assert.rejects(access(join(rootText, 'runs/session/limited-copy')));
+    await assert.rejects(cloneOwnedTree({
+      helperPath, ownedRoot: root, sourceRelativePath: sourcePath,
+      destinationRelativePath: Buffer.from('snapshot/world/copy'), maxFiles: 4, maxBytes: 128,
+    }), nativeFailure('invalid_path', Buffer.from('snapshot/world/copy'), sourcePath));
+    assert.deepEqual(await readdir(join(rootText, 'runs/session')), []);
+  });
+});
+
+test('a signalled clone removes its identity-owned staging directory before publication', async () => {
+  await withOwnedRoot(async (root, rootText) => {
+    const sourcePath = Buffer.from('snapshot/world');
+    const destinationParent = Buffer.from('runs/session');
+    const destinationPath = Buffer.from('runs/session/world');
+    await mkdir(join(rootText, 'snapshot/world'), { recursive: true });
+    await createOwnedDirectory({ helperPath, ownedRoot: root, relativePath: destinationParent });
+    const child = spawn(helperPath, [
+      'clone-owned-tree', root.toString('base64'), sourcePath.toString('base64'),
+      destinationPath.toString('base64'), String(MAX_OWNED_TREE_FILES), String(MAX_OWNED_TREE_BYTES),
+    ], { shell: false, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+    let output = Buffer.alloc(0);
+    let signalled = false;
+    const closed = new Promise<{ exitCode: number | null; exitSignal: NodeJS.Signals | null }>((resolveClose) => {
+      child.once('close', (exitCode, exitSignal) => resolveClose({ exitCode, exitSignal }));
+    });
+    child.stdout.on('data', (chunk: Buffer) => {
+      output = Buffer.concat([output, chunk]);
+      if (signalled) return;
+      const newline = output.indexOf(0x0a);
+      if (newline < 0) return;
+      const first = JSON.parse(output.subarray(0, newline).toString('ascii')) as { event?: string };
+      if (first.event === 'created-directory') {
+        signalled = true;
+        child.kill('SIGTERM');
+      }
+    });
+    const { exitCode, exitSignal } = await closed;
+    child.stdin.destroy();
+    assert.equal(signalled, true);
+    assert.equal(exitCode, 1);
+    assert.equal(exitSignal, null);
+    const records = output.toString('ascii').trim().split('\n').map((line) => JSON.parse(line));
+    assert.equal(records[0].event, 'created-directory');
+    assert.equal(records.at(-1).category, 'cancelled');
+    await assert.rejects(access(join(rootText, 'runs/session/world')));
+    assert.deepEqual(await readdir(join(rootText, 'runs/session')), []);
+  });
+});
+
+test('a clone cancelled before helper startup reports no publication', async () => {
+  await withOwnedRoot(async (root, rootText) => {
+    const controller = new AbortController();
+    controller.abort();
+    await assert.rejects(cloneOwnedTree({
+      helperPath,
+      ownedRoot: root,
+      sourceRelativePath: Buffer.from('snapshot/world'),
+      destinationRelativePath: Buffer.from('runs/world'),
+      maxFiles: MAX_OWNED_TREE_FILES,
+      maxBytes: MAX_OWNED_TREE_BYTES,
+      signal: controller.signal,
+    }), (error: unknown) => error instanceof OwnedFilesError && error.clonePublication === 'absent');
+    await assert.rejects(access(join(rootText, 'runs')));
   });
 });
 

@@ -2,6 +2,7 @@
 #define _GNU_SOURCE 1
 
 #include <errno.h>
+#include <dirent.h>
 #include <fcntl.h>
 #include <inttypes.h>
 #include <limits.h>
@@ -11,8 +12,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/file.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <time.h>
 #include <unistd.h>
 
 extern char **environ;
@@ -21,14 +24,20 @@ extern char **environ;
 #include <stdlib.h>
 #define ARENA_SUPPORTED_HOST 1
 #elif defined(__linux__) && defined(__x86_64__)
+#include <linux/fs.h>
 #include <sys/random.h>
 #define ARENA_SUPPORTED_HOST 1
 #else
 #error "arena-fs supports only Darwin arm64 and Linux x86_64"
 #endif
 
+#define MAX_OWNED_FILE_BYTES (256U * 1024U * 1024U)
 #define MAX_PLAN_BYTES (128U * 1024U * 1024U)
 #define MAX_READ_BYTES (16U * 1024U * 1024U)
+#define MAX_CLONE_FILES 100000U
+#define MAX_CLONE_ENTRIES 200000U
+#define MAX_CLONE_PATH_BYTES (64U * 1024U * 1024U)
+#define MAX_CLONE_BYTES (UINT64_C(16) * 1024U * 1024U * 1024U)
 #define MAX_PATH_BYTES 4096U
 #define MAX_PATH_COMPONENTS 128U
 #define MAX_RAW_ARGV_COUNT 4096U
@@ -349,15 +358,46 @@ static int open_relative_parent(int root_fd, const char *path, size_t length,
     return 0;
 }
 
+static int open_relative_directory(int root_fd, const char *path, size_t length,
+                                   int *directory_fd) {
+    int parent_fd = -1;
+    char *leaf = NULL;
+    int error = open_relative_parent(root_fd, path, length, &parent_fd, &leaf);
+    if (error != 0) return error;
+    int opened_fd = open_directory_at(parent_fd, leaf);
+    if (opened_fd < 0) {
+        error = -opened_fd;
+        close(parent_fd);
+        free(leaf);
+        return error;
+    }
+    struct stat status;
+    if (fstat(opened_fd, &status) != 0) {
+        error = errno;
+    } else if (!S_ISDIR(status.st_mode)) {
+        error = ENOTDIR;
+    } else {
+        error = validate_existing_parent(opened_fd);
+    }
+    close(parent_fd);
+    free(leaf);
+    if (error != 0) {
+        close(opened_fd);
+        return error;
+    }
+    *directory_fd = opened_fd;
+    return 0;
+}
+
 static const char *error_category(int error) {
     if (error == EINVAL || error == ENAMETOOLONG || error == E2BIG || error == ENOTDIR) return "invalid_path";
-    if (error == EEXIST || error == ENOTEMPTY || error == ESTALE) return "conflict";
+    if (error == EEXIST || error == ENOTEMPTY || error == ESTALE || error == EAGAIN) return "conflict";
     if (error == EACCES || error == EPERM || error == EROFS) return "permission";
     if (error == ELOOP) return "symlink_rejected";
     if (error == ENOENT) return "not_found";
     if (error == EFBIG) return "too_large";
     if (error == ECANCELED) return "cancelled";
-    if (error == ENOTSUP || error == EOPNOTSUPP) return "unsupported_file_type";
+    if (error == ENOTSUP || error == EOPNOTSUPP || error == EXDEV) return "unsupported_file_type";
     return "io";
 }
 
@@ -503,8 +543,8 @@ static int validate_existing_parent(int fd) {
 }
 
 /* Create only the final run leaf; missing ancestors are private and removed on failure. */
-static int create_run_directory(const char *root, const char *relative, size_t relative_length,
-                                struct fs_error *failure, struct stat *created_status) {
+static int create_owned_directory(const char *root, const char *relative, size_t relative_length,
+                                  struct fs_error *failure, struct stat *created_status) {
     struct created_directory created[MAX_PATH_COMPONENTS];
     memset(created, 0, sizeof(created));
     size_t created_count = 0;
@@ -676,16 +716,16 @@ fail:
     return error;
 }
 
-static int create_random_temp_name(char *name, size_t capacity) {
+static int create_random_temp_name(char *name, size_t capacity, const char *prefix) {
     unsigned char random[16];
     int error = random_bytes(random, sizeof(random));
     if (error != 0) return error;
     static const char hex[] = "0123456789abcdef";
-    const char prefix[] = ".arena-world-plan-";
-    size_t needed = sizeof(prefix) - 1U + sizeof(random) * 2U + 1U;
+    size_t prefix_length = strlen(prefix);
+    size_t needed = prefix_length + sizeof(random) * 2U + 1U;
     if (capacity < needed) return ENAMETOOLONG;
-    memcpy(name, prefix, sizeof(prefix) - 1U);
-    size_t offset = sizeof(prefix) - 1U;
+    memcpy(name, prefix, prefix_length);
+    size_t offset = prefix_length;
     for (size_t index = 0; index < sizeof(random); index++) {
         name[offset++] = hex[(random[index] >> 4U) & 0xfU];
         name[offset++] = hex[random[index] & 0xfU];
@@ -695,9 +735,9 @@ static int create_random_temp_name(char *name, size_t capacity) {
 }
 
 /* linkat publishes a fully synced same-directory temp without replacing an existing leaf. */
-static int stage_world_plan(const char *root, const char *relative, size_t relative_length,
-                            uint64_t caller_limit, struct fs_error *failure,
-                            struct stat *published_status) {
+static int stage_owned_file(const char *root, const char *relative, size_t relative_length,
+                            uint64_t caller_limit, uint64_t maximum_limit, const char *operation,
+                            struct fs_error *failure, struct stat *published_status) {
     int root_fd = open_owned_root(root);
     if (root_fd < 0) {
         failure->code = -root_fd;
@@ -722,7 +762,11 @@ static int stage_world_plan(const char *root, const char *relative, size_t relat
         goto done;
     }
 
-    uint64_t limit = caller_limit < MAX_PLAN_BYTES ? caller_limit : MAX_PLAN_BYTES;
+    if (caller_limit > maximum_limit) {
+        error = EFBIG;
+        goto done;
+    }
+    uint64_t limit = caller_limit;
     char temporary[NAME_MAX + 1U];
     int temporary_fd = -1;
     for (unsigned int attempt = 0; attempt < 32U; attempt++) {
@@ -730,7 +774,7 @@ static int stage_world_plan(const char *root, const char *relative, size_t relat
             error = ECANCELED;
             goto done;
         }
-        error = create_random_temp_name(temporary, sizeof(temporary));
+        error = create_random_temp_name(temporary, sizeof(temporary), ".arena-stage-");
         if (error != 0) goto done;
         temporary_fd = openat(parent_fd, temporary,
                               O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
@@ -825,7 +869,7 @@ static int stage_world_plan(const char *root, const char *relative, size_t relat
         goto done;
     }
     failure->published = false;
-    print_success("stage-world-plan", published_status);
+    print_success(operation, published_status);
     close(parent_fd);
     free(destination);
     return 0;
@@ -844,6 +888,659 @@ done:
     close(parent_fd);
     free(destination);
     return error;
+}
+
+struct clone_entry {
+    char *path;
+    size_t path_length;
+    dev_t device;
+    ino_t inode;
+    bool directory;
+};
+
+struct clone_state {
+    int staging_root_fd;
+    struct clone_entry *entries;
+    size_t entry_count;
+    size_t entry_capacity;
+    size_t path_bytes;
+    uint64_t files;
+    uint64_t total_bytes;
+    uint64_t max_files;
+    uint64_t max_bytes;
+    dev_t source_device;
+};
+
+#if defined(__APPLE__)
+static bool same_timespec(struct timespec left, struct timespec right) {
+    return left.tv_sec == right.tv_sec && left.tv_nsec == right.tv_nsec;
+}
+
+static bool same_snapshot_status(const struct stat *left, const struct stat *right) {
+    return left->st_dev == right->st_dev && left->st_ino == right->st_ino &&
+           left->st_mode == right->st_mode && left->st_size == right->st_size &&
+           same_timespec(left->st_mtimespec, right->st_mtimespec) &&
+           same_timespec(left->st_ctimespec, right->st_ctimespec);
+}
+#else
+static bool same_timespec(struct timespec left, struct timespec right) {
+    return left.tv_sec == right.tv_sec && left.tv_nsec == right.tv_nsec;
+}
+
+static bool same_snapshot_status(const struct stat *left, const struct stat *right) {
+    return left->st_dev == right->st_dev && left->st_ino == right->st_ino &&
+           left->st_mode == right->st_mode && left->st_size == right->st_size &&
+           same_timespec(left->st_mtim, right->st_mtim) &&
+           same_timespec(left->st_ctim, right->st_ctim);
+}
+#endif
+
+static bool paths_overlap(const char *left, size_t left_length,
+                          const char *right, size_t right_length) {
+    size_t common = left_length < right_length ? left_length : right_length;
+    if (memcmp(left, right, common) != 0) return false;
+    if (left_length == right_length) return true;
+    if (left_length < right_length) return right[left_length] == '/';
+    return left[right_length] == '/';
+}
+
+static int rename_directory_noreplace(int parent_fd, const char *temporary,
+                                      const char *destination) {
+#if defined(__APPLE__)
+    if (renameatx_np(parent_fd, temporary, parent_fd, destination, RENAME_EXCL) != 0) return errno;
+#elif defined(__linux__)
+    if (renameat2(parent_fd, temporary, parent_fd, destination, RENAME_NOREPLACE) != 0) return errno;
+#endif
+    return 0;
+}
+
+static int record_clone_entry(struct clone_state *state, const char *path, size_t path_length,
+                              const struct stat *status, bool directory) {
+    if (state->entry_count >= MAX_CLONE_ENTRIES || path_length > MAX_PATH_BYTES ||
+        path_length > MAX_CLONE_PATH_BYTES - state->path_bytes) return EFBIG;
+    if (state->entry_count == state->entry_capacity) {
+        size_t next_capacity = state->entry_capacity == 0 ? 64U : state->entry_capacity * 2U;
+        if (next_capacity > MAX_CLONE_ENTRIES) next_capacity = MAX_CLONE_ENTRIES;
+        if (next_capacity > SIZE_MAX / sizeof(struct clone_entry)) return EOVERFLOW;
+        struct clone_entry *next_entries = realloc(state->entries,
+                                                     next_capacity * sizeof(struct clone_entry));
+        if (next_entries == NULL) return ENOMEM;
+        state->entries = next_entries;
+        state->entry_capacity = next_capacity;
+    }
+    char *path_copy = malloc(path_length + 1U);
+    if (path_copy == NULL) return ENOMEM;
+    memcpy(path_copy, path, path_length);
+    path_copy[path_length] = '\0';
+    state->entries[state->entry_count++] = (struct clone_entry){
+        .path = path_copy,
+        .path_length = path_length,
+        .device = status->st_dev,
+        .inode = status->st_ino,
+        .directory = directory,
+    };
+    state->path_bytes += path_length;
+    return 0;
+}
+
+static int append_clone_path(const char *parent, size_t parent_length, const char *name,
+                             size_t name_length, char **path, size_t *path_length) {
+    size_t separator_length = parent_length == 0 ? 0U : 1U;
+    if (parent_length > MAX_PATH_BYTES || separator_length > MAX_PATH_BYTES - parent_length ||
+        name_length > MAX_PATH_BYTES - parent_length - separator_length) return ENAMETOOLONG;
+    size_t length = parent_length + separator_length + name_length;
+    char *result = malloc(length + 1U);
+    if (result == NULL) return ENOMEM;
+    if (parent_length > 0) memcpy(result, parent, parent_length);
+    if (separator_length > 0) result[parent_length] = '/';
+    memcpy(result + parent_length + separator_length, name, name_length);
+    result[length] = '\0';
+    *path = result;
+    *path_length = length;
+    return 0;
+}
+
+static int unlink_clone_entry(struct clone_state *state, const struct clone_entry *entry) {
+    int parent_fd = -1;
+    char *leaf = NULL;
+    int error = open_relative_parent(state->staging_root_fd, entry->path, entry->path_length,
+                                     &parent_fd, &leaf);
+    if (error == ENOENT) return 0;
+    if (error != 0) return error;
+    struct stat status;
+    error = identity_at(parent_fd, leaf, entry->device, entry->inode, entry->directory, &status);
+    if (error == ENOENT) {
+        error = 0;
+    } else if (error == 0 && unlinkat(parent_fd, leaf, entry->directory ? AT_REMOVEDIR : 0) != 0) {
+        error = errno;
+    }
+    close(parent_fd);
+    free(leaf);
+    return error;
+}
+
+static int cleanup_clone_entries(struct clone_state *state) {
+    int first_error = 0;
+    for (size_t index = state->entry_count; index > 0; index--) {
+        int error = unlink_clone_entry(state, &state->entries[index - 1U]);
+        if (error != 0 && first_error == 0) first_error = error;
+    }
+    return first_error;
+}
+
+static void free_clone_state(struct clone_state *state) {
+    for (size_t index = 0; index < state->entry_count; index++) free(state->entries[index].path);
+    free(state->entries);
+    state->entries = NULL;
+    state->entry_count = 0;
+    state->entry_capacity = 0;
+    state->path_bytes = 0;
+}
+
+/* EOF on the control pipe starts the copy; a signal can abort before tree traversal. */
+static int wait_for_clone_start(void) {
+    for (;;) {
+        if (cancelled()) return ECANCELED;
+        unsigned char byte;
+        ssize_t amount = read(STDIN_FILENO, &byte, sizeof(byte));
+        if (amount == 0) return 0;
+        if (amount > 0) return EINVAL;
+        if (errno == EINTR) {
+            if (cancelled()) return ECANCELED;
+            continue;
+        }
+        return errno;
+    }
+}
+
+static int copy_regular_file(int source_directory_fd, int destination_directory_fd,
+                             const char *name, const struct stat *expected_source_status,
+                             const char *relative_path, size_t path_length,
+                             struct clone_state *state) {
+    if (state->files >= state->max_files) return EFBIG;
+    int source_fd = openat(source_directory_fd, name, O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK);
+    if (source_fd < 0) {
+        int error = errno;
+        if (error == ENOTDIR || error == ELOOP) {
+            struct stat link_status;
+            if (fstatat(source_directory_fd, name, &link_status, AT_SYMLINK_NOFOLLOW) == 0 &&
+                S_ISLNK(link_status.st_mode)) error = ELOOP;
+        }
+        return error;
+    }
+    struct stat source_status;
+    if (fstat(source_fd, &source_status) != 0) {
+        int error = errno;
+        close(source_fd);
+        return error;
+    }
+    if (!S_ISREG(source_status.st_mode)) {
+        close(source_fd);
+        return EOPNOTSUPP;
+    }
+    if (!same_snapshot_status(expected_source_status, &source_status)) {
+        close(source_fd);
+        return ESTALE;
+    }
+    if (source_status.st_dev != state->source_device) {
+        close(source_fd);
+        return EXDEV;
+    }
+    if (source_status.st_size < 0 || (uint64_t)source_status.st_size > state->max_bytes - state->total_bytes) {
+        close(source_fd);
+        return EFBIG;
+    }
+
+    int destination_fd = openat(destination_directory_fd, name,
+                                O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
+    if (destination_fd < 0) {
+        int error = errno;
+        close(source_fd);
+        return error;
+    }
+    struct stat destination_status;
+    if (fstat(destination_fd, &destination_status) != 0) {
+        int error = errno;
+        close(source_fd);
+        close(destination_fd);
+        return error;
+    }
+    if (!S_ISREG(destination_status.st_mode)) {
+        close(source_fd);
+        close(destination_fd);
+        return EINVAL;
+    }
+    int error = record_clone_entry(state, relative_path, path_length, &destination_status, false);
+    if (error != 0) {
+        int cleanup_error = unlink_if_identity(destination_directory_fd, name,
+                                              destination_status.st_dev, destination_status.st_ino, false);
+        close(source_fd);
+        close(destination_fd);
+        return cleanup_error == 0 ? error : cleanup_error;
+    }
+    state->files++;
+
+    uint64_t copied = 0;
+    unsigned char buffer[65536];
+    while (error == 0) {
+        if (cancelled()) {
+            error = ECANCELED;
+            break;
+        }
+        ssize_t amount = read(source_fd, buffer, sizeof(buffer));
+        if (amount < 0) {
+            if (errno == EINTR && cancelled()) error = ECANCELED;
+            else if (errno != EINTR) error = errno;
+            continue;
+        }
+        if (amount == 0) break;
+        uint64_t amount_u64 = (uint64_t)amount;
+        if (amount_u64 > state->max_bytes - state->total_bytes) {
+            error = EFBIG;
+            break;
+        }
+        error = write_all(destination_fd, buffer, (size_t)amount);
+        if (error != 0) break;
+        copied += amount_u64;
+        state->total_bytes += amount_u64;
+    }
+
+    struct stat after_status;
+    if (error == 0 && fstat(source_fd, &after_status) != 0) error = errno;
+    if (error == 0 && (!same_snapshot_status(&source_status, &after_status) ||
+                       copied != (uint64_t)source_status.st_size)) error = ESTALE;
+    if (error == 0 && fsync(destination_fd) != 0) error = errno;
+    if (close(source_fd) != 0 && error == 0) error = errno;
+    if (close(destination_fd) != 0 && error == 0) error = errno;
+    return error;
+}
+
+static int copy_tree_directory(int source_fd, int destination_fd, const char *relative_path,
+                               size_t path_length, size_t depth, struct clone_state *state) {
+    if (depth >= MAX_PATH_COMPONENTS) return E2BIG;
+    struct stat source_before;
+    if (fstat(source_fd, &source_before) != 0) return errno;
+    if (!S_ISDIR(source_before.st_mode) || source_before.st_dev != state->source_device) return EXDEV;
+
+    int scan_fd = dup(source_fd);
+    if (scan_fd < 0) return errno;
+    DIR *directory = fdopendir(scan_fd);
+    if (directory == NULL) {
+        int error = errno;
+        close(scan_fd);
+        return error;
+    }
+    int error = 0;
+    for (;;) {
+        errno = 0;
+        struct dirent *entry = readdir(directory);
+        if (entry == NULL) {
+            if (errno != 0) error = errno;
+            break;
+        }
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) continue;
+        if (cancelled()) {
+            error = ECANCELED;
+            break;
+        }
+        struct stat child_status;
+        if (fstatat(source_fd, entry->d_name, &child_status, AT_SYMLINK_NOFOLLOW) != 0) {
+            error = errno;
+            break;
+        }
+        if (S_ISLNK(child_status.st_mode)) {
+            error = ELOOP;
+            break;
+        }
+        if (child_status.st_dev != state->source_device) {
+            error = EXDEV;
+            break;
+        }
+        char *child_path = NULL;
+        size_t child_path_length = 0;
+        error = append_clone_path(relative_path, path_length, entry->d_name, strlen(entry->d_name),
+                                  &child_path, &child_path_length);
+        if (error != 0) break;
+
+        if (S_ISDIR(child_status.st_mode)) {
+            if (mkdirat(destination_fd, entry->d_name, 0700) != 0) {
+                error = errno;
+                free(child_path);
+                break;
+            }
+            struct stat created_status;
+            if (fstatat(destination_fd, entry->d_name, &created_status, AT_SYMLINK_NOFOLLOW) != 0) {
+                error = errno;
+                free(child_path);
+                break;
+            }
+            if (!S_ISDIR(created_status.st_mode)) {
+                error = ESTALE;
+                free(child_path);
+                break;
+            }
+            error = record_clone_entry(state, child_path, child_path_length, &created_status, true);
+            if (error != 0) {
+                int cleanup_error = unlink_if_identity(destination_fd, entry->d_name,
+                                                       created_status.st_dev, created_status.st_ino, true);
+                if (cleanup_error != 0) error = cleanup_error;
+                free(child_path);
+                break;
+            }
+            int child_source_fd = open_directory_at(source_fd, entry->d_name);
+            if (child_source_fd < 0) {
+                error = -child_source_fd;
+                free(child_path);
+                break;
+            }
+            struct stat opened_source_status;
+            if (fstat(child_source_fd, &opened_source_status) != 0) {
+                error = errno;
+                close(child_source_fd);
+                free(child_path);
+                break;
+            }
+            if (!same_snapshot_status(&child_status, &opened_source_status)) {
+                error = ESTALE;
+                close(child_source_fd);
+                free(child_path);
+                break;
+            }
+            int child_destination_fd = open_directory_at(destination_fd, entry->d_name);
+            if (child_destination_fd < 0) {
+                error = -child_destination_fd;
+                close(child_source_fd);
+                free(child_path);
+                break;
+            }
+            struct stat opened_destination_status;
+            if (fstat(child_destination_fd, &opened_destination_status) != 0) {
+                error = errno;
+                close(child_source_fd);
+                close(child_destination_fd);
+                free(child_path);
+                break;
+            }
+            if (opened_destination_status.st_dev != created_status.st_dev ||
+                opened_destination_status.st_ino != created_status.st_ino ||
+                !S_ISDIR(opened_destination_status.st_mode)) {
+                error = ESTALE;
+                close(child_source_fd);
+                close(child_destination_fd);
+                free(child_path);
+                break;
+            }
+            error = copy_tree_directory(child_source_fd, child_destination_fd,
+                                        child_path, child_path_length, depth + 1U, state);
+            close(child_source_fd);
+            close(child_destination_fd);
+        } else if (S_ISREG(child_status.st_mode)) {
+            error = copy_regular_file(source_fd, destination_fd, entry->d_name, &child_status,
+                                      child_path, child_path_length, state);
+        } else {
+            error = EOPNOTSUPP;
+        }
+        free(child_path);
+        if (error != 0) break;
+    }
+    if (closedir(directory) != 0 && error == 0) error = errno;
+    struct stat source_after;
+    if (error == 0 && fstat(source_fd, &source_after) != 0) error = errno;
+    if (error == 0 && !same_snapshot_status(&source_before, &source_after)) error = ESTALE;
+    if (error == 0) error = sync_directory(destination_fd);
+    return error;
+}
+
+/* Publish a complete private copy by an OS-specific no-replace directory rename. */
+static int clone_owned_tree(const char *root, const char *source, size_t source_length,
+                            const char *destination, size_t destination_length,
+                            uint64_t max_files, uint64_t max_bytes,
+                            struct fs_error *failure, struct stat *published_status) {
+    if (paths_overlap(source, source_length, destination, destination_length)) {
+        failure->code = EINVAL;
+        return EINVAL;
+    }
+    int root_fd = open_owned_root(root);
+    if (root_fd < 0) {
+        failure->code = -root_fd;
+        return failure->code;
+    }
+    int source_fd = -1;
+    int error = open_relative_directory(root_fd, source, source_length, &source_fd);
+    if (error != 0) {
+        close(root_fd);
+        failure->code = error;
+        return error;
+    }
+    struct stat source_status;
+    if (fstat(source_fd, &source_status) != 0) {
+        error = errno;
+        close(source_fd);
+        close(root_fd);
+        failure->code = error;
+        return error;
+    }
+
+    int parent_fd = -1;
+    char *destination_leaf = NULL;
+    error = open_relative_parent(root_fd, destination, destination_length,
+                                 &parent_fd, &destination_leaf);
+    if (error != 0) {
+        close(source_fd);
+        close(root_fd);
+        failure->code = error;
+        return error;
+    }
+    struct stat existing;
+    if (fstatat(parent_fd, destination_leaf, &existing, AT_SYMLINK_NOFOLLOW) == 0) {
+        error = EEXIST;
+        goto clone_done;
+    }
+    if (errno != ENOENT) {
+        error = errno;
+        goto clone_done;
+    }
+
+    char temporary[NAME_MAX + 1U];
+    error = create_random_temp_name(temporary, sizeof(temporary), ".arena-clone-");
+    if (error != 0) goto clone_done;
+    if (mkdirat(parent_fd, temporary, 0700) != 0) {
+        error = errno;
+        goto clone_done;
+    }
+    struct stat staging_status;
+    if (fstatat(parent_fd, temporary, &staging_status, AT_SYMLINK_NOFOLLOW) != 0) {
+        error = errno;
+        failure->cleanup_code = error;
+        goto clone_done;
+    }
+    if (!S_ISDIR(staging_status.st_mode)) {
+        error = ESTALE;
+        failure->cleanup_code = error;
+        goto clone_done;
+    }
+    size_t parent_length = 0;
+    for (size_t index = 0; index < destination_length; index++) {
+        if (destination[index] == '/') parent_length = index + 1U;
+    }
+    size_t temporary_path_length = parent_length + strlen(temporary);
+    if (temporary_path_length > MAX_PATH_BYTES) {
+        error = ENAMETOOLONG;
+        goto cleanup_root;
+    }
+    char temporary_path[MAX_PATH_BYTES + 1U];
+    memcpy(temporary_path, destination, parent_length);
+    memcpy(temporary_path + parent_length, temporary, strlen(temporary));
+    temporary_path[temporary_path_length] = '\0';
+    error = print_created_event("created-directory", temporary_path,
+                                temporary_path_length, &staging_status);
+    if (error != 0) goto cleanup_root;
+    int staging_fd = open_directory_at(parent_fd, temporary);
+    if (staging_fd < 0) {
+        error = -staging_fd;
+        goto cleanup_root;
+    }
+    struct stat opened_staging_status;
+    if (fstat(staging_fd, &opened_staging_status) != 0) {
+        error = errno;
+        close(staging_fd);
+        goto cleanup_root;
+    }
+    if (opened_staging_status.st_dev != staging_status.st_dev ||
+        opened_staging_status.st_ino != staging_status.st_ino ||
+        !S_ISDIR(opened_staging_status.st_mode)) {
+        error = ESTALE;
+        close(staging_fd);
+        goto cleanup_root;
+    }
+    if (sync_directory(parent_fd) != 0) {
+        error = errno;
+        close(staging_fd);
+        goto cleanup_root;
+    }
+
+    struct clone_state state = {
+        .staging_root_fd = staging_fd,
+        .max_files = max_files,
+        .max_bytes = max_bytes,
+        .source_device = source_status.st_dev,
+    };
+    error = wait_for_clone_start();
+    if (error == 0) error = copy_tree_directory(source_fd, staging_fd, "", 0, 0, &state);
+    if (error == 0 && cancelled()) error = ECANCELED;
+    if (error == 0) error = sync_directory(staging_fd);
+    bool published = false;
+    if (error == 0) {
+        error = rename_directory_noreplace(parent_fd, temporary, destination_leaf);
+        if (error == 0) {
+            published = true;
+            *published_status = staging_status;
+            failure->published = true;
+            failure->device = staging_status.st_dev;
+            failure->inode = staging_status.st_ino;
+            error = print_created_event("clone-published", destination, destination_length,
+                                        &staging_status);
+            if (error == 0 && cancelled()) error = ECANCELED;
+            if (error == 0) error = sync_directory(parent_fd);
+        }
+    }
+    if (error != 0) {
+        int cleanup_error = cleanup_clone_entries(&state);
+        if (cleanup_error != 0 && failure->cleanup_code == 0) failure->cleanup_code = cleanup_error;
+        const char *root_name = published ? destination_leaf : temporary;
+        int root_cleanup_error = unlink_if_identity(parent_fd, root_name,
+                                                    staging_status.st_dev, staging_status.st_ino, true);
+        if (root_cleanup_error != 0 && root_cleanup_error != ENOENT && failure->cleanup_code == 0) {
+            failure->cleanup_code = root_cleanup_error;
+        }
+        struct stat remaining;
+        if (fstatat(parent_fd, root_name, &remaining, AT_SYMLINK_NOFOLLOW) == 0 &&
+            remaining.st_dev == staging_status.st_dev && remaining.st_ino == staging_status.st_ino &&
+            S_ISDIR(remaining.st_mode)) {
+            failure->published = published;
+        } else {
+            failure->published = false;
+        }
+    } else {
+        failure->published = false;
+    }
+    free_clone_state(&state);
+    close(staging_fd);
+    if (error == 0) {
+        print_success("clone-owned-tree", published_status);
+        close(parent_fd);
+        free(destination_leaf);
+        close(source_fd);
+        close(root_fd);
+        return 0;
+    }
+    goto clone_done;
+
+cleanup_root:
+    {
+        int root_cleanup_error = unlink_if_identity(parent_fd, temporary,
+                                                    staging_status.st_dev, staging_status.st_ino, true);
+        if (root_cleanup_error != 0 && root_cleanup_error != ENOENT && failure->cleanup_code == 0) {
+            failure->cleanup_code = root_cleanup_error;
+        }
+    }
+clone_done:
+    failure->code = error;
+    close(parent_fd);
+    free(destination_leaf);
+    close(source_fd);
+    close(root_fd);
+    return error;
+}
+
+/* Keep the per-run advisory lock alive in this helper until its owner closes stdin. */
+static int hold_run_lease(const char *root, const char *relative, size_t relative_length,
+                          struct fs_error *failure, struct stat *lease_status) {
+    int root_fd = open_owned_root(root);
+    if (root_fd < 0) {
+        failure->code = -root_fd;
+        return failure->code;
+    }
+    int run_fd = -1;
+    int error = open_relative_directory(root_fd, relative, relative_length, &run_fd);
+    close(root_fd);
+    if (error != 0) {
+        failure->code = error;
+        return error;
+    }
+    int lock_fd = openat(run_fd, ".arena-run.lock",
+                         O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK, 0600);
+    if (lock_fd < 0) {
+        error = errno;
+        close(run_fd);
+        failure->code = error;
+        return error;
+    }
+    if (fstat(lock_fd, lease_status) != 0) {
+        error = errno;
+        close(lock_fd);
+        close(run_fd);
+        failure->code = error;
+        return error;
+    }
+    if (!S_ISREG(lease_status->st_mode) || lease_status->st_nlink != 1 ||
+        lease_status->st_uid != geteuid() || (lease_status->st_mode & 0777) != 0600) {
+        close(lock_fd);
+        close(run_fd);
+        failure->code = EACCES;
+        return EACCES;
+    }
+    if (flock(lock_fd, LOCK_EX | LOCK_NB) != 0) {
+        error = errno;
+        close(lock_fd);
+        close(run_fd);
+        failure->code = error;
+        return error;
+    }
+    print_success("hold-run-lease", lease_status);
+    for (;;) {
+        if (cancelled()) break;
+        unsigned char byte;
+        ssize_t amount = read(STDIN_FILENO, &byte, sizeof(byte));
+        if (amount == 0) break;
+        if (amount > 0) {
+            error = EINVAL;
+            break;
+        }
+        if (errno == EINTR) {
+            if (cancelled()) break;
+            continue;
+        }
+        error = errno;
+        break;
+    }
+    close(lock_fd);
+    close(run_fd);
+    if (error != 0) {
+        failure->code = error;
+        return error;
+    }
+    return 0;
 }
 
 /* Refuse cleanup unless the leaf still names the regular file or empty directory we created. */
@@ -1137,39 +1834,43 @@ static int decode_root_and_relative(const char *encoded_root, const char *encode
     return 0;
 }
 
-static int run_create(int argc, char **argv) {
+static int run_create(int argc, char **argv, const char *operation) {
     struct fs_error failure = {0};
     char *root = NULL;
     char *relative = NULL;
     size_t relative_length = 0;
     int error = decode_root_and_relative(argv[2], argv[3], &root, &relative, &relative_length, &failure);
     struct stat status;
-    if (error == 0) error = create_run_directory(root, relative, relative_length, &failure, &status);
-    if (error == 0) print_success("create-run", &status);
-    else print_error("create-run", &failure);
+    if (error == 0) error = create_owned_directory(root, relative, relative_length, &failure, &status);
+    if (error == 0) print_success(operation, &status);
+    else print_error(operation, &failure);
     free(root);
     free(relative);
     (void)argc;
     return error == 0 ? 0 : 1;
 }
 
-static int run_stage(int argc, char **argv) {
+static int run_stage(int argc, char **argv, const char *operation) {
     struct fs_error failure = {0};
     char *root = NULL;
     char *relative = NULL;
     size_t relative_length = 0;
     uint64_t limit = 0;
     int error = parse_u64(argv[4], &limit);
-    if (error == 0 && limit > MAX_PLAN_BYTES) error = EFBIG;
+    uint64_t maximum_limit = strcmp(operation, "stage-world-plan") == 0
+        ? MAX_PLAN_BYTES
+        : MAX_OWNED_FILE_BYTES;
+    if (error == 0 && limit > maximum_limit) error = EFBIG;
     if (error == 0) error = decode_root_and_relative(argv[2], argv[3], &root, &relative,
                                                     &relative_length, &failure);
     if (error == 0) {
         struct stat status;
-        error = stage_world_plan(root, relative, relative_length, limit, &failure, &status);
+        error = stage_owned_file(root, relative, relative_length, limit, maximum_limit,
+                                 operation, &failure, &status);
     } else {
         failure.code = error;
     }
-    if (error != 0) print_error("stage-world-plan", &failure);
+    if (error != 0) print_error(operation, &failure);
     free(root);
     free(relative);
     (void)argc;
@@ -1228,6 +1929,59 @@ static int run_unlink(int argc, char **argv) {
     return error == 0 ? 0 : 1;
 }
 
+static int run_clone_tree(int argc, char **argv) {
+    struct fs_error failure = {0};
+    char *root = NULL;
+    char *source = NULL;
+    char *destination = NULL;
+    size_t root_length = 0;
+    size_t source_length = 0;
+    size_t destination_length = 0;
+    uint64_t max_files = 0;
+    uint64_t max_bytes = 0;
+    int error = parse_u64(argv[5], &max_files);
+    if (error == 0) error = parse_u64(argv[6], &max_bytes);
+    if (error == 0 && max_files > MAX_CLONE_FILES) error = EFBIG;
+    if (error == 0 && max_bytes > MAX_CLONE_BYTES) error = EFBIG;
+    if (error == 0) error = decode_path_argument(argv[2], &root, &root_length);
+    if (error == 0) error = decode_path_argument(argv[3], &source, &source_length);
+    if (error == 0) error = decode_path_argument(argv[4], &destination, &destination_length);
+    if (error == 0 && root[0] != '/') error = EINVAL;
+    if (error == 0) error = check_relative_path(source, source_length);
+    if (error == 0) error = check_relative_path(destination, destination_length);
+    if (error == 0) {
+        struct stat status;
+        error = clone_owned_tree(root, source, source_length, destination, destination_length,
+                                 max_files, max_bytes, &failure, &status);
+    } else {
+        failure.code = error;
+    }
+    if (error != 0) print_error("clone-owned-tree", &failure);
+    free(root);
+    free(source);
+    free(destination);
+    (void)argc;
+    return error == 0 ? 0 : 1;
+}
+
+static int run_hold_lease(int argc, char **argv) {
+    struct fs_error failure = {0};
+    char *root = NULL;
+    char *relative = NULL;
+    size_t relative_length = 0;
+    int error = decode_root_and_relative(argv[2], argv[3], &root, &relative,
+                                         &relative_length, &failure);
+    if (error == 0) {
+        struct stat status;
+        error = hold_run_lease(root, relative, relative_length, &failure, &status);
+    }
+    if (error != 0) print_error("hold-run-lease", &failure);
+    free(root);
+    free(relative);
+    (void)argc;
+    return error == 0 ? 0 : 1;
+}
+
 int main(int argc, char **argv) {
     if (argc >= 2 && strcmp(argv[1], "launch-node") == 0) return launch_node(argc, argv);
     /* Keep private create modes exact regardless of the caller's umask. */
@@ -1238,9 +1992,19 @@ int main(int argc, char **argv) {
         print_error("startup", &failure);
         return 1;
     }
-    if (argc == 4 && strcmp(argv[1], "create-run") == 0) return run_create(argc, argv);
+    if (argc == 4 && strcmp(argv[1], "create-run") == 0) return run_create(argc, argv, "create-run");
+    if (argc == 4 && strcmp(argv[1], "create-owned-directory") == 0) {
+        return run_create(argc, argv, "create-owned-directory");
+    }
+    if (argc == 4 && strcmp(argv[1], "hold-run-lease") == 0) return run_hold_lease(argc, argv);
     if (argc == 5 && strcmp(argv[1], "read-owned-file") == 0) return run_read(argc, argv);
-    if (argc == 5 && strcmp(argv[1], "stage-world-plan") == 0) return run_stage(argc, argv);
+    if (argc == 5 && strcmp(argv[1], "stage-world-plan") == 0) {
+        return run_stage(argc, argv, "stage-world-plan");
+    }
+    if (argc == 5 && strcmp(argv[1], "stage-owned-file") == 0) {
+        return run_stage(argc, argv, "stage-owned-file");
+    }
+    if (argc == 7 && strcmp(argv[1], "clone-owned-tree") == 0) return run_clone_tree(argc, argv);
     if (argc == 6 && (strcmp(argv[1], "unlink-created-file") == 0 ||
                       strcmp(argv[1], "unlink-created-directory") == 0)) return run_unlink(argc, argv);
     fprintf(stderr, "arena-fs: invalid operation or argument count\n");

@@ -1,8 +1,12 @@
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { constants as osConstants } from 'node:os';
 import { consumeRawArgv, RawArgvError } from './raw-argv.js';
 
 export const MAX_WORLD_PLAN_BYTES = 128 * 1024 * 1024;
+export const MAX_OWNED_FILE_BYTES = 256 * 1024 * 1024;
 export const MAX_OWNED_READ_BYTES = 16 * 1024 * 1024;
+export const MAX_OWNED_TREE_FILES = 100_000;
+export const MAX_OWNED_TREE_BYTES = 16 * 1024 * 1024 * 1024;
 
 export type NativeErrorCategory =
   | 'invalid_path'
@@ -23,15 +27,31 @@ export type FileIdentity = Readonly<{
   inode: string;
 }>;
 
+export type ClonePublication = 'absent' | 'present' | 'unknown';
+
+export type OwnedRunLeaseClose =
+  | Readonly<{ kind: 'released' }>
+  | Readonly<{ kind: 'lost'; error: OwnedFilesError }>;
+
+export interface OwnedRunLease {
+  readonly identity: FileIdentity;
+  readonly closed: Promise<OwnedRunLeaseClose>;
+  release(): Promise<void>;
+}
+
 type NativeOperation =
   | 'create-run'
+  | 'create-owned-directory'
   | 'stage-world-plan'
+  | 'stage-owned-file'
+  | 'clone-owned-tree'
+  | 'hold-run-lease'
   | 'read-owned-file'
   | 'unlink-created-file'
   | 'unlink-created-directory';
 
 type NativeEvent = Readonly<{
-  event: 'created-directory' | 'staged-file';
+  event: 'created-directory' | 'staged-file' | 'clone-published';
   path: Buffer;
   device: string;
   inode: string;
@@ -78,26 +98,30 @@ const childTerminationGraceMs = 5000;
 export class OwnedFilesError extends Error {
   readonly category: NativeErrorCategory;
   readonly operation: NativeOperation;
-  readonly errno?: number;
-  readonly cleanupErrno?: number;
+  readonly errno: number | undefined;
+  readonly cleanupErrno: number | undefined;
   readonly published: boolean;
-  readonly identity?: FileIdentity;
-  readonly relativePath?: Buffer;
+  readonly identity: FileIdentity | undefined;
+  readonly relativePath: Buffer | undefined;
+  readonly sourceRelativePath: Buffer | undefined;
   readonly nativeEvents: readonly NativeEvent[];
-  readonly diagnostic?: string;
+  readonly clonePublication: ClonePublication | undefined;
+  readonly diagnostic: string | undefined;
   readonly causeValue?: unknown;
 
   constructor(details: {
     message: string;
     category: NativeErrorCategory;
     operation: NativeOperation;
-    errno?: number;
-    cleanupErrno?: number;
+    errno?: number | undefined;
+    cleanupErrno?: number | undefined;
     published?: boolean;
-    identity?: FileIdentity;
-    relativePath?: Buffer;
+    identity?: FileIdentity | undefined;
+    relativePath?: Buffer | undefined;
+    sourceRelativePath?: Buffer | undefined;
     nativeEvents?: readonly NativeEvent[];
-    diagnostic?: string;
+    clonePublication?: ClonePublication | undefined;
+    diagnostic?: string | undefined;
     cause?: unknown;
   }) {
     super(details.message);
@@ -109,7 +133,9 @@ export class OwnedFilesError extends Error {
     this.published = details.published ?? false;
     this.identity = details.identity;
     this.relativePath = details.relativePath;
+    this.sourceRelativePath = details.sourceRelativePath;
     this.nativeEvents = details.nativeEvents ?? [];
+    this.clonePublication = details.clonePublication;
     this.diagnostic = details.diagnostic;
     this.causeValue = details.cause;
   }
@@ -129,7 +155,32 @@ async function withRelativePath<T>(relativePath: Buffer, action: () => Promise<T
       published: error.published,
       identity: error.identity,
       relativePath: Buffer.from(relativePath),
+      sourceRelativePath: error.sourceRelativePath,
       nativeEvents: error.nativeEvents,
+      clonePublication: error.clonePublication,
+      diagnostic: error.diagnostic,
+      cause: error.causeValue,
+    });
+  }
+}
+
+async function withSourceRelativePath<T>(sourceRelativePath: Buffer, action: () => Promise<T>): Promise<T> {
+  try {
+    return await action();
+  } catch (error) {
+    if (!(error instanceof OwnedFilesError)) throw error;
+    throw new OwnedFilesError({
+      message: error.message,
+      category: error.category,
+      operation: error.operation,
+      errno: error.errno,
+      cleanupErrno: error.cleanupErrno,
+      published: error.published,
+      identity: error.identity,
+      relativePath: error.relativePath,
+      sourceRelativePath: Buffer.from(sourceRelativePath),
+      nativeEvents: error.nativeEvents,
+      clonePublication: error.clonePublication,
       diagnostic: error.diagnostic,
       cause: error.causeValue,
     });
@@ -142,6 +193,7 @@ function encodePath(path: Buffer, name: string, operation: NativeOperation): str
       message: `${name} must be a non-empty OS path without NUL bytes`,
       category: 'invalid_path',
       operation,
+      clonePublication: operation === 'clone-owned-tree' ? 'absent' : undefined,
     });
   }
   return path.toString('base64');
@@ -180,7 +232,7 @@ function identityFrom(device: unknown, inode: unknown, operation: NativeOperatio
 
 function includePublishedStage(events: NativeEvent[], operation: NativeOperation,
                               arguments_: readonly string[], result: NativeSuccess | NativeFailure | undefined): void {
-  if (operation !== 'stage-world-plan') return;
+  if (operation !== 'stage-world-plan' && operation !== 'stage-owned-file') return;
   if (result !== undefined && !(result.ok || result.published)) return;
   let identity: FileIdentity | undefined;
   if (result?.device !== undefined && result.inode !== undefined &&
@@ -204,6 +256,58 @@ function includePublishedStage(events: NativeEvent[], operation: NativeOperation
     path,
     ...identity,
   });
+}
+
+function includePublishedClone(events: NativeEvent[], operation: NativeOperation,
+                               arguments_: readonly string[], result: NativeSuccess | NativeFailure | undefined): void {
+  if (operation !== 'clone-owned-tree' || (result !== undefined && !(result.ok || result.published))) return;
+  let identity: FileIdentity | undefined;
+  if (result?.device !== undefined && result.inode !== undefined &&
+      !(result.device === '0' && result.inode === '0')) {
+    try {
+      identity = identityFrom(result.device, result.inode, operation);
+    } catch (error) {
+      if (!(error instanceof OwnedFilesError)) throw error;
+    }
+  }
+  const destination = decodeBase64(arguments_[2]!, 'clone destination', operation);
+  const existing = events.find((event) => event.event === 'clone-published' && event.path.equals(destination));
+  if (identity === undefined && existing !== undefined) {
+    identity = { device: existing.device, inode: existing.inode };
+  }
+  if (identity === undefined) return;
+  if (existing !== undefined && existing.device === identity.device && existing.inode === identity.inode) return;
+  events.push({ event: 'clone-published', path: destination, ...identity });
+}
+
+function clonePublication(events: readonly NativeEvent[]): Readonly<{
+  published: boolean;
+  identity: FileIdentity | undefined;
+  status: ClonePublication;
+}> {
+  const event = [...events].reverse().find((candidate) => candidate.event === 'clone-published');
+  return event === undefined
+    ? { published: false, identity: undefined, status: 'unknown' }
+    : { published: true, identity: { device: event.device, inode: event.inode }, status: 'present' };
+}
+
+function cloneFailureState(operation: NativeOperation, events: readonly NativeEvent[],
+                           result: NativeSuccess | NativeFailure | undefined): Readonly<{
+  published: boolean;
+  identity: FileIdentity | undefined;
+  status: ClonePublication | undefined;
+}> {
+  if (operation !== 'clone-owned-tree') return { published: false, identity: undefined, status: undefined };
+  if (result !== undefined && !result.ok) {
+    return {
+      published: result.published,
+      identity: result.published && !(result.device === '0' && result.inode === '0')
+        ? identityFrom(result.device, result.inode, operation)
+        : undefined,
+      status: result.published ? 'present' : 'absent',
+    };
+  }
+  return clonePublication(events);
 }
 
 function parseRecord(line: string, expectedOperation: NativeOperation): NativeRecord {
@@ -233,7 +337,8 @@ function parseRecord(line: string, expectedOperation: NativeOperation): NativeRe
       operation: expectedOperation,
     });
   }
-  if (record.event === 'created-directory' || record.event === 'staged-file') {
+  if (record.event === 'created-directory' || record.event === 'staged-file' ||
+      record.event === 'clone-published') {
     const identity = identityFrom(record.device, record.inode, expectedOperation);
     return {
       event: record.event,
@@ -347,6 +452,9 @@ function makeNativeError(operation: NativeOperation, result: NativeFailure,
     published: result.published,
     identity,
     nativeEvents: events,
+    clonePublication: operation === 'clone-owned-tree'
+      ? (result.published ? 'present' : 'absent')
+      : undefined,
     diagnostic: diagnostic || undefined,
   });
 }
@@ -361,6 +469,7 @@ async function spawnHelper(helperPath: string, operation: NativeOperation, argum
       message: `${operation} was cancelled before the helper started`,
       category: 'cancelled',
       operation,
+      clonePublication: operation === 'clone-owned-tree' ? 'absent' : undefined,
     });
   }
   try {
@@ -371,6 +480,7 @@ async function spawnHelper(helperPath: string, operation: NativeOperation, argum
       message: 'raw argv channel could not be consumed before starting a helper',
       category: 'protocol_error',
       operation,
+      clonePublication: operation === 'clone-owned-tree' ? 'absent' : undefined,
       cause,
     });
   }
@@ -450,11 +560,16 @@ async function spawnHelper(helperPath: string, operation: NativeOperation, argum
           if (error instanceof OwnedFilesError) events = [...error.nativeEvents];
         }
         includePublishedStage(events, operation, arguments_, result);
+        includePublishedClone(events, operation, arguments_, result);
+        const cloneState = cloneFailureState(operation, events, result);
         reject(new OwnedFilesError({
           message: `${operation} was cancelled`,
           category: 'cancelled',
           operation,
+          published: cloneState.published,
+          identity: cloneState.identity,
           nativeEvents: events,
+          clonePublication: cloneState.status,
           diagnostic: diagnostic || undefined,
         }));
         return;
@@ -464,6 +579,7 @@ async function spawnHelper(helperPath: string, operation: NativeOperation, argum
           message: `could not start native helper for ${operation}`,
           category: 'helper_start',
           operation,
+          clonePublication: operation === 'clone-owned-tree' ? 'absent' : undefined,
           diagnostic: diagnostic || undefined,
           cause: spawnError,
         }));
@@ -471,19 +587,26 @@ async function spawnHelper(helperPath: string, operation: NativeOperation, argum
       }
       if (outputOverflow || diagnosticOverflow) {
         let events: NativeEvent[] = [];
+        let result: NativeSuccess | NativeFailure | undefined;
         try {
           const parsed = parseOutput(Buffer.concat(stdout), operation);
           events = parsed.events;
+          result = parsed.result;
           includePublishedStage(events, operation, arguments_, parsed.result);
         } catch (error) {
           if (error instanceof OwnedFilesError) events = [...error.nativeEvents];
         }
-        includePublishedStage(events, operation, arguments_, undefined);
+        includePublishedStage(events, operation, arguments_, result);
+        includePublishedClone(events, operation, arguments_, result);
+        const cloneState = cloneFailureState(operation, events, result);
         reject(new OwnedFilesError({
           message: 'native helper exceeded its output limit',
           category: 'protocol_error',
           operation,
+          published: cloneState.published,
+          identity: cloneState.identity,
           nativeEvents: events,
+          clonePublication: cloneState.status,
           diagnostic: diagnostic || undefined,
         }));
         return;
@@ -495,15 +618,18 @@ async function spawnHelper(helperPath: string, operation: NativeOperation, argum
         if (error instanceof OwnedFilesError) {
           const events = [...error.nativeEvents];
           includePublishedStage(events, operation, arguments_, undefined);
+          includePublishedClone(events, operation, arguments_, undefined);
+          const cloneState = cloneFailureState(operation, events, undefined);
           reject(new OwnedFilesError({
             message: error.message,
             category: error.category,
             operation: error.operation,
             errno: error.errno,
             cleanupErrno: error.cleanupErrno,
-            published: error.published,
-            identity: error.identity,
+            published: error.published || cloneState.published,
+            identity: error.identity ?? cloneState.identity,
             nativeEvents: events,
+            clonePublication: cloneState.status,
             diagnostic: error.diagnostic,
             cause: error.causeValue,
           }));
@@ -513,6 +639,7 @@ async function spawnHelper(helperPath: string, operation: NativeOperation, argum
         return;
       }
       includePublishedStage(parsed.events, operation, arguments_, parsed.result);
+      includePublishedClone(parsed.events, operation, arguments_, parsed.result);
       if (!parsed.result.ok) {
         reject(makeNativeError(operation, parsed.result, parsed.events, diagnostic));
         return;
@@ -523,6 +650,7 @@ async function spawnHelper(helperPath: string, operation: NativeOperation, argum
           category: 'protocol_error',
           operation,
           nativeEvents: parsed.events,
+          clonePublication: operation === 'clone-owned-tree' ? 'present' : undefined,
           diagnostic: diagnostic || undefined,
         }));
         return;
@@ -535,12 +663,351 @@ async function spawnHelper(helperPath: string, operation: NativeOperation, argum
   });
 }
 
+class HelperRunLease implements OwnedRunLease {
+  readonly identity: FileIdentity;
+  readonly closed: Promise<OwnedRunLeaseClose>;
+  readonly #child: ChildProcessWithoutNullStreams;
+  readonly #relativePath: Buffer;
+  readonly #diagnostic: () => string;
+  readonly #resolveClosed: (result: OwnedRunLeaseClose) => void;
+  #releaseRequested = false;
+  #releasePromise: Promise<void> | undefined;
+  #failure: OwnedFilesError | undefined;
+  #escalationTimer: NodeJS.Timeout | undefined;
+
+  constructor(child: ChildProcessWithoutNullStreams, identity: FileIdentity,
+              relativePath: Buffer, diagnostic: () => string) {
+    this.#child = child;
+    this.identity = identity;
+    this.#relativePath = Buffer.from(relativePath);
+    this.#diagnostic = diagnostic;
+    let resolveClosed!: (result: OwnedRunLeaseClose) => void;
+    this.closed = new Promise((resolve) => { resolveClosed = resolve; });
+    this.#resolveClosed = resolveClosed;
+    child.once('close', (exitCode, exitSignal) => {
+      if (this.#escalationTimer !== undefined) clearTimeout(this.#escalationTimer);
+      const failure = this.#failure ??
+        (this.#releaseRequested && exitCode === 0 && exitSignal === null
+          ? undefined
+          : this.contextualize(new OwnedFilesError({
+            message: `run lease helper exited with ${String(exitCode ?? exitSignal)}`,
+            category: 'io',
+            operation: 'hold-run-lease',
+            diagnostic: this.#diagnostic() || undefined,
+          })));
+      this.#resolveClosed(failure === undefined ? { kind: 'released' } : { kind: 'lost', error: failure });
+    });
+    child.on('error', (cause: Error) => {
+      this.recordFailure(new OwnedFilesError({
+        message: 'run lease helper stopped unexpectedly',
+        category: 'helper_start',
+        operation: 'hold-run-lease',
+        cause,
+      }));
+    });
+  }
+
+  recordFailure(error: OwnedFilesError): void {
+    this.#failure ??= this.contextualize(error);
+    if (this.#child.pid !== undefined) {
+      this.#child.kill('SIGTERM');
+      this.#escalationTimer ??= setTimeout(() => this.#child.kill('SIGKILL'), childTerminationGraceMs);
+    }
+  }
+
+  release(): Promise<void> {
+    this.#releasePromise ??= this.releaseOnce();
+    return this.#releasePromise;
+  }
+
+  private async releaseOnce(): Promise<void> {
+    this.#releaseRequested = true;
+    this.#child.stdin.end();
+    const result = await this.closed;
+    if (result.kind === 'lost') throw result.error;
+  }
+
+  private contextualize(error: OwnedFilesError): OwnedFilesError {
+    return new OwnedFilesError({
+      message: error.message,
+      category: error.category,
+      operation: error.operation,
+      errno: error.errno,
+      cleanupErrno: error.cleanupErrno,
+      published: error.published,
+      identity: error.identity,
+      relativePath: Buffer.from(error.relativePath ?? this.#relativePath),
+      sourceRelativePath: error.sourceRelativePath,
+      nativeEvents: error.nativeEvents,
+      diagnostic: error.diagnostic,
+      cause: error.causeValue,
+    });
+  }
+}
+
+function startOwnedRunLease(helperPath: string, ownedRoot: Buffer, relativePath: Buffer,
+                            signal: AbortSignal | undefined): Promise<OwnedRunLease> {
+  const operation: NativeOperation = 'hold-run-lease';
+  if (signal?.aborted) {
+    return Promise.reject(new OwnedFilesError({
+      message: 'run lease acquisition was cancelled before the helper started',
+      category: 'cancelled',
+      operation,
+    }));
+  }
+  try {
+    consumeRawArgv();
+  } catch (cause) {
+    if (!(cause instanceof RawArgvError)) return Promise.reject(cause);
+    return Promise.reject(new OwnedFilesError({
+      message: 'raw argv channel could not be consumed before starting a helper',
+      category: 'protocol_error',
+      operation,
+      cause,
+    }));
+  }
+
+  const arguments_ = [
+    encodePath(ownedRoot, 'owned root', operation),
+    encodePath(relativePath, 'run directory', operation),
+  ];
+  return new Promise((resolve, reject) => {
+    const child = spawn(helperPath, [operation, ...arguments_], {
+      shell: false,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      windowsHide: true,
+    });
+    const stderr: Buffer[] = [];
+    let stderrBytes = 0;
+    let stdoutBytes = 0;
+    let pending = Buffer.alloc(0);
+    let spawnError: Error | undefined;
+    let startupError: OwnedFilesError | undefined;
+    let cancellationRequested = false;
+    let outputOverflow = false;
+    let diagnosticOverflow = false;
+    let lease: HelperRunLease | undefined;
+    let escalationTimer: NodeJS.Timeout | undefined;
+
+    const diagnostic = (): string => Buffer.concat(stderr).toString('utf8');
+    const terminateChild = (): void => {
+      if (child.pid === undefined) return;
+      child.kill('SIGTERM');
+      escalationTimer ??= setTimeout(() => child.kill('SIGKILL'), childTerminationGraceMs);
+    };
+    const failBeforeAcquisition = (error: OwnedFilesError): void => {
+      startupError ??= error;
+      terminateChild();
+    };
+    const onAbort = (): void => {
+      cancellationRequested = true;
+      child.stdin.destroy();
+      terminateChild();
+    };
+    const contextualError = (error: OwnedFilesError): OwnedFilesError => new OwnedFilesError({
+      message: error.message,
+      category: error.category,
+      operation: error.operation,
+      errno: error.errno,
+      cleanupErrno: error.cleanupErrno,
+      published: error.published,
+      identity: error.identity,
+      relativePath: Buffer.from(relativePath),
+      sourceRelativePath: error.sourceRelativePath,
+      nativeEvents: error.nativeEvents,
+      diagnostic: (error.diagnostic ?? diagnostic()) || undefined,
+      cause: error.causeValue,
+    });
+
+    const handleLine = (line: Buffer): void => {
+      if (line.length === 0 || line.includes(0) || line.some((byte) => byte > 0x7f)) {
+        const error = new OwnedFilesError({
+          message: 'native run lease helper returned malformed control output',
+          category: 'protocol_error',
+          operation,
+        });
+        if (lease === undefined) failBeforeAcquisition(error);
+        else lease.recordFailure(contextualError(error));
+        return;
+      }
+      let record: NativeRecord;
+      try {
+        record = parseRecord(line.toString('ascii'), operation);
+      } catch (error) {
+        const protocolError = error instanceof OwnedFilesError ? error : new OwnedFilesError({
+          message: 'native run lease helper returned invalid control output',
+          category: 'protocol_error',
+          operation,
+          cause: error,
+        });
+        if (lease === undefined) failBeforeAcquisition(protocolError);
+        else lease.recordFailure(contextualError(protocolError));
+        return;
+      }
+      if ('event' in record) {
+        const error = new OwnedFilesError({
+          message: 'native run lease helper returned an unexpected event',
+          category: 'protocol_error',
+          operation,
+        });
+        if (lease === undefined) failBeforeAcquisition(error);
+        else lease.recordFailure(contextualError(error));
+        return;
+      }
+      if (record.ok === false) {
+        const error = makeNativeError(operation, record, [], diagnostic());
+        if (lease === undefined) failBeforeAcquisition(error);
+        else lease.recordFailure(contextualError(error));
+        return;
+      }
+      if (record.operation !== operation) {
+        const error = new OwnedFilesError({
+          message: 'native run lease result does not match the requested operation',
+          category: 'protocol_error',
+          operation,
+        });
+        if (lease === undefined) failBeforeAcquisition(error);
+        else lease.recordFailure(contextualError(error));
+        return;
+      }
+      if (lease !== undefined) {
+        lease.recordFailure(contextualError(new OwnedFilesError({
+          message: 'native run lease helper returned a second result',
+          category: 'protocol_error',
+          operation,
+        })));
+        return;
+      }
+      if (cancellationRequested || signal?.aborted) {
+        cancellationRequested = true;
+        terminateChild();
+        return;
+      }
+      try {
+        lease = new HelperRunLease(child, resultIdentity(record, operation), relativePath, diagnostic);
+        signal?.removeEventListener('abort', onAbort);
+        resolve(lease);
+      } catch (error) {
+        failBeforeAcquisition(error instanceof OwnedFilesError ? error : new OwnedFilesError({
+          message: 'native run lease helper returned an invalid identity',
+          category: 'protocol_error',
+          operation,
+          cause: error,
+        }));
+      }
+    };
+
+    signal?.addEventListener('abort', onAbort, { once: true });
+    if (signal?.aborted) onAbort();
+    child.once('spawn', () => {
+      if (cancellationRequested || startupError !== undefined) terminateChild();
+    });
+    child.stdout.on('data', (chunk: Buffer) => {
+      stdoutBytes += chunk.length;
+      if (stdoutBytes > maxStderrBytes) {
+        outputOverflow = true;
+        const error = new OwnedFilesError({
+          message: 'native run lease helper exceeded its output limit',
+          category: 'protocol_error',
+          operation,
+        });
+        if (lease === undefined) failBeforeAcquisition(error);
+        else lease.recordFailure(contextualError(error));
+        return;
+      }
+      pending = Buffer.concat([pending, chunk]);
+      let newline = pending.indexOf(0x0a);
+      while (newline >= 0) {
+        handleLine(pending.subarray(0, newline));
+        pending = pending.subarray(newline + 1);
+        newline = pending.indexOf(0x0a);
+      }
+      if (pending.length > maxStderrBytes) {
+        outputOverflow = true;
+        const error = new OwnedFilesError({
+          message: 'native run lease helper exceeded its output limit',
+          category: 'protocol_error',
+          operation,
+        });
+        if (lease === undefined) failBeforeAcquisition(error);
+        else lease.recordFailure(contextualError(error));
+      }
+    });
+    child.stderr.on('data', (chunk: Buffer) => {
+      stderrBytes += chunk.length;
+      if (stderrBytes > maxStderrBytes) {
+        diagnosticOverflow = true;
+      } else {
+        stderr.push(Buffer.from(chunk));
+      }
+      if (diagnosticOverflow) {
+        const error = new OwnedFilesError({
+          message: 'native run lease helper exceeded its diagnostic limit',
+          category: 'protocol_error',
+          operation,
+        });
+        if (lease === undefined) failBeforeAcquisition(error);
+        else lease.recordFailure(contextualError(error));
+      }
+    });
+    child.on('error', (error: Error) => {
+      spawnError = error;
+      if (lease !== undefined) lease.recordFailure(contextualError(new OwnedFilesError({
+        message: 'native run lease helper stopped unexpectedly',
+        category: 'helper_start',
+        operation,
+        cause: error,
+      })));
+    });
+    child.stdin.on('error', (error: NodeJS.ErrnoException) => {
+      if (error.code !== 'EPIPE' && !cancellationRequested) spawnError ??= error;
+    });
+    child.on('close', (exitCode, exitSignal) => {
+      if (escalationTimer !== undefined) clearTimeout(escalationTimer);
+      signal?.removeEventListener('abort', onAbort);
+      if (lease !== undefined) return;
+      if (cancellationRequested || signal?.aborted) {
+        reject(new OwnedFilesError({
+          message: 'run lease acquisition was cancelled',
+          category: 'cancelled',
+          operation,
+          relativePath: Buffer.from(relativePath),
+          diagnostic: diagnostic() || undefined,
+        }));
+      } else if (spawnError !== undefined) {
+        reject(new OwnedFilesError({
+          message: 'could not start native helper for hold-run-lease',
+          category: 'helper_start',
+          operation,
+          relativePath: Buffer.from(relativePath),
+          diagnostic: diagnostic() || undefined,
+          cause: spawnError,
+        }));
+      } else if (startupError !== undefined) {
+        reject(contextualError(startupError));
+      } else {
+        const trailingOutput = pending.length > 0;
+        reject(new OwnedFilesError({
+          message: trailingOutput
+            ? 'native run lease helper closed with an incomplete result'
+            : `native run lease helper exited before acquiring the lease (${String(exitCode ?? exitSignal)})`,
+          category: outputOverflow || diagnosticOverflow ? 'protocol_error' : 'io',
+          operation,
+          relativePath: Buffer.from(relativePath),
+          diagnostic: diagnostic() || undefined,
+        }));
+      }
+    });
+  });
+}
+
 function validateByteLimit(limit: number, maximum: number, operation: NativeOperation): void {
   if (!Number.isSafeInteger(limit) || limit < 0 || limit > maximum) {
     throw new OwnedFilesError({
       message: `${operation} byte limit must be between zero and ${maximum}`,
       category: 'invalid_argument',
       operation,
+      clonePublication: operation === 'clone-owned-tree' ? 'absent' : undefined,
     });
   }
 }
@@ -551,6 +1018,17 @@ function resultIdentity(result: NativeSuccess, operation: NativeOperation): File
 
 function nativeIdentityArguments(identity: FileIdentity): string[] {
   return [identity.device, identity.inode];
+}
+
+export async function acquireOwnedRunLease(options: Readonly<{
+  helperPath: string;
+  ownedRoot: Buffer;
+  relativePath: Buffer;
+  signal?: AbortSignal;
+}>): Promise<OwnedRunLease> {
+  const { helperPath, ownedRoot, relativePath, signal } = options;
+  return await withRelativePath(relativePath, () =>
+    startOwnedRunLease(helperPath, ownedRoot, relativePath, signal));
 }
 
 async function cleanupEvents(helperPath: string, root: Buffer, events: readonly NativeEvent[]): Promise<number | undefined> {
@@ -574,35 +1052,103 @@ async function cleanupEvents(helperPath: string, root: Buffer, events: readonly 
   return firstCleanupErrno;
 }
 
-async function cleanupAfterFailure(helperPath: string, root: Buffer, error: unknown): Promise<never> {
-  if (!(error instanceof OwnedFilesError) || error.nativeEvents.length === 0) throw error;
-  const cleanupErrno = await cleanupEvents(helperPath, root, error.nativeEvents);
-  if (cleanupErrno === undefined) {
-    if (error.cleanupErrno === undefined && !error.published) throw error;
-    throw new OwnedFilesError({
-      message: error.message,
-      category: error.category,
-      operation: error.operation,
-      errno: error.errno,
-      published: false,
-      identity: error.identity,
-      nativeEvents: error.nativeEvents,
-      diagnostic: error.diagnostic,
-      cause: error.causeValue,
-    });
+async function cleanupClonePublication(helperPath: string, root: Buffer, destination: Buffer,
+                                       error: OwnedFilesError): Promise<{
+  status: ClonePublication;
+  identity: FileIdentity | undefined;
+  cleanupErrno: number | undefined;
+}> {
+  const status = error.clonePublication ?? 'unknown';
+  const publicationEvent = [...error.nativeEvents].reverse().find((event) => event.event === 'clone-published');
+  const stagingEvent = [...error.nativeEvents].reverse().find((event) => event.event === 'created-directory');
+  const identity = error.identity ?? (publicationEvent === undefined
+    ? stagingEvent === undefined ? undefined : { device: stagingEvent.device, inode: stagingEvent.inode }
+    : { device: publicationEvent.device, inode: publicationEvent.inode });
+  if (status === 'absent' || identity === undefined) {
+    return { status, identity, cleanupErrno: undefined };
   }
+
+  try {
+    await spawnHelper(helperPath, 'unlink-created-directory', [
+      encodePath(root, 'owned root', 'unlink-created-directory'),
+      encodePath(destination, 'clone destination', 'unlink-created-directory'),
+      ...nativeIdentityArguments(identity),
+    ], undefined, undefined);
+    return { status: 'absent', identity, cleanupErrno: undefined };
+  } catch (cleanupError) {
+    if (cleanupError instanceof OwnedFilesError &&
+        (cleanupError.category === 'not_found' || cleanupError.category === 'invalid_path')) {
+      return { status: 'absent', identity, cleanupErrno: undefined };
+    }
+    const status = cleanupError instanceof OwnedFilesError &&
+      cleanupError.errno === osConstants.errno.ENOTEMPTY
+      ? 'present'
+      : error.clonePublication ?? 'unknown';
+    return {
+      status,
+      identity,
+      cleanupErrno: cleanupError instanceof OwnedFilesError
+        ? cleanupError.errno ?? cleanupError.cleanupErrno ?? -1
+        : -1,
+    };
+  }
+}
+
+async function cleanupAfterFailure(helperPath: string, root: Buffer, error: unknown,
+                                   cloneDestination?: Buffer): Promise<never> {
+  if (!(error instanceof OwnedFilesError) ||
+      (error.nativeEvents.length === 0 && !(error.operation === 'clone-owned-tree' && error.published))) throw error;
+  const eventCleanupErrno = await cleanupEvents(helperPath, root, error.nativeEvents);
+  const cloneCleanup = error.operation === 'clone-owned-tree' && cloneDestination !== undefined
+    ? await cleanupClonePublication(helperPath, root, cloneDestination, error)
+    : undefined;
+  const cleanupErrno = error.cleanupErrno ?? eventCleanupErrno ?? cloneCleanup?.cleanupErrno;
+  const published = cloneCleanup === undefined
+    ? cleanupErrno === undefined ? false : error.published
+    : cloneCleanup.status === 'present' || (cloneCleanup.status === 'unknown' && error.published);
+  if (cleanupErrno === undefined && !error.published &&
+      (cloneCleanup === undefined || cloneCleanup.status === 'unknown')) throw error;
   throw new OwnedFilesError({
     message: error.message,
     category: error.category,
     operation: error.operation,
     errno: error.errno,
-    cleanupErrno: error.cleanupErrno ?? cleanupErrno,
-    published: error.published,
-    identity: error.identity,
+    cleanupErrno,
+    published,
+    identity: cloneCleanup?.identity ?? error.identity,
+    relativePath: error.relativePath,
+    sourceRelativePath: error.sourceRelativePath,
     nativeEvents: error.nativeEvents,
+    clonePublication: cloneCleanup?.status ?? error.clonePublication,
     diagnostic: error.diagnostic,
     cause: error.causeValue,
   });
+}
+
+async function createDirectory(helperPath: string, ownedRoot: Buffer, relativePath: Buffer,
+                               signal: AbortSignal | undefined,
+                               operation: 'create-run' | 'create-owned-directory'): Promise<FileIdentity> {
+  return await withRelativePath(relativePath, async () => {
+    try {
+      const { result } = await spawnHelper(helperPath, operation, [
+        encodePath(ownedRoot, 'owned root', operation),
+        encodePath(relativePath, 'owned directory', operation),
+      ], undefined, signal);
+      return resultIdentity(result, operation);
+    } catch (error) {
+      return await cleanupAfterFailure(helperPath, ownedRoot, error);
+    }
+  });
+}
+
+export async function createOwnedDirectory(options: Readonly<{
+  helperPath: string;
+  ownedRoot: Buffer;
+  relativePath: Buffer;
+  signal?: AbortSignal;
+}>): Promise<FileIdentity> {
+  return await createDirectory(options.helperPath, options.ownedRoot, options.relativePath,
+                               options.signal, 'create-owned-directory');
 }
 
 export async function createRunDirectory(options: Readonly<{
@@ -611,18 +1157,47 @@ export async function createRunDirectory(options: Readonly<{
   relativePath: Buffer;
   signal?: AbortSignal;
 }>): Promise<FileIdentity> {
-  const { helperPath, ownedRoot, relativePath, signal } = options;
+  return await createDirectory(options.helperPath, options.ownedRoot, options.relativePath,
+                               options.signal, 'create-run');
+}
+
+async function stageFile(helperPath: string, ownedRoot: Buffer, relativePath: Buffer,
+                          contents: Buffer, maxBytes: number, maximumBytes: number,
+                          signal: AbortSignal | undefined,
+                          operation: 'stage-world-plan' | 'stage-owned-file'): Promise<FileIdentity> {
   return await withRelativePath(relativePath, async () => {
+    validateByteLimit(maxBytes, maximumBytes, operation);
+    if (contents.length > maxBytes) {
+      throw new OwnedFilesError({
+        message: 'owned file exceeds its byte limit',
+        category: 'too_large',
+        operation,
+      });
+    }
     try {
-      const { result } = await spawnHelper(helperPath, 'create-run', [
-        encodePath(ownedRoot, 'owned root', 'create-run'),
-        encodePath(relativePath, 'run directory', 'create-run'),
-      ], undefined, signal);
-      return resultIdentity(result, 'create-run');
+      const { result } = await spawnHelper(helperPath, operation, [
+        encodePath(ownedRoot, 'owned root', operation),
+        encodePath(relativePath, 'owned file destination', operation),
+        String(maxBytes),
+      ], contents, signal);
+      return resultIdentity(result, operation);
     } catch (error) {
       return await cleanupAfterFailure(helperPath, ownedRoot, error);
     }
   });
+}
+
+export async function stageOwnedFile(options: Readonly<{
+  helperPath: string;
+  ownedRoot: Buffer;
+  relativePath: Buffer;
+  contents: Buffer;
+  maxBytes: number;
+  signal?: AbortSignal;
+}>): Promise<FileIdentity> {
+  const { helperPath, ownedRoot, relativePath, contents, maxBytes, signal } = options;
+  return await stageFile(helperPath, ownedRoot, relativePath, contents, maxBytes,
+                         MAX_OWNED_FILE_BYTES, signal, 'stage-owned-file');
 }
 
 export async function stageWorldPlan(options: Readonly<{
@@ -634,26 +1209,44 @@ export async function stageWorldPlan(options: Readonly<{
   signal?: AbortSignal;
 }>): Promise<FileIdentity> {
   const { helperPath, ownedRoot, destinationRelativePath, contents, maxBytes, signal } = options;
-  return await withRelativePath(destinationRelativePath, async () => {
-    validateByteLimit(maxBytes, MAX_WORLD_PLAN_BYTES, 'stage-world-plan');
-    if (contents.length > maxBytes) {
-      throw new OwnedFilesError({
-        message: 'world plan exceeds its byte limit',
-        category: 'too_large',
-        operation: 'stage-world-plan',
-      });
-    }
-    try {
-      const { result } = await spawnHelper(helperPath, 'stage-world-plan', [
-        encodePath(ownedRoot, 'owned root', 'stage-world-plan'),
-        encodePath(destinationRelativePath, 'world plan destination', 'stage-world-plan'),
-        String(maxBytes),
-      ], contents, signal);
-      return resultIdentity(result, 'stage-world-plan');
-    } catch (error) {
-      return await cleanupAfterFailure(helperPath, ownedRoot, error);
-    }
-  });
+  return await stageFile(helperPath, ownedRoot, destinationRelativePath, contents, maxBytes,
+                         MAX_WORLD_PLAN_BYTES, signal, 'stage-world-plan');
+}
+
+export async function cloneOwnedTree(options: Readonly<{
+  helperPath: string;
+  ownedRoot: Buffer;
+  sourceRelativePath: Buffer;
+  destinationRelativePath: Buffer;
+  maxFiles: number;
+  maxBytes: number;
+  signal?: AbortSignal;
+}>): Promise<FileIdentity> {
+  const { helperPath, ownedRoot, sourceRelativePath, destinationRelativePath, maxFiles, maxBytes, signal } = options;
+  return await withSourceRelativePath(sourceRelativePath, async () =>
+    await withRelativePath(destinationRelativePath, async () => {
+      if (!Number.isSafeInteger(maxFiles) || maxFiles < 0 || maxFiles > MAX_OWNED_TREE_FILES) {
+        throw new OwnedFilesError({
+          message: `clone-owned-tree file limit must be between zero and ${MAX_OWNED_TREE_FILES}`,
+          category: 'invalid_argument',
+          operation: 'clone-owned-tree',
+          clonePublication: 'absent',
+        });
+      }
+      validateByteLimit(maxBytes, MAX_OWNED_TREE_BYTES, 'clone-owned-tree');
+      try {
+        const { result } = await spawnHelper(helperPath, 'clone-owned-tree', [
+          encodePath(ownedRoot, 'owned root', 'clone-owned-tree'),
+          encodePath(sourceRelativePath, 'clone source', 'clone-owned-tree'),
+          encodePath(destinationRelativePath, 'clone destination', 'clone-owned-tree'),
+          String(maxFiles),
+          String(maxBytes),
+        ], undefined, signal);
+        return resultIdentity(result, 'clone-owned-tree');
+      } catch (error) {
+        return await cleanupAfterFailure(helperPath, ownedRoot, error, destinationRelativePath);
+      }
+    }));
 }
 
 export async function readOwnedFile(options: Readonly<{

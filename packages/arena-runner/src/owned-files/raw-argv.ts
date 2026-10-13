@@ -6,7 +6,7 @@ const maxRawArgvChannelBytes = 64 * 1024;
 export type RawArgv = readonly Buffer[];
 
 export class RawArgvError extends Error {
-  readonly argumentIndex?: number;
+  readonly argumentIndex: number | undefined;
 
   constructor(message: string, argumentIndex?: number) {
     super(message);
