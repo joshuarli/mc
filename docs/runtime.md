@@ -14,11 +14,17 @@ The CLI applies a 180 second cold-start deadline, a 60 second per-server readine
 
 ## Focused failure coverage
 
-The live integration cases are supplemented by narrow boundary tests:
+The live selectors and focused source tests cover distinct parts of runtime failure handling:
 
-- `runtime-session.test.ts` covers wrong-token authentication, unsupported protocol versions, malformed frames, unexpected plugin disconnect, acknowledgement correlation, and listener cancellation.
-- `control-codec.test.ts` covers length mismatch, oversized bodies, noncanonical and overflowing values, unknown fields, and duplicate JSON keys.
-- `runtime-process.test.ts` covers Paper bind-error classification, child exit, and graceful shutdown.
-- `owned-files-native.test.ts` covers traversal and symlink rejection, bounded reads and clones, non-UTF-8 path bytes, lease release on owner exit, and atomic staging and clone publication.
+| Behavior | Evidence |
+| --- | --- |
+| Ten real start-stop cycles and resource cleanup | `tests/integration/lifecycle.ts`, selectors `lifecycle-smoke` and `lifecycle`; checks live control and bot sockets, process reaping, port reuse, archival, retained stats and trace, and removal of completed run directories. |
+| Occupied game port does not stop its owner | `tests/integration/faults.ts`, selector `faults-port-conflict`; `runtime-process.test.ts`, test `owned server detects a Paper bind failure across output chunks as an owner conflict`. |
+| A second runtime cannot take the run lease | `tests/integration/faults.ts`, selector `faults-second-owner`; `owned-files-native.test.ts`, tests `stages runtime files, creates private plugin directories, and locks a run exclusively` and `asserts that a held lease matches the owned run identity`. |
+| Loaded plugin identity matches the shipped descriptor | `tests/integration/faults.ts`, selector `faults-plugin-identity`; `runtime-plugin-identity.test.ts`, tests `runtime rejects a ready message with a plugin identity different from the shipped descriptor` and `runtime plugin descriptor requires exactly one supported name and version`. |
+| Server crash, controller disconnect, and truthful interrupted evidence | `tests/integration/faults.ts`, selector `faults-server-crash`; `runtime-session.test.ts`, test `control session reports an unexpected plugin disconnect`; `runtime-failure-artifact.test.ts`, test `runtime failure evidence records the primary error and cleanup result`. The live case requires a failure artifact and partial trace without a plugin outcome. |
+| CLI Ctrl-C preserves cancellation and incomplete evidence | `tests/integration/faults.ts`, selector `faults-sigint`; `runtime-session.test.ts`, tests `canceling plugin acceptance releases the loopback listener` and `closing the listener cancels a connection waiting for its authenticated hello`. |
+| Bad token, protocol version, frame, and acknowledgement correlation | `runtime-session.test.ts`, tests `control listener rejects a plugin with the wrong token and closes its socket`, `control listener rejects an unsupported protocol version and closes its socket`, `control listener rejects a malformed frame and closes its socket`, and `control session closes the connection on an uncorrelated acknowledgment`; `control-codec.test.ts`, tests `control frames use one big-endian length and reject mismatches` and `control schema rejects duplicate JSON keys before DTO validation`. |
+| Owned filesystem path, lease, clone, and staging boundaries | `owned-files-native.test.ts`, tests `rejects traversal, symlink components, and reads beyond the bound`, `preserves non-UTF-8 path bytes where the host filesystem accepts them`, `releases a run lease when its owning process exits`, `a signalled clone removes its identity-owned staging directory before publication`, and `does not publish a replacement swapped into a staged temporary name`. |
 
-These tests do not claim a disk-full simulation or an end-to-end Java control-queue saturation proof.
+There is no disk-full simulation or end-to-end Java control-queue saturation proof. The tests also do not claim that every partial Paper initialization failure has a separate live integration case.
