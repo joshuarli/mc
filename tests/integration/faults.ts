@@ -21,7 +21,8 @@ import {
 import { readOperationalFailureArtifact } from "../../packages/arena-runner/src/runtime/failure-artifact.js";
 import { runPreparedRun } from "../../packages/arena-runner/src/runtime/run.js";
 import { parseSegment } from "../../packages/arena-runner/src/trace.js";
-import type { TraceSegment } from "../../packages/arena-runner/src/trace.js";
+import type { TraceRecord, TraceSegment } from "../../packages/arena-runner/src/trace.js";
+import { RuntimeTraceBuilder } from "../../packages/arena-runner/src/runtime/trace.js";
 import { prepareOwnedAcceptanceRun } from "./support/owned-run.js";
 
 const ROOT = process.cwd();
@@ -107,6 +108,51 @@ test("interrupted traces retain only requested operator aborts", () => {
       : record),
   };
   assert.throws(() => assertInterruptedTrace([wrongReason], "cancelled"));
+});
+
+test("fault trace checkpoint waits for the writer's 200 policy observations", async () => {
+  const trace = new RuntimeTraceBuilder({
+    runId: "fault-checkpoint-cadence",
+    helperPath: "",
+    ownedRoot: Buffer.alloc(0),
+    preparedRun: {
+      runId: "fault-checkpoint-cadence",
+      runDirectoryPath: Buffer.from(".work/tmp/fault-checkpoint-cadence", "ascii"),
+    },
+  });
+  await trace.checkpoint(TRACE_CHECKPOINT_POLICY_OBSERVATIONS);
+
+  const run = { helperPath: "", ownedRoot: Buffer.alloc(0), runId: "fault-checkpoint-watermark" };
+  const partialFinalTrace = {
+    runId: run.runId,
+    records: [
+      ...Array.from({ length: 106 }, () => ({ schema: "policy-replay-v1" })),
+      { type: "outcome" },
+    ],
+  };
+  const checkpointTrace = {
+    runId: run.runId,
+    records: Array.from({ length: TRACE_CHECKPOINT_POLICY_OBSERVATIONS }, () => ({ schema: "policy-replay-v1" })),
+  };
+
+  let checkpointReadCount = 0;
+  await waitForTraceCheckpoint(run, new AbortController().signal, 1_000, undefined, async () => {
+    checkpointReadCount += 1;
+    return checkpointReadCount === 1 ? partialFinalTrace : checkpointTrace;
+  });
+  assert.equal(checkpointReadCount, 2, "a final partial trace must not satisfy the checkpoint wait");
+
+  let statusCheckCount = 0;
+  await assert.rejects(waitForTraceCheckpoint(
+    run,
+    new AbortController().signal,
+    1_000,
+    () => {
+      statusCheckCount += 1;
+      return statusCheckCount < 2 ? undefined : { code: 1, signal: null };
+    },
+    async () => partialFinalTrace,
+  ), /runtime child exited before a trace checkpoint/);
 });
 
 async function runOccupiedPortConflict(scenario: FaultScenario, testContext: TestContext): Promise<void> {
@@ -414,8 +460,17 @@ async function waitForTraceCheckpoint(
   signal: AbortSignal,
   timeoutMs: number,
   completed?: () => Readonly<{ code: number | null; signal: NodeJS.Signals | null }> | undefined,
+  readSegment: () => Promise<Pick<TraceSegment, "runId" | "records">> = async () => {
+    const bytes = await readOwnedFile({
+      helperPath: run.helperPath,
+      ownedRoot: run.ownedRoot,
+      relativePath: Buffer.from(`.work/arena/runs/${run.runId}/trace-v2-000001.json`, "ascii"),
+      maxBytes: MAX_OWNED_READ_BYTES,
+      signal,
+    });
+    return parseSegment(bytes);
+  },
 ): Promise<void> {
-  const relativePath = Buffer.from(`.work/arena/runs/${run.runId}/trace-v2-000001.json`, "ascii");
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     signal.throwIfAborted();
@@ -424,22 +479,23 @@ async function waitForTraceCheckpoint(
       if (status !== undefined) throw new Error(`runtime child exited before a trace checkpoint (${status.code ?? status.signal})`);
     }
     try {
-      const bytes = await readOwnedFile({
-        helperPath: run.helperPath,
-        ownedRoot: run.ownedRoot,
-        relativePath,
-        maxBytes: MAX_OWNED_READ_BYTES,
-        signal,
-      });
-      const parsed = parseSegment(bytes);
+      const parsed = await readSegment();
       assert.equal(parsed.runId, run.runId);
-      return;
+      if (hasTraceCheckpointWatermark(parsed.records)) return;
     } catch (error) {
       if (!(error instanceof OwnedFilesError) || error.category !== "not_found") throw error;
     }
     await delay(250, undefined, { signal });
   }
-  throw new Error(`run ${run.runId} did not stage its first trace checkpoint within ${timeoutMs} ms`);
+  throw new Error(`run ${run.runId} did not stage ${TRACE_CHECKPOINT_POLICY_OBSERVATIONS} policy observations within ${timeoutMs} ms`);
+}
+
+/** Trace segments do not store observation counts, so the live helper counts policy decisions at the writer cadence. */
+const TRACE_CHECKPOINT_POLICY_OBSERVATIONS = 200;
+
+function hasTraceCheckpointWatermark(records: readonly TraceRecord[]): boolean {
+  return records.reduce((count, record) =>
+    count + (record.schema === "policy-replay-v1" ? 1 : 0), 0) >= TRACE_CHECKPOINT_POLICY_OBSERVATIONS;
 }
 
 async function waitForOwnedJavaProcess(
