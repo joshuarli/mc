@@ -17,7 +17,7 @@ max_tick_rate = 20
 
 [match]
 countdown_ticks = 200
-grace_ticks = 20
+grace_ticks = 100
 authoritative_max_ticks = 600
 respawn = false
 block_breaking = false

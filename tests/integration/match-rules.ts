@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { setTimeout as delay } from "node:timers/promises";
+import { resolve } from "node:path";
 import { test } from "node:test";
 
+import { MAX_OWNED_READ_BYTES, readOwnedFile } from "../../packages/arena-runner/src/owned-files/index.js";
 import {
   assertDeathWinner,
   competitorForSeat,
@@ -43,7 +45,14 @@ test("match-rules", { timeout: 300_000 }, async (t) => {
         const target = seatZero.bot.players[seatOne.identity.username]?.entity;
         assert.ok(target, "the attacker must receive its opponent before the grace-phase attack");
         await seatZero.bot.lookAt(target.position.offset(0, target.height * 0.6, 0), true);
+        const observation = await waitForVisibleOpponent(seatZero, target.id, signal);
+        assert.ok(
+          distance(point(seatZero.bot.entity.position), point(target.position)) <= 3,
+          "the grace-phase target must be within ordinary melee reach",
+        );
+        assert.equal(observation.opponents.kind, "current");
         seatZero.bot.attack(target);
+        await waitForPaperCancelledDamage(active, seatZero.identity.username, seatOne.identity.username, signal);
         await delay(200, undefined, { signal });
         assert.equal(latestPhase(active), "grace", "the denied attack must occur during grace");
         assert.equal(minimumHealth, healthBeforeGrace, "grace-phase PvP must not lower the target's health");
@@ -138,6 +147,55 @@ async function waitForPhase(
 
 function latestPhase(active: AcceptanceRunContext): string | undefined {
   return active.events().findLast((event) => event.type === "public_clock")?.payload.phase;
+}
+
+async function waitForVisibleOpponent(
+  competitor: ReturnType<typeof competitorForSeat>,
+  entityId: number,
+  signal: AbortSignal,
+) {
+  const deadline = Date.now() + PHASE_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    signal.throwIfAborted();
+    const observation = competitor.client.observe(0);
+    if (observation.opponents.kind === "current"
+        && observation.opponents.value.some(({ id }) => id === entityId)) {
+      return observation;
+    }
+    await delay(50, undefined, { signal });
+  }
+  throw new Error("grace-phase target did not enter the attacker's current client perception");
+}
+
+async function waitForPaperCancelledDamage(
+  active: AcceptanceRunContext,
+  attackerUsername: string,
+  victimUsername: string,
+  signal: AbortSignal,
+): Promise<void> {
+  const repositoryRoot = process.cwd();
+  const helperPath = process.env.ARENA_FS_HELPER ?? resolve(repositoryRoot, ".work", "arena-fs", "arena-fs");
+  const logPath = Buffer.concat([
+    active.preparedRun.runDirectoryPath,
+    Buffer.from("/server/logs/latest.log", "ascii"),
+  ]);
+  const expectedAttempt = `ARENA_DAMAGE_ATTEMPT|${attackerUsername}|${victimUsername}|cancelled=true|`;
+  const expectedSwing = `ARENA_SWING|${attackerUsername}`;
+  const deadline = Date.now() + PHASE_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    signal.throwIfAborted();
+    const log = await readOwnedFile({
+      helperPath,
+      ownedRoot: Buffer.from(repositoryRoot, "utf8"),
+      relativePath: logPath,
+      maxBytes: MAX_OWNED_READ_BYTES,
+      signal,
+    });
+    const text = log.toString("utf8");
+    if (text.includes(expectedSwing) && text.includes(expectedAttempt)) return;
+    await delay(50, undefined, { signal });
+  }
+  throw new Error(`Paper did not record a cancelled grace-phase damage attempt from ${attackerUsername} to ${victimUsername}`);
 }
 
 async function walkForward(bot: ReturnType<typeof competitorForSeat>["bot"], signal: AbortSignal): Promise<void> {
