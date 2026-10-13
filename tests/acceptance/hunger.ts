@@ -12,6 +12,7 @@ import { runPreparedRun } from "../../packages/arena-runner/src/runtime/run.js";
 import { recordHungerGameplayEvidence, type HungerGameplayEvidence } from "./hunger-gameplay.js";
 import { createHungerRunMeasurements, type HungerRunMeasurementEvidence } from "./hunger-measurements.js";
 import { withHungerResourceDiagnostic } from "./hunger-resource-diagnostic.js";
+import { hasEliminatedSeatEvidence } from "./hunger-alive-state.js";
 import { prepareOwnedAcceptanceRun, inspectOwnedAcceptanceRun, type runOwnedAcceptanceScenario, type AcceptanceRunContext } from "../integration/support/owned-run.js";
 
 const SCENARIOS = [
@@ -240,14 +241,13 @@ async function waitForEliminatedState(
   active: AcceptanceRunContext,
   seat: number,
   signal: AbortSignal,
-  afterEventCount = 0,
+  afterEventCount?: number,
 ): Promise<void> {
   await waitForCondition(
-    () => {
-      const latest = active.events().slice(afterEventCount).findLast((event) => event.type === "public_state");
-      return latest !== undefined && !latest.payload.alive_seats.includes(seat);
-    },
-    `seat ${seat} remained alive after elimination`,
+    () => hasEliminatedSeatEvidence(active.events(), seat, afterEventCount),
+    afterEventCount === undefined
+      ? `seat ${seat} remained alive after elimination`
+      : `seat ${seat} lacked authoritative eliminated-state evidence after reconnect`,
     ELIMINATION_TIMEOUT_MS,
     signal,
   );
