@@ -221,10 +221,20 @@ export function assertCivilizationOutpostsPresent(
   if (outpostPositions.length !== 30) {
     throw new Error("civilization outpost evidence requires the thirty declared blueprint positions");
   }
+  assertCivilizationPlacedPositionsPresent(checkpoint, outpostPositions, "the two complete outposts");
+}
+
+/** Requires selected configured cells in the authoritative census while preserving other legal placements. */
+export function assertCivilizationPlacedPositionsPresent(
+  checkpoint: CivilizationMaterialCheckpoint,
+  expectedPositions: readonly BlockPosition[],
+  description: string,
+): void {
+  if (expectedPositions.length === 0) throw new Error("civilization placed-position evidence cannot be empty");
   const placedPositions = uniquePositions(checkpoint.placedOakPlanks, "checkpoint placed oak planks");
-  const expectedPositions = uniquePositions(outpostPositions, "declared outpost blueprint positions");
-  if (expectedPositions.size !== 30 || [...expectedPositions].some((position) => !placedPositions.has(position))) {
-    throw new Error("authoritative placed-plank census is missing cells from the two complete outposts");
+  const expected = uniquePositions(expectedPositions, "declared outpost blueprint positions");
+  if (expected.size !== expectedPositions.length || [...expected].some((position) => !placedPositions.has(position))) {
+    throw new Error(`authoritative placed-plank census is missing cells from ${description}`);
   }
 }
 

@@ -3,11 +3,13 @@ import type {
   CivIntent,
   CivilizationFactionId,
   CivilizationGoal,
+  CivilizationRole,
   Goal,
   Intent,
   OutpostCell,
   SkillOutcome,
 } from "@arena/core";
+import type { CivilizationFactionIr } from "@arena/spec";
 
 export interface CivilizationFactionActionLayout {
   readonly naturalOakLogSources: readonly BlockPosition[];
@@ -68,6 +70,85 @@ export function assertCrossFactionCombat(engagements: readonly CivilizationComba
     if (factionForSeat(attacker) !== factionForSeat(victim)) crossFactionHit = true;
   }
   if (!crossFactionHit) throw new Error("civilization combat requires an opposing-faction hit");
+}
+
+/** Requires the configured gatherer, builder, and defender on each faction to contribute. */
+export function assertCivilizationRoleContributions(
+  actions: readonly CivilizationActionEvidence[],
+  factions: readonly CivilizationFactionIr[],
+  layout: CivilizationActionLayout,
+): void {
+  if (factions.length !== 2) throw new Error("civilization role evidence requires both configured factions");
+  const seats = new Set<number>();
+  for (const faction of factions) {
+    const memberForRole = new Map(faction.members.map(({ seat, role }) => [role, seat] as const));
+    if (memberForRole.size !== 3 || faction.members.length !== 3) {
+      throw new Error(`${faction.id} must have one configured member for each civilization role`);
+    }
+    for (const { seat } of faction.members) {
+      if (!Number.isSafeInteger(seat) || seat < 0 || seat > 5 || seats.has(seat)) {
+        throw new Error("civilization role evidence has an invalid or repeated configured seat");
+      }
+      seats.add(seat);
+    }
+
+    const gatherer = requiredRoleSeat(memberForRole, "gatherer_crafter", faction.id);
+    const builder = requiredRoleSeat(memberForRole, "builder", faction.id);
+    const defender = requiredRoleSeat(memberForRole, "defender_scout", faction.id);
+    const factionLayout = layout[faction.id];
+    const successfulBySeat = (seat: number) => actions.filter((action) => action.seat === seat
+      && action.outcome.kind === "succeeded");
+    const gathererActions = successfulBySeat(gatherer);
+    const builderActions = successfulBySeat(builder);
+    const defenderActions = successfulBySeat(defender);
+
+    requireAction(gathererActions, ({ goal, intent }) => goal.kind === "gatherMaterial"
+      && goal.item === "oak_log" && intent.kind === "mineBlock" && intent.expectedBlock === "oak_log",
+    `${faction.id} gatherer must mine a declared natural oak log`);
+    requireAction(gathererActions, ({ goal, intent }) => goal.kind === "gatherMaterial"
+      && goal.item === "oak_log" && intent.kind === "dropCollect",
+    `${faction.id} gatherer must collect an observed oak log drop`);
+    requireAction(gathererActions, ({ goal, intent }) => goal.kind === "craftMaterial"
+      && goal.item === "oak_planks" && goal.resultCount === 16 && intent.kind === "craft"
+      && intent.output === "oak_planks" && intent.resultCount === 16,
+    `${faction.id} gatherer must craft sixteen planks from the ordinary recipe`);
+    requireAction(gathererActions, ({ goal, intent }) => goal.kind === "transferMaterial"
+      && goal.direction === "deposit" && goal.item === "oak_planks" && goal.count === 16
+      && samePosition(goal.container, factionLayout.chest)
+      && intent.kind === "containerTransfer" && intent.direction === "deposit"
+      && intent.item === "oak_planks" && intent.count === 16
+      && samePosition(intent.position, factionLayout.chest),
+    `${faction.id} gatherer must deposit all sixteen planks in its declared chest`);
+
+    requireAction(builderActions, ({ goal, intent }) => goal.kind === "transferMaterial"
+      && goal.direction === "withdraw" && goal.item === "oak_planks" && goal.count === 15
+      && samePosition(goal.container, factionLayout.chest)
+      && intent.kind === "containerTransfer" && intent.direction === "withdraw"
+      && intent.item === "oak_planks" && intent.count === 15
+      && samePosition(intent.position, factionLayout.chest),
+    `${faction.id} builder must withdraw fifteen planks from its declared chest`);
+    const expectedCells = new Map(factionLayout.outpostCells.map((cell) => [positionKey(cell.position), cell] as const));
+    const builtCells = new Set<string>();
+    for (const action of builderActions) {
+      if (action.goal.kind !== "buildOutpost" || action.goal.blueprintId !== "oak-outpost-v1"
+        || action.intent.kind !== "placeBlock" || action.intent.item !== "oak_planks") continue;
+      const cell = expectedCells.get(positionKey(action.goal.target));
+      if (cell !== undefined && action.goal.cellIndex === cell.index
+        && samePosition(action.intent.target, cell.position)
+        && samePosition(action.intent.referencePosition, cell.supportPosition)
+        && action.intent.face === "up") {
+        builtCells.add(positionKey(cell.position));
+      }
+    }
+    if (builtCells.size !== 15) {
+      throw new Error(`${faction.id} builder must place all fifteen declared outpost cells`);
+    }
+
+    requireAction(defenderActions, ({ goal, intent }) => goal.kind === "captureZone"
+      && intent.kind === "navigate" && samePosition(goal.target, intent.target),
+    `${faction.id} defender/scout must navigate to its configured capture objective`);
+  }
+  if (seats.size !== 6) throw new Error("civilization role evidence must cover all six fixed seats");
 }
 
 function assertFactionMaterialChain(
@@ -172,6 +253,24 @@ function earliest(actions: readonly CivilizationActionEvidence[]): CivilizationA
   const action = actions[0];
   if (action === undefined) throw new Error("required successful civilization action is missing");
   return action;
+}
+
+function requiredRoleSeat(
+  members: ReadonlyMap<CivilizationRole, number>,
+  role: CivilizationRole,
+  faction: string,
+): number {
+  const seat = members.get(role);
+  if (seat === undefined) throw new Error(`${faction} has no configured ${role} seat`);
+  return seat;
+}
+
+function requireAction(
+  actions: readonly CivilizationActionEvidence[],
+  predicate: (action: CivilizationActionEvidence) => boolean,
+  message: string,
+): void {
+  if (!actions.some(predicate)) throw new Error(message);
 }
 
 function positionKey(position: Readonly<{ x: number; y: number; z: number }>): string {

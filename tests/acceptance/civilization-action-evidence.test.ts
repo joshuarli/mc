@@ -10,9 +10,11 @@ import {
   type Intent,
   type CivIntent,
 } from "@arena/core";
+import type { CivilizationFactionIr } from "@arena/spec";
 
 import {
   assertBothFactionsCompletedMaterialChain,
+  assertCivilizationRoleContributions,
   assertCrossFactionCombat,
   type CivilizationActionEvidence,
 } from "./civilization-action-evidence.js";
@@ -33,6 +35,21 @@ test("civilization usefulness ignores unsuccessful skills and requires the missi
   assert.throws(
     () => assertBothFactionsCompletedMaterialChain(incomplete, layout),
     /tide must complete the four-log to sixteen-plank recipe/,
+  );
+});
+
+test("civilization usefulness requires all six configured roles to contribute", () => {
+  const layout = actionLayout();
+  const factions = factionRoster();
+  const actions = [...factionChain(0, layout.ember, 1n), ...factionChain(3, layout.tide, 100n)];
+  assertCivilizationRoleContributions(actions, factions, layout);
+  assert.throws(
+    () => assertCivilizationRoleContributions(
+      actions.filter((entry) => !(entry.seat === 5 && entry.goal.kind === "captureZone")),
+      factions,
+      layout,
+    ),
+    /tide defender\/scout must navigate to its configured capture objective/,
   );
 });
 
@@ -69,14 +86,14 @@ function factionChain(
     kind: "craft", output: "oak_planks", resultCount: 16, table: null,
   }));
   actions.push(action(firstSeat + 1, at++, {
-    kind: "transferMaterial", item: "oak_planks", count: 1, direction: "deposit", container: layout.chest,
+    kind: "transferMaterial", item: "oak_planks", count: 16, direction: "deposit", container: layout.chest,
   }, {
-    kind: "containerTransfer", position: layout.chest, direction: "deposit", item: "oak_planks", count: 1,
+    kind: "containerTransfer", position: layout.chest, direction: "deposit", item: "oak_planks", count: 16,
   }));
   actions.push(action(firstSeat + 1, at++, {
-    kind: "transferMaterial", item: "oak_planks", count: 1, direction: "withdraw", container: layout.chest,
+    kind: "transferMaterial", item: "oak_planks", count: 15, direction: "withdraw", container: layout.chest,
   }, {
-    kind: "containerTransfer", position: layout.chest, direction: "withdraw", item: "oak_planks", count: 1,
+    kind: "containerTransfer", position: layout.chest, direction: "withdraw", item: "oak_planks", count: 15,
   }));
   for (const cell of layout.outpostCells) {
     actions.push(action(firstSeat + 1, at++, {
@@ -85,7 +102,27 @@ function factionChain(
       kind: "placeBlock", target: cell.position, referencePosition: cell.supportPosition, face: "up", item: "oak_planks",
     }));
   }
+  actions.push(action(firstSeat + 2, at++, {
+    kind: "captureZone", target: blockPosition(95, 65, 95),
+  }, {
+    kind: "navigate", target: blockPosition(95, 65, 95),
+  }));
   return actions;
+}
+
+function factionRoster(): readonly CivilizationFactionIr[] {
+  return [
+    { id: "ember", members: [
+      { seat: 0, role: "gatherer_crafter" },
+      { seat: 1, role: "builder" },
+      { seat: 2, role: "defender_scout" },
+    ] },
+    { id: "tide", members: [
+      { seat: 3, role: "gatherer_crafter" },
+      { seat: 4, role: "builder" },
+      { seat: 5, role: "defender_scout" },
+    ] },
+  ];
 }
 
 function actionLayout(): CivilizationActionLayout {
