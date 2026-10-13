@@ -158,7 +158,9 @@ async function waitForVisibleOpponent(
   const deadline = Date.now() + PHASE_TIMEOUT_MS;
   while (Date.now() < deadline) {
     signal.throwIfAborted();
-    const observation = competitor.client.observe(0);
+    const gameplay = competitor.gameplay;
+    if (gameplay.mode !== "hunger_games") throw new Error("opponent visibility evaluator requires Hunger Games");
+    const observation = gameplay.client.observe(0);
     if (observation.opponents.kind === "current"
         && observation.opponents.value.some(({ id }) => id === entityId)) {
       return observation;

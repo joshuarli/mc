@@ -1,7 +1,7 @@
 import { civilizationPolicyContext, civilizationProfileForSeat } from '@arena/core';
 import { createBot, type Bot } from 'mineflayer';
 import type { PartiallyComputedPath } from 'mineflayer-pathfinder';
-import { createMineflayerArenaClient, createMineflayerCivilizationClient, type CivilizationRosterMember, type MineflayerArenaClient, type MineflayerCivilizationClient } from '@arena/bots';
+import { createMineflayerArenaClient, createMineflayerCivilizationClient, type CivilizationRosterMember, type MineflayerArenaClient } from '@arena/bots';
 import { performance } from 'node:perf_hooks';
 import { RunnerError } from '../errors.js';
 import type { ScenarioIr } from '@arena/spec';
@@ -46,7 +46,7 @@ export class RuntimeCompetitorClient implements RuntimeCompetitorHandle {
     return this.#requireConnection().bot;
   }
 
-  get client(): MineflayerArenaClient | MineflayerCivilizationClient {
+  get client(): Pick<MineflayerArenaClient, 'run' | 'cancel' | 'close'> {
     return this.#requireConnection().client;
   }
 
@@ -83,7 +83,7 @@ export class RuntimeCompetitorClient implements RuntimeCompetitorHandle {
   async #replaceConnection(): Promise<void> {
     await this.#replaceQueued(async () => {
       if (this.#connection !== undefined) await this.#connection.close();
-      const connection = await connectRuntimeBot(this.identity, this.#connectionOptions, this.seat);
+      const connection = await connectRuntimeBot(this.identity, this.#connectionOptions, { kind: 'competitor', seat: this.seat });
       this.#connections.push(connection);
       this.#connection = connection;
     });
@@ -126,7 +126,7 @@ export class RuntimeSpectatorClient implements RuntimeSpectatorHandle {
   }
 
   async connect(options: RuntimeClientOptions): Promise<void> {
-    const connection = await connectRuntimeBot(this.identity, options);
+    const connection = await connectRuntimeBot(this.identity, options, { kind: 'spectator' });
     this.#connections.push(connection);
     this.#connection = connection;
   }
@@ -145,9 +145,13 @@ export class RuntimeSpectatorClient implements RuntimeSpectatorHandle {
   }
 }
 
+type RuntimeConnectionAdapter =
+  | { readonly kind: 'spectator'; readonly client: MineflayerArenaClient }
+  | { readonly kind: 'competitor'; readonly gameplay: RuntimeGameplay };
+
 interface RuntimeBotConnection {
   readonly bot: Bot;
-  readonly client: MineflayerArenaClient | MineflayerCivilizationClient;
+  readonly client: Pick<MineflayerArenaClient, 'run' | 'cancel' | 'close'>;
   readonly gameplay: RuntimeGameplay | undefined;
   readonly ended: Promise<void>;
   readonly receipts: ReceiptRecorder;
@@ -166,8 +170,7 @@ class OwnedBotConnection implements RuntimeBotConnection {
   readonly #rejectInjectionAllowed: (error: RunnerError) => void;
   readonly #resolveSpawned: () => void;
   readonly #rejectSpawned: (error: RunnerError) => void;
-  #client: MineflayerArenaClient | MineflayerCivilizationClient | undefined;
-  #gameplay: RuntimeGameplay | undefined;
+  #adapter: RuntimeConnectionAdapter | undefined;
   #failure: RunnerError | undefined;
   #closePromise: Promise<void> | undefined;
   #injectionWasAllowed = false;
@@ -204,21 +207,22 @@ class OwnedBotConnection implements RuntimeBotConnection {
     bot.on('end', this.#onEnd);
   }
 
-  get client(): MineflayerArenaClient | MineflayerCivilizationClient {
-    if (this.#client === undefined) {
+  get client(): Pick<MineflayerArenaClient, 'run' | 'cancel' | 'close'> {
+    if (this.#adapter === undefined) {
       throw new RunnerError('runtime_failure', 'Mineflayer client', { kind: 'client_adapter_not_ready' });
     }
-    return this.#client;
+    return this.#adapter.kind === 'competitor' ? this.#adapter.gameplay.client : this.#adapter.client;
   }
 
-  get gameplay(): RuntimeGameplay | undefined { return this.#gameplay; }
+  get gameplay(): RuntimeGameplay | undefined {
+    return this.#adapter?.kind === 'competitor' ? this.#adapter.gameplay : undefined;
+  }
 
-  setClient(client: MineflayerArenaClient | MineflayerCivilizationClient, gameplay?: RuntimeGameplay): void {
-    if (this.#client !== undefined) {
+  setAdapter(adapter: RuntimeConnectionAdapter): void {
+    if (this.#adapter !== undefined) {
       throw new RunnerError('runtime_failure', 'Mineflayer client', { kind: 'client_adapter_already_ready' });
     }
-    this.#client = client;
-    this.#gameplay = gameplay;
+    this.#adapter = adapter;
   }
 
   /** Mineflayer's plugin loader runs before this listener so adapter setup sees injected plugins. */
@@ -282,7 +286,7 @@ class OwnedBotConnection implements RuntimeBotConnection {
   async #close(): Promise<void> {
     this.#closing = true;
     const existingFailure = this.#failure;
-    const adapterClose = this.#client?.close();
+    const adapterClose = this.#adapter === undefined ? undefined : this.client.close();
     const socket = this.bot._client.socket;
     if (!socket.destroyed) {
       if (!this.bot._client.ended) this.bot.end('arena runtime cleanup');
@@ -322,7 +326,7 @@ export function collectClientFailures(
 async function connectRuntimeBot(
   identity: PlayerIdentity,
   options: RuntimeClientOptions,
-  seat?: number,
+  role: { readonly kind: 'spectator' } | { readonly kind: 'competitor'; readonly seat: number },
 ): Promise<RuntimeBotConnection> {
   if (options.signal.aborted) throw cancelledClient();
   let bot: Bot;
@@ -349,11 +353,10 @@ async function connectRuntimeBot(
   try {
     await connection.waitForInjectionAllowed(options.signal, deadline);
     if (connection.failure !== undefined) throw connection.failure;
-    let client: MineflayerArenaClient | MineflayerCivilizationClient;
-    let gameplay: RuntimeGameplay | undefined;
+    let adapter: RuntimeConnectionAdapter;
     try {
-      if (options.scenario.mode === 'civilization' && seat !== undefined) {
-        const profile = civilizationProfileForSeat(seat);
+      if (options.scenario.mode === 'civilization' && role.kind === 'competitor') {
+        const profile = civilizationProfileForSeat(role.seat);
         if (profile === null) throw new RangeError('civilization competitor seat is outside the canonical roster');
         const rules = options.scenario.civilization;
         const anchor = rules.blueprint.anchors[profile.faction];
@@ -361,11 +364,12 @@ async function connectRuntimeBot(
           captureBox: { min: rules.captureZone.min, max: rules.captureZone.max },
           outpost: { blueprintId: rules.blueprint.id, anchor: anchor.position, rotationDegrees: anchor.rotationDegrees },
         } });
-        client = createMineflayerCivilizationClient(bot, { context, publicRoster: options.publicRoster });
-        gameplay = { mode: 'civilization', context, client };
+        const client = createMineflayerCivilizationClient(bot, { context, publicRoster: options.publicRoster });
+        adapter = { kind: 'competitor', gameplay: { mode: 'civilization', context, client } };
       } else {
-        client = createMineflayerArenaClient(bot);
-        if (seat !== undefined) gameplay = { mode: 'hunger_games', client };
+        const client = createMineflayerArenaClient(bot);
+        adapter = role.kind === 'spectator' ? { kind: 'spectator', client }
+          : { kind: 'competitor', gameplay: { mode: 'hunger_games', client } };
       }
     } catch (error) {
       throw new RunnerError('runtime_failure', 'Mineflayer client', {
@@ -373,7 +377,7 @@ async function connectRuntimeBot(
         reason: errorReason(error),
       });
     }
-    connection.setClient(client, gameplay);
+    connection.setAdapter(adapter);
     await connection.waitForSpawn(options.signal, deadline);
     if (connection.failure !== undefined) throw connection.failure;
     return connection;

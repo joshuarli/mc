@@ -35,7 +35,7 @@ export interface RuntimeCompetitorHandle {
   readonly seat: number;
   readonly identity: PlayerIdentity;
   readonly bot: Bot;
-  readonly client: import('@arena/bots').MineflayerArenaClient | import('@arena/bots').MineflayerCivilizationClient;
+  readonly client: Pick<import('@arena/bots').MineflayerArenaClient, 'run' | 'cancel' | 'close'>;
   readonly gameplay: RuntimeGameplay;
   chunkReceipts(): MineflayerReceiptSnapshot;
 }
