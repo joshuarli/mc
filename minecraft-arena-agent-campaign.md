@@ -338,6 +338,8 @@ Decisions dated 2026-10-12 are historical and are superseded where they select R
 
 Append one line per phase end: date, merged checkpoint, checks passed, parked items and reason. No continuous progress diary. A blocked milestone is explicitly blocked, never a passed gate with prose caveats.
 
+- 2026-10-13 — P1 M1 blocked at `c8c3e4e`: configured resets, ordinary duel, Hunger fairness, and several authority variants passed; legal-player food loss passed but precise ramp navigation timed out without a proven source cause. Park the six-seat MVP and its dependent integrations; continue independent authority, lifecycle, replay/report, and runtime-failure proofs. Reproduction and resume condition are in the acceptance report.
+
 ## 10. For the owner afterwards
 
 - Read README for exact bootstrap/run commands and acceptance report for tested versus parked claims.
