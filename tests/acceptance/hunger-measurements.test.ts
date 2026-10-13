@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
+import { entityId } from "@arena/core";
 import { RunnerError } from "../../packages/arena-runner/src/errors.js";
-import type { PolicyActivityEvent } from "../../packages/arena-runner/src/runtime/live-policy-loop.js";
 import type { ResourceMonitorSampleEvent } from "../../packages/arena-runner/src/runtime/resource-monitor.js";
 import { createHungerRunMeasurements } from "./hunger-measurements.js";
 
@@ -66,6 +66,7 @@ test("hunger measurements split resource samples at the observed active boundary
 
 test("hunger measurements include action and resource callbacks received during run cleanup", () => {
   const measurements = createHungerRunMeasurements([3]);
+  const target = entityId(7);
   measurements.markActiveBoundary(100n);
   measurements.onResourceSample(resourceSample(100n, 10, 5, 20n, 1n));
 
@@ -74,12 +75,12 @@ test("hunger measurements include action and resource callbacks received during 
     kind: "action",
     seat: 3,
     actionSequence: "1",
-    intent: { kind: "attack", target: 7 } as never,
+    intent: { kind: "attack", target },
     startedAtNs: 200n,
     settledAtNs: 1_000_200n,
     outcome: { kind: "cancelled", reason: "shutdown" },
     cleanupIncluded: true,
-  } as unknown as PolicyActivityEvent);
+  });
   measurements.onResourceSample(resourceSample(200n, 15, 9, 30n, 3n));
 
   const evidence = measurements.snapshot();
@@ -115,28 +116,29 @@ test("hunger measurements keep failed resource samples distinct from zero-valued
 
 test("hunger measurements preserve decision and skill timing while naming attack limits", () => {
   const measurements = createHungerRunMeasurements([3]);
+  const target = entityId(7);
   measurements.onPolicyActivity({
     kind: "decision",
     seat: 3,
     tick: 4,
     sequence: "1",
     disposition: { kind: "start", action_sequence: "1" },
-    goal: {} as never,
-    intent: { kind: "attack", target: 7 } as never,
+    goal: { kind: "engageVisibleOpponent", target },
+    intent: { kind: "attack", target },
     tickReceivedAtNs: 100n,
     decisionStartedAtNs: 130n,
     acceptedAtNs: 150n,
-  } as unknown as PolicyActivityEvent);
+  });
   measurements.onPolicyActivity({
     kind: "action",
     seat: 3,
     actionSequence: "1",
-    intent: { kind: "attack", target: 7 } as never,
+    intent: { kind: "attack", target },
     startedAtNs: 200n,
     settledAtNs: 1_000_200n,
     outcome: { kind: "failed", cause: "timedOut" },
     cleanupIncluded: true,
-  } as unknown as PolicyActivityEvent);
+  });
 
   const policy = measurements.snapshot().policyBySeat.get(3);
   assert.ok(policy);
