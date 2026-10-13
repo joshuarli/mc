@@ -66,9 +66,10 @@ async function runLifecycleCycle(
     ...prepared,
     competitorDriver: "evaluator",
     evaluate: async (active) => {
-      assert.ok(
-        activeResourceCount("TCPServerWrap") > beforeServers,
-        "the lifecycle probe must observe the live control listener",
+      assert.equal(
+        activeResourceCount("TCPServerWrap"),
+        beforeServers,
+        "the authenticated control listener must already be closed",
       );
       assert.ok(
         activeResourceCount("TCPSocketWrap") > beforeSockets,

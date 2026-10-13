@@ -39,6 +39,7 @@ Focused live runtime proofs can be run one at a time. Each fault selector starts
 ```
 
 `lifecycle-smoke` checks one start/stop and archive cycle. `lifecycle` runs ten sequential cycles and checks resource cleanup after each.
+The lifecycle check expects the one-connection control listener to be closed once authentication completes, observes the live control and bot sockets during evaluation, and then verifies the listener and sockets return to baseline, Paper is reaped, and port 25565 can be rebound.
 
 Errors are one JSON object on stderr. Exit codes are 0 for success, 2 for invalid input, 3 for a missing resource or prerequisite, 4 for an owned-resource or port conflict, 5 for corrupt or incomplete evidence, 6 for runtime failures, and 130 for operator cancellation. An authoritative abort outcome is a runtime failure; its error includes the outcome reason, run ID, and final trace path when available. Error output carries a category, a generic resource label, and structured source details such as the scenario field and source location, OS error codes, the primary and cleanup failure kinds, or whether a failed staging operation may have published a file. It omits parser text and file contents.
 
