@@ -1,4 +1,4 @@
-export type ControlCapability = "hunger_games_v1" | "dynamic_human_seat_v1";
+export type ControlCapability = "hunger_games_v1";
 
 export type AuthoritativeTick =
   | { readonly domain: "countdown"; readonly value: bigint }
@@ -36,19 +36,13 @@ export interface BuildProgressPayload {
   readonly total: number;
 }
 
-export type Competitor =
-  | {
-      readonly kind: "bot";
-      readonly seat: number;
-      readonly participant_id: string;
-      readonly username: string;
-      readonly offline_uuid: string;
-    }
-  | {
-      readonly kind: "human";
-      readonly seat: 0;
-      readonly participant_id: string;
-    };
+export interface BotCompetitor {
+  readonly kind: "bot";
+  readonly seat: number;
+  readonly participant_id: string;
+  readonly username: string;
+  readonly offline_uuid: string;
+}
 
 export interface MatchSettings {
   readonly countdown_ticks: bigint;
@@ -77,7 +71,7 @@ export interface PreparePayload {
     readonly match: MatchSettings;
     readonly border: BorderSettings;
   };
-  readonly roster: readonly Competitor[];
+  readonly roster: readonly BotCompetitor[];
 }
 
 export type AbortReason =
@@ -85,7 +79,6 @@ export type AbortReason =
   | "lease_lost"
   | "invalid_world"
   | "protocol_error"
-  | "human_wait_timeout"
   | "runtime_timeout";
 
 export interface ClockPayload {

@@ -30,13 +30,13 @@ are positive u64 decimal strings. Each direction maintains its own strictly
 increasing sequence. Gaps are permitted; repeats and lower values fail. A
 response correlation equals the initiating message's sequence.
 
-The plugin's first message is authenticated `hello`, with a closed capability
-list. The runner acknowledges that sequence, then the plugin sends `ready`
-with the acknowledgment sequence as its correlation and the Paper, Minecraft,
-protocol, plugin, and capability identities. The runner accepts no commands
-until this handshake completes. The plugin sends a heartbeat every second.
-`ControlReceiver` performs run, sequence, authentication, capability, and
-handshake checks before returning an accepted message to the caller.
+The plugin's first message is authenticated `hello`, with the `hunger_games_v1`
+capability. The runner acknowledges that sequence, then the plugin sends
+`ready` with the acknowledgment sequence as its correlation and the Paper,
+Minecraft, protocol, plugin, and capability identities. The runner accepts no
+commands until this handshake completes. The plugin sends a heartbeat every
+second. `ControlReceiver` performs run, sequence, authentication, capability,
+and handshake checks before returning an accepted message to the caller.
 
 ## Message contract
 
@@ -47,26 +47,22 @@ under `fixtures/protocol/control-*.json`.
 - `hello` is `{token, capabilities}`. `ready` is `{server:{name,version,
   minecraft_version,protocol_version}, plugin:{name,version}, capabilities}`.
   An `ack` has an empty payload. Both `ready` and `ack` carry the initiating
-  sequence in `correlation`.
+  sequence in `correlation`. The codec validates the sequence format, but the
+  runtime session must track pending requests and reject acknowledgments whose
+  correlation has no outstanding request before treating an `ack` as complete.
 - `heartbeat` and `start` have empty payloads. `start` enters the prepared
-  match lifecycle; when the roster reserves a human seat, Java waits for an
-  eligible player to join and use `/arena ready` before starting the countdown.
-  `abort` carries one closed `reason` value: `operator`, `lease_lost`,
-  `invalid_world`, `protocol_error`, `human_wait_timeout`, or
-  `runtime_timeout`.
+  match lifecycle. `abort` carries one closed `reason` value: `operator`,
+  `lease_lost`, `invalid_world`, `protocol_error`, or `runtime_timeout`.
 - `build_progress` reports only its stage and bounded completed/total counts.
   `prepare` carries `map_semantic_id`, `scenario_semantic_id`, `seed`, `mode`,
   `settings`, and `roster`. P0 accepts `mode: "hunger_games"`. Its `settings`
   contain the resolved scenario `match` and `border` fields with their source
   names and no Java-side defaults. Civilization settings are unsupported until
   their schema and values are defined.
-- A bot roster entry has `kind`, `seat`, `participant_id`, `username`, and
-  `offline_uuid`. A human entry has only `kind`, `seat: 0`, and
-  `participant_id`. Seats are ordered, contiguous, and bounded to zero through
-  five. A human entry reserves seat zero; it does not identify or bind a player.
-  The first eligible local player claims it only after `/arena ready`; later
-  joins are spectators. A competitive reconnect after countdown cannot reclaim
-  a seat.
+- Every roster entry is a fixed bot identity with `kind`, `seat`,
+  `participant_id`, `username`, and `offline_uuid`. Seats are ordered,
+  contiguous, and bounded to zero through five. Non-roster players are
+  spectators and cannot claim a competitive seat.
 - `public_clock` reports phase, authoritative countdown/match tick, and border
   diameter. `public_state` reports alive seat IDs. `elimination` reports the
   ordered seat and cause at one authoritative tick. `outcome` is the sole

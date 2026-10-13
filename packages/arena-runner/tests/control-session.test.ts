@@ -13,7 +13,7 @@ function frame(message: ControlMessage): Uint8Array {
 }
 
 test("control receiver authenticates before accepting plugin events", () => {
-  const receiver = new ControlReceiver("fixture-run", "fixture-secret", ["hunger_games_v1", "dynamic_human_seat_v1"]);
+  const receiver = new ControlReceiver("fixture-run", "fixture-secret", ["hunger_games_v1"]);
   const wrongToken: ControlMessage = {
     protocol: 1,
     run_id: "fixture-run",
@@ -30,13 +30,13 @@ test("control receiver authenticates before accepting plugin events", () => {
 });
 
 test("control receiver requires hello, correlated ready, and increasing plugin sequences", () => {
-  const receiver = new ControlReceiver("fixture-run", "fixture-secret", ["hunger_games_v1", "dynamic_human_seat_v1"]);
+  const receiver = new ControlReceiver("fixture-run", "fixture-secret", ["hunger_games_v1"]);
   const hello: ControlMessage = {
     protocol: 1,
     run_id: "fixture-run",
     sequence: 4n,
     type: "hello",
-    payload: { token: "fixture-secret", capabilities: ["hunger_games_v1", "dynamic_human_seat_v1"] }
+    payload: { token: "fixture-secret", capabilities: ["hunger_games_v1"] }
   };
   assert.equal(receiver.acceptFrame(frame(hello)).type, "hello");
   assert.equal(receiver.lastAcceptedSequence, 4n);
@@ -51,7 +51,7 @@ test("control receiver requires hello, correlated ready, and increasing plugin s
     payload: {
       server: { name: "paper", version: "26.1.2-74", minecraft_version: "26.1.2", protocol_version: 775 },
       plugin: { name: "arena-foundation", version: "0.1.0" },
-      capabilities: ["hunger_games_v1", "dynamic_human_seat_v1"]
+      capabilities: ["hunger_games_v1"]
     }
   };
   assert.equal(receiver.acceptFrame(frame(ready)).type, "ready");

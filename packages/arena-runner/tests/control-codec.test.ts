@@ -41,7 +41,7 @@ test("control envelopes round-trip u64 values without narrowing", () => {
           final_diameter_blocks: 16
         }
       },
-      roster: [{ kind: "human", seat: 0, participant_id: "human-local" }]
+      roster: [{ kind: "bot", seat: 0, participant_id: "bot-local", username: "arena_bot_0", offline_uuid: "00000000-0000-0000-0000-000000000001" }]
     }
   };
   const encoded = encodeControlEnvelope(message);
@@ -90,7 +90,7 @@ test("control decoder rejects numeric, noncanonical, overflow, unknown, and remo
   }
 });
 
-test("prepare rejects civilization and noncontiguous or invalid human seats", () => {
+test("prepare rejects civilization and noncontiguous bot seats", () => {
   const template = {
     protocol: 1,
     run_id: "fixture-run",
@@ -119,14 +119,14 @@ test("prepare rejects civilization and noncontiguous or invalid human seats", ()
           final_diameter_blocks: 16
         }
       },
-      roster: [{ kind: "human", seat: 0, participant_id: "human-local" }]
+      roster: [{ kind: "bot", seat: 0, participant_id: "bot-local", username: "arena_bot_0", offline_uuid: "00000000-0000-0000-0000-000000000001" }]
     }
   };
   const civilization = JSON.stringify(template).replace('"mode":"hunger_games"', '"mode":"civilization"');
   assert.throws(() => decodeControlEnvelope(civilization), ControlCodecError);
 
-  const invalidHuman = JSON.stringify(template).replace('"seat":0', '"seat":1');
-  assert.throws(() => decodeControlEnvelope(invalidHuman), ControlCodecError);
+  const invalidSeat = JSON.stringify(template).replace('"seat":0', '"seat":1');
+  assert.throws(() => decodeControlEnvelope(invalidSeat), ControlCodecError);
 });
 
 test("control schema rejects duplicate JSON keys before DTO validation", () => {

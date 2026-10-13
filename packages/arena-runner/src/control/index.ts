@@ -17,7 +17,7 @@ export type {
   BorderSettings,
   BuildProgressPayload,
   ClockPayload,
-  Competitor,
+  BotCompetitor,
   ControlCapability,
   ControlEnvelopeFields,
   ControlErrorCode,

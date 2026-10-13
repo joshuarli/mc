@@ -1,11 +1,17 @@
-import { parseStrictJson, StrictJsonError, type StrictJsonValue } from "./strict-json.js";
+import {
+  isWellFormedUnicode,
+  parseStrictJson,
+  StrictJsonError,
+  strictJsonNumberToken,
+  type StrictJsonValue
+} from "./strict-json.js";
 import type {
   AbortReason,
   AuthoritativeTick,
   BorderSettings,
   BuildProgressPayload,
   ClockPayload,
-  Competitor,
+  BotCompetitor,
   ControlCapability,
   ControlErrorCode,
   ControlMessage,
@@ -57,7 +63,7 @@ export function decodeControlEnvelope(input: string | Uint8Array): ControlMessag
     if (typeof input === "string" && new TextEncoder().encode(input).byteLength > MAX_CONTROL_FRAME_BYTES) {
       throw new ControlCodecError("oversized_frame", "control JSON exceeds the 1 MiB limit");
     }
-    return readEnvelope(parseStrictJson(input));
+    return deepFreeze(readEnvelope(parseStrictJson(input)));
   } catch (error) {
     if (error instanceof ControlCodecError) throw error;
     if (error instanceof StrictJsonError) {
@@ -110,11 +116,12 @@ export class ControlReceiver {
   private handshake: "hello" | "ready" | "complete" | "terminal" = "hello";
   private expectedReadyCorrelation: bigint | null = null;
   private helloCapabilities: readonly ControlCapability[] = [];
+  private readonly supportedCapabilities: ReadonlySet<ControlCapability>;
 
   constructor(
     private readonly runId: string,
     private readonly expectedToken: string,
-    private readonly supportedCapabilities: readonly ControlCapability[]
+    supportedCapabilities: readonly ControlCapability[]
   ) {
     if (!matchesPattern(runId, RUN_ID) || expectedToken.length === 0) {
       throw new ControlCodecError("invalid_handshake", "control receiver requires a valid run id and token");
@@ -124,6 +131,7 @@ export class ControlReceiver {
         || supportedCapabilities.some((capability) => !CAPABILITIES.has(capability))) {
       throw new ControlCodecError("invalid_handshake", "control receiver capability set is invalid");
     }
+    this.supportedCapabilities = new Set(supported);
   }
 
   get isReady(): boolean {
@@ -187,23 +195,22 @@ export class ControlReceiver {
     if (payload.token !== this.expectedToken) {
       throw new ControlCodecError("authentication_failed", "plugin control token is invalid");
     }
-    const supported = new Set(this.supportedCapabilities);
     for (const capability of payload.capabilities) {
-      if (!supported.has(capability)) {
+      if (!this.supportedCapabilities.has(capability)) {
         throw new ControlCodecError("unsupported_capability", "plugin announced an unsupported capability");
       }
     }
     if (!payload.capabilities.includes("hunger_games_v1")) {
       throw new ControlCodecError("unsupported_capability", "plugin does not support Hunger Games control");
     }
-    this.helloCapabilities = payload.capabilities;
+    this.helloCapabilities = Object.freeze([...payload.capabilities]);
   }
 }
 
 const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
-const CAPABILITIES = new Set<ControlCapability>(["hunger_games_v1", "dynamic_human_seat_v1"]);
+const CAPABILITIES = new Set<ControlCapability>(["hunger_games_v1"]);
 const ABORT_REASONS = new Set<AbortReason>([
-  "operator", "lease_lost", "invalid_world", "protocol_error", "human_wait_timeout", "runtime_timeout"
+  "operator", "lease_lost", "invalid_world", "protocol_error", "runtime_timeout"
 ]);
 const PHASES = new Set(["waiting", "countdown", "grace", "active", "finished", "aborted"]);
 
@@ -221,7 +228,7 @@ function isPluginEvent(message: ControlMessage): boolean {
 function readEnvelope(value: StrictJsonValue): ControlMessage {
   const envelope = readObject(value, "envelope", ["protocol", "run_id", "sequence", "correlation", "type", "payload"],
     ["protocol", "run_id", "sequence", "type", "payload"]);
-  if (readSafeInteger(envelope.protocol, "protocol") !== 1) {
+  if (readSafeInteger(envelope.protocol, "protocol", 0, Number.MAX_SAFE_INTEGER, envelope, "protocol") !== 1) {
     throw new ControlCodecError("unsupported_protocol", "control protocol version is unsupported", "protocol");
   }
   const runId = readString(envelope.run_id, "run_id", 1, 64, RUN_ID);
@@ -288,7 +295,7 @@ function readReady(value: StrictJsonValue): ReadyPayload {
       name: readString(server.name, "payload.server.name", 1, 128),
       version: readString(server.version, "payload.server.version", 1, 128),
       minecraft_version: readString(server.minecraft_version, "payload.server.minecraft_version", 1, 64),
-      protocol_version: readSafeInteger(server.protocol_version, "payload.server.protocol_version", 0, 2_147_483_647)
+      protocol_version: readSafeInteger(server.protocol_version, "payload.server.protocol_version", 0, 2_147_483_647, server, "protocol_version")
     },
     plugin: {
       name: readString(plugin.name, "payload.plugin.name", 1, 128),
@@ -315,8 +322,8 @@ function readBuildProgress(value: StrictJsonValue): BuildProgressPayload {
   const payload = readObject(value, "payload", ["stage", "completed", "total"], ["stage", "completed", "total"]);
   const stage = readString(payload.stage, "payload.stage", 1, 64);
   if (stage !== "validating" && stage !== "preparing_world" && stage !== "snapshotting") invalid("payload.stage", "unknown build stage");
-  const completed = readSafeInteger(payload.completed, "payload.completed", 0);
-  const total = readSafeInteger(payload.total, "payload.total", 0);
+  const completed = readSafeInteger(payload.completed, "payload.completed", 0, Number.MAX_SAFE_INTEGER, payload, "completed");
+  const total = readSafeInteger(payload.total, "payload.total", 0, Number.MAX_SAFE_INTEGER, payload, "total");
   if (completed > total) invalid("payload.completed", "completed cannot exceed total");
   return { stage, completed, total };
 }
@@ -381,32 +388,24 @@ function readBorderSettings(value: StrictJsonValue | undefined): BorderSettings 
   };
 }
 
-function readRoster(value: StrictJsonValue | undefined): readonly Competitor[] {
+function readRoster(value: StrictJsonValue | undefined): readonly BotCompetitor[] {
   const entries = readArray(value, "payload.roster", 1, 6);
   const participants = new Set<string>();
   const usernames = new Set<string>();
   const offlineUuids = new Set<string>();
-  let humans = 0;
-  const roster = entries.map((entry, index): Competitor => {
+  const roster = entries.map((entry, index): BotCompetitor => {
     const path = `payload.roster[${index}]`;
     const member = readObject(entry, path,
       ["kind", "seat", "participant_id", "username", "offline_uuid"],
-      ["kind", "seat", "participant_id"]);
+      ["kind", "seat", "participant_id", "username", "offline_uuid"]);
     const kind = readString(member.kind, `${path}.kind`, 1, 16);
-    const seat = readSafeInteger(member.seat, `${path}.seat`, 0, 5);
+    const seat = readSafeInteger(member.seat, `${path}.seat`, 0, 5, member, "seat");
     const participant = readString(member.participant_id, `${path}.participant_id`, 1, 128, /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/);
     if (participants.has(participant)) invalid(`${path}.participant_id`, "participant ids must be unique");
     participants.add(participant);
     if (seat !== index) invalid(`${path}.seat`, "roster seats must be ordered and contiguous from zero");
 
-    if (kind === "human") {
-      if (Object.hasOwn(member, "username") || Object.hasOwn(member, "offline_uuid") || seat !== 0 || humans !== 0) {
-        invalid(path, "human roster entry must reserve unique seat zero without a bound game identity");
-      }
-      humans++;
-      return { kind, seat: 0, participant_id: participant };
-    }
-    if (kind !== "bot") invalid(`${path}.kind`, "roster member kind must be bot or human");
+    if (kind !== "bot") invalid(`${path}.kind`, "all roster members must be bots");
     const username = readString(member.username, `${path}.username`, 1, 16, /^[A-Za-z0-9_]+$/);
     const offlineUuid = readString(member.offline_uuid, `${path}.offline_uuid`, 36, 36,
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
@@ -454,7 +453,7 @@ function readElimination(value: StrictJsonValue): EliminationPayload {
   const eliminations = events.map((entry, index) => {
     const path = `payload.eliminations[${index}]`;
     const elimination = readObject(entry, path, ["seat", "cause"], ["seat", "cause"]);
-    const seat = readSafeInteger(elimination.seat, `${path}.seat`, 0, 5);
+    const seat = readSafeInteger(elimination.seat, `${path}.seat`, 0, 5, elimination, "seat");
     if (seat <= previousSeat) invalid(`${path}.seat`, "eliminations must be ordered by unique seat");
     previousSeat = seat;
     const cause = readEliminationCause(elimination.cause, `${path}.cause`);
@@ -473,7 +472,7 @@ function readOutcome(value: StrictJsonValue): OutcomePayload {
     if (!Object.hasOwn(payload, "winner_seat") || Object.hasOwn(payload, "reason") || at === null) {
       invalid("payload", "winner outcome requires a winner seat and authoritative tick only");
     }
-    const winnerSeat = readSafeInteger(payload.winner_seat, "payload.winner_seat", 0, 5);
+    const winnerSeat = readSafeInteger(payload.winner_seat, "payload.winner_seat", 0, 5, payload, "winner_seat");
     if (survivors.length !== 1 || survivors[0] !== winnerSeat) invalid("payload.survivors", "winner must be the sole survivor");
     return { kind, winner_seat: winnerSeat, survivors: [winnerSeat], at };
   }
@@ -503,9 +502,9 @@ function readMetrics(value: StrictJsonValue): MetricsPayload {
     ["server_tick_duration_micros", "critical_queue_depth", "dropped_optional_metrics"],
     ["server_tick_duration_micros", "critical_queue_depth", "dropped_optional_metrics"]);
   return {
-    server_tick_duration_micros: readSafeInteger(payload.server_tick_duration_micros, "payload.server_tick_duration_micros", 0),
-    critical_queue_depth: readSafeInteger(payload.critical_queue_depth, "payload.critical_queue_depth", 0),
-    dropped_optional_metrics: readSafeInteger(payload.dropped_optional_metrics, "payload.dropped_optional_metrics", 0)
+    server_tick_duration_micros: readSafeInteger(payload.server_tick_duration_micros, "payload.server_tick_duration_micros", 0, Number.MAX_SAFE_INTEGER, payload, "server_tick_duration_micros"),
+    critical_queue_depth: readSafeInteger(payload.critical_queue_depth, "payload.critical_queue_depth", 0, Number.MAX_SAFE_INTEGER, payload, "critical_queue_depth"),
+    dropped_optional_metrics: readSafeInteger(payload.dropped_optional_metrics, "payload.dropped_optional_metrics", 0, Number.MAX_SAFE_INTEGER, payload, "dropped_optional_metrics")
   };
 }
 
@@ -530,7 +529,7 @@ function readSeatList(value: StrictJsonValue | undefined, path: string): readonl
   const values = readArray(value, path, 0, 6);
   let previous = -1;
   return values.map((entry, index) => {
-    const seat = readSafeInteger(entry, `${path}[${index}]`, 0, 5);
+    const seat = readSafeInteger(entry, `${path}[${index}]`, 0, 5, values, index);
     if (seat <= previous) invalid(`${path}[${index}]`, "seats must be ordered and unique");
     previous = seat;
     return seat;
@@ -585,7 +584,7 @@ function readString(
   maxLength: number,
   pattern?: RegExp
 ): string {
-  if (typeof value !== "string" || value.length < minLength || value.length > maxLength || (pattern && !matchesPattern(value, pattern))) {
+  if (typeof value !== "string" || Array.from(value).length < minLength || Array.from(value).length > maxLength || (pattern && !matchesPattern(value, pattern))) {
     invalid(path, "must be a string with the required length and format");
   }
   return value;
@@ -596,11 +595,32 @@ function readBoolean(value: StrictJsonValue | undefined, path: string): boolean 
   return value;
 }
 
-function readSafeInteger(value: StrictJsonValue | undefined, path: string, min = 0, max = Number.MAX_SAFE_INTEGER): number {
-  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < min || value > max) {
+function readSafeInteger(
+  value: StrictJsonValue | undefined,
+  path: string,
+  min = 0,
+  max = Number.MAX_SAFE_INTEGER,
+  owner?: object,
+  key?: string | number
+): number {
+  const token = owner === undefined || key === undefined ? undefined : strictJsonNumberToken(owner, key);
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || (token !== undefined && !isIntegerNumberToken(token))
+      || value < min || value > max) {
     invalid(path, "must be a safe integer in range");
   }
   return value;
+}
+
+function isIntegerNumberToken(token: string): boolean {
+  const match = /^-?(\d+)(?:\.(\d+))?(?:[eE]([+-]?\d+))?$/.exec(token);
+  if (!match) return false;
+  const fraction = match[2] ?? "";
+  const exponent = match[3] === undefined ? 0 : Number(match[3]);
+  const decimalPlaces = fraction.length - exponent;
+  if (decimalPlaces <= 0) return true;
+  const digits = `${match[1]}${fraction}`;
+  if (decimalPlaces >= digits.length) return /^0+$/.test(digits);
+  return new RegExp(`0{${decimalPlaces}}$`).test(digits);
 }
 
 function readFiniteNumber(value: StrictJsonValue | undefined, path: string): number {
@@ -628,7 +648,11 @@ function matchesPattern(value: string, pattern: RegExp): boolean {
 }
 
 function toStrictJsonValue(value: unknown, seen: Set<object>): StrictJsonValue {
-  if (value === null || typeof value === "string" || typeof value === "boolean") return value;
+  if (value === null || typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    if (!isWellFormedUnicode(value)) throw new ControlCodecError("invalid_message", "control message contains an unpaired surrogate");
+    return value;
+  }
   if (typeof value === "bigint") return value.toString(10);
   if (typeof value === "number") {
     if (!Number.isFinite(value) || (Number.isInteger(value) && !Number.isSafeInteger(value))) {
@@ -658,6 +682,7 @@ function toStrictJsonValue(value: unknown, seen: Set<object>): StrictJsonValue {
     }
     const result: { [key: string]: StrictJsonValue } = Object.create(null) as { [key: string]: StrictJsonValue };
     for (const key of Object.getOwnPropertyNames(value)) {
+      if (!isWellFormedUnicode(key)) throw new ControlCodecError("invalid_message", "control message contains an unpaired surrogate key");
       const descriptor = Object.getOwnPropertyDescriptor(value, key);
       if (!descriptor || !descriptor.enumerable || !("value" in descriptor)) {
         throw new ControlCodecError("invalid_message", "control message contains a hidden or accessor field");
@@ -668,6 +693,14 @@ function toStrictJsonValue(value: unknown, seen: Set<object>): StrictJsonValue {
   } finally {
     seen.delete(value);
   }
+}
+
+function deepFreeze<T>(value: T): T {
+  if (value !== null && typeof value === "object" && !Object.isFrozen(value)) {
+    for (const child of Object.values(value)) deepFreeze(child);
+    Object.freeze(value);
+  }
+  return value;
 }
 
 function sortObjectKeys(value: StrictJsonValue): StrictJsonValue {

@@ -25,10 +25,28 @@ export class StrictJsonError extends Error {
     this.offset = offset;
   }
 }
-
 const MAX_NESTING = 32;
 const JSON_WHITESPACE = new Set([" ", "\t", "\n", "\r"]);
 const NUMBER_PREFIX = /-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/y;
+const numberTokens = new WeakMap<object, Map<string | number, string>>();
+
+export function strictJsonNumberToken(owner: object, key: string | number): string | undefined {
+  return numberTokens.get(owner)?.get(key);
+}
+
+export function isWellFormedUnicode(value: string): boolean {
+  for (let index = 0; index < value.length; index++) {
+    const code = value.charCodeAt(index);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (next < 0xdc00 || next > 0xdfff) return false;
+      index++;
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      return false;
+    }
+  }
+  return true;
+}
 
 export function parseStrictJson(input: string | Uint8Array): StrictJsonValue {
   const source = typeof input === "string" ? input : decodeUtf8(input);
@@ -105,7 +123,9 @@ class JsonParser {
       seen.add(key);
       this.skipWhitespace();
       if (!this.consume(":")) this.invalid("object key must be followed by a colon");
-      result[key] = this.readValue(depth);
+      const value = this.readValue(depth);
+      result[key] = value;
+      if (typeof value === "number") this.recordNumberToken(result, key);
       this.skipWhitespace();
       if (this.consume("}")) return result;
       if (!this.consume(",")) this.invalid("object fields must be separated by commas");
@@ -120,7 +140,9 @@ class JsonParser {
     if (this.consume("]")) return result;
 
     while (true) {
-      result.push(this.readValue(depth));
+      const value = this.readValue(depth);
+      result.push(value);
+      if (typeof value === "number") this.recordNumberToken(result, result.length - 1);
       this.skipWhitespace();
       if (this.consume("]")) return result;
       if (!this.consume(",")) this.invalid("array values must be separated by commas");
@@ -176,14 +198,40 @@ class JsonParser {
     const match = NUMBER_PREFIX.exec(this.source);
     if (!match) this.invalid("invalid JSON value");
     this.offset += match[0].length;
-    const value = Number(match[0]);
+    const token = match[0];
+    const exponentMatch = /[eE]([+-]?)(\d+)$/.exec(token);
+    if (exponentMatch) {
+      const exponentDigits = exponentMatch[2]!;
+      const exponent = exponentDigits.length > 5 ? Infinity : Number(exponentDigits) * (exponentMatch[1] === "-" ? -1 : 1);
+      if (!Number.isFinite(exponent) || Math.abs(exponent) > 10_000) {
+        throw new StrictJsonError("invalid_json", this.offset - token.length, "JSON number exponent exceeds the supported range");
+      }
+    }
+    const value = Number(token);
     if (!Number.isFinite(value)) {
-      throw new StrictJsonError("invalid_json", this.offset - match[0].length, "JSON number is not finite");
+      throw new StrictJsonError("invalid_json", this.offset - token.length, "JSON number is not finite");
+    }
+    if (value === 0 && /[1-9]/.test(token.split(/[eE]/, 1)[0]!)) {
+      throw new StrictJsonError("invalid_json", this.offset - token.length, "JSON number underflows to zero");
     }
     if (Number.isInteger(value) && !Number.isSafeInteger(value)) {
-      throw new StrictJsonError("unsafe_number", this.offset - match[0].length, "JSON integer exceeds the safe number range");
+      throw new StrictJsonError("unsafe_number", this.offset - token.length, "JSON integer exceeds the safe number range");
     }
+    this.lastNumberToken = token;
     return value;
+  }
+
+  private lastNumberToken: string | null = null;
+
+  private recordNumberToken(owner: object, key: string | number): void {
+    const token = this.lastNumberToken;
+    if (token === null) throw new Error("missing JSON number token");
+    let tokens = numberTokens.get(owner);
+    if (!tokens) {
+      tokens = new Map();
+      numberTokens.set(owner, tokens);
+    }
+    tokens.set(key, token);
   }
 
   private skipWhitespace(): void {
@@ -199,18 +247,4 @@ class JsonParser {
   private invalid(message: string): never {
     throw new StrictJsonError("invalid_json", this.offset, message);
   }
-}
-
-function isWellFormedUnicode(value: string): boolean {
-  for (let index = 0; index < value.length; index++) {
-    const code = value.charCodeAt(index);
-    if (code >= 0xd800 && code <= 0xdbff) {
-      const next = value.charCodeAt(index + 1);
-      if (next < 0xdc00 || next > 0xdfff) return false;
-      index++;
-    } else if (code >= 0xdc00 && code <= 0xdfff) {
-      return false;
-    }
-  }
-  return true;
 }
