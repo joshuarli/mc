@@ -62,7 +62,7 @@ test('Mineflayer 4.39 encodes sprint actions with the protocol 775 mapper', () =
 test('the entity action string mapper correction is limited to protocol 775', () => {
   const bot = makeBot();
   bot.bot.protocolVersion = '776';
-  const nativeSupportFeature = bot.bot.supportFeature;
+  const nativeSupportFeature = bot.bot.supportFeature as (feature: string) => boolean;
 
   bindEntityActionStringMapperFeature(bot.bot);
 
