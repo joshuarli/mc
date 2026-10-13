@@ -184,7 +184,7 @@ export class LivePolicyLoop {
     if (previous !== undefined && tick - previous < CIVILIZATION_TEAM_MESSAGE_MIN_INTERVAL_TICKS) return;
     if (observation.observedResources.kind !== 'current') return;
     const resource = observation.observedResources.value.find((value) => value.kind !== 'outpostCell');
-    if (resource === undefined || resource.kind === 'outpostCell') return;
+    if (resource === undefined) return;
     const report = { sourceTick: tick, declaredStale: false, kind: 'resourceSighting',
       resource: resource.kind === 'logBlock' ? 'oakLogBlock' : resource.kind === 'container' ? 'container'
         : resource.item === 'oak_log' ? 'oakLogDrop' : 'oakPlankDrop', position: resource.position };

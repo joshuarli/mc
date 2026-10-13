@@ -101,7 +101,9 @@ export async function eliminateOpponentWithSkillAttacks(
   const target = competitorForSeat(active, targetSeat);
   assert.notEqual(attacker.identity.username, target.identity.username);
 
-  const agent = await waitForCurrentAgent(attacker.client, signal);
+  const gameplay = attacker.gameplay;
+  if (gameplay.mode !== "hunger_games") throw new Error("duel evaluator requires Hunger Games");
+  const agent = await waitForCurrentAgent(gameplay.client, signal);
   const weaponUpgrade = agent.value.upgrades.find(({ equipmentSlot }) => equipmentSlot === "weapon");
   if (weaponUpgrade) {
     assert.deepStrictEqual(
@@ -144,7 +146,7 @@ export async function eliminateOpponentWithSkillAttacks(
 }
 
 async function waitForCurrentAgent(
-  client: AcceptanceRunContext["competitors"][number]["client"],
+  client: Extract<AcceptanceRunContext["competitors"][number]["gameplay"], { readonly mode: "hunger_games" }>["client"],
   signal: AbortSignal,
 ) {
   const deadline = Date.now() + AGENT_OBSERVATION_TIMEOUT_MS;
