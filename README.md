@@ -2,7 +2,7 @@
 
 Arena is a headless Minecraft competition stack. Mineflayer bots are the only clients; the Paper plugin owns authoritative world and match rules. Toolchain versions are pinned in [`versions.lock.toml`](versions.lock.toml), while package versions are pinned in the npm manifests and lockfile. See [compatibility](docs/compatibility.md) for the full matrix.
 
-The current TypeScript runner supports offline scenario preparation and trace inspection, reporting, and comparison. Full live-run supervision and gameplay acceptance are still in progress.
+The TypeScript runner supports configured Paper runs, scenario preparation, stopped-run inspection and cleanup, and trace inspection, policy replay, reporting, and comparison. Runtime lifecycle and authority behavior have focused live proofs; full gameplay acceptance remains in progress.
 
 ## Set up and check
 
@@ -34,6 +34,6 @@ Use `./arena help` for launcher syntax. The implemented runner commands are:
 
 ## Current proof
 
-The two-client Paper/Mineflayer stack smoke passed on macOS arm64 with the pinned versions. Linux x86_64 has not been verified. This smoke proves protocol and ordinary client-action compatibility for its fixture only; configured-map reset, authoritative match outcomes, full gameplay acceptance, and performance remain unverified. See [compatibility](docs/compatibility.md) and the [acceptance report](docs/acceptance-report.md) for current case status.
+Live Paper proofs cover the two-client stack, configured-map reset, eight authority variants, extended-grace duel, fairness, policy replay, and ten-cycle lifecycle/resource cleanup. Four fault selectors have passed individually; the SIGINT selector still needs its corrected operator-abort assertion and rerun. The current legal-player gameplay run remains parked after an unexplained ramp timeout. These results do not establish six-seat gameplay or civilization acceptance, a frozen baseline, delivery readiness, performance, a fresh-checkout run, or Linux support. See [compatibility](docs/compatibility.md) and the [acceptance report](docs/acceptance-report.md) for current case status.
 
 Pinned toolchains, downloads, dependencies, generated builds, test runs, and prepared run data stay under the repository-local `.work/` directory.
