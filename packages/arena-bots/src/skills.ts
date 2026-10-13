@@ -39,9 +39,20 @@ type MineflayerEntity = Bot['entity'];
 type BoundedPathfinder = Bot['pathfinder'] & { searchRadius: number };
 type PathfinderGoal = import('mineflayer-pathfinder').goals.Goal;
 
+interface WindowItemsPacket {
+  readonly windowId?: unknown;
+  readonly items?: readonly unknown[];
+}
+
 type MineflayerWindowSynchronizer = Bot & {
   readonly _syncWindow?: (window: MineflayerWindow) => Promise<void>;
 };
+
+interface WindowTransferReceipt {
+  readonly promise: Promise<void>;
+  arm(): void;
+  dispose(): void;
+}
 
 interface ActiveSkill {
   readonly controller: AbortController;
@@ -526,21 +537,39 @@ export class SkillOwner {
       const inventoryBefore = countWindowItem(window, item, window.inventoryStart, window.inventoryEnd);
       const containerBefore = countWindowItem(window, item, 0, window.inventoryStart);
       const syncWindow = requireWindowSynchronizer(this.#bot);
+      const receipt = waitForWindowTransferReceipt(
+        this.#bot,
+        window,
+        item,
+        inventoryBefore,
+        containerBefore,
+        active.controller.signal,
+        ACTION_TIMEOUT_MS,
+      );
+      const receiptError = receipt.promise.then(() => null, (error: unknown) => error);
       try {
         await this.#awaitInventoryOperation(
           active,
           `withdraw ${item.name}`,
-          () => this.#bot.clickWindow(slot, 0, 1),
+          () => {
+            const click = this.#bot.clickWindow(slot, 0, 1);
+            receipt.arm();
+            return click;
+          },
         );
         await this.#awaitInventoryOperation(
           active,
           `synchronize window after withdrawing ${item.name}`,
           () => syncWindow(window),
         );
+        const error = await receiptError;
+        if (error !== null) throw error;
       } catch (error) {
         if (active.controller.signal.aborted) throw new SkillInterrupted();
         if (error instanceof SkillFault) throw error;
         throw new SkillFault('serverRejected', errorMessage(error));
+      } finally {
+        receipt.dispose();
       }
       throwIfInterrupted(active.controller.signal);
       if (this.#bot.currentWindow !== window) {
@@ -1056,6 +1085,65 @@ function requireWindowSynchronizer(bot: Bot): (window: MineflayerWindow) => Prom
     throw new SkillFault('preconditionsNotMet', 'Mineflayer cannot synchronize the open container window');
   }
   return (window) => synchronize.call(bot, window);
+}
+
+/** Watches full client snapshots until both sides of a requested container transfer are visible. */
+function waitForWindowTransferReceipt(
+  bot: Bot,
+  window: MineflayerWindow,
+  target: MineflayerItem,
+  inventoryBefore: number,
+  containerBefore: number,
+  signal: AbortSignal,
+  timeoutMs: number,
+): WindowTransferReceipt {
+  const client = bot._client;
+  let armed = false;
+  let settled = false;
+  let timeout: NodeJS.Timeout | null = null;
+  let resolvePromise!: () => void;
+  let rejectPromise!: (error: unknown) => void;
+  const promise = new Promise<void>((resolve, reject) => {
+    resolvePromise = resolve;
+    rejectPromise = reject;
+  });
+  const onAbort = () => finish(new SkillInterrupted());
+  const onWindowItems = (packet: WindowItemsPacket) => {
+    if (!armed || packet.windowId !== window.id || !Array.isArray(packet.items)
+      || packet.items.length !== window.slots.length || bot.currentWindow !== window) return;
+
+    // Mineflayer's window_items handler updates this window before later client listeners run.
+    if (countWindowItem(window, target, window.inventoryStart, window.inventoryEnd) > inventoryBefore
+      && countWindowItem(window, target, 0, window.inventoryStart) < containerBefore) {
+      finish();
+    }
+  };
+  const cleanup = () => {
+    if (timeout !== null) clearTimeout(timeout);
+    client.removeListener('window_items', onWindowItems);
+    signal.removeEventListener('abort', onAbort);
+  };
+  const finish = (error?: unknown) => {
+    if (settled) return;
+    settled = true;
+    cleanup();
+    if (error === undefined) resolvePromise();
+    else rejectPromise(error);
+  };
+
+  timeout = setTimeout(
+    () => finish(new SkillFault('noProgress', 'a full window snapshot did not confirm the container transfer')),
+    timeoutMs,
+  );
+  client.on('window_items', onWindowItems);
+  signal.addEventListener('abort', onAbort, { once: true });
+  if (signal.aborted) onAbort();
+
+  return {
+    promise,
+    arm: () => { armed = true; },
+    dispose: () => finish(new SkillInterrupted()),
+  };
 }
 
 function slotCount(bot: Bot, slot: number, target: MineflayerItem): number {

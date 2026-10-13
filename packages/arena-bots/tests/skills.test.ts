@@ -208,17 +208,45 @@ test('container open synchronizes each withdrawn item from the full window snaps
   }
 });
 
-test('container open reports noProgress when the server snapshot rolls back a click', async () => {
+test('container open waits past an earlier stale full-window snapshot', async () => {
   const harness = makeHarness();
-  const transfer = prepareContainerTransfer(harness, false);
+  const transfer = prepareContainerTransfer(harness, true, true);
 
   try {
     assert.deepEqual(await harness.owner.run({
       kind: 'containerOpen',
       position: blockPosition(1, 64, 0),
-    }), { kind: 'failed', cause: 'noProgress' });
+    }), { kind: 'succeeded' });
+    assert.equal(transfer.clicks(), 2);
+    assert.equal(transfer.syncs(), 2);
+    assert.deepEqual(harness.bot.inventory.items().map((item) => item.name), ['bread', 'iron_sword']);
+    assert.equal(transfer.window.slots[0], null);
+    assert.equal(transfer.window.slots[1], null);
+  } finally {
+    await harness.owner.close();
+    harness.observer.close();
+  }
+});
+
+test('container open reports noProgress after repeated stale snapshots', async (context) => {
+  context.mock.timers.enable({ apis: ['setTimeout'] });
+  const harness = makeHarness();
+  const transfer = prepareContainerTransfer(harness, false, false, 1_000, 3);
+
+  try {
+    const running = harness.owner.run({
+      kind: 'containerOpen',
+      position: blockPosition(1, 64, 0),
+    });
+    await waitUntil(() => transfer.syncs() > 0);
+    for (let snapshot = 0; snapshot < 5; snapshot += 1) {
+      context.mock.timers.tick(1_000);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    assert.deepEqual(await running, { kind: 'failed', cause: 'noProgress' });
     assert.equal(transfer.clicks(), 1);
     assert.equal(transfer.syncs(), 1);
+    assert.ok(transfer.snapshots() >= 4);
     assert.equal(transfer.window.slots[0]?.name, 'bread');
     assert.equal(harness.bot.inventory.items().length, 0);
     assert.equal(harness.bot.currentWindow, null);
@@ -228,7 +256,13 @@ test('container open reports noProgress when the server snapshot rolls back a cl
   }
 });
 
-function prepareContainerTransfer(harness: ReturnType<typeof makeHarness>, applyWithdrawal: boolean) {
+function prepareContainerTransfer(
+  harness: ReturnType<typeof makeHarness>,
+  applyWithdrawal: boolean,
+  staleFirstSnapshot = false,
+  snapshotDelayMs = 0,
+  additionalStaleSnapshots = 0,
+) {
   prepareChest(harness.bot);
   Object.assign(harness.bot.registry.foodsByName, { bread: {} });
   type Item = NonNullable<Bot['inventory']['slots'][number]>;
@@ -237,6 +271,7 @@ function prepareContainerTransfer(harness: ReturnType<typeof makeHarness>, apply
   const slots = new Array(63).fill(null) as (Item | null)[];
   slots[0] = bread;
   slots[1] = sword;
+  const staleSlots = [...slots];
   const serverSlots = [...slots];
   const window = {
     id: 2,
@@ -248,6 +283,7 @@ function prepareContainerTransfer(harness: ReturnType<typeof makeHarness>, apply
   } as unknown as NonNullable<Bot['currentWindow']>;
   let clicks = 0;
   let syncs = 0;
+  let snapshots = 0;
   Object.assign(harness.bot, {
     supportFeature: (feature: string) => feature === 'stateIdUsed',
     lookAt: async () => undefined,
@@ -271,13 +307,30 @@ function prepareContainerTransfer(harness: ReturnType<typeof makeHarness>, apply
     _syncWindow: async (receivedWindow: NonNullable<Bot['currentWindow']>) => {
       assert.equal(receivedWindow, window);
       syncs += 1;
-      for (let slot = 0; slot < serverSlots.length; slot += 1) {
-        window.slots[slot] = serverSlots[slot] ?? null;
+      const applySnapshot = (snapshot: readonly (Item | null)[]) => {
+        snapshots += 1;
+        for (let slot = 0; slot < snapshot.length; slot += 1) {
+          window.slots[slot] = snapshot[slot] ?? null;
+        }
+        for (let slot = window.inventoryStart; slot < window.inventoryEnd; slot += 1) {
+          const inventorySlot = slot - (window.inventoryStart - harness.bot.inventory.inventoryStart);
+          harness.bot.inventory.slots[inventorySlot] = snapshot[slot] ?? null;
+        }
+        harness.bot._client.emit('window_items', { windowId: window.id, items: snapshot });
+        harness.bot.emit(`setWindowItems:${window.id}` as never);
+      };
+      if (staleFirstSnapshot && syncs === 1) {
+        applySnapshot(staleSlots);
+        setImmediate(() => applySnapshot(serverSlots));
+        return;
       }
-      for (let slot = window.inventoryStart; slot < window.inventoryEnd; slot += 1) {
-        const inventorySlot = slot - (window.inventoryStart - harness.bot.inventory.inventoryStart);
-        harness.bot.inventory.slots[inventorySlot] = serverSlots[slot] ?? null;
+      if (snapshotDelayMs > 0) {
+        for (let snapshot = 1; snapshot <= additionalStaleSnapshots; snapshot += 1) {
+          setTimeout(() => applySnapshot(serverSlots), snapshotDelayMs * (snapshot + 1));
+        }
+        await new Promise<void>((resolve) => setTimeout(resolve, snapshotDelayMs));
       }
+      applySnapshot(serverSlots);
     },
     closeWindow: async () => {
       for (let slot = window.inventoryStart; slot < window.inventoryEnd; slot += 1) {
@@ -288,7 +341,7 @@ function prepareContainerTransfer(harness: ReturnType<typeof makeHarness>, apply
       harness.bot.emit('windowClose', window as never);
     },
   });
-  return { window, clicks: () => clicks, syncs: () => syncs };
+  return { window, clicks: () => clicks, syncs: () => syncs, snapshots: () => snapshots };
 }
 
 function makeHarness(onPathStarted: () => void = () => undefined, onPathStopped: () => void = () => undefined) {
