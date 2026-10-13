@@ -5,7 +5,7 @@ import type { Bot } from 'mineflayer';
 import {
   agentObservation, agentState, blockPosition, currentKnowledge, emptyEquipment,
   observationSequence, PolicyParams, tick, unknownKnowledge, worldBorder,
-  visibleOpponent, visibleDrop, entityId, type SkillOutcome, civilizationPolicyContext, civilizationProfileForSeat, civilizationObservation, skillProgress, materialStack,
+  visibleOpponent, visibleDrop, entityId, type SkillOutcome, civilizationPolicyContext, civilizationProfileForSeat, civilizationObservation, civilizationTeamMessage, skillProgress, materialStack,
 } from '@arena/core';
 import type { MineflayerArenaClient, MineflayerCivilizationClient } from '@arena/bots';
 import { LivePolicyLoop, type PolicyActivityEvent } from '../src/runtime/live-policy-loop.js';
@@ -518,7 +518,7 @@ test('civilization decisions receive the current failed shared-action feedback b
 });
 
 
-for (const task of ['craft', 'gatherApproach'] as const) test(`civilization loop feeds ${task} failure and settled receipts with shared ticks`, async () => {
+for (const task of ['craft', 'gatherApproach', 'reportedGatherApproach'] as const) test(`civilization loop feeds ${task} failure and settled receipts with shared ticks`, async () => {
   const baseline = competitor(0, async () => ({ kind: 'succeeded' }), false, 0);
   const profile = civilizationProfileForSeat(0)!;
   const context = civilizationPolicyContext({ ...profile, objective: {
@@ -531,10 +531,13 @@ for (const task of ['craft', 'gatherApproach'] as const) test(`civilization loop
   const client: MineflayerCivilizationClient = {
     observe: (value) => civilizationObservation({ base: baseline.client.observe(value),
       ownMaterials: currentKnowledge(task === 'craft' ? [materialStack(9, 'oak_log', 4)] : []),
-      observedResources: currentKnowledge(task === 'craft' ? [] : [{ kind: 'logBlock', position: blockPosition(10, 64, 0) }]), teamMessages: [],
+      observedResources: currentKnowledge(task === 'gatherApproach' ? [{ kind: 'logBlock', position: blockPosition(10, 64, 0) }] : []),
+      teamMessages: task === 'reportedGatherApproach' && (value === 0 || value >= 20)
+        ? [civilizationTeamMessage({ sender: 1, sourceTick: value, declaredStale: false, kind: 'resourceSighting',
+          resource: 'oakLogBlock', position: blockPosition(10, 64, 0) })] : [],
     }, context),
     run: async (intent) => {
-      assert.equal(task, 'gatherApproach');
+      assert.notEqual(task, 'craft');
       assert.equal(intent.kind, 'navigate');
       return result();
     },
