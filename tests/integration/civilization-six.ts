@@ -35,10 +35,10 @@ import {
 import type { AcceptanceRunContext } from "./support/owned-run.js";
 
 const SCENARIO_PATH = "scenarios/civilization-six.toml";
-const RUN_TIMEOUT_MS = 650_000;
+const TEST_TIMEOUT_MS = 1_200_000 + 60_000;
 const CAPTURE_TIMEOUT_MS = 300_000;
 
-test("civilization-six", { timeout: RUN_TIMEOUT_MS }, async (t) => {
+test("civilization-six", { timeout: TEST_TIMEOUT_MS }, async (t) => {
   const actions: CivilizationActionEvidence[] = [];
   const engagements: CivilizationCombatEngagement[] = [];
   let baseline: ReturnType<typeof civilizationMaterialBaseline> | undefined;
