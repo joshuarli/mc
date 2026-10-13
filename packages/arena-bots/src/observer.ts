@@ -189,7 +189,11 @@ export class MineflayerObserver {
     const entity = this.#bot.entity;
     if (entity === undefined || entity === null || !isFinitePosition(entity.position)) return null;
     if (!Number.isFinite(this.#bot.health) || !Number.isFinite(this.#bot.food)) return null;
-    const healthHalfHearts = this.#bot.health * 2;
+    if (this.#bot.health < 0) {
+      throw new RangeError(`health must be between 0 and 40 half-hearts, received ${this.#bot.health}`);
+    }
+    // Mineflayer already reports half-hearts; ceiling preserves integer policy thresholds and living health.
+    const healthHalfHearts = Math.ceil(this.#bot.health);
     if (!Number.isSafeInteger(healthHalfHearts) || !Number.isSafeInteger(this.#bot.food)) return null;
 
     const inventory = this.#bot.inventory;
