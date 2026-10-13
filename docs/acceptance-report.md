@@ -146,6 +146,10 @@ At `e6357db`, the five focused Java test classes passed all 44 cases, including 
 
 ## Contract changes and measurements
 
+At `b3f5e9d`, `make server` reserves one of the ordinary scenario's four spectator slots for an external native client, starting six competitors and three automated spectators. Other runs retain four automated spectators. The additive runtime `spectatorMode` accepts `automated` or `reserveExternalSlot`; `--reserve-external-spectator-slot` selects the latter and rejects zero capacity before preparation. The runtime also requires explicit `acceptMinecraftEula: true`, and the CLI requires `--accept-minecraft-eula`; no shipped consent default exists. Optional `onRosterReady` reports authenticated server connection details before match start. An independent runner build and eight focused roster/CLI cases passed, including the pre-preparation rejection. Parent-workspace and repository `make -n server` resolve to the same launcher command. An actual graphical-client connection has not been tested.
+
+Independent civilization source preparation at `e6e27eb` (`campaign/civ-rules-prep`) ports only the pure Java tick controller and its tests to the current Hunger controller API. All seven named `CivilizationMatchControllerTest` cases passed with pinned Java and strict offline Gradle verification. The branch remains unmerged and has no plugin, scenario, or protocol wiring; M1 still gates civilization integration and live acceptance.
+
 The runtime exposes `run --scenario`, read-only `validate --scenario`, stopped-run inspection, and explicit selected-run `gc --dry-run` / `gc --apply`. Scripted acceptance cases select an evaluator driver; normal Hunger runs retain the baseline policy and configured strategy cadence. Conflict and cancellation errors use exits 4 and 130, including independent cleanup failures. Evaluators may finish their assertions after outcome before cancellation, and baseline policy actions stop on actual death or spectator mode. Configured reset and stopped inspection passed. No six-seat or performance gate measurements were collected.
 
 ## Compact retained evidence

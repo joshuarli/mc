@@ -36,7 +36,7 @@ Use `./arena help` for launcher syntax. The implemented runner commands are:
 
 Run `make server` from the repository (or the installed parent workspace shortcut). Explicit EULA acceptance is required: use `make server ACCEPT_MINECRAFT_EULA=1`, or set `ACCEPT_MINECRAFT_EULA := 1` in the ignored `.work/arena/server.mk` after accepting the Minecraft EULA. No acceptance is shipped by default.
 
-The target starts `scenarios/hunger-six.toml` and prints the actual Minecraft Java Edition version and connection address after server and bot readiness. Use a matching native client and connect to `127.0.0.1:25565` as a spectator. The server stops when the match ends or when you press Ctrl-C. Plain `make` only shows help.
+The target starts `scenarios/hunger-six.toml` with six bots and three automated spectators, reserving the fourth spectator slot for your client. It prints the actual Minecraft Java Edition version and connection address after server and bot readiness. Use a matching native client and connect to `127.0.0.1:25565` as a spectator. The server stops when the match ends or when you press Ctrl-C. Plain `make` only shows help.
 
 ## Current proof
 
