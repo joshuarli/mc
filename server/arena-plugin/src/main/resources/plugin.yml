@@ -1,0 +1,4 @@
+name: ArenaFoundation
+version: 0.1.0
+main: dev.arena.foundation.ArenaFoundationPlugin
+api-version: '${pluginApiVersion}'

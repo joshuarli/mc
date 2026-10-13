@@ -2,19 +2,304 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-mkdir -p "$root/.work/tmp" "$root/.work/arena"
-export TMPDIR="$root/.work/tmp"
-export CARGO_HOME="$root/.work/arena/cargo"
-export CARGO_TARGET_DIR="$root/.work/arena/target"
-export RUSTUP_HOME="$root/.work/arena/rustup"
-
 fail() {
     printf '%s\n' "arena: $*" >&2
     exit 2
 }
 
+ensure_work_directory() {
+    path=$1
+    [ ! -L "$path" ] || fail "working directory must not be a symlink: $path"
+    if [ ! -d "$path" ]; then
+        mkdir "$path" || fail "create working directory: $path"
+    fi
+    [ -d "$path" ] && [ ! -L "$path" ] || fail "working directory must be a real directory: $path"
+}
+
+ensure_work_excluded() {
+    exclude=$(git -C "$root" rev-parse --git-path info/exclude) || fail "locate the repository-local Git exclude file"
+    [ -f "$exclude" ] || fail "repository-local Git exclude file is unavailable: $exclude"
+    if ! grep -Fqx '.work/' "$exclude"; then
+        printf '\n.work/\n' >> "$exclude" || fail "exclude project-local .work state from Git"
+    fi
+}
+
+ensure_work_excluded
+ensure_work_directory "$root/.work"
+ensure_work_directory "$root/.work/tmp"
+ensure_work_directory "$root/.work/arena"
+export TMPDIR="$root/.work/tmp"
+export CARGO_HOME="$root/.work/arena/cargo"
+export CARGO_TARGET_DIR="$root/.work/arena/target"
+export RUSTUP_HOME="$root/.work/arena/rustup"
+export GRADLE_USER_HOME="$root/.work/arena/gradle"
+ensure_work_directory "$GRADLE_USER_HOME"
+download_tmp=
+jdk_stage=
+extract_stage=
+
+cleanup_work_files() {
+    [ -z "$download_tmp" ] || rm -f -- "$download_tmp"
+    [ -z "$jdk_stage" ] || rm -rf -- "$jdk_stage"
+    [ -z "$extract_stage" ] || rm -rf -- "$extract_stage"
+}
+trap cleanup_work_files EXIT
+
+verify_jdk() {
+    java=$1
+    version=$2
+    runtime_build=$3
+    [ -x "$java" ] || fail "pinned JDK executable is unavailable: $java"
+    java_output=$("$java" -version 2>&1) || fail "pinned JDK does not start"
+    printf '%s\n' "$java_output" | awk -v version="$version" -v runtime_build="$runtime_build" '
+        index($0, "openjdk version \"" version "\"") { found_version = 1 }
+        index($0, "build " runtime_build) { found_build = 1 }
+        END { exit !(found_version && found_build) }
+    ' || fail "JDK version or runtime build does not match versions.lock.toml"
+}
+
+locked_value() {
+    key=$1
+    value=$(awk -F '"' -v name="$key" '$0 ~ "^" name " = " { print $2; matches++ } END { if (matches != 1) exit 1 }' "$root/versions.lock.toml") || fail "versions.lock.toml must contain one $key"
+    printf '%s\n' "$value"
+}
+
+locked_section_value() {
+    section=$1
+    key=$2
+    value=$(awk -F '"' -v section="[$section]" -v name="$key" '
+        $0 == section { active = 1; next }
+        active && /^\[/ { active = 0 }
+        active && $0 ~ "^" name " = " { print $2; matches++ }
+        END { if (matches != 1) exit 1 }
+    ' "$root/versions.lock.toml") || fail "versions.lock.toml must contain one $section.$key"
+    printf '%s\n' "$value"
+}
+
+prepare_jdk() {
+    jdk_version=$(locked_section_value java version)
+    runtime_build=$(locked_section_value java runtime_build)
+    download_limit=$(locked_section_value limits max_download_bytes)
+    case "$(uname -s):$(uname -m)" in
+        Darwin:arm64) platform=macos_arm64 ;;
+        Linux:x86_64) platform=linux_x86_64 ;;
+        *) fail "locked Temurin JDK supports macOS arm64 and Linux x86_64" ;;
+    esac
+
+    archive_file=$(locked_section_value "java.$platform" archive_file)
+    archive_root=$(locked_section_value "java.$platform" archive_root)
+    archive_url=$(locked_section_value "java.$platform" archive_url)
+    archive_size=$(awk -F ' = ' -v section="[java.$platform]" '
+        $0 == section { active = 1; next }
+        active && /^\[/ { active = 0 }
+        active && $1 == "archive_size_bytes" { print $2; matches++ }
+        END { if (matches != 1) exit 1 }
+    ' "$root/versions.lock.toml") || fail "versions.lock.toml must contain one java.$platform.archive_size_bytes"
+    archive_sha=$(locked_section_value "java.$platform" archive_sha256)
+    case "$archive_file" in
+        /*|*/*|*".."*) fail "unsafe JDK archive filename in versions.lock.toml" ;;
+    esac
+    case "$archive_root" in
+        /*|*/*|*".."*) fail "unsafe JDK archive root in versions.lock.toml" ;;
+    esac
+    case "$archive_url" in
+        https://github.com/adoptium/temurin25-binaries/releases/download/*) ;;
+        *) fail "JDK URL is not an official Temurin release URL" ;;
+    esac
+    [ "$archive_size" -le "$download_limit" ] || fail "locked JDK archive exceeds the download limit in versions.lock.toml"
+
+    download_root="$root/.work/arena/downloads"
+    ensure_work_directory "$download_root"
+    archive_path="$download_root/$archive_file"
+    [ ! -L "$archive_path" ] || fail "locked JDK archive path must not be a symlink"
+    if [ -e "$archive_path" ] && [ ! -f "$archive_path" ]; then
+        fail "locked JDK archive path must be a regular file"
+    fi
+    if [ ! -f "$archive_path" ]; then
+        download_tmp=$(mktemp "$download_root/.jdk.XXXXXXXX") || fail "create JDK download staging file"
+        curl --fail --location --proto '=https' --tlsv1.2 --max-filesize "$download_limit" \
+            --output "$download_tmp" "$archive_url" || fail "download locked Temurin JDK archive"
+        actual_size=$(wc -c < "$download_tmp" | awk '{ print $1 }')
+        [ "$actual_size" = "$archive_size" ] || fail "JDK archive size mismatch: expected $archive_size bytes, got $actual_size"
+        actual_sha=$(sha256_file "$download_tmp")
+        [ "$actual_sha" = "$archive_sha" ] || fail "JDK archive SHA-256 mismatch: expected $archive_sha, got $actual_sha"
+        mv "$download_tmp" "$archive_path" || fail "install verified JDK archive"
+        download_tmp=
+    fi
+    actual_size=$(wc -c < "$archive_path" | awk '{ print $1 }')
+    [ "$actual_size" = "$archive_size" ] || fail "cached JDK size mismatch: expected $archive_size bytes, got $actual_size"
+    actual_sha=$(sha256_file "$archive_path")
+    [ "$actual_sha" = "$archive_sha" ] || fail "cached JDK SHA-256 mismatch: expected $archive_sha, got $actual_sha"
+
+    toolchains="$root/.work/arena/toolchains"
+    ensure_work_directory "$toolchains"
+    toolchain_root="$toolchains/$archive_root"
+    if [ ! -e "$toolchain_root" ]; then
+        jdk_stage=$(mktemp -d "$toolchains/.temurin.XXXXXXXX") || fail "create JDK extraction directory"
+        entries="$jdk_stage/archive.entries"
+        tar -tzf "$archive_path" > "$entries" || fail "list locked JDK archive contents"
+        while IFS= read -r entry; do
+            entry_path=${entry%/}
+            case "$entry_path" in
+                "$archive_root"|"$archive_root"/*) ;;
+                *) fail "JDK archive entry escaped its locked root: $entry" ;;
+            esac
+            case "/$entry_path/" in
+                *"/../"*|*"/./"*|*"//"*) fail "unsafe path in JDK archive: $entry" ;;
+            esac
+        done < "$entries"
+        tar -xzf "$archive_path" -C "$jdk_stage" || fail "extract locked JDK archive"
+        staged_root="$jdk_stage/$archive_root"
+        case "$platform" in
+            macos_arm64) java="$staged_root/Contents/Home/bin/java" ;;
+            linux_x86_64) java="$staged_root/bin/java" ;;
+        esac
+        verify_jdk "$java" "$jdk_version" "$runtime_build"
+        [ ! -L "$toolchain_root" ] || fail "project-local JDK path must not be a symlink"
+        mv -n "$staged_root" "$toolchain_root" || fail "install verified project-local JDK"
+        [ -d "$toolchain_root" ] && [ ! -L "$toolchain_root" ] || fail "project-local JDK was not installed"
+        rm -rf -- "$jdk_stage"
+        jdk_stage=
+    elif [ ! -d "$toolchain_root" ] || [ -L "$toolchain_root" ]; then
+        fail "project-local JDK path must be a real directory"
+    fi
+
+    case "$platform" in
+        macos_arm64) JAVA_HOME="$toolchain_root/Contents/Home" ;;
+        linux_x86_64) JAVA_HOME="$toolchain_root" ;;
+    esac
+    verify_jdk "$JAVA_HOME/bin/java" "$jdk_version" "$runtime_build"
+    export JAVA_HOME
+    export PATH="$JAVA_HOME/bin:$PATH"
+}
+
+prepare_gradle() {
+    gradle_version=$(locked_section_value gradle version)
+    distribution_url=$(locked_section_value gradle distribution)
+    distribution_sha=$(locked_section_value gradle distribution_sha256)
+    download_limit=$(locked_section_value limits max_download_bytes)
+    distribution_file=${distribution_url##*/}
+    distribution_root="gradle-$gradle_version"
+    [ "$distribution_file" = "$distribution_root-bin.zip" ] || fail "Gradle distribution filename does not match its locked version"
+    [ "$distribution_url" = "https://services.gradle.org/distributions/$distribution_file" ] || fail "Gradle URL is not the official versioned distribution"
+
+    download_root="$root/.work/arena/downloads"
+    ensure_work_directory "$download_root"
+    distribution_path="$download_root/$distribution_file"
+    [ ! -L "$distribution_path" ] || fail "locked Gradle distribution path must not be a symlink"
+    if [ -e "$distribution_path" ] && [ ! -f "$distribution_path" ]; then
+        fail "locked Gradle distribution path must be a regular file"
+    fi
+    if [ ! -f "$distribution_path" ]; then
+        download_tmp=$(mktemp "$download_root/.gradle.XXXXXXXX") || fail "create Gradle download staging file"
+        curl --fail --location --proto '=https' --tlsv1.2 --max-filesize "$download_limit" \
+            --output "$download_tmp" "$distribution_url" || fail "download locked Gradle distribution"
+        actual_sha=$(sha256_file "$download_tmp")
+        [ "$actual_sha" = "$distribution_sha" ] || fail "Gradle distribution SHA-256 mismatch: expected $distribution_sha, got $actual_sha"
+        mv "$download_tmp" "$distribution_path" || fail "install verified Gradle distribution"
+        download_tmp=
+    fi
+    actual_sha=$(sha256_file "$distribution_path")
+    [ "$actual_sha" = "$distribution_sha" ] || fail "cached Gradle distribution SHA-256 mismatch: expected $distribution_sha, got $actual_sha"
+
+    toolchains="$root/.work/arena/toolchains"
+    ensure_work_directory "$toolchains"
+    gradle_home="$toolchains/$distribution_root"
+    if [ ! -e "$gradle_home" ]; then
+        extract_stage=$(mktemp -d "$toolchains/.gradle.XXXXXXXX") || fail "create Gradle extraction directory"
+        entries="$extract_stage/archive.entries"
+        unzip -Z1 "$distribution_path" > "$entries" || fail "list locked Gradle archive contents"
+        while IFS= read -r entry; do
+            entry_path=${entry%/}
+            case "$entry_path" in
+                "$distribution_root"|"$distribution_root"/*) ;;
+                *) fail "Gradle archive entry escaped its locked root: $entry" ;;
+            esac
+            case "/$entry_path/" in
+                *"/../"*|*"/./"*|*"//"*) fail "unsafe path in Gradle archive: $entry" ;;
+            esac
+        done < "$entries"
+        unzip -q "$distribution_path" -d "$extract_stage" || fail "extract locked Gradle distribution"
+        [ -x "$extract_stage/$distribution_root/bin/gradle" ] || fail "verified Gradle launcher is unavailable"
+        mv -n "$extract_stage/$distribution_root" "$gradle_home" || fail "install verified Gradle distribution"
+        [ -d "$gradle_home" ] && [ ! -L "$gradle_home" ] || fail "Gradle distribution was not installed"
+        rm -rf -- "$extract_stage"
+        extract_stage=
+    elif [ ! -d "$gradle_home" ] || [ -L "$gradle_home" ]; then
+        fail "project-local Gradle path must be a real directory"
+    fi
+    [ -x "$gradle_home/bin/gradle" ] || fail "project-local Gradle launcher is unavailable"
+    gradle_output=$("$gradle_home/bin/gradle" --version 2>&1) || fail "pinned Gradle launcher does not start"
+    printf '%s\n' "$gradle_output" | awk -v version="Gradle $gradle_version" 'index($0, version) { found = 1 } END { exit !found }' || fail "project-local Gradle version does not match versions.lock.toml"
+    GRADLE_BIN="$gradle_home/bin/gradle"
+}
+
+build_plugin() {
+    api_group=$(locked_section_value paper api_group)
+    api_artifact=$(locked_section_value paper api_artifact)
+    api_version=$(locked_section_value paper api_version)
+    plugin_api_version=$(locked_section_value paper plugin_api_version)
+    (cd "$root/server/arena-plugin" && "$GRADLE_BIN" --no-daemon \
+        -PpaperApiGroup="$api_group" \
+        -PpaperApiArtifact="$api_artifact" \
+        -PpaperApiVersion="$api_version" \
+        -PpluginApiVersion="$plugin_api_version" \
+        build)
+}
+
+sha256_file() {
+    file=$1
+    if command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$file" | awk '{ print $1 }'
+    elif command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$file" | awk '{ print $1 }'
+    else
+        fail "no SHA-256 utility is available"
+    fi
+}
+
+ensure_paper_artifact() {
+    paper_file=$(locked_value server_file)
+    paper_url=$(locked_value server_url)
+    expected_sha=$(locked_value server_sha256)
+    expected_size=$(awk -F ' = ' '$1 == "server_size_bytes" { print $2; matches++ } END { if (matches != 1) exit 1 }' "$root/versions.lock.toml") || fail "versions.lock.toml must contain one server_size_bytes"
+    download_limit=$(locked_section_value limits max_download_bytes)
+    case "$paper_file" in
+        /*|*".."*) fail "unsafe Paper filename in versions.lock.toml" ;;
+    esac
+    case "$paper_url" in
+        https://fill-data.papermc.io/*) ;;
+        *) fail "Paper URL is not an official Fill artifact URL" ;;
+    esac
+    [ "$expected_size" -le "$download_limit" ] || fail "locked Paper artifact exceeds the download limit in versions.lock.toml"
+
+    download_root="$root/.work/arena/downloads"
+    paper_path="$download_root/$paper_file"
+    ensure_work_directory "$download_root"
+    [ ! -L "$paper_path" ] || fail "locked Paper artifact path must not be a symlink"
+    if [ -e "$paper_path" ] && [ ! -f "$paper_path" ]; then
+        fail "locked Paper artifact path must be a regular file"
+    fi
+    if [ ! -f "$paper_path" ]; then
+        download_tmp=$(mktemp "$download_root/.paper.XXXXXXXX") || fail "create Paper download staging file"
+        curl --fail --location --proto '=https' --tlsv1.2 --max-filesize "$download_limit" \
+            -H 'User-Agent: Arena/0.1 (dankmeme133769@proton.me)' \
+            --output "$download_tmp" "$paper_url" || fail "download locked Paper artifact"
+        actual_size=$(wc -c < "$download_tmp" | awk '{ print $1 }')
+        [ "$actual_size" = "$expected_size" ] || fail "Paper size mismatch: expected $expected_size bytes, got $actual_size"
+        actual_sha=$(sha256_file "$download_tmp")
+        [ "$actual_sha" = "$expected_sha" ] || fail "Paper SHA-256 mismatch: expected $expected_sha, got $actual_sha"
+        mv "$download_tmp" "$paper_path" || fail "install verified Paper artifact"
+        download_tmp=
+    fi
+    actual_size=$(wc -c < "$paper_path" | awk '{ print $1 }')
+    [ "$actual_size" = "$expected_size" ] || fail "cached Paper size mismatch: expected $expected_size bytes, got $actual_size"
+    actual_sha=$(sha256_file "$paper_path")
+    [ "$actual_sha" = "$expected_sha" ] || fail "cached Paper SHA-256 mismatch: expected $expected_sha, got $actual_sha"
+}
+
 if [ "${1-}" != test ]; then
-    fail "usage: ./arena test --suite integration --case stack"
+    fail "usage: ./arena test --suite integration --case stack | ./arena test --suite java --case plugin"
 fi
 shift
 
@@ -38,8 +323,21 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 
-[ "$suite" = integration ] || fail "unknown or unsupported suite: ${suite:-<missing>}"
-[ "$case_name" = stack ] || fail "unknown or blocked integration case: ${case_name:-<missing>}"
-[ -f "$root/tests/integration/stack.rs" ] || fail "blocked: stack smoke harness is not ready"
-
-exec cargo test --locked --package arena-runner --test stack -- --exact stack --nocapture
+case "$suite:$case_name" in
+    java:plugin)
+        prepare_jdk
+        prepare_gradle
+        build_plugin
+        ;;
+    integration:stack)
+        [ -f "$root/tests/integration/stack.rs" ] || fail "blocked: stack smoke harness is not ready"
+        prepare_jdk
+        prepare_gradle
+        build_plugin
+        ensure_paper_artifact
+        exec cargo test --locked --offline --package arena-bots --test stack -- --exact stack --nocapture
+        ;;
+    *)
+        fail "unknown or blocked test selector: ${suite:-<missing>} / ${case_name:-<missing>}"
+        ;;
+esac

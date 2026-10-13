@@ -13,3 +13,7 @@ tokio = { workspace = true }
 [[bin]]
 name = "arena-smoke-client"
 path = "src/bin/smoke.rs"
+
+[[test]]
+name = "stack"
+path = "../../tests/integration/stack.rs"
