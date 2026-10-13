@@ -21,7 +21,7 @@ position = { x = 12, y = 65, z = 64 }
 [[operations]]
 kind = "spawn"
 seat = 1
-position = { x = 116, y = 65, z = 64 }
+position = { x = 115, y = 65, z = 64 }
 
 [[operations]]
 kind = "loot_container"

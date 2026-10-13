@@ -20,7 +20,7 @@
 | `maps-reset` | Pass | `./arena test --suite integration --case maps-reset` at `a44e0ab` passed all three runs: both clients observed the declared blocks, spawns, and chest contents; ordinary collection and fall death occurred; stopped inspection recorded the death; both subsequent clones had empty inventories and zero deaths. |
 | `match-rules` | Partial pass | `./arena test --suite integration --case match-rules` at `10d8a75` passed waiting/countdown movement and chest guards, active movement and looting, and an ordinary equipped duel with death, winner, independently reconstructed outcome, and stopped stats. Border, zero-survivor, timeout, abort, and remaining seat variants still need live proof. |
 | `legal-player` | Parked | Not run. No configured live route, container interaction, and attack sequence has been exercised through the Mineflayer skill client. |
-| `fairness` | Parked | Not run. Independent client receipt histories, complete current perception, and a live hidden-state perturbation remain unproven. |
+| `fairness` | Parked | Not run. The source oracle compares complete policy inputs and checks hidden chunk/entity absence per run. It keeps raw receipt event order because asynchronous chunk arrival order can vary across runs; the live hidden-state perturbation remains unproven. |
 | `hunger-six` | Parked | Not run. Acceptance will assert all six bot seats, an automated spectator outside the competitor roster, and death/reconnect seat outcomes. |
 | `replay-report`, `faults`, civilization, policy comparison, and benchmarks | Parked | No revised live or acceptance run was performed. |
 | Linux x86_64 | Unverified | No Linux run was performed. |

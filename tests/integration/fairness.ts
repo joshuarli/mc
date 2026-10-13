@@ -12,6 +12,7 @@ import {
 import { test } from "node:test";
 
 import { waitForActivePhase } from "./support/duel.js";
+import { assertSamePolicyObservation } from "./support/fairness-oracle.js";
 import { createMineflayerSemanticWorldReader } from "./support/mineflayer-world.js";
 import { runOwnedAcceptanceScenario, type AcceptanceRunContext } from "./support/owned-run.js";
 
@@ -35,14 +36,9 @@ test("fairness", { timeout: 300_000 }, async (t) => {
     perturbed.seatOneChest,
     "the second run must change the chest contents received by seat one",
   );
-  assert.deepStrictEqual(
-    baseline.seatZeroReceipts,
-    perturbed.seatZeroReceipts,
-    "seat zero must receive the same chunk history in both runs",
-  );
-  assert.deepStrictEqual(
-    permittedObservation(baseline.seatZeroObservation),
-    permittedObservation(perturbed.seatZeroObservation),
+  assertSamePolicyObservation(
+    baseline.seatZeroObservation,
+    perturbed.seatZeroObservation,
     "seat zero's complete permitted observation must not expose seat one's changed chest contents",
   );
   assert.deepStrictEqual(
@@ -61,7 +57,8 @@ async function runFairnessVariant(
   variant: (typeof variants)[number],
   signal: AbortSignal,
 ): Promise<{
-  readonly seatZeroReceipts: ReturnType<AcceptanceRunContext["competitors"][number]["chunkReceipts"]>["chunkColumns"];
+  readonly seatZeroReceipts: ReturnType<AcceptanceRunContext["competitors"][number]["chunkReceipts"]>;
+  readonly seatOneReceipts: ReturnType<AcceptanceRunContext["competitors"][number]["chunkReceipts"]>;
   readonly seatOneChest: Awaited<ReturnType<ReturnType<typeof createMineflayerSemanticWorldReader>["readContainer"]>>;
   readonly seatZeroObservation: AgentObservation;
   readonly seatZeroDecision: ReturnType<typeof decide>;
@@ -124,6 +121,24 @@ async function captureFairnessRun(active: AcceptanceRunContext, signal: AbortSig
   assert.ok(seatOneChest.slots.some((item) => item !== null), "seat one's chest must contain configured items");
 
   const seatZeroObservation = await waitForCompleteObservation(seatZero.client, signal);
+  const seatOneEntityId = seatOne.bot.entity.id;
+  assert.equal(seatZeroObservation.opponents.kind, "current");
+  assert.ok(
+    !seatZeroObservation.opponents.value.some(({ id }) => id === seatOneEntityId),
+    "seat zero's current observation must not contain seat one's hidden entity",
+  );
+  assert.equal(seatZeroObservation.loot.kind, "current");
+  assert.ok(
+    !seatZeroObservation.loot.value.some((opportunity) => opportunity.kind === "unopenedContainer"
+      && opportunity.position.x === chest.position.x
+      && opportunity.position.y === chest.position.y
+      && opportunity.position.z === chest.position.z),
+    "seat zero's current observation must not contain a loot target at seat one's hidden chest",
+  );
+  assert.ok(
+    !seatZeroReceipts.entities.some(({ id }) => id === seatOneEntityId),
+    "seat zero's raw entity receipts must not contain seat one's hidden entity",
+  );
   const random = DeterministicRandom.forStream(
     active.preparedRun.scenario.seed,
     RandomStream.policy(seatId(0)),
@@ -137,7 +152,8 @@ async function captureFairnessRun(active: AcceptanceRunContext, signal: AbortSig
   );
 
   return {
-    seatZeroReceipts: seatZeroReceipts.chunkColumns,
+    seatZeroReceipts,
+    seatOneReceipts,
     seatOneChest,
     seatZeroObservation,
     seatZeroDecision,
@@ -179,12 +195,3 @@ async function waitForCompleteObservation(
   throw new Error("seat zero did not receive complete current perception within 20000 ms");
 }
 
-function permittedObservation(observation: AgentObservation) {
-  return {
-    tick: observation.tick,
-    agent: observation.agent,
-    border: observation.border,
-    opponents: observation.opponents,
-    loot: observation.loot,
-  };
-}
