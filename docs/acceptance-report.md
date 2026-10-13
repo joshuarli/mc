@@ -186,7 +186,7 @@ The runtime exposes `run --scenario`, read-only `validate --scenario`, stopped-r
 
 ## Remaining prerequisites
 
-The server-width mismatch is reproduced and corrected, and the narrow exact ramp proof now passes. M1 next needs the complete legal-player chain followed by the unchanged registered six-seed suite. These live checks wait for the campaign's 16 GiB host/run reservation and stable swap counters; no safeguard or gameplay floor is relaxed.
+The server-width mismatch is reproduced and corrected, and the narrow exact ramp proof now passes. M1 next needs the complete legal-player chain followed by the unchanged registered six-seed suite. The owner's later instruction sets live admission to 8 GiB available memory with stable swap counters, replacing the earlier 16 GiB reservation. Runtime enforces an 8 GiB combined RSS ceiling and aborts on swapping or available memory below 4 GiB. Builds remain serialized with Paper.
 
 Configured map reset, all eight match authority variants, the extended real grace-phase duel, replay/report, fairness, and ten-cycle lifecycle acceptance are already verified above. Pending SIGINT acceptance remains independent and does not unblock M1.
 
