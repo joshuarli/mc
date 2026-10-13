@@ -10,6 +10,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import test, { type TestContext } from "node:test";
 
 import { RunnerError } from "../../packages/arena-runner/src/errors.js";
+import { reconstruct, reconstructRunEvidence } from "../../packages/arena-runner/src/evidence.js";
 import {
   acquireOwnedRunLease,
   MAX_OWNED_READ_BYTES,
@@ -19,6 +20,7 @@ import {
 import { readOperationalFailureArtifact } from "../../packages/arena-runner/src/runtime/failure-artifact.js";
 import { runPreparedRun } from "../../packages/arena-runner/src/runtime/run.js";
 import { parseSegment } from "../../packages/arena-runner/src/trace.js";
+import type { TraceSegment } from "../../packages/arena-runner/src/trace.js";
 import { prepareOwnedAcceptanceRun } from "./support/owned-run.js";
 
 const ROOT = process.cwd();
@@ -86,6 +88,24 @@ test("faults", { timeout: 900_000 }, async (testContext) => {
     await testContext.test(faultCase.description, { timeout: faultCase.timeoutMs }, (caseTest) =>
       faultCase.run(scenario, caseTest));
   }
+});
+
+test("interrupted traces retain only requested operator aborts", () => {
+  const segment = parseSegment(readFileSync(join(ROOT, "tests/fixtures/operator-abort/trace-v2-000001.json")));
+  assert.doesNotThrow(() => assertInterruptedTrace([segment], "cancelled"));
+  assert.throws(() => assertInterruptedTrace([segment], "runtime_failure"));
+  const unsolicited = {
+    ...segment,
+    records: segment.records.filter((record) => record.direction !== "runner" || record.type !== "abort"),
+  };
+  assert.throws(() => assertInterruptedTrace([unsolicited], "cancelled"));
+  const wrongReason = {
+    ...segment,
+    records: segment.records.map((record) => record.direction === "runner" && record.type === "abort"
+      ? { ...record, payload: { reason: "wall_timeout" } }
+      : record),
+  };
+  assert.throws(() => assertInterruptedTrace([wrongReason], "cancelled"));
 });
 
 async function runOccupiedPortConflict(scenario: FaultScenario, testContext: TestContext): Promise<void> {
@@ -357,6 +377,7 @@ async function assertInterruptedEvidence(
   const artifact = await readOperationalFailureArtifact({ helperPath, ownedRoot, runId });
   assert.equal(artifact.primary.category, category);
   assert.ok(artifact.trace_checkpoint_segments.length > 0, "the interrupted run must retain a real trace checkpoint");
+  const segments: TraceSegment[] = [];
   for (const segment of artifact.trace_checkpoint_segments) {
     const parsed = parseSegment(await readOwnedFile({
       helperPath,
@@ -366,14 +387,22 @@ async function assertInterruptedEvidence(
     }));
     assert.equal(parsed.runId, runId);
     assert.equal(parsed.byteLength, segment.byte_length);
-    assert.ok(
-      parsed.records.every((record) => {
-        const envelope = record as Record<string, unknown>;
-        return envelope.direction !== "plugin" || envelope.type !== "outcome";
-      }),
-      "an interrupted run must not claim a terminal plugin outcome",
-    );
+    segments.push(parsed);
   }
+  assertInterruptedTrace(segments, category);
+}
+
+function assertInterruptedTrace(segments: readonly TraceSegment[], category: "cancelled" | "runtime_failure"): void {
+  const evidence = reconstruct(segments);
+  const outcomeIndex = evidence.records.findIndex((record) => record.direction === "plugin" && record.type === "outcome");
+  if (outcomeIndex < 0) return;
+  assert.equal(category, "cancelled", "a crashed server must not claim a terminal plugin outcome");
+  const abortIndex = evidence.records.findIndex((record) => record.direction === "runner" && record.type === "abort");
+  assert.ok(abortIndex >= 0 && abortIndex < outcomeIndex, "an operator abort must follow its recorded runner command");
+  assert.deepEqual(evidence.records[abortIndex]!.payload, { reason: "operator" });
+  const { report } = reconstructRunEvidence(evidence);
+  assert.equal(report.outcome.kind, "abort", "cancellation must not claim a winner or draw");
+  assert.equal(report.outcome.reason, "operator");
 }
 
 async function waitForTraceCheckpoint(
