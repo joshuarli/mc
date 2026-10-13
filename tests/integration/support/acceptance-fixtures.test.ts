@@ -27,6 +27,17 @@ test("all live acceptance scenario and policy sources compile offline", () => {
   }
 });
 
+test("match-rules freeze fixture offers an ordinary weapon", () => {
+  const scenarioPath = resolve(FIXTURE_DIRECTORY, "match-rules-freeze-scenario.toml");
+  const scenarioSource = readFileSync(scenarioPath, "utf8");
+  const mapPath = resolve(dirname(scenarioPath), scenarioMapReference(scenarioSource));
+  const scenario = compileScenario(scenarioSource, readFileSync(mapPath, "utf8"));
+  assert.ok(
+    scenario.map.lootContainers.some(({ inventory }) => inventory.includes("minecraft:stone_sword")),
+    "the ordinary duel fixture must let the attacker loot a stone sword",
+  );
+});
+
 // Observation-only clients stay at their spawns through the authoritative tick limit.
 test("fairness fixtures keep both stationary competitors inside the final border", () => {
   for (const name of ["fairness-scenario.toml", "fairness-perturbed-scenario.toml"]) {

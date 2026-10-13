@@ -26,4 +26,4 @@ position = { x = 31, y = 65, z = 32 }
 [[operations]]
 kind = "loot_container"
 position = { x = 29, y = 65, z = 30 }
-inventory = ["minecraft:bread"]
+inventory = ["minecraft:bread", "minecraft:stone_sword"]
