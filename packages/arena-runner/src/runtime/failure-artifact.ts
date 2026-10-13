@@ -1,5 +1,10 @@
 import { canonicalJson } from '../canonical.js';
-import { RunnerError, type ErrorCategory, type ErrorSource } from '../errors.js';
+import {
+  isBoundedErrorReason,
+  RunnerError,
+  type ErrorCategory,
+  type ErrorSource,
+} from '../errors.js';
 import {
   MAX_OWNED_READ_BYTES,
   OwnedFilesError,
@@ -225,6 +230,9 @@ function parseErrorSource(value: StrictJsonValue | undefined): ErrorSource {
   for (const field of ['field', 'cleanup_kind', 'reason', 'run_id', 'relative_artifact'] as const) {
     const fieldValue = source[field];
     if (fieldValue !== undefined && typeof fieldValue !== 'string') throw invalidArtifact('invalid_source');
+  }
+  if (typeof source.reason === 'string' && !isBoundedErrorReason(source.reason)) {
+    throw invalidArtifact('invalid_source');
   }
   if (source.published !== undefined && typeof source.published !== 'boolean') {
     throw invalidArtifact('invalid_source');

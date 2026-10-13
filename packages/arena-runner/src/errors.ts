@@ -24,13 +24,41 @@ export interface ErrorSource {
   readonly relative_artifact?: string;
 }
 
+export const MAX_ERROR_REASON_CODE_POINTS = 1024;
+
+/** Keep local assertion text useful in failure evidence without copying an unbounded message. */
+export function boundedErrorReason(error: unknown): string | undefined {
+  if (!(error instanceof Error) || error.message.length === 0) return undefined;
+  let codePoints = 0;
+  let end = 0;
+  for (const character of error.message) {
+    if (codePoints === MAX_ERROR_REASON_CODE_POINTS) return error.message.slice(0, end);
+    codePoints += 1;
+    end += character.length;
+  }
+  return error.message;
+}
+
+export function isBoundedErrorReason(reason: string): boolean {
+  let codePoints = 0;
+  for (const _character of reason) {
+    if (codePoints === MAX_ERROR_REASON_CODE_POINTS) return false;
+    codePoints += 1;
+  }
+  return true;
+}
+
 export class RunnerError extends Error {
   constructor(
     readonly category: ErrorCategory,
     readonly resource: string,
     readonly source: ErrorSource,
+    options?: ErrorOptions,
   ) {
-    super(source.kind);
+    super(source.kind, options);
+    if (source.reason !== undefined && !isBoundedErrorReason(source.reason)) {
+      throw new RangeError('runner error reason exceeds the evidence limit');
+    }
   }
 
   exitCode(): 2 | 3 | 4 | 5 | 6 | 130 {
