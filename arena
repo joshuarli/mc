@@ -584,7 +584,7 @@ test_command() {
             build_fs_helper
             run_named_tests runtime "$case_name"
             ;;
-        integration:stack|integration:maps-reset|integration:match-rules|integration:lifecycle|integration:legal-player|integration:legal-player-ramp|integration:policy-border-preemption|integration:fairness|integration:replay-report)
+        integration:stack|integration:maps-reset|integration:match-rules|integration:lifecycle|integration:legal-player|integration:legal-player-ramp|integration:policy-border-preemption|integration:fairness|integration:replay-report|integration:civilization-six|integration:civilization-rules)
             case "$case_name" in
                 legal-player-ramp) integration_source_name=legal-player ;;
                 *) integration_source_name=$case_name ;;
@@ -632,8 +632,12 @@ test_command() {
             ensure_paper_artifact
             run_named_tests integration "$case_name"
             ;;
-        acceptance:hunger-six)
-            [ -f "$root/tests/acceptance/hunger.ts" ] || fail "blocked: acceptance case is not ready: hunger-six"
+        acceptance:hunger-six|acceptance:civilization-baseline)
+            case "$case_name" in
+                hunger-six) acceptance_source_name=hunger ;;
+                *) acceptance_source_name=$case_name ;;
+            esac
+            [ -f "$root/tests/acceptance/$acceptance_source_name.ts" ] || fail "blocked: acceptance case is not ready: $case_name"
             prepare_node
             ensure_workspace_dependencies
             build_typescript stack
@@ -641,7 +645,7 @@ test_command() {
             prepare_jdk
             build_plugin
             ensure_paper_artifact
-            run_named_tests acceptance hunger-six
+            run_named_tests acceptance "$case_name"
             ;;
         *)
             fail "unknown or blocked test selector: $suite / $case_name"
