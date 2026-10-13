@@ -14,6 +14,7 @@ import { isValidRunId } from './run-id.js';
 import { inspectStoppedRun } from './runtime/inspect.js';
 import { collectOwnedRuns, type RunGarbageCollectionMode } from './runtime/gc.js';
 import { runPreparedRun } from './runtime/run.js';
+import { createRuntimeRoster, type RuntimeSpectatorMode } from './runtime/roster.js';
 import { armRuntimeDeadline, COLD_START_TIMEOUT_MS } from './runtime/deadline.js';
 import { readSegment, TraceError, type TraceSegment } from './trace.js';
 
@@ -240,6 +241,7 @@ async function runCommand(args: readonly Buffer[]): Promise<CliResult> {
   let scenarioArgument: Buffer | undefined;
   let runId: string | undefined;
   let acceptMinecraftEula = false;
+  let spectatorMode: RuntimeSpectatorMode = 'automated';
   for (let index = 0; index < args.length;) {
     const option = argumentText(args[index]!, index + 1);
     if (option === '--scenario') {
@@ -259,6 +261,14 @@ async function runCommand(args: readonly Buffer[]): Promise<CliResult> {
     if (option === '--accept-minecraft-eula') {
       if (acceptMinecraftEula) throw invalidInput('run_accept_minecraft_eula_repeated');
       acceptMinecraftEula = true;
+      index += 1;
+      continue;
+    }
+    if (option === '--reserve-external-spectator-slot') {
+      if (spectatorMode === 'reserveExternalSlot') {
+        throw invalidInput('run_reserve_external_spectator_slot_repeated');
+      }
+      spectatorMode = 'reserveExternalSlot';
       index += 1;
       continue;
     }
@@ -282,7 +292,8 @@ async function runCommand(args: readonly Buffer[]): Promise<CliResult> {
   return await withProcessAbortSignal(async (signal, controller) => {
     const coldStartDeadline = armRuntimeDeadline(controller, 'cold_start', COLD_START_TIMEOUT_MS);
     try {
-      await compileScenarioAndPolicy(helperPath, ownedRoot, scenarioPath, signal);
+      const inputs = await compileScenarioAndPolicy(helperPath, ownedRoot, scenarioPath, signal);
+      createRuntimeRoster(inputs.scenario, { spectatorMode });
       const preparedRun = await prepareRun(helperPath, ownedRoot, scenarioPath, runId!, signal);
       try {
         const completed = await runPreparedRun({
@@ -293,6 +304,7 @@ async function runCommand(args: readonly Buffer[]): Promise<CliResult> {
           paperJarPath,
           pluginJarPath,
           acceptMinecraftEula: true,
+          spectatorMode,
           signal,
           coldStartDeadline,
           onRosterReady: (details) => {
@@ -524,7 +536,7 @@ function helpJson(): object {
       'compare <left-segment> <right-segment>': 'Compare two single-segment record streams exactly.',
       'prepare --scenario <path> --run-id <id>': 'Compile a scenario and stage its world plan in a new run directory.',
       'validate --scenario <path>': 'Compile the scenario, map, and policy without staging a run.',
-      'run --scenario <path> --accept-minecraft-eula [--run-id <id>]': 'Run a match and report its stopped result.',
+      'run --scenario <path> --accept-minecraft-eula [--run-id <id>] [--reserve-external-spectator-slot]': 'Run a match and report its stopped result.',
       'replay-policy <segment>...': 'Replay recorded core policy decisions and validate correlated skill/path effect records.',
     },
     errors: {

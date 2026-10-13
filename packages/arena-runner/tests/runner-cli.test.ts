@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { mkdtemp, mkdir, symlink, writeFile, rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
@@ -168,6 +168,7 @@ test('run accepts explicit EULA option and rejects unknown options', async () =>
   try {
     const accepted = await runCli([
       'run', '--scenario', 'scenarios/hunger-six.toml', '--accept-minecraft-eula',
+      '--reserve-external-spectator-slot',
     ]);
     assert.equal(accepted.kind, 'failure');
     if (accepted.kind !== 'failure') return;
@@ -179,9 +180,57 @@ test('run accepts explicit EULA option and rejects unknown options', async () =>
     assert.equal(unknown.kind, 'failure');
     if (unknown.kind !== 'failure') return;
     assert.equal(JSON.parse(unknown.stderr).error.source.kind, 'unexpected_argument');
+
+    const repeatedReservation = await runCli([
+      'run', '--scenario', 'scenarios/hunger-six.toml', '--accept-minecraft-eula',
+      '--reserve-external-spectator-slot', '--reserve-external-spectator-slot',
+    ]);
+    assert.equal(repeatedReservation.kind, 'failure');
+    if (repeatedReservation.kind !== 'failure') return;
+    assert.equal(repeatedReservation.exitCode, 2);
+    assert.equal(JSON.parse(repeatedReservation.stderr).error.source.kind,
+      'run_reserve_external_spectator_slot_repeated');
   } finally {
     if (previousHelper === undefined) delete process.env.ARENA_FS_HELPER;
     else process.env.ARENA_FS_HELPER = previousHelper;
+  }
+});
+
+test('run rejects an external spectator reservation at zero capacity before preparing a run', async () => {
+  const runId = `no-spectator-${randomUUID()}`;
+  const relativeScenarioPath = `.work/tmp/${runId}.toml`;
+  const scenarioFile = join(repositoryRoot, relativeScenarioPath);
+  const runDirectory = join(repositoryRoot, '.work/arena/runs', runId);
+  const source = readFileSync(join(repositoryRoot, 'scenarios/hunger-six.toml'), 'utf8')
+    .replace('map = "../maps/hunger-six.toml"', 'map = "../../maps/hunger-six.toml"')
+    .replace('policy = "../policies/baseline.toml"', 'policy = "../../policies/baseline.toml"')
+    .replace('spectator_capacity = 4', 'spectator_capacity = 0');
+  const environment = ['ARENA_FS_HELPER', 'ARENA_JAVA_HOME', 'ARENA_PAPER_JAR', 'ARENA_PLUGIN_JAR'] as const;
+  const previousEnvironment = new Map(environment.map((name) => [name, process.env[name]]));
+
+  await mkdir(temporaryRoot, { recursive: true });
+  await writeFile(scenarioFile, source);
+  process.env.ARENA_FS_HELPER = resolve(repositoryRoot, '.work/arena-fs/arena-fs');
+  process.env.ARENA_JAVA_HOME = '/unused/java';
+  process.env.ARENA_PAPER_JAR = '/unused/paper.jar';
+  process.env.ARENA_PLUGIN_JAR = '/unused/plugin.jar';
+  try {
+    const result = await runCli([
+      'run', '--scenario', relativeScenarioPath, '--run-id', runId,
+      '--accept-minecraft-eula', '--reserve-external-spectator-slot',
+    ]);
+    assert.equal(result.kind, 'failure');
+    if (result.kind !== 'failure') return;
+    assert.equal(result.exitCode, 2);
+    assert.equal(JSON.parse(result.stderr).error.source.kind, 'external_spectator_requires_capacity');
+    assert.equal(existsSync(runDirectory), false, 'capacity validation must happen before run preparation');
+  } finally {
+    for (const [name, value] of previousEnvironment) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+    await rm(scenarioFile, { force: true });
+    await rm(runDirectory, { recursive: true, force: true });
   }
 });
 

@@ -6,12 +6,30 @@ import type { PlayerIdentity } from './observations.js';
 
 export const MAX_RUNTIME_SPECTATORS = 4;
 
+export type RuntimeSpectatorMode = 'automated' | 'reserveExternalSlot';
+
 /** Creates stable offline identities from seat numbers so every run preserves roster identity. */
-export function createRuntimeRoster(scenario: ScenarioIr): Readonly<{
+export function createRuntimeRoster(
+  scenario: ScenarioIr,
+  options: Readonly<{ spectatorMode?: RuntimeSpectatorMode }> = {},
+): Readonly<{
   competitors: readonly BotCompetitor[];
   competitorIdentities: readonly PlayerIdentity[];
   spectators: readonly PlayerIdentity[];
 }> {
+  const spectatorMode = options.spectatorMode ?? 'automated';
+  const spectatorCapacity = scenario.roster.spectatorCapacity;
+  if (spectatorMode === 'reserveExternalSlot' && spectatorCapacity === 0n) {
+    throw new RunnerError('invalid_input', 'scenario spectator capacity', {
+      kind: 'external_spectator_requires_capacity',
+    });
+  }
+  if (spectatorCapacity > BigInt(MAX_RUNTIME_SPECTATORS)) {
+    throw new RunnerError('invalid_input', 'scenario spectator capacity', {
+      kind: 'runtime_client_limit_exceeded',
+    });
+  }
+
   const competitors: BotCompetitor[] = [];
   const competitorIdentities: PlayerIdentity[] = [];
   for (let seat = 0; seat < scenario.roster.competitors; seat += 1) {
@@ -27,12 +45,7 @@ export function createRuntimeRoster(scenario: ScenarioIr): Readonly<{
     competitorIdentities.push(Object.freeze({ username, offlineUuid }));
   }
 
-  if (scenario.roster.spectatorCapacity > BigInt(MAX_RUNTIME_SPECTATORS)) {
-    throw new RunnerError('invalid_input', 'scenario spectator capacity', {
-      kind: 'runtime_client_limit_exceeded',
-    });
-  }
-  const spectatorCount = Number(scenario.roster.spectatorCapacity);
+  const spectatorCount = Number(spectatorCapacity) - (spectatorMode === 'reserveExternalSlot' ? 1 : 0);
   const spectators = Array.from({ length: spectatorCount }, (_, index) => {
     const username = `ArenaSpec${index}`;
     return Object.freeze({ username, offlineUuid: minecraftOfflineUuid(username) });

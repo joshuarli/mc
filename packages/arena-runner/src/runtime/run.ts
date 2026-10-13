@@ -32,7 +32,7 @@ import {
   RuntimeCompetitorClient,
   RuntimeSpectatorClient,
 } from './clients.js';
-import { createPreparePayload, createRuntimeRoster } from './roster.js';
+import { createPreparePayload, createRuntimeRoster, type RuntimeSpectatorMode } from './roster.js';
 import {
   paperArguments,
   readRuntimePluginJar,
@@ -82,6 +82,7 @@ export interface RunPreparedRunOptions {
   readonly coldStartDeadline?: RuntimeDeadline;
   readonly evaluate?: ActiveRunEvaluator;
   readonly competitorDriver?: 'baselinePolicy' | 'evaluator';
+  readonly spectatorMode?: RuntimeSpectatorMode;
   readonly onPolicyActivity?: (event: PolicyActivityEvent) => void;
   readonly onResourceSample?: (event: ResourceMonitorSampleEvent) => void;
   readonly onRosterReady?: (details: Readonly<{
@@ -133,6 +134,8 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
   try {
     assertRunning(runSignal);
     const scenario = options.preparedRun.scenario;
+    const spectatorMode = options.spectatorMode ?? 'automated';
+    const roster = createRuntimeRoster(scenario, { spectatorMode });
     const competitorDriver = options.competitorDriver ?? 'baselinePolicy';
     if (competitorDriver === 'evaluator' && options.evaluate === undefined) {
       throw new RunnerError('invalid_input', 'competitor driver', { kind: 'evaluator_missing' });
@@ -142,7 +145,6 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
     const serverInputs: RuntimeServerInputs = { ...options, javaTmpDir, signal: runSignal };
     const pluginIdentity = await readRuntimePluginIdentity(serverInputs);
     const pluginBytes = await readRuntimePluginJar(serverInputs);
-    const roster = createRuntimeRoster(scenario);
     const preparePayload = createPreparePayload(scenario, roster.competitors);
 
     lease = await acquireOwnedRunLease({

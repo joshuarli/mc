@@ -37,9 +37,40 @@ test('runtime roster rejects spectator counts beyond the four-client budget', ()
       && error.source.kind === 'runtime_client_limit_exceeded');
 });
 
+test('runtime roster reserves one existing spectator seat for an external client when requested', () => {
+  const scenario = compileHungerSixScenario(4);
+  const automated = createRuntimeRoster(scenario);
+  const reserved = createRuntimeRoster(scenario, { spectatorMode: 'reserveExternalSlot' });
+
+  assert.equal(automated.competitors.length, 6);
+  assert.deepEqual(automated.spectators.map(({ username }) => username), [
+    'ArenaSpec0', 'ArenaSpec1', 'ArenaSpec2', 'ArenaSpec3',
+  ]);
+  assert.equal(reserved.competitors.length, 6);
+  assert.deepEqual(reserved.spectators.map(({ username }) => username), [
+    'ArenaSpec0', 'ArenaSpec1', 'ArenaSpec2',
+  ]);
+});
+
+test('runtime roster rejects reserving an external spectator slot at zero capacity', () => {
+  assert.throws(() => createRuntimeRoster(compileDuelScenario(0), {
+    spectatorMode: 'reserveExternalSlot',
+  }), (error: unknown) =>
+    error instanceof RunnerError
+      && error.category === 'invalid_input'
+      && error.source.kind === 'external_spectator_requires_capacity');
+});
+
 function compileDuelScenario(spectatorCapacity: number) {
   const scenarioSource = readFileSync(join(repositoryRoot, 'scenarios/duel.toml'), 'utf8')
     .replace('spectator_capacity = 2', `spectator_capacity = ${spectatorCapacity}`);
   const mapSource = readFileSync(join(repositoryRoot, 'maps/duel.toml'), 'utf8');
+  return compileScenario(scenarioSource, mapSource);
+}
+
+function compileHungerSixScenario(spectatorCapacity: number) {
+  const scenarioSource = readFileSync(join(repositoryRoot, 'scenarios/hunger-six.toml'), 'utf8')
+    .replace('spectator_capacity = 4', `spectator_capacity = ${spectatorCapacity}`);
+  const mapSource = readFileSync(join(repositoryRoot, 'maps/hunger-six.toml'), 'utf8');
   return compileScenario(scenarioSource, mapSource);
 }
