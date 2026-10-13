@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { setTimeout as delay } from "node:timers/promises";
+import { inventorySlot } from "@arena/core";
 import type { Bot } from "mineflayer";
 import { test } from "node:test";
 
@@ -71,7 +72,7 @@ test("legal-player", { timeout: 300_000 }, async (t) => {
       assert.ok(bread, "the player inventory must identify a bread slot for the ordinary eating skill");
       const foodBeforeEating = seatZero.bot.food;
       assert.deepStrictEqual(
-        await seatZero.client.run({ kind: "eat", inventorySlot: bread.slot }),
+        await seatZero.client.run({ kind: "eat", inventorySlot: inventorySlot(bread.slot) }),
         { kind: "succeeded" },
         "the ordinary eating skill must consume the looted bread after sprint-jump food loss",
       );
