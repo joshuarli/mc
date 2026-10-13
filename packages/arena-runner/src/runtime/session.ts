@@ -4,6 +4,7 @@ import { randomBytes } from 'node:crypto';
 import {
   ControlCodecError,
   ControlReceiver,
+  decodeControlFrame,
   encodeControlFrame,
   MAX_CONTROL_FRAME_BYTES,
   type AbortReason,
@@ -19,6 +20,15 @@ export type RunnerCommand =
   | { readonly type: 'prepare'; readonly payload: PreparePayload }
   | { readonly type: 'start'; readonly payload: Record<string, never> }
   | { readonly type: 'abort'; readonly payload: { readonly reason: AbortReason } };
+
+export type RunnerCommandEnvelope = Extract<ControlMessage, { readonly type: 'prepare' | 'start' | 'abort' }>;
+
+const authenticatedMessages = new WeakSet<object>();
+
+/** Returns true only for the immutable envelope accepted or sent by a live control session. */
+export function isAuthenticatedControlMessage(message: ControlMessage): boolean {
+  return authenticatedMessages.has(message);
+}
 
 export type ControlSessionErrorCode =
   | 'listener_failed'
@@ -72,6 +82,7 @@ class TcpControlListenerLease implements ControlListenerLease {
   readonly #server: Server;
   readonly #options: ControlListenerOptions;
   #connection: Socket | undefined;
+  #authenticationSocket: Socket | undefined;
   #connectionSeen = false;
   #acceptStarted = false;
   #closed = false;
@@ -161,6 +172,7 @@ class TcpControlListenerLease implements ControlListenerLease {
     this.#closed = true;
     this.#acceptReject?.(new ControlSessionError('listener_closed'));
     this.#discardPendingConnection();
+    this.#authenticationSocket?.destroy();
     this.#stopAccepting();
     await this.#closePromise;
   }
@@ -179,8 +191,11 @@ class TcpControlListenerLease implements ControlListenerLease {
   }
 
   async #authenticate(socket: Socket, signal?: AbortSignal): Promise<ControlSession> {
+    this.#authenticationSocket = socket;
     const reader = new ControlFrameReader(socket);
-    const onAbort = (): void => socket.destroy();
+    const onAbort = (): void => {
+      socket.destroy();
+    };
     signal?.addEventListener('abort', onAbort, { once: true });
     try {
       const receiver = new ControlReceiver(
@@ -213,6 +228,7 @@ class TcpControlListenerLease implements ControlListenerLease {
       throw mapControlFailure(error);
     } finally {
       signal?.removeEventListener('abort', onAbort);
+      if (this.#authenticationSocket === socket) this.#authenticationSocket = undefined;
     }
   }
 
@@ -258,7 +274,7 @@ export async function bindControlListener(options: ControlListenerOptions): Prom
 /** Owns the authenticated plugin socket and its independent runner sequence. */
 export interface ControlSession {
   readonly ready: Extract<ControlMessage, { readonly type: 'ready' }>;
-  send(command: RunnerCommand): Promise<bigint>;
+  send(command: RunnerCommand): Promise<RunnerCommandEnvelope>;
   messages(): AsyncGenerator<ControlMessage>;
   close(): Promise<void>;
 }
@@ -289,12 +305,13 @@ class AuthenticatedControlSession implements ControlSession {
     this.#receiver = receiver;
     this.#runId = runId;
     this.ready = ready;
+    authenticatedMessages.add(ready);
     this.#outgoingSequence = lastOutgoingSequence;
     this.#socket.on('error', (error) => { this.#socketFailure = error; });
   }
 
   /** Sends one command without retrying it and returns its correlation sequence. */
-  async send(command: RunnerCommand): Promise<bigint> {
+  async send(command: RunnerCommand): Promise<RunnerCommandEnvelope> {
     this.#assertOpen();
     if (this.#terminal) throw new ControlSessionError('control_closed');
     if (this.#pendingAcknowledgment !== undefined) throw new ControlSessionError('command_pending');
@@ -304,21 +321,28 @@ class AuthenticatedControlSession implements ControlSession {
       run_id: this.#runId,
       sequence,
     };
-    const message: ControlMessage = command.type === 'prepare'
+    const commandEnvelope: RunnerCommandEnvelope = command.type === 'prepare'
       ? { ...envelope, type: 'prepare', payload: command.payload }
       : command.type === 'start'
         ? { ...envelope, type: 'start', payload: command.payload }
         : { ...envelope, type: 'abort', payload: command.payload };
+    let message: RunnerCommandEnvelope;
     let frame: Uint8Array;
     try {
-      frame = encodeControlFrame(message);
+      frame = encodeControlFrame(commandEnvelope);
+      const decoded = decodeControlFrame(frame);
+      if (decoded.type !== 'prepare' && decoded.type !== 'start' && decoded.type !== 'abort') {
+        throw new ControlSessionError('control_protocol');
+      }
+      message = decoded;
     } catch (error) {
       throw mapControlFailure(error);
     }
     this.#pendingAcknowledgment = sequence;
     try {
       await writeFrame(this.#socket, frame);
-      return sequence;
+      authenticatedMessages.add(message);
+      return message;
     } catch (error) {
       this.#pendingAcknowledgment = undefined;
       this.#terminal = true;
@@ -358,6 +382,7 @@ class AuthenticatedControlSession implements ControlSession {
         throw new ControlSessionError('control_protocol');
       }
       if (message.type === 'outcome') this.#terminal = true;
+      authenticatedMessages.add(message);
       yield message;
     }
   }

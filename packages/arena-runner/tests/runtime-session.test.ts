@@ -8,7 +8,7 @@ import {
   MAX_CONTROL_FRAME_BYTES,
   type ControlCapability,
 } from '../src/control/index.js';
-import { bindControlListener, createControlToken } from '../src/runtime/session.js';
+import { bindControlListener, ControlSessionError, createControlToken } from '../src/runtime/session.js';
 
 const RUN_ID = 'runtime-session-test';
 const TOKEN = 'test-token-that-is-never-logged';
@@ -72,7 +72,8 @@ test('control listener authenticates one loopback plugin and sequences commands'
   assert.equal(reconnectError.code, 'ECONNREFUSED');
   reconnect.destroy();
 
-  const startSequence = await session.send({ type: 'start', payload: {} });
+  const startCommand = await session.send({ type: 'start', payload: {} });
+  const startSequence = startCommand.sequence;
   assert.equal(startSequence, 2n);
   const start = decodeControlFrame(await reader.readFrame());
   assert.equal(start.type, 'start');
@@ -111,7 +112,6 @@ test('control listener authenticates one loopback plugin and sequences commands'
   assert.equal(outcome.done, false);
   assert.equal(outcome.value?.type, 'outcome');
   assert.equal((await messages.next()).done, true);
-  await messages.return?.();
   await session.close();
 });
 
@@ -227,7 +227,7 @@ test('control session closes the connection on an uncorrelated acknowledgment', 
   t.after(async () => {
     await session.close();
   });
-  const sequence = await session.send({ type: 'start', payload: {} });
+  const sequence = (await session.send({ type: 'start', payload: {} })).sequence;
   await reader.readFrame();
   const messages = session.messages();
   client.write(encodeControlFrame({
@@ -267,6 +267,21 @@ test('canceling plugin acceptance releases the loopback listener', async () => {
   probe.destroy();
 });
 
+test('closing the listener cancels a connection waiting for its authenticated hello', async (t) => {
+  const listener = await bindControlListener({
+    runId: RUN_ID,
+    token: TOKEN,
+    capabilities: CAPABILITIES,
+  });
+  const client = connectTo(listener.address.port);
+  t.after(() => client.destroy());
+  const accepting = listener.accept();
+  await once(client, 'connect');
+
+  await listener.close();
+  await assert.rejects(accepting, (error: unknown) => error instanceof ControlSessionError);
+});
+
 test('canceling before accept destroys a plugin connection already waiting', { timeout: 2_000 }, async (t) => {
   const listener = await bindControlListener({
     runId: RUN_ID,
@@ -274,7 +289,9 @@ test('canceling before accept destroys a plugin connection already waiting', { t
     capabilities: CAPABILITIES,
   });
   const client = connectTo(listener.address.port);
-  const clientClosed = once(client, 'close');
+  let clientError: NodeJS.ErrnoException | undefined;
+  client.on('error', (error: NodeJS.ErrnoException) => { clientError = error; });
+  const clientClosed = new Promise<void>((resolve) => client.once('close', () => resolve()));
   t.after(async () => {
     await listener.close();
     client.destroy();
@@ -286,6 +303,7 @@ test('canceling before accept destroys a plugin connection already waiting', { t
   await assert.rejects(listener.accept(controller.signal), (error: unknown) =>
     isRuntimeSessionError(error) && error.code === 'cancelled');
   await clientClosed;
+  assert.ok(clientError === undefined || clientError.code === 'ECONNRESET');
 });
 
 function connectTo(port: number): Socket {

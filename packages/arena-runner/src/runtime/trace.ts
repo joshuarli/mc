@@ -5,6 +5,7 @@ import { MAX_OWNED_FILE_BYTES, stageOwnedFile, type FileIdentity } from '../owne
 import { RunnerError } from '../errors.js';
 import type { PreparedRun } from '../prepare.js';
 import type { TraceRecord } from '../trace.js';
+import { isAuthenticatedControlMessage, type RunnerCommandEnvelope } from './session.js';
 
 const TRACE_SCHEMA_VERSION = 1;
 const MAX_RUNTIME_TRACE_BYTES = 4 * 1024 * 1024;
@@ -19,8 +20,12 @@ export class RuntimeTraceBuilder {
   readonly #records: TraceRecord[] = [];
   #recordBytes = 0;
   #hasReady = false;
+  #hasPrepare = false;
+  #hasStart = false;
   #hasOutcome = false;
-  #lastControlSequence = 0n;
+  #lastPluginSequence = 0n;
+  #lastRunnerSequence = 0n;
+  #lastAcknowledgedRunnerSequence = 0n;
   #finalized: Buffer | undefined;
 
   constructor(runId: string) {
@@ -42,13 +47,51 @@ export class RuntimeTraceBuilder {
     if (this.#hasReady || this.#records.length !== 0) {
       throw new RunnerError('runtime_failure', 'run trace', { kind: 'readiness_out_of_order' });
     }
+    if (!isAuthenticatedControlMessage(ready)) {
+      throw new RunnerError('runtime_failure', 'run trace', { kind: 'unauthenticated_readiness_envelope' });
+    }
     if (ready.protocol !== 1 || ready.run_id !== this.#runId || ready.sequence <= 0n
         || ready.correlation === undefined || ready.correlation <= 0n) {
       throw new RunnerError('runtime_failure', 'run trace', { kind: 'invalid_readiness_envelope' });
     }
-    this.#append(toTraceRecord(ready));
+    this.#append(toTraceRecord('plugin', ready));
     this.#hasReady = true;
-    this.#lastControlSequence = ready.sequence;
+    this.#lastPluginSequence = ready.sequence;
+    this.#lastRunnerSequence = ready.correlation;
+    this.#lastAcknowledgedRunnerSequence = ready.correlation;
+  }
+
+  /** Records non-secret runner commands so evidence retains the configured match roster. */
+  recordRunnerCommand(message: RunnerCommandEnvelope): void {
+    this.#assertMutable();
+    if (!this.#hasReady) {
+      throw new RunnerError('runtime_failure', 'run trace', { kind: 'readiness_missing' });
+    }
+    if (!isAuthenticatedControlMessage(message)) {
+      throw new RunnerError('runtime_failure', 'run trace', { kind: 'unauthenticated_runner_command' });
+    }
+    if (message.protocol !== 1 || message.run_id !== this.#runId || message.sequence <= this.#lastRunnerSequence
+        || message.correlation !== undefined) {
+      throw new RunnerError('runtime_failure', 'run trace', { kind: 'invalid_runner_command_envelope' });
+    }
+    if (this.#hasOutcome) {
+      throw new RunnerError('runtime_failure', 'run trace', { kind: 'command_after_outcome' });
+    }
+    if (message.type === 'prepare') {
+      if (this.#hasPrepare) {
+        throw new RunnerError('runtime_failure', 'run trace', { kind: 'duplicate_prepare_command' });
+      }
+      this.#hasPrepare = true;
+    } else if (message.type === 'start') {
+      if (!this.#hasPrepare || this.#hasStart) {
+        throw new RunnerError('runtime_failure', 'run trace', { kind: 'invalid_start_command' });
+      }
+      this.#hasStart = true;
+    } else if (!this.#hasPrepare) {
+      throw new RunnerError('runtime_failure', 'run trace', { kind: 'abort_before_prepare' });
+    }
+    this.#append(toTraceRecord('runner', message));
+    this.#lastRunnerSequence = message.sequence;
   }
 
   /** Records each semantic event; a size limit failure invalidates the run instead of dropping it. */
@@ -57,13 +100,16 @@ export class RuntimeTraceBuilder {
     if (message.type === 'hello' || message.type === 'ready') {
       throw new RunnerError('runtime_failure', 'run trace', { kind: 'unexpected_handshake' });
     }
+    if (!isAuthenticatedControlMessage(message)) {
+      throw new RunnerError('runtime_failure', 'run trace', { kind: 'unauthenticated_plugin_message' });
+    }
     if (!this.#hasReady) {
       throw new RunnerError('runtime_failure', 'run trace', { kind: 'readiness_missing' });
     }
     if (message.run_id !== this.#runId) {
       throw new RunnerError('runtime_failure', 'run trace', { kind: 'run_id_mismatch' });
     }
-    if (message.sequence <= this.#lastControlSequence) {
+    if (message.sequence <= this.#lastPluginSequence) {
       throw new RunnerError('runtime_failure', 'run trace', { kind: 'non_monotonic_control_sequence' });
     }
     if (this.#hasOutcome) {
@@ -73,18 +119,29 @@ export class RuntimeTraceBuilder {
     switch (message.type) {
       case 'heartbeat':
       case 'metrics':
-        this.#lastControlSequence = message.sequence;
+        this.#lastPluginSequence = message.sequence;
         return;
       case 'prepare':
       case 'start':
       case 'abort':
         throw new RunnerError('runtime_failure', 'run trace', { kind: 'unexpected_runner_command' });
+      case 'ack':
+      case 'error':
+        if (message.correlation === undefined || message.correlation <= this.#lastAcknowledgedRunnerSequence
+            || message.correlation > this.#lastRunnerSequence) {
+          throw new RunnerError('runtime_failure', 'run trace', { kind: 'invalid_command_acknowledgment' });
+        }
+        this.#lastAcknowledgedRunnerSequence = message.correlation;
+        break;
       default:
         break;
     }
 
-    this.#append(toTraceRecord(message));
-    this.#lastControlSequence = message.sequence;
+    if (!this.#hasPrepare) {
+      throw new RunnerError('runtime_failure', 'run trace', { kind: 'prepare_missing' });
+    }
+    this.#append(toTraceRecord('plugin', message));
+    this.#lastPluginSequence = message.sequence;
     if (message.type === 'outcome') this.#hasOutcome = true;
   }
 
@@ -158,12 +215,19 @@ export async function stageRuntimeTrace(options: Readonly<{
   return Object.freeze({ relativePath, identity, byteLength: contents.byteLength });
 }
 
-function toTraceRecord(value: unknown): TraceRecord {
-  const converted = toTraceValue(value);
+function toTraceRecord(direction: 'runner' | 'plugin', value: unknown): TraceRecord {
+  const converted = toTraceValue({ direction, ...asRecord(value) });
   if (converted === null || typeof converted !== 'object' || Array.isArray(converted)) {
     throw new RunnerError('runtime_failure', 'run trace', { kind: 'invalid_record' });
   }
   return converted as TraceRecord;
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new RunnerError('runtime_failure', 'run trace', { kind: 'invalid_record' });
+  }
+  return value as Record<string, unknown>;
 }
 
 function toTraceValue(value: unknown): StrictJsonValue {
