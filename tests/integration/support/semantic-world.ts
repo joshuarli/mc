@@ -35,6 +35,10 @@ export interface PlayerInventoryObservation {
   readonly items: readonly ObservedPlayerItem[];
 }
 
+export interface PlayerDeathStatsObservation {
+  readonly deaths: number;
+}
+
 /**
  * Case-owned adapters over ordinary Mineflayer clients. `readContainer` must
  * open the real container and close its window before it settles; `readSpawn`
@@ -124,6 +128,16 @@ export function assertResetWorldMatchesFirst(
 /** A fresh reset must not restore any item collected in the earlier run. */
 export function assertPlayerInventoryEmpty(observed: PlayerInventoryObservation): void {
   assert.deepStrictEqual(observed.items, [], "a reset player must not retain items from the earlier run");
+}
+
+/** A reset proves the death counter was cleared only after the prior run recorded a death. */
+export function assertPlayerDeathWasRecorded(observed: PlayerDeathStatsObservation): void {
+  assert.ok(observed.deaths > 0, "the completed run must persist at least one player death");
+}
+
+/** Player statistics are part of the reset; a completed fresh run must start with zero deaths. */
+export function assertPlayerDeathStatsReset(observed: PlayerDeathStatsObservation): void {
+  assert.equal(observed.deaths, 0, "a reset player must start with zero recorded deaths");
 }
 
 function chestSlots(items: readonly string[]): readonly (ObservedItem | null)[] {

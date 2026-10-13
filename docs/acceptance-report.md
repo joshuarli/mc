@@ -14,7 +14,7 @@
 | Case | Status | Evidence or blocker |
 | --- | --- | --- |
 | `stack` | Parked | Not run. The revised two-client Mineflayer/Paper proof still needs the locked server and wrong-protocol control. |
-| `maps-reset` | Parked | Not run. A real prepared-map lifecycle must expose independent world observations and a reset that discards prior player inventory and death state. Smoke-world readiness markers cannot establish this. |
+| `maps-reset` | Parked | Not run. A real prepared-map lifecycle must expose independent world observations and a reset that discards prior player inventory and death state. The completed-run stats read must come from the stopped server's owned run data; smoke-world readiness markers cannot establish this. |
 | `match-rules` | Parked | Not run. The authenticated control and typed terminal outcome path is still being implemented. No ordinary two-client duel or independently reconstructed result was observed. |
 | `legal-player` | Parked | Not run. The client skill path and a configured route/container fixture are not yet integrated. |
 | `fairness` | Parked | Not run. Separate client receipt histories and a live hidden-state perturbation remain unproven. |
@@ -26,7 +26,7 @@
 
 The in-progress Java plugin emits startup diagnostics for the prepared map and server readiness. Those diagnostics are useful for locating startup failures, but a marker alone does not prove generated blocks, chest contents, reset behavior, a legal action, or an authoritative match result. Acceptance cases must read block and inventory state through Mineflayer and consume the plugin's typed outcome stream. Match actions must use ordinary client mechanics; no administrative damage or injected live inventory is accepted.
 
-The TypeScript support oracle in this change compares the full declared block sequence, client-observed spawn positions in seat order, and all 27 slots of every declared chest against a compiled map. It has not been exercised against a live client observation. Player death-stat reset still needs a server-sourced observation. The oracle's existence is not acceptance evidence.
+The TypeScript support oracle in this change compares the full declared block sequence, client-observed spawn positions in seat order, and all 27 slots of every declared chest against a compiled map. It also requires a recorded death before reset and zero deaths afterward. None of these assertions has been exercised against a live client observation. The runner's stopped-run stats read is still being implemented; the planned check uses the completed run's server stats for the same offline UUID. The oracle's existence is not acceptance evidence.
 
 ## Contract changes and measurements
 
@@ -35,5 +35,5 @@ This slice adds only private test-support types and assertions; no product API, 
 ## Remaining prerequisites
 
 1. Merge the F0 stack/selector and authenticated fixture seam, then run the exact-version two-client smoke.
-2. Integrate the world-plan runner reset path and Java typed outcome stream.
+2. Integrate the configured-world runner lifecycle, stopped-run stats inspection, and Java typed outcome stream.
 3. Run the cases above against genuine Mineflayer observations and retain exact commands and results here. A headless result must not be described as a GUI or Metal result.
