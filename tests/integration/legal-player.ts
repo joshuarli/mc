@@ -1,9 +1,14 @@
 import assert from "node:assert/strict";
+import { performance } from "node:perf_hooks";
+import { resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { PathDiagnosticRing } from "@arena/bots";
 import { blockPosition, inventorySlot } from "@arena/core";
 import type { Bot } from "mineflayer";
 import { test } from "node:test";
 
+import { stageOwnedFile } from "../../packages/arena-runner/src/owned-files/index.js";
+import { RunnerError } from "../../packages/arena-runner/src/errors.js";
 import {
   assertDeathWinner,
   competitorForSeat,
@@ -11,7 +16,10 @@ import {
   waitForActivePhase,
 } from "./support/duel.js";
 import { observePlayerInventory } from "./support/mineflayer-world.js";
-import { runOwnedAcceptanceScenario, type AcceptanceRunContext } from "./support/owned-run.js";
+import {
+  runOwnedAcceptanceScenario,
+  type AcceptanceRunContext,
+} from "./support/owned-run.js";
 import { startSprintCourse } from "./support/sprint-course.js";
 
 const FOOD_DEPLETION_TIMEOUT_MS = 60_000;
@@ -23,6 +31,7 @@ const COURSE_CENTER_COORDINATE = 31.5;
 const COURSE_EDGE_MARGIN = 2;
 const REQUIRED_SPRINT_TAKEOFFS = 8;
 const RAMP_RECEIPT_TIMEOUT_MS = 5_000;
+const RAMP_DIAGNOSTIC_MAX_BYTES = 32 * 1024 * 1024;
 
 test("legal-player", { timeout: 300_000 }, async (t) => {
   const run = await runOwnedAcceptanceScenario(
@@ -42,18 +51,30 @@ test("legal-player", { timeout: 300_000 }, async (t) => {
       await active.start();
       await waitForActivePhase(active, signal);
 
-      const initialFood = seatZero.bot.food;
-      assert.equal(initialFood, 20, "prepared competitor must begin with full food and reset saturation");
-      const jumpEvidence = await depleteFoodBySprintJump(seatZero.bot, signal);
-      assert.ok(jumpEvidence.takeoffs >= 8, "food loss must follow repeated client-observed sprint-jumps");
-      assert.ok(jumpEvidence.highestY > jumpEvidence.startingY + 0.4, "sprint-jumps must include a real upward movement");
-      assert.ok(jumpEvidence.remainingFood < initialFood, "ordinary movement must lower the server-observed food level");
-      const hungry = await waitForCurrentAgent(seatZero.client, signal);
-      assert.equal(hungry.agent.kind, "current");
-      if (hungry.agent.kind !== "current") throw new Error("hungry player observation did not become current");
-      assert.ok(hungry.agent.value.hungerPoints < initialFood, "the permitted player observation must report the food loss");
+      const diagnostics = createRampPathDiagnostics(active, seatZero.bot);
+      try {
+        const initialFood = seatZero.bot.food;
+        assert.equal(initialFood, 20, "prepared competitor must begin with full food and reset saturation");
+        const jumpEvidence = await depleteFoodBySprintJump(seatZero.bot, signal, diagnostics);
+        assert.ok(jumpEvidence.takeoffs >= 8, "food loss must follow repeated client-observed sprint-jumps");
+        assert.ok(jumpEvidence.highestY > jumpEvidence.startingY + 0.4, "sprint-jumps must include a real upward movement");
+        assert.ok(jumpEvidence.remainingFood < initialFood, "ordinary movement must lower the server-observed food level");
+        const hungry = await waitForCurrentAgent(seatZero.client, signal);
+        assert.equal(hungry.agent.kind, "current");
+        if (hungry.agent.kind !== "current") throw new Error("hungry player observation did not become current");
+        assert.ok(hungry.agent.value.hungerPoints < initialFood, "the permitted player observation must report the food loss");
 
-      await navigateOverRamp(seatZero.bot, seatZero.client, seatOne.bot, ramp, signal);
+        await navigateOverRamp(active, seatZero.bot, seatZero.client, seatOne.bot, ramp, signal, {
+          beyond: {
+            x: ramp.position.x + 9,
+            y: ramp.position.y,
+            z: ramp.position.z - 4,
+          },
+        }, diagnostics);
+        diagnostics.snapshot();
+      } finally {
+        diagnostics.close();
+      }
       assert.deepStrictEqual(
         await seatZero.client.run({ kind: "navigate", target: chest.position }),
         { kind: "succeeded" },
@@ -140,6 +161,45 @@ test("legal-player", { timeout: 300_000 }, async (t) => {
   assertDeathWinner(run, 0, 1, 2);
 });
 
+test("legal-player-ramp", { timeout: 300_000 }, async (t) => {
+  const run = await runOwnedAcceptanceScenario(
+    "tests/integration/fixtures/legal-player-ramp.toml",
+    "legal-player-ramp",
+    async (active, signal) => {
+      const seatZero = competitorForSeat(active, 0);
+      const seatOne = competitorForSeat(active, 1);
+      const ramp = active.preparedRun.scenario.map.blocks.find(({ block, position }) =>
+        block === "minecraft:cobblestone" && position.x === 31 && position.z === 21,
+      );
+      assert.ok(ramp, "duel map must provide the declared ramp");
+
+      await active.start();
+      await waitForActivePhase(active, signal);
+      const approach = blockPosition(ramp.position.x - 1, ramp.position.y, ramp.position.z);
+      await navigateOverRamp(active, seatZero.bot, seatZero.client, seatOne.bot, ramp, signal, { approach });
+      await active.waitForOutcome();
+    },
+    t.signal,
+    { competitorDriver: "evaluator" },
+  );
+
+  assert.equal(run.outcome.kind, "draw");
+  if (run.outcome.kind !== "draw") throw new Error("ramp diagnostic run did not reach its natural tick-limit draw");
+  assert.equal(run.outcome.reason, "tick_limit");
+  assert.equal(run.outcome.at?.domain, "match");
+  assert.equal(run.outcome.at?.value, 800n);
+  assert.deepStrictEqual(run.outcome.survivors, [0, 1]);
+
+  const report = record(run.inspection.report, "arena inspect must include the ramp run report");
+  assert.equal(report.outcome_status, "reconstructed_from_authoritative_events");
+  const outcome = record(report.outcome, "arena inspect must include the reconstructed tick-limit draw");
+  assert.equal(outcome.kind, "draw");
+  assert.equal(outcome.reason, "tick_limit");
+  const at = record(outcome.at, "arena inspect draw must include its event time");
+  assert.equal(at.domain, "match");
+  assert.equal(at.value, "800");
+});
+
 async function waitForCurrentAgent(
   client: AcceptanceRunContext["competitors"][number]["client"],
   signal: AbortSignal,
@@ -154,7 +214,11 @@ async function waitForCurrentAgent(
   throw new Error("Mineflayer agent state did not become current within 20000 ms");
 }
 
-async function depleteFoodBySprintJump(bot: Bot, signal: AbortSignal): Promise<{
+async function depleteFoodBySprintJump(
+  bot: Bot,
+  signal: AbortSignal,
+  diagnostics: PathDiagnosticRing,
+): Promise<{
   readonly startingY: number;
   readonly highestY: number;
   readonly takeoffs: number;
@@ -171,11 +235,13 @@ async function depleteFoodBySprintJump(bot: Bot, signal: AbortSignal): Promise<{
     wasOnGround = onGround;
     highestY = Math.max(highestY, position.y);
   };
+  diagnostics.setExternalMovementOwner("sprintCourse");
   bot.on("physicsTick", onPhysicsTick);
-  const course = startSprintCourse(bot);
+  let course: ReturnType<typeof startSprintCourse> | undefined;
 
   const deadline = Date.now() + FOOD_DEPLETION_TIMEOUT_MS;
   try {
+    course = startSprintCourse(bot);
     while (bot.food >= startingFood && Date.now() < deadline) {
       for (const preferredYaw of SPRINT_HEADINGS) {
         signal.throwIfAborted();
@@ -186,8 +252,12 @@ async function depleteFoodBySprintJump(bot: Bot, signal: AbortSignal): Promise<{
       }
     }
   } finally {
-    course.stop();
-    bot.removeListener("physicsTick", onPhysicsTick);
+    try {
+      course?.stop();
+    } finally {
+      bot.removeListener("physicsTick", onPhysicsTick);
+      diagnostics.setExternalMovementOwner(null);
+    }
   }
 
   if (bot.food >= startingFood) {
@@ -213,12 +283,20 @@ function sprintCourseHeading(bot: Bot, preferredYaw: number): number {
 }
 
 async function navigateOverRamp(
+  active: AcceptanceRunContext,
   bot: Bot,
   client: AcceptanceRunContext["competitors"][number]["client"],
   observer: Bot,
   ramp: { readonly position: { readonly x: number; readonly y: number; readonly z: number } },
   signal: AbortSignal,
+  route: Readonly<{
+    approach?: ReturnType<typeof blockPosition>;
+    beyond?: { readonly x: number; readonly y: number; readonly z: number };
+  }> = {},
+  suppliedDiagnostics?: PathDiagnosticRing,
 ): Promise<void> {
+  const diagnostics = suppliedDiagnostics ?? createRampPathDiagnostics(active, bot);
+  const closeDiagnostics = suppliedDiagnostics === undefined;
   let traversedRamp = false;
   let observerReceivedRampTop = false;
   const observePosition = (): void => {
@@ -229,22 +307,31 @@ async function navigateOverRamp(
       observerReceivedRampTop = true;
     }
   };
-  bot.on("move", observePosition);
-  bot.on("physicsTick", observePosition);
-  observer.on("entityMoved", observeRemotePosition);
   try {
+    if (route.approach !== undefined) {
+      signal.throwIfAborted();
+      assert.deepStrictEqual(
+        await client.run({ kind: "navigateToBlock", target: route.approach }),
+        { kind: "succeeded" },
+        "the pathfinder skill must reach the west-adjacent floor block before the ramp",
+      );
+      assert.ok(
+        isAtBlock(bot.entity.position, route.approach),
+        "the client must reach the exact west-adjacent floor block before climbing",
+      );
+    }
+
+    bot.on("move", observePosition);
+    bot.on("physicsTick", observePosition);
+    observer.on("entityMoved", observeRemotePosition);
     const rampTop = blockPosition(ramp.position.x, ramp.position.y + 1, ramp.position.z);
-    const beyondRamp = {
-      x: ramp.position.x + 9,
-      y: ramp.position.y,
-      z: ramp.position.z - 4,
-    };
     signal.throwIfAborted();
     assert.deepStrictEqual(
       await client.run({ kind: "navigateToBlock", target: rampTop }),
       { kind: "succeeded" },
       "the pathfinder skill must climb onto the existing ramp",
     );
+    if (isAtRampTop(bot.entity.position, ramp.position)) traversedRamp = true;
     assert.ok(traversedRamp, "the client must observe its own position on top of the ramp");
     const receiptDeadline = Date.now() + RAMP_RECEIPT_TIMEOUT_MS;
     while (!observerReceivedRampTop && Date.now() < receiptDeadline) {
@@ -255,13 +342,42 @@ async function navigateOverRamp(
       observerReceivedRampTop,
       "the opponent client must receive seat zero at the ramp top from the server",
     );
-    signal.throwIfAborted();
-    assert.deepStrictEqual(
-      await client.run({ kind: "navigate", target: beyondRamp }),
-      { kind: "succeeded" },
-      "the pathfinder skill must continue along the route beyond the existing ramp",
-    );
+    if (route.beyond !== undefined) {
+      signal.throwIfAborted();
+      assert.deepStrictEqual(
+        await client.run({ kind: "navigate", target: route.beyond }),
+        { kind: "succeeded" },
+        "the pathfinder skill must continue along the route beyond the existing ramp",
+      );
+    }
+    if (closeDiagnostics) diagnostics.snapshot();
+  } catch (error) {
+    diagnostics.close();
+    let snapshot: ReturnType<PathDiagnosticRing["snapshot"]>;
+    try {
+      snapshot = diagnostics.snapshot();
+    } catch (captureError) {
+      throw new AggregateError(
+        [error, captureError],
+        `ramp route failed and path diagnostics could not be captured: ${truncateCodePoints(describeRunFailure(error), 160)}`,
+      );
+    }
+
+    let artifactPath: string;
+    try {
+      artifactPath = await stageRampPathDiagnostics(active, snapshot);
+    } catch (stageError) {
+      throw new AggregateError(
+        [error, stageError],
+        `ramp route failed and path diagnostics could not be staged: ${truncateCodePoints(describeRunFailure(error), 160)}`,
+      );
+    }
+    const reason = `ramp route failed: ${truncateCodePoints(describeRunFailure(error), 160)}`
+      + `; diagnostics=${summarizeRampDiagnostics(snapshot, ramp.position)}`
+      + `; artifact=${artifactPath}`;
+    throw new Error(reason, { cause: error });
   } finally {
+    if (closeDiagnostics) diagnostics.close();
     bot.removeListener("move", observePosition);
     bot.removeListener("physicsTick", observePosition);
     observer.removeListener("entityMoved", observeRemotePosition);
@@ -274,8 +390,146 @@ function isAtRampTop(
   ramp: { readonly x: number; readonly y: number; readonly z: number },
 ): boolean {
   return Math.floor(position.x) === ramp.x
-    && Math.floor(position.z) === ramp.z
-    && position.y >= ramp.y + 1;
+    && Math.floor(position.y) === ramp.y + 1
+    && Math.floor(position.z) === ramp.z;
+}
+
+function isAtBlock(
+  position: { readonly x: number; readonly y: number; readonly z: number },
+  target: ReturnType<typeof blockPosition>,
+): boolean {
+  return Math.floor(position.x) === target.x
+    && Math.floor(position.y) === target.y
+    && Math.floor(position.z) === target.z;
+}
+
+function createRampPathDiagnostics(active: AcceptanceRunContext, bot: Bot): PathDiagnosticRing {
+  return new PathDiagnosticRing(bot, {
+    clientLabel: "seat-0",
+    clock: () => ({
+      clientMs: performance.now(),
+      authorityTick: latestMatchTick(active),
+    }),
+  });
+}
+
+function latestMatchTick(active: AcceptanceRunContext): number | null {
+  const clock = active.events().findLast((event) =>
+    event.type === "public_clock" && event.payload.tick?.domain === "match",
+  );
+  if (clock?.type !== "public_clock" || clock.payload.tick?.domain !== "match") return null;
+  const tick = Number(clock.payload.tick.value);
+  if (!Number.isSafeInteger(tick) || tick < 0) {
+    throw new RangeError(`match diagnostic tick must be a non-negative safe integer: ${clock.payload.tick.value}`);
+  }
+  return tick;
+}
+
+async function stageRampPathDiagnostics(
+  active: AcceptanceRunContext,
+  records: ReturnType<PathDiagnosticRing["snapshot"]>,
+): Promise<string> {
+  const repositoryRoot = process.cwd();
+  const helperPath = process.env.ARENA_FS_HELPER ?? resolve(repositoryRoot, ".work/arena-fs/arena-fs");
+  const relativePath = Buffer.concat([
+    active.preparedRun.runDirectoryPath,
+    Buffer.from("/ramp-path-diagnostics.json", "ascii"),
+  ]);
+  const contents = Buffer.from(JSON.stringify(records), "utf8");
+  if (contents.byteLength > RAMP_DIAGNOSTIC_MAX_BYTES) {
+    throw new RangeError(`ramp path diagnostics exceeded ${RAMP_DIAGNOSTIC_MAX_BYTES} bytes`);
+  }
+  await stageOwnedFile({
+    helperPath,
+    ownedRoot: Buffer.from(repositoryRoot, "utf8"),
+    relativePath,
+    contents,
+    maxBytes: RAMP_DIAGNOSTIC_MAX_BYTES,
+  });
+  return relativePath.toString("utf8");
+}
+
+function summarizeRampDiagnostics(
+  records: ReturnType<PathDiagnosticRing["snapshot"]>,
+  ramp: { readonly x: number; readonly y: number; readonly z: number },
+): string {
+  const kinds: Record<string, number> = {};
+  for (const record of records) kinds[record.kind] = (kinds[record.kind] ?? 0) + 1;
+  const physics = records.findLast((record) => record.kind === "physicsTick");
+  const path = records.findLast((record) => record.kind === "pathUpdate");
+  const correction = records.findLast((record) => record.kind === "positionCorrection");
+  const summary = {
+    count: records.length,
+    kinds,
+    last: records.at(-1)?.kind ?? null,
+    physics: physics === undefined ? null : {
+      tick: physics.authorityTick,
+      owner: physics.owner,
+      navigation: physics.navigationActive,
+      position: physics.position,
+      velocity: physics.velocity,
+      onGround: physics.onGround,
+      collision: [physics.collidedHorizontally, physics.collidedVertically],
+      control: physics.control,
+      goal: physics.goal,
+      path: physics.path === null ? null : {
+        status: physics.path.status,
+        contextTimeMs: physics.path.contextTimeMs,
+        nodeCount: physics.path.nodeCount,
+        visitedNodes: physics.path.visitedNodes,
+      },
+      rampBlocks: physics.blocks.filter(({ position }) =>
+        (position.x === ramp.x && position.y === ramp.y && position.z === ramp.z)
+        || (position.x === ramp.x - 1 && position.y === ramp.y && position.z === ramp.z),
+      ).map(({ position, loaded, name, stateId, shapes }) => ({
+        position,
+        loaded,
+        name,
+        stateId,
+        shapes: shapes.slice(0, 2),
+      })),
+    },
+    pathUpdate: path === undefined ? null : {
+      tick: path.authorityTick,
+      status: path.path.status,
+      cost: path.path.cost,
+      contextTimeMs: path.path.contextTimeMs,
+      visitedNodes: path.path.visitedNodes,
+      nodes: path.path.nodes.slice(0, 3),
+    },
+    correction: correction === undefined ? null : {
+      tick: correction.authorityTick,
+      packet: correction.packet,
+      position: correction.resultingPosition,
+      velocity: correction.resultingVelocity,
+    },
+  };
+  return truncateCodePoints(JSON.stringify(summary), 520);
+}
+
+function describeRunFailure(error: unknown): string {
+  if (error instanceof RunnerError) {
+    const reason = error.source.reason === undefined ? "" : `: ${error.source.reason}`;
+    return `${error.category}/${error.source.kind}${reason}`;
+  }
+  if (error instanceof Error) return `${error.name}: ${error.message}`;
+  return String(error);
+}
+
+function truncateCodePoints(value: string, maximum: number): string {
+  let result = "";
+  let count = 0;
+  for (const character of value) {
+    if (count === maximum) return `${result}…`;
+    result += character;
+    count += 1;
+  }
+  return result;
+}
+
+function record(value: unknown, message: string): Record<string, unknown> {
+  assert.ok(value !== null && typeof value === "object", message);
+  return value as Record<string, unknown>;
 }
 
 function recordKnockbackReceipt(victim: Bot, attackerEntityId: number) {
