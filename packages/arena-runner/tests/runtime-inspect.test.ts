@@ -129,7 +129,7 @@ function setHelperEnvironment(t: import('node:test').TestContext): void {
 
 async function prepareStatsDirectory(runDirectoryPath: Buffer): Promise<void> {
   const ownedRoot = Buffer.from(repositoryRoot, 'utf8');
-  for (const suffix of ['/server', '/server/world', '/server/world/stats']) {
+  for (const suffix of ['/server', '/server/world', '/server/world/players', '/server/world/players/stats']) {
     await createOwnedDirectory({
       helperPath,
       ownedRoot,
@@ -149,7 +149,7 @@ async function stageStats(
     ownedRoot: Buffer.from(repositoryRoot, 'utf8'),
     relativePath: Buffer.concat([
       runDirectoryPath,
-      Buffer.from(`/server/world/stats/${uuid}.json`, 'ascii'),
+      Buffer.from(`/server/world/players/stats/${uuid}.json`, 'ascii'),
     ]),
     contents,
     maxBytes: 1024 * 1024,

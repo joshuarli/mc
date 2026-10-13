@@ -28,7 +28,7 @@ test('stopped stats distinguish absent files from present counters', async (t) =
   await createOwnedDirectory({
     helperPath,
     ownedRoot,
-    relativePath: Buffer.from('run/server/world/stats', 'ascii'),
+    relativePath: Buffer.from('run/server/world/players/stats', 'ascii'),
   });
   await stageStats(ownedRoot, bot, '{"stats":{"minecraft:custom":{"minecraft:deaths":2,"minecraft:player_kills":1}}}');
 
@@ -51,7 +51,7 @@ test('stopped stats treat missing counters as zero and reject negative counters'
   await createOwnedDirectory({
     helperPath,
     ownedRoot,
-    relativePath: Buffer.from('run/server/world/stats', 'ascii'),
+    relativePath: Buffer.from('run/server/world/players/stats', 'ascii'),
   });
   await stageStats(ownedRoot, bot, '{"stats":{}}');
   const [stats] = await readStoppedPlayerStats({
@@ -83,7 +83,7 @@ async function stageStats(ownedRoot: Buffer, player: PlayerIdentity, contents: s
   await stageOwnedFile({
     helperPath,
     ownedRoot,
-    relativePath: Buffer.from(`run/server/world/stats/${player.offlineUuid}.json`, 'ascii'),
+    relativePath: Buffer.from(`run/server/world/players/stats/${player.offlineUuid}.json`, 'ascii'),
     contents: Buffer.from(contents, 'utf8'),
     maxBytes: 1024,
   });

@@ -3,7 +3,7 @@ import { RunnerError } from '../errors.js';
 import { parseStrictJson, strictJsonNumberToken, type StrictJsonValue } from '../control/strict-json.js';
 
 const MAX_STATS_BYTES = 16 * 1024 * 1024;
-const STATS_DIRECTORY = Buffer.from('/server/world/stats/', 'ascii');
+const STATS_DIRECTORY = Buffer.from('/server/world/players/stats/', 'ascii');
 const STATS_SUFFIX = Buffer.from('.json', 'ascii');
 
 export interface PlayerIdentity {
