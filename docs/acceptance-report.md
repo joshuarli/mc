@@ -52,6 +52,16 @@ Earlier versions of this new live test exposed two test assumptions: loot/border
 
 The six-player measurement code is ready to collect per-seat movement, loot/equipment changes, hits, idle/stuck intervals, decision/skill timing, target failures, and separate bot/Paper RSS and CPU observations for startup and active phases. The six-player run has not occurred, so no resource envelope is reported. General event-loop delay, authoritative server tick duration, diagnostic overhead, exact attack misses, and internal damage-receipt wait remain explicitly unavailable where no source exposes them. No capacity or speedup estimate is inferred.
 
+### Continued ramp investigation
+
+At `7fff500`, four new `MovementFailureDiagnosticsTest` cases passed with strict Gradle dependency verification on the merged revision. The diagnostic is off by default and limited to 256 seated-player rejection records plus one truncation marker. It observes Paper's `PlayerFailMoveEvent` at `MONITOR` without changing the event or exposing evaluator data to bots. Activate it with `JAVA_TOOL_OPTIONS=-Darena.movement-diagnostics=true` when invoking the existing ramp selector.
+
+That exact command reproduced the timeout in run `legal-player-ramp-e3cb3c40-0fce-4adb-ac93-82b048443560`; cleanup succeeded and both arrival receipts remained null. The first rejection is now known: `CLIPPED_INTO_BLOCK` at tick 288, from `(30.409184866947346,65,21.495385857614927)` to `(30.7,65.41999998688698,21.49710011243552)`. The committed `server-rejection-excerpt.log` contains six exact lines selected from 256 rejections and the truncation marker, rather than claiming to be the full log. Full logs, trace, and the 512-record ring remain with the owned run.
+
+The earlier float-width hypothesis was rejected using the wrong part of the collision path. Inspection of the pinned server bytecode shows that full-cube target candidates use strict `AABB.intersects`; the `1e-7` check applies to the old box afterwards. An executable check using the actual Paper `EntityDimensions` and `AABB` classes confirmed that the old box is clear, while the requested target box extends to `x=31.00000001192093` and intersects the cube at `(31,65,21)`. Paper uses the float width `0.6f`, whereas pinned Prismarine physics uses double half-width `0.3`. The position calculated with the server half-width is `x=30.69999998807907`; its box ends at exactly 31 and is clear. A focused adapter regression and correction are in progress; successful exact arrival is not yet claimed.
+
+Four obsolete bootstrap staging trees for already archived successful runs were removed after checking source readers, archive inspection, ownership, identities, regular file types, and absence of symlinks. The archived runs were `policy-border-preemp-6a15c262-c319-4ee6-af45-c86b58bdfb67`, `lifecycle-1-91c33972-c5c1-4479-a4ac-f13080354051`, `fairness-baseline-810da19f-c71d-4c9f-8e8e-c485833d43c2`, and `fairness-baseline-aa134240-444d-4b9e-b164-c5cf7a51bed7`. This removed 700,891,212 bytes of unused generated staging data; canonical templates, committed evidence, archives, and protected failure worlds were preserved. After the new failed ramp run, native inspection reported nine run directories and 7,512,829,370 dependency bytes, below the 8 GiB limit.
+
 Replay the committed live proof without starting Paper:
 
 ```sh
