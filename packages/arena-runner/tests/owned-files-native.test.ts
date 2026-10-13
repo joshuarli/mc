@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { constants as osConstants } from 'node:os';
 import { randomBytes } from 'node:crypto';
-import { access, link as linkFile, lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, unlink, writeFile } from 'node:fs/promises';
+import { access, link as linkFile, lstat, mkdir, mkdtemp, readFile, readlink, readdir, rename, rm, symlink, unlink, writeFile } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
 import { setImmediate as nextTurn } from 'node:timers/promises';
 import { test } from 'node:test';
@@ -27,6 +27,10 @@ import { decodeRawArgvChannel, rawArgumentText, RawArgvError } from '../src/owne
 const packageDirectory = basename(process.cwd()) === 'arena-runner';
 const repoRoot = packageDirectory ? resolve(process.cwd(), '../..') : process.cwd();
 const helperPath = process.env.ARENA_FS_HELPER ?? resolve(repoRoot, '.work/arena-fs/arena-fs');
+const unlinkRaceHelperPath = process.env.ARENA_FS_RACE_HELPER ??
+  resolve(repoRoot, '.work/arena-fs/arena-fs-race-helper');
+const cloneRaceHelperPath = process.env.ARENA_FS_CLONE_RACE_HELPER ??
+  resolve(repoRoot, '.work/arena-fs/arena-fs-clone-race-helper');
 
 async function withOwnedRoot(run: (root: Buffer, rootText: string) => Promise<void>): Promise<void> {
   const prefix = join(repoRoot, '.work/tmp/arena-owned-files-');
@@ -74,6 +78,41 @@ test('creates a fresh run, stages without overwrite, reads, and removes by ident
     await removeCreatedFile({ helperPath, ownedRoot: root, relativePath: planPath, identity: planIdentity });
     await removeCreatedDirectory({ helperPath, ownedRoot: root, relativePath: runPath, identity: runIdentity });
     await assert.rejects(access(join(rootText, 'runs/session-one')));
+  });
+});
+
+test('preserves a replacement installed at a file leaf during identity removal', async () => {
+  await withOwnedRoot(async (root, rootText) => {
+    if (process.env.ARENA_FS_RACE_HELPER === undefined) {
+      const build = spawnSync('make', ['-C', join(repoRoot, 'native/arena-fs'), 'race-helper'], {
+        encoding: 'utf8',
+        env: { ...process.env, TMPDIR: join(repoRoot, '.work/tmp') },
+      });
+      assert.equal(build.status, 0, build.stderr);
+    }
+
+    const parentPath = Buffer.from('run');
+    const targetPath = Buffer.from('run/owned.txt');
+    const backupPath = join(rootText, 'run/original-moved-by-mutator');
+    await createRunDirectory({ helperPath, ownedRoot: root, relativePath: parentPath });
+    const identity = await stageOwnedFile({
+      helperPath, ownedRoot: root, relativePath: targetPath,
+      contents: Buffer.from('identity-owned file'), maxBytes: 128,
+    });
+    const unlinkResult = spawnSync(unlinkRaceHelperPath, [
+      'unlink-created-file', root.toString('base64'), targetPath.toString('base64'),
+      identity.device, identity.inode,
+    ], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        ARENA_TEST_UNLINK_LEAF: 'owned.txt',
+        ARENA_TEST_UNLINK_BACKUP: 'original-moved-by-mutator',
+      },
+    });
+    assert.equal(unlinkResult.status, 0, unlinkResult.stderr);
+    assert.deepEqual(await readFile(join(rootText, 'run/owned.txt')), Buffer.from('replacement survives'));
+    await assert.rejects(access(backupPath));
   });
 });
 
@@ -136,6 +175,111 @@ test('stages runtime files, creates private plugin directories, and locks a run 
     });
     assert.deepEqual(await readFile(join(rootText, 'server/run/.arena-run.lock')), Buffer.alloc(0));
     assert.equal(runIdentity.inode.length > 0, true);
+  });
+});
+
+test('does not publish a replacement swapped into a staged temporary name', async () => {
+  await withOwnedRoot(async (root, rootText) => {
+    const parentPath = Buffer.from('server/run');
+    const destinationPath = Buffer.from('server/run/server.properties');
+    await createRunDirectory({ helperPath, ownedRoot: root, relativePath: parentPath });
+    const replacementPath = join(rootText, 'replacement');
+    await writeFile(replacementPath, Buffer.from('attacker replacement'));
+
+    const child = spawn(helperPath, [
+      'stage-owned-file', root.toString('base64'), destinationPath.toString('base64'), '1024',
+    ], { shell: false, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+    let output = Buffer.alloc(0);
+    let firstLineResolve!: (line: Buffer) => void;
+    const firstLine = new Promise<Buffer>((resolveLine) => { firstLineResolve = resolveLine; });
+    let firstLineSeen = false;
+    child.stdout.on('data', (chunk: Buffer) => {
+      output = Buffer.concat([output, chunk]);
+      const newline = output.indexOf(0x0a);
+      if (!firstLineSeen && newline >= 0) {
+        firstLineSeen = true;
+        firstLineResolve(Buffer.from(output.subarray(0, newline)));
+      }
+    });
+    child.stderr.resume();
+    const closed = new Promise<{ exitCode: number | null; exitSignal: NodeJS.Signals | null }>((resolveClose) => {
+      child.once('close', (exitCode, exitSignal) => resolveClose({ exitCode, exitSignal }));
+    });
+
+    const event = JSON.parse((await firstLine).toString('ascii')) as { event: string; path: string };
+    assert.equal(event.event, 'staged-file');
+    const temporaryPath = join(rootText, Buffer.from(event.path, 'base64').toString('utf8'));
+    await unlink(temporaryPath);
+    await symlink(replacementPath, temporaryPath);
+    child.stdin.end(Buffer.from('expected staged contents'));
+
+    const { exitCode, exitSignal } = await closed;
+    assert.equal(exitSignal, null);
+    assert.equal(exitCode, 1);
+    const records = output.toString('ascii').trim().split('\n').map((line) => JSON.parse(line));
+    assert.equal(records.at(-1).ok, false);
+    await assert.rejects(access(join(rootText, 'server/run/server.properties')));
+    assert.equal(await readlink(temporaryPath), replacementPath);
+    assert.deepEqual(await readFile(replacementPath), Buffer.from('attacker replacement'));
+  });
+});
+
+test('does not publish a replacement swapped into a clone staging name', async () => {
+  await withOwnedRoot(async (root, rootText) => {
+    if (process.env.ARENA_FS_CLONE_RACE_HELPER === undefined) {
+      const build = spawnSync('make', ['-C', join(repoRoot, 'native/arena-fs'), 'clone-race-helper'], {
+        encoding: 'utf8',
+        env: { ...process.env, TMPDIR: join(repoRoot, '.work/tmp') },
+      });
+      assert.equal(build.status, 0, build.stderr);
+    }
+    const sourcePath = Buffer.from('snapshot/world');
+    const destinationParent = Buffer.from('runs/session');
+    const destinationPath = Buffer.from('runs/session/world');
+    await mkdir(join(rootText, 'snapshot/world'), { recursive: true });
+    await writeFile(join(rootText, 'snapshot/world/level.dat'), Buffer.from('pristine'));
+    await createOwnedDirectory({ helperPath, ownedRoot: root, relativePath: destinationParent });
+    const child = spawn(cloneRaceHelperPath, [
+      'clone-owned-tree', root.toString('base64'), sourcePath.toString('base64'),
+      destinationPath.toString('base64'), String(MAX_OWNED_TREE_FILES), String(MAX_OWNED_TREE_BYTES),
+    ], {
+      shell: false,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      windowsHide: true,
+      env: { ...process.env, ARENA_TEST_CLONE_PARENT: join(rootText, 'runs/session') },
+    });
+    let output = Buffer.alloc(0);
+    let firstLineResolve!: (line: Buffer) => void;
+    const firstLine = new Promise<Buffer>((resolveLine) => { firstLineResolve = resolveLine; });
+    let firstLineSeen = false;
+    child.stdout.on('data', (chunk: Buffer) => {
+      output = Buffer.concat([output, chunk]);
+      const newline = output.indexOf(0x0a);
+      if (!firstLineSeen && newline >= 0) {
+        firstLineSeen = true;
+        firstLineResolve(Buffer.from(output.subarray(0, newline)));
+      }
+    });
+    child.stderr.resume();
+    const closed = new Promise<{ exitCode: number | null; exitSignal: NodeJS.Signals | null }>((resolveClose) => {
+      child.once('close', (exitCode, exitSignal) => resolveClose({ exitCode, exitSignal }));
+    });
+
+    const event = JSON.parse((await firstLine).toString('ascii')) as { event: string; path: string };
+    assert.equal(event.event, 'created-directory');
+    const temporaryPath = join(rootText, Buffer.from(event.path, 'base64').toString('utf8'));
+    child.stdin.end();
+
+    const { exitCode, exitSignal } = await closed;
+    assert.equal(exitSignal, null);
+    assert.equal(exitCode, 1);
+    const records = output.toString('ascii').trim().split('\n').map((line) => JSON.parse(line));
+    assert.equal(records.at(-1).ok, false);
+    assert.equal(records.some((record) => record.event === 'clone-published'), false);
+    await assert.rejects(access(join(rootText, 'runs/session/world')));
+    await rm(`${temporaryPath}.displaced`, { recursive: true, force: true });
+    const sentinel = await readFile(join(temporaryPath, 'attacker-sentinel')).catch(() => undefined);
+    assert.deepEqual(sentinel, Buffer.from('replacement directory'), output.toString('ascii'));
   });
 });
 

@@ -487,12 +487,33 @@ static int identity_at(int parent_fd, const char *name, dev_t device, ino_t inod
     return 0;
 }
 
+static int create_random_temp_name(char *name, size_t capacity, const char *prefix);
+static int rename_noreplace(int source_parent_fd, const char *source,
+                            int destination_parent_fd, const char *destination);
+
 static int unlink_if_identity(int parent_fd, const char *name, dev_t device, ino_t inode,
                               bool directory) {
-    struct stat found;
-    int error = identity_at(parent_fd, name, device, inode, directory, &found);
+    char quarantine[NAME_MAX + 1U];
+    int error = EEXIST;
+    for (unsigned int attempt = 0; attempt < 32U; attempt++) {
+        error = create_random_temp_name(quarantine, sizeof(quarantine), ".arena-remove-");
+        if (error != 0) return error;
+        error = rename_noreplace(parent_fd, name, parent_fd, quarantine);
+        if (error != EEXIST) break;
+    }
     if (error != 0) return error;
-    if (unlinkat(parent_fd, name, directory ? AT_REMOVEDIR : 0) != 0) return errno;
+
+    struct stat found;
+    error = identity_at(parent_fd, quarantine, device, inode, directory, &found);
+    if (error != 0) {
+        int restore_error = rename_noreplace(parent_fd, quarantine, parent_fd, name);
+        return restore_error == 0 ? error : restore_error;
+    }
+    if (unlinkat(parent_fd, quarantine, directory ? AT_REMOVEDIR : 0) != 0) {
+        error = errno;
+        int restore_error = rename_noreplace(parent_fd, quarantine, parent_fd, name);
+        return restore_error == 0 ? error : restore_error;
+    }
     return sync_directory(parent_fd);
 }
 
@@ -734,7 +755,7 @@ static int create_random_temp_name(char *name, size_t capacity, const char *pref
     return 0;
 }
 
-/* linkat publishes a fully synced same-directory temp without replacing an existing leaf. */
+/* Rename the synced inode without replacement and verify the destination against its open handle. */
 static int stage_owned_file(const char *root, const char *relative, size_t relative_length,
                             uint64_t caller_limit, uint64_t maximum_limit, const char *operation,
                             struct fs_error *failure, struct stat *published_status) {
@@ -825,54 +846,64 @@ static int stage_owned_file(const char *root, const char *relative, size_t relat
         error = errno;
         goto cleanup_temporary;
     }
-    if (close(temporary_fd) != 0) {
-        temporary_fd = -1;
-        error = errno;
-        goto cleanup_temporary;
-    }
-    temporary_fd = -1;
     if (cancelled()) {
         error = ECANCELED;
         goto cleanup_temporary;
     }
-    if (linkat(parent_fd, temporary, parent_fd, destination, 0) != 0) {
+    error = rename_noreplace(parent_fd, temporary, parent_fd, destination);
+    if (error != 0) goto cleanup_temporary;
+    struct stat opened_status;
+    if (fstat(temporary_fd, &opened_status) != 0) {
         error = errno;
+        goto cleanup_published;
+    }
+    struct stat destination_status;
+    if (fstatat(parent_fd, destination, &destination_status, AT_SYMLINK_NOFOLLOW) != 0) {
+        error = errno;
+        goto cleanup_published;
+    }
+    if (!S_ISREG(destination_status.st_mode) ||
+        destination_status.st_dev != opened_status.st_dev ||
+        destination_status.st_ino != opened_status.st_ino) {
+        error = ESTALE;
+        int restore_error = rename_noreplace(parent_fd, destination, parent_fd, temporary);
+        if (restore_error != 0) failure->cleanup_code = restore_error;
         goto cleanup_temporary;
     }
     failure->published = true;
-    failure->device = temporary_status.st_dev;
-    failure->inode = temporary_status.st_ino;
-    *published_status = temporary_status;
-
-    if (unlinkat(parent_fd, temporary, 0) != 0) {
-        error = errno;
-        int cleanup_error = unlink_if_identity(parent_fd, destination, temporary_status.st_dev,
-                                              temporary_status.st_ino, false);
-        if (cleanup_error != 0) failure->cleanup_code = cleanup_error;
-        failure->published = cleanup_error != 0;
-        goto done;
-    }
+    failure->device = opened_status.st_dev;
+    failure->inode = opened_status.st_ino;
+    *published_status = opened_status;
     if (cancelled()) {
         error = ECANCELED;
-        int cleanup_error = unlink_if_identity(parent_fd, destination, temporary_status.st_dev,
-                                              temporary_status.st_ino, false);
-        if (cleanup_error != 0) failure->cleanup_code = cleanup_error;
-        failure->published = cleanup_error != 0;
-        goto done;
+        goto cleanup_published;
     }
     error = sync_directory(parent_fd);
-    if (error != 0) {
-        int cleanup_error = unlink_if_identity(parent_fd, destination, temporary_status.st_dev,
-                                              temporary_status.st_ino, false);
-        if (cleanup_error != 0) failure->cleanup_code = cleanup_error;
-        failure->published = cleanup_error != 0;
-        goto done;
+    if (error != 0) goto cleanup_published;
+    if (close(temporary_fd) != 0) {
+        temporary_fd = -1;
+        error = errno;
+        goto cleanup_published;
     }
+    temporary_fd = -1;
     failure->published = false;
     print_success(operation, published_status);
     close(parent_fd);
     free(destination);
     return 0;
+
+cleanup_published:
+    if (temporary_fd >= 0 && close(temporary_fd) != 0 && failure->cleanup_code == 0) {
+        failure->cleanup_code = errno;
+    }
+    temporary_fd = -1;
+    {
+        int cleanup_error = unlink_if_identity(parent_fd, destination,
+                                               temporary_status.st_dev, temporary_status.st_ino, false);
+        if (cleanup_error != 0 && failure->cleanup_code == 0) failure->cleanup_code = cleanup_error;
+        failure->published = cleanup_error != 0;
+    }
+    goto done;
 
 cleanup_temporary:
     if (temporary_fd >= 0 && close(temporary_fd) != 0 && failure->cleanup_code == 0) {
@@ -944,12 +975,16 @@ static bool paths_overlap(const char *left, size_t left_length,
     return left[right_length] == '/';
 }
 
-static int rename_directory_noreplace(int parent_fd, const char *temporary,
-                                      const char *destination) {
+static int rename_noreplace(int source_parent_fd, const char *source,
+                            int destination_parent_fd, const char *destination) {
 #if defined(__APPLE__)
-    if (renameatx_np(parent_fd, temporary, parent_fd, destination, RENAME_EXCL) != 0) return errno;
+    if (renameatx_np(source_parent_fd, source, destination_parent_fd, destination, RENAME_EXCL) != 0) {
+        return errno;
+    }
 #elif defined(__linux__)
-    if (renameat2(parent_fd, temporary, parent_fd, destination, RENAME_NOREPLACE) != 0) return errno;
+    if (renameat2(source_parent_fd, source, destination_parent_fd, destination, RENAME_NOREPLACE) != 0) {
+        return errno;
+    }
 #endif
     return 0;
 }
@@ -1007,13 +1042,8 @@ static int unlink_clone_entry(struct clone_state *state, const struct clone_entr
                                      &parent_fd, &leaf);
     if (error == ENOENT) return 0;
     if (error != 0) return error;
-    struct stat status;
-    error = identity_at(parent_fd, leaf, entry->device, entry->inode, entry->directory, &status);
-    if (error == ENOENT) {
-        error = 0;
-    } else if (error == 0 && unlinkat(parent_fd, leaf, entry->directory ? AT_REMOVEDIR : 0) != 0) {
-        error = errno;
-    }
+    error = unlink_if_identity(parent_fd, leaf, entry->device, entry->inode, entry->directory);
+    if (error == ENOENT) error = 0;
     close(parent_fd);
     free(leaf);
     return error;
@@ -1411,17 +1441,32 @@ static int clone_owned_tree(const char *root, const char *source, size_t source_
     if (error == 0) error = sync_directory(staging_fd);
     bool published = false;
     if (error == 0) {
-        error = rename_directory_noreplace(parent_fd, temporary, destination_leaf);
+        error = rename_noreplace(parent_fd, temporary, parent_fd, destination_leaf);
         if (error == 0) {
-            published = true;
-            *published_status = staging_status;
-            failure->published = true;
-            failure->device = staging_status.st_dev;
-            failure->inode = staging_status.st_ino;
-            error = print_created_event("clone-published", destination, destination_length,
-                                        &staging_status);
-            if (error == 0 && cancelled()) error = ECANCELED;
-            if (error == 0) error = sync_directory(parent_fd);
+            struct stat opened_publication_status;
+            struct stat destination_status;
+            if (fstat(staging_fd, &opened_publication_status) != 0) {
+                error = errno;
+            } else if (fstatat(parent_fd, destination_leaf, &destination_status, AT_SYMLINK_NOFOLLOW) != 0) {
+                error = errno;
+            } else if (!S_ISDIR(destination_status.st_mode) ||
+                       destination_status.st_dev != opened_publication_status.st_dev ||
+                       destination_status.st_ino != opened_publication_status.st_ino) {
+                error = ESTALE;
+                int restore_error = rename_noreplace(parent_fd, destination_leaf,
+                                                     parent_fd, temporary);
+                if (restore_error != 0) failure->cleanup_code = restore_error;
+            } else {
+                published = true;
+                *published_status = opened_publication_status;
+                failure->published = true;
+                failure->device = opened_publication_status.st_dev;
+                failure->inode = opened_publication_status.st_ino;
+                error = print_created_event("clone-published", destination, destination_length,
+                                            &opened_publication_status);
+                if (error == 0 && cancelled()) error = ECANCELED;
+                if (error == 0) error = sync_directory(parent_fd);
+            }
         }
     }
     if (error != 0) {
@@ -1543,7 +1588,7 @@ static int hold_run_lease(const char *root, const char *relative, size_t relativ
     return 0;
 }
 
-/* Refuse cleanup unless the leaf still names the regular file or empty directory we created. */
+/* Quarantine the leaf before checking identity so a public-name replacement survives. */
 static int remove_created_entry(const char *root, const char *relative, size_t relative_length,
                                 uintmax_t expected_device, uintmax_t expected_inode,
                                 bool directory, struct fs_error *failure) {
@@ -1560,18 +1605,9 @@ static int remove_created_entry(const char *root, const char *relative, size_t r
         failure->code = error;
         return error;
     }
-    struct stat status;
-    error = identity_at(parent_fd, leaf, (dev_t)expected_device, (ino_t)expected_inode,
-                        directory, &status);
-    if (error == 0) {
-        if (cancelled()) {
-            error = ECANCELED;
-        } else if (unlinkat(parent_fd, leaf, directory ? AT_REMOVEDIR : 0) != 0) {
-            error = errno;
-        } else {
-            error = sync_directory(parent_fd);
-        }
-    }
+    error = cancelled()
+        ? ECANCELED
+        : unlink_if_identity(parent_fd, leaf, (dev_t)expected_device, (ino_t)expected_inode, directory);
     close(parent_fd);
     free(leaf);
     if (error != 0) failure->code = error;

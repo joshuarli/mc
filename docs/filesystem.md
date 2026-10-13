@@ -22,11 +22,11 @@ still match.
 
 `stageWorldPlan` accepts at most 128 MiB. It creates a random, exclusive,
 same-directory temporary file with mode `0600`, writes at most the caller's
-limit, syncs the file, then publishes it with `linkat`, which fails if the
-destination already exists. It removes the temporary name and syncs the parent
-directory before reporting success. A failed or cancelled operation attempts
-to remove only temporary or published entries whose device and inode match
-the identity returned by the helper.
+limit, and syncs the open file. It publishes that same inode with an atomic
+no-replace rename, then compares the destination to the still-open file handle
+before reporting success. A failed or cancelled operation attempts to remove
+only temporary or published entries whose type and device/inode match the
+identity returned by the helper.
 
 `stageOwnedFile` uses the same atomic no-overwrite protocol for runtime-owned
 files such as `server.properties`, `eula.txt`, and plugin JARs. Its hard limit
@@ -68,7 +68,18 @@ file, and reads at most 16 MiB or the smaller caller limit. It checks the
 opened handle while reading, so growth during the read cannot exceed the
 limit. `removeCreatedFile` and `removeCreatedDirectory` accept the identity
 returned at creation and reject an entry whose type or device/inode differs.
+Before unlinking, the helper atomically moves the leaf to a random sibling name,
+checks that moved entry's identity, and restores it if the identity differs.
 Directory removal is non-recursive.
+
+The owned root is a private, single-owner runtime namespace. Only its owning
+runner may mutate it, and it must serialize operations that can change the same
+artifact. The helper verifies a staged inode after publication and moves a
+removal target to a random sibling before checking its identity. POSIX provides
+no conditional rename or unlink-by-inode operation, so an arbitrary process
+with the same user ID that concurrently mutates the root, including one that
+discovers and replaces a random helper name, cannot be excluded by file
+permissions. Do not share the owned root with another mutating process.
 
 The runner wrapper starts the helper without a shell, streams plan bytes over
 stdin, bounds helper output, and uses an `AbortSignal` for cancellation. It
