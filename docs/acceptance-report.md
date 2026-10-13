@@ -17,7 +17,7 @@
 | Case | Status | Evidence or blocker |
 | --- | --- | --- |
 | `stack` | Pass | `./arena test --suite integration --case stack` on isolated commit `6c553f2`; includes ordinary two-client actions, per-client receipt checks, damage/disconnect outcome, and wrong-protocol rejection. |
-| `maps-reset` | Parked | Not run. The configured-run coordinator must prove three independent native clones, exact client-observed map state, and cleared inventory/death stats; readiness markers cannot establish this. |
+| `maps-reset` | Failing | The first configured attempt at `26a07a7` reached generated-world startup, then failed because the adapter was constructed before Mineflayer injected its plugins. The runner stopped both JVMs and saved an operational failure artifact; map comparison and reset remain unverified. |
 | `match-rules` | Parked | Not run. No ordinary two-client duel or independently reconstructed typed result has been observed. |
 | `legal-player` | Parked | Not run. No configured live route, container interaction, and attack sequence has been exercised through the Mineflayer skill client. |
 | `fairness` | Parked | Not run. Independent client receipt histories, complete current perception, and a live hidden-state perturbation remain unproven. |
