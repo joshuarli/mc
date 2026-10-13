@@ -32,6 +32,7 @@ import {
 } from './failures.js';
 import { clonePristineWorld } from './world.js';
 import { decideRuntimePolicy, isStrategyDecisionTick } from './policy-decision.js';
+import { joinEvaluatorAfterOutcome } from './evaluator.js';
 import { armRuntimeDeadline, COLD_START_TIMEOUT_MS, type RuntimeDeadline } from './deadline.js';
 import {
   collectClientFailures,
@@ -317,15 +318,19 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
         coordinator.failure,
       );
       if (callbackResult.kind === 'returned') {
-        if (!startAttempted) await start();
+        if (!startAttempted && !coordinator.outcomeReceived) await start();
         finalOutcome = await raceWithRunState(
           outcome.promise, abortPromise, leaseLost, processFailure, coordinator.failure,
         );
       } else {
         finalOutcome = callbackResult.value;
       }
-      evaluatorAbort.abort(new Error('match outcome received'));
-      await withTimeout(evaluatorTask, EVALUATOR_JOIN_TIMEOUT_MS, 'evaluator_did_not_stop');
+      await joinEvaluatorAfterOutcome({
+        task: evaluatorTask,
+        abort: evaluatorAbort,
+        timeoutMs: EVALUATOR_JOIN_TIMEOUT_MS,
+        failures: [abortPromise, leaseLost, processFailure, coordinator.failure],
+      });
     }
 
     matchOutcomeReceived = true;
