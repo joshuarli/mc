@@ -10,6 +10,8 @@ Optional `spectatorMode` defaults to `automated`. `reserveExternalSlot` starts o
 
 The CLI applies a 180 second cold-start deadline, a 60 second per-server readiness deadline, and a 600 second wall deadline. Deadlines fail with a structured runtime timeout. Cleanup preserves the initiating error and reports cleanup failure separately. An interrupted run retains its structured failure artifact and any completed trace checkpoints; cancellation does not invent a terminal outcome. A genuine operator-abort outcome may be emitted during cleanup after cancellation when backed by its preceding recorded runner operator-abort command and independently validated authority events; it cannot be replaced by a winner, draw, or fabricated outcome.
 
+The resource monitor aborts when combined owned RSS exceeds 8 GiB, process-available memory falls below 4 GiB, or swap-outs increase. Swap-in-only activity is permitted; both system-wide counters remain in opt-in samples. These counters do not identify which process caused the activity. Live admission reserves 8 GiB available memory and checks stable swap-outs before launch.
+
 ## Integration selectors
 
 - `./arena test --suite integration --case policy-border-preemption` runs the ordinary baseline policy through natural border shrink. It uses recorded client observations to identify the first unsafe input, then checks next-cadence acceptance, cancellation settlement, and successor start separately. The selector passed at `761916d`; complete replay and timing receipts are committed under `tests/fixtures/policy-border-preemption`.

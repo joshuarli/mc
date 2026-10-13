@@ -1,0 +1,1 @@
+{"cleanup":{"source":null,"status":"succeeded"},"primary":{"category":"runtime_failure","resource":"system memory","source":{"field":"swap_ins","kind":"system_swapping_detected"}},"run_id":"legal-player-fe9a5215-8549-42d6-9bb0-6d29103480c9","schema":1,"trace_checkpoint_segments":[]}

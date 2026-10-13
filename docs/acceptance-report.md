@@ -1,6 +1,6 @@
 # Acceptance report
 
-**Status: campaign execution continues. The narrow ramp and full-chain navigation now pass with the collision-width and partial-path corrections. The latest full legal-player run aborted on host swap-ins during the subsequent chest route. Its cancellation assertion exposed a separate evaluator defect, now covered and corrected offline. Six-seed gameplay remains pending and M1 is unaccepted.** Historical proofs below apply to their recorded revisions.
+**Status: campaign execution continues. The narrow ramp and full-chain navigation now pass with the collision-width and partial-path corrections. Subsequent swap-in-only aborts blocked the remaining legal-player checks. Evaluator cancellation is corrected; the owner approved allowing swap-in-only recovery while retaining the memory limits and swap-out guard. Six-seed gameplay remains pending and M1 is unaccepted.** Historical proofs below apply to their recorded revisions.
 
 ## Environment and selected stack
 
@@ -116,6 +116,12 @@ At `384273c`, the complete legal-player route passed food depletion, exact `Goal
 
 At `0fe834d`, the evaluator checks its abort signal after each awaited legal-player/duel skill, preserving the initiating runtime failure before success assertions. A regression through the actual duel helper failed before correction. An independently compiled merged revision passed four new cancellation/error-identity cases and six existing evaluator/failure cases. Independent operation rejections and ordinary failed skill outcomes remain errors. Live verification of this correction is pending.
 
+The next run at `f004218`, `legal-player-fe9a5215-8549-42d6-9bb0-6d29103480c9`, aborted during startup on `swap_ins` after a full minute of stable preflight counters. Cleanup succeeded, but evaluation never started and no trace checkpoint exists. Its exact 283-byte artifact is retained under `legal-player-swap-abort/startup-failure`; this is not a live evaluator proof. Before and after the attempt, swap-ins advanced by four 16-KiB pages while swap-outs remained flat; this does not attribute the activity to Paper.
+
+At `d117589`, the owner explicitly approved permitting swap-in-only recovery. The monitor still aborts on every new swap-out, RSS above 8 GiB, or available memory below 4 GiB, and continues reporting both counters. The new regression failed against the prior guard; an independently compiled proposal passed all eleven resource-monitor cases, including the unchanged swap-out failure case and command kill/reap behavior. Swap-ins and swap-outs are separate lifetime counters in [Apple's XNU definitions](https://github.com/apple-oss-distributions/xnu/blob/main/osfmk/mach/vm_statistics.h#L159). Live verification remains pending.
+
+The older startup failure `legal-player-ramp-262bf9b9-f1c5-49cf-b2a8-55fff43576d3` became eligible under normal retention. Its world plan, server log, and failure artifact were compared before and after selected native GC; no authoritative trace existed or was invented. Nine full runs remain, with 7,723,852,130 work bytes and 6,121,230,680 dependency bytes in the latest native snapshot.
+
 `tests/fixtures/legal-player-swap-abort/` retains the exact 328,320-byte trace, 658-byte failure artifact, and a 54,972-byte excerpt of 33 indexed original ring records. Both copied files and every selected record/receipt match the original. Independent reporting reconstructs the authority abort from 1,398 records. The full run and complete ring remain protected locally.
 
 That failure made the older diagnosed `legal-player-ramp-e3cb3c40-0fce-4adb-ac93-82b048443560` eligible under normal retention. Its world plan, failure artifact, full ring, server log, four stats files, and complete trace were staged and compared byte for byte before native apply removed only that selected run. Its archived abort reconstructs successfully, and all nine files matched again after removal. The resulting native snapshot has nine full runs, 7,723,557,544 work bytes, and 6,121,199,444 dependency bytes; no retention rule was changed.
@@ -194,7 +200,7 @@ The runtime exposes `run --scenario`, read-only `validate --scenario`, stopped-r
 
 ## Remaining prerequisites
 
-The server-width mismatch is reproduced and corrected, and the narrow exact ramp proof now passes. M1 next needs the complete legal-player chain followed by the unchanged registered six-seed suite. The owner's later instruction sets live admission to 8 GiB available memory with stable swap counters, replacing the earlier 16 GiB reservation. Runtime enforces an 8 GiB combined RSS ceiling and aborts on swapping or available memory below 4 GiB. Builds remain serialized with Paper.
+The server-width mismatch is reproduced and corrected, and the narrow exact ramp proof now passes. M1 next needs the complete legal-player chain followed by the unchanged registered six-seed suite. The owner sets live admission to 8 GiB available memory with stable swap-outs, replacing the earlier 16 GiB reservation. Runtime enforces an 8 GiB combined RSS ceiling and aborts on new swap-outs or available memory below 4 GiB; swap-in-only recovery is explicitly approved. Builds remain serialized with Paper.
 
 Configured map reset, all eight match authority variants, the extended real grace-phase duel, replay/report, fairness, and ten-cycle lifecycle acceptance are already verified above. Pending SIGINT acceptance remains independent and does not unblock M1.
 
