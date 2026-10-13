@@ -88,6 +88,13 @@ async function inspectCompletedRun(helperPath: string, runId: string): Promise<{
   };
 }
 
+/** Inspects a stopped run whose runner returned early after an authoritative abort. */
+export async function inspectOwnedAcceptanceRun(runId: string) {
+  const repositoryRoot = process.cwd();
+  const helperPath = process.env.ARENA_FS_HELPER ?? resolve(repositoryRoot, ".work/arena-fs/arena-fs");
+  return await inspectCompletedRun(helperPath, runId);
+}
+
 function lockedString(section: string, key: string): string {
   const values: string[] = [];
   let active = false;

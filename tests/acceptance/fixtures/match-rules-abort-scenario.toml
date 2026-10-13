@@ -1,0 +1,43 @@
+schema = 1
+name = "match-rules-abort"
+mode = "hunger_games"
+seed = 951004
+map = "match-rules-authority-map.toml"
+policy = "../../../policies/baseline.toml"
+
+[roster]
+competitors = 2
+spectator_capacity = 1
+
+[server]
+minecraft = "26.1.2"
+view_distance_chunks = 6
+simulation_distance_chunks = 5
+max_tick_rate = 20
+
+[match]
+countdown_ticks = 0
+grace_ticks = 0
+authoritative_max_ticks = 60
+respawn = false
+block_breaking = false
+block_placing = false
+natural_mobs = false
+natural_random_ticks = false
+
+[border]
+initial_diameter_blocks = 62
+shrink_start_tick = 10
+shrink_end_tick = 20
+final_diameter_blocks = 52
+
+[bots]
+strategy_interval_ticks = 4
+path_expansions_per_slice = 2048
+max_pending_paths_per_bot = 1
+perception = "competitive-v1"
+
+[record]
+mode = "evaluation"
+policy_replay = true
+world_outcomes = true

@@ -17,9 +17,20 @@ const integrationCases = new Map([
   ["stack", "stack.js"],
   ["maps-reset", "maps-reset.js"],
   ["match-rules", "match-rules.js"],
+  ["match-rules-border-death", "match-rules-authority.js"],
+  ["match-rules-disconnect", "match-rules-authority.js"],
+  ["match-rules-timeout", "match-rules-authority.js"],
+  ["match-rules-abort", "match-rules-authority.js"],
+  ["match-rules-spectator-identity", "match-rules-authority.js"],
+  ["match-rules-duplicate-identity", "match-rules-authority.js"],
+  ["match-rules-eliminated-reconnect", "match-rules-authority.js"],
+  ["match-rules-same-tick-zero-survivors", "match-rules-authority.js"],
+  ["lifecycle", "lifecycle.js"],
+  ["lifecycle-smoke", "lifecycle.js"],
+  ["faults", "faults.js"],
   ["legal-player", "legal-player.js"],
-  ["fairness", "fairness.js"],
-  ["replay-report", "replay-report.js"]
+  ["replay-report", "replay-report.js"],
+  ["fairness", "fairness.js"]
 ]);
 const acceptanceCases = new Map([
   ["hunger-six", "hunger.js"]

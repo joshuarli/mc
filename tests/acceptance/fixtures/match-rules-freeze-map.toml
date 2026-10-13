@@ -1,0 +1,29 @@
+schema = 1
+name = "match-rules-freeze"
+
+[dimensions]
+width = 64
+depth = 64
+min_y = 0
+max_y = 128
+
+[[operations]]
+kind = "cuboid"
+from = { x = 0, y = 64, z = 0 }
+to = { x = 63, y = 64, z = 63 }
+block = "minecraft:stone"
+
+[[operations]]
+kind = "spawn"
+seat = 0
+position = { x = 28, y = 65, z = 32 }
+
+[[operations]]
+kind = "spawn"
+seat = 1
+position = { x = 31, y = 65, z = 32 }
+
+[[operations]]
+kind = "loot_container"
+position = { x = 29, y = 65, z = 30 }
+inventory = ["minecraft:bread"]

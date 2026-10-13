@@ -2,7 +2,7 @@ schema = 1
 name = "match-rules-freeze"
 mode = "hunger_games"
 seed = 88172645463325252
-map = "maps-reset-map.toml"
+map = "match-rules-freeze-map.toml"
 policy = "../../../policies/baseline.toml"
 
 [roster]

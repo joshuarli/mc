@@ -20,45 +20,72 @@ test("match-rules", { timeout: 300_000 }, async (t) => {
     "match-rules",
     async (active, signal) => {
       const seatZero = competitorForSeat(active, 0);
+      const seatOne = competitorForSeat(active, 1);
       const chest = active.preparedRun.scenario.map.lootContainers[0];
       assert.ok(chest, "match-rules fixture must declare a chest within spawn reach");
-      await seatZero.bot.look(0, 0);
+      const healthBeforeGrace = seatOne.bot.health;
+      let minimumHealth = healthBeforeGrace;
+      let damageReceipts = 0;
+      const onHealth = (): void => { minimumHealth = Math.min(minimumHealth, seatOne.bot.health); };
+      const onHurt = (entity: typeof seatOne.bot.entity | undefined): void => {
+        if (entity?.id === seatOne.bot.entity.id) damageReceipts += 1;
+      };
+      seatOne.bot.on("health", onHealth);
+      seatOne.bot.on("entityHurt", onHurt);
+      try {
+        await seatZero.bot.look(0, 0);
 
-      await assertPreReleaseLocked(active, seatZero, chest.position, "waiting", signal);
-      await active.start();
-      await assertPreReleaseLocked(active, seatZero, chest.position, "countdown", signal);
+        await assertPreReleaseLocked(active, seatZero, chest.position, "waiting", signal);
+        await active.start();
+        await assertPreReleaseLocked(active, seatZero, chest.position, "countdown", signal);
 
-      await waitForActivePhase(active, signal);
-      const positionBeforeReleaseMove = point(seatZero.bot.entity.position);
-      await walkForward(seatZero.bot, signal);
-      assert.ok(
-        distance(positionBeforeReleaseMove, point(seatZero.bot.entity.position)) > 0.1,
-        "the same walking input must move the competitor after the active phase is released",
-      );
+        await waitForPhase(active, "grace", signal);
+        const target = seatZero.bot.players[seatOne.identity.username]?.entity;
+        assert.ok(target, "the attacker must receive its opponent before the grace-phase attack");
+        await seatZero.bot.lookAt(target.position.offset(0, target.height * 0.6, 0), true);
+        seatZero.bot.attack(target);
+        await delay(200, undefined, { signal });
+        assert.equal(latestPhase(active), "grace", "the denied attack must occur during grace");
+        assert.equal(minimumHealth, healthBeforeGrace, "grace-phase PvP must not lower the target's health");
+        assert.equal(damageReceipts, 0, "grace-phase PvP must not produce a target damage receipt");
 
-      assert.equal(active.prepare.type, "prepare");
-      const usernamesBySeat = new Map(active.prepare.payload.roster.map(({ seat, username }) => [seat, username] as const));
-      const reader = createMineflayerSemanticWorldReader(seatZero.bot, usernamesBySeat);
-      const chestBeforeLoot = await reader.readContainer(chest.position, signal);
-      assert.deepStrictEqual(
-        chestBeforeLoot.slots.filter((item) => item !== null).map(({ item }) => item),
-        chest.inventory,
-        "waiting and countdown chest attempts must leave every declared item in the server chest",
-      );
-      assert.equal(observePlayerInventory(seatZero.bot).items.length, 0);
+        await waitForActivePhase(active, signal);
+        const positionBeforeReleaseMove = point(seatZero.bot.entity.position);
+        await walkForward(seatZero.bot, signal);
+        assert.ok(
+          distance(positionBeforeReleaseMove, point(seatZero.bot.entity.position)) > 0.1,
+          "the same walking input must move the competitor after the active phase is released",
+        );
 
-      assert.deepStrictEqual(
-        await seatZero.client.run({ kind: "containerOpen", position: chest.position }),
-        { kind: "succeeded" },
-        "the same chest interaction must transfer its items after release",
-      );
-      const inventory = observePlayerInventory(seatZero.bot);
-      for (const item of chest.inventory) {
-        assert.ok(inventory.items.some((entry) => entry.item === item), `released player must receive ${item}`);
+        assert.equal(active.prepare.type, "prepare");
+        const usernamesBySeat = new Map(active.prepare.payload.roster.map(({ seat, username }) => [seat, username] as const));
+        const reader = createMineflayerSemanticWorldReader(seatZero.bot, usernamesBySeat);
+        const chestBeforeLoot = await reader.readContainer(chest.position, signal);
+        assert.deepStrictEqual(
+          chestBeforeLoot.slots.filter((item) => item !== null).map(({ item }) => item),
+          chest.inventory,
+          "waiting and countdown chest attempts must leave every declared item in the server chest",
+        );
+        assert.equal(observePlayerInventory(seatZero.bot).items.length, 0);
+
+        assert.deepStrictEqual(
+          await seatZero.client.run({ kind: "containerOpen", position: chest.position }),
+          { kind: "succeeded" },
+          "the same chest interaction must transfer its items after release",
+        );
+        const inventory = observePlayerInventory(seatZero.bot);
+        for (const item of chest.inventory) {
+          assert.ok(inventory.items.some((entry) => entry.item === item), `released player must receive ${item}`);
+        }
+
+        await eliminateOpponentWithSkillAttacks(active, 0, 1, signal);
+        assert.ok(minimumHealth < healthBeforeGrace, "active-phase Mineflayer attacks must lower the target's health");
+        assert.ok(damageReceipts > 0, "active-phase Mineflayer attacks must produce a target damage receipt");
+        await active.waitForOutcome();
+      } finally {
+        seatOne.bot.removeListener("health", onHealth);
+        seatOne.bot.removeListener("entityHurt", onHurt);
       }
-
-      await eliminateOpponentWithSkillAttacks(active, 0, 1, signal);
-      await active.waitForOutcome();
     },
     t.signal,
     { competitorDriver: "evaluator" },
@@ -77,7 +104,7 @@ async function assertPreReleaseLocked(
   active: AcceptanceRunContext,
   competitor: ReturnType<typeof competitorForSeat>,
   chestPosition: { readonly x: number; readonly y: number; readonly z: number },
-  phase: "waiting" | "countdown",
+  phase: "waiting" | "countdown" | "grace",
   signal: AbortSignal,
 ): Promise<void> {
   await waitForPhase(active, phase, signal);
