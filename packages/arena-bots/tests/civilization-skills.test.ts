@@ -2,7 +2,19 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { createRequire } from 'node:module';
 import test from 'node:test';
-import { blockPosition, entityId, type CivilizationPolicyContextInput } from '@arena/core';
+import {
+  blockPosition,
+  civilizationPolicyContext,
+  civilizationPolicyFeedbackBatch,
+  decideCivilization,
+  DeterministicRandom,
+  emptyCivilizationPolicyMemory,
+  entityId,
+  PolicyParams,
+  RandomStream,
+  seatId,
+  type CivilizationPolicyContextInput,
+} from '@arena/core';
 import type { Bot } from 'mineflayer';
 import { MineflayerCivilizationObserver } from '../src/civilization-observer.js';
 import { MineflayerObserver } from '../src/observer.js';
@@ -73,6 +85,168 @@ test('craft spends four observed oak logs for sixteen observed oak planks', asyn
     }), { kind: 'succeeded' });
     assert.equal(harness.inventory.items().filter((stack) => stack.name === 'oak_log').length, 0);
     assert.equal(harness.inventory.items().find((stack) => stack.name === 'oak_planks')?.count, 16);
+  } finally {
+    await harness.owner.close();
+    harness.civilization.close();
+    harness.observer.close();
+  }
+});
+
+test('core residual craft decision spends two oak logs for the remaining eight planks', async () => {
+  const harness = makeHarness();
+  const logs = item('oak_log', 10, 2, 9);
+  const planks = item('oak_planks', 11, 8, 10);
+  harness.inventory.slots[9] = logs;
+  harness.inventory.slots[10] = planks;
+  Object.assign(harness.bot, { food: 20 });
+  harness.bot.emit('spawn');
+  harness.bot.emit('health');
+  harness.bot._client.emit('window_items', { windowId: 0 });
+  const recipe = {
+    result: { id: 11, count: 4 },
+    delta: [{ id: 10, count: -1 }, { id: 11, count: 4 }],
+  };
+  let craftIterations = 0;
+  Object.assign(harness.bot, {
+    recipesFor: (_itemType: number, _metadata: null, minimumResultCount: number, craftingTable: null) => {
+      assert.equal(minimumResultCount, 8);
+      assert.equal(craftingTable, null);
+      return [recipe];
+    },
+    craft: async (_recipe: unknown, count: number) => {
+      assert.equal(count, 2);
+      for (let index = 0; index < count; index += 1) {
+        assert.ok(logs.count > 0);
+        logs.count -= 1;
+        planks.count += 4;
+        craftIterations += 1;
+      }
+      if (logs.count === 0) harness.inventory.slots[9] = null;
+    },
+  });
+
+  try {
+    const policyContext = civilizationPolicyContext(context());
+    const observation = harness.civilization.observe(1, harness.observer.observe(1));
+    const decision = decideCivilization(
+      policyContext,
+      observation,
+      emptyCivilizationPolicyMemory(),
+      PolicyParams.baseline(),
+      DeterministicRandom.forStream(456n, RandomStream.search(seatId(0))),
+      civilizationPolicyFeedbackBatch({ shared: [], actions: [] }),
+    );
+    if (decision.goal.kind !== 'craftMaterial' || decision.intent.kind !== 'craft') {
+      throw new Error('two logs and eight planks should produce an eight-plank craft decision');
+    }
+    assert.deepEqual(decision.goal, { kind: 'craftMaterial', item: 'oak_planks', resultCount: 8 });
+    assert.deepEqual(decision.intent, {
+      kind: 'craft',
+      output: 'oak_planks',
+      resultCount: 8,
+      table: null,
+    });
+
+    assert.deepEqual(await harness.owner.runCivilization(decision.intent), { kind: 'succeeded' });
+    assert.equal(craftIterations, 2);
+    assert.equal(harness.inventory.items().find((stack) => stack.name === 'oak_log')?.count ?? 0, 0);
+    assert.equal(harness.inventory.items().find((stack) => stack.name === 'oak_planks')?.count, 16);
+  } finally {
+    await harness.owner.close();
+    harness.civilization.close();
+    harness.observer.close();
+  }
+});
+
+test('craft supports one and three oak log recipe iterations', async () => {
+  for (const { resultCount, logsRequired, planksBefore } of [
+    { resultCount: 4, logsRequired: 1, planksBefore: 12 },
+    { resultCount: 12, logsRequired: 3, planksBefore: 4 },
+  ]) {
+    const harness = makeHarness();
+    const logs = item('oak_log', 10, logsRequired, 9);
+    const planks = item('oak_planks', 11, planksBefore, 10);
+    harness.inventory.slots[9] = logs;
+    harness.inventory.slots[10] = planks;
+    let craftIterations = 0;
+    Object.assign(harness.bot, {
+      recipesFor: (_itemType: number, _metadata: null, minimumResultCount: number, craftingTable: null) => {
+        assert.equal(minimumResultCount, resultCount);
+        assert.equal(craftingTable, null);
+        return [{
+          result: { id: 11, count: 4 },
+          delta: [{ id: 10, count: -1 }, { id: 11, count: 4 }],
+        }];
+      },
+      craft: async (_recipe: unknown, count: number) => {
+        assert.equal(count, logsRequired);
+        for (let index = 0; index < count; index += 1) {
+          logs.count -= 1;
+          planks.count += 4;
+          craftIterations += 1;
+        }
+        harness.inventory.slots[9] = null;
+      },
+    });
+
+    try {
+      assert.deepEqual(await harness.owner.runCivilization({
+        kind: 'craft', output: 'oak_planks', resultCount, table: null,
+      }), { kind: 'succeeded' });
+      assert.equal(craftIterations, logsRequired);
+      assert.equal(harness.inventory.items().find((stack) => stack.name === 'oak_log')?.count ?? 0, 0);
+      assert.equal(harness.inventory.items().find((stack) => stack.name === 'oak_planks')?.count, 16);
+    } finally {
+      await harness.owner.close();
+      harness.civilization.close();
+      harness.observer.close();
+    }
+  }
+});
+
+test('craft rejects non-recipe-aligned and unbounded result counts before lookup', async () => {
+  const harness = makeHarness();
+  harness.inventory.slots[9] = item('oak_log', 10, 4, 9);
+  let recipeLookups = 0;
+  let craftCalls = 0;
+  Object.assign(harness.bot, {
+    recipesFor: () => { recipeLookups += 1; return []; },
+    craft: async () => { craftCalls += 1; },
+  });
+
+  try {
+    for (const resultCount of [0, 3, 5, 17, 1.5, Number.NaN, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 1]) {
+      assert.deepEqual(await harness.owner.runCivilization({
+        kind: 'craft', output: 'oak_planks', resultCount, table: null,
+      }), { kind: 'failed', cause: 'preconditionsNotMet' });
+    }
+    assert.equal(recipeLookups, 0);
+    assert.equal(craftCalls, 0);
+  } finally {
+    await harness.owner.close();
+    harness.civilization.close();
+    harness.observer.close();
+  }
+});
+
+test('craft rejects recipes that do not consume exactly one oak log for four planks', async () => {
+  const harness = makeHarness();
+  harness.inventory.slots[9] = item('oak_log', 10, 1, 9);
+  let craftCalls = 0;
+  Object.assign(harness.bot, {
+    recipesFor: () => [{
+      result: { id: 11, count: 4 },
+      delta: [{ id: 12, count: -1 }, { id: 11, count: 4 }],
+    }],
+    craft: async () => { craftCalls += 1; },
+  });
+
+  try {
+    assert.deepEqual(await harness.owner.runCivilization({
+      kind: 'craft', output: 'oak_planks', resultCount: 4, table: null,
+    }), { kind: 'failed', cause: 'preconditionsNotMet' });
+    assert.equal(craftCalls, 0);
+    assert.equal(harness.inventory.items().find((stack) => stack.name === 'oak_log')?.count, 1);
   } finally {
     await harness.owner.close();
     harness.civilization.close();

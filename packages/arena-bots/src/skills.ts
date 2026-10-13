@@ -767,28 +767,37 @@ export class SkillOwner {
     active: ActiveSkill,
   ): Promise<void> {
     this.#requireSynchronizedCivilizationInventory();
-    if (intent.table !== null || intent.resultCount !== OUTPOST_PLANKS_REQUIRED) {
-      throw new SkillFault('preconditionsNotMet', 'the outpost recipe requires four oak logs and exactly sixteen oak planks in hand crafting');
+    const planksPerOakLog = OUTPOST_PLANKS_REQUIRED / OUTPOST_LOGS_REQUIRED;
+    if (intent.table !== null
+      || !Number.isSafeInteger(intent.resultCount)
+      || intent.resultCount < planksPerOakLog
+      || intent.resultCount > OUTPOST_PLANKS_REQUIRED
+      || intent.resultCount % planksPerOakLog !== 0) {
+      throw new SkillFault(
+        'preconditionsNotMet',
+        `outpost crafting requires whole multiples of ${planksPerOakLog} oak planks, up to ${OUTPOST_PLANKS_REQUIRED}, in hand crafting`,
+      );
     }
+    const resultCount = intent.resultCount;
+    const craftCount = resultCount / planksPerOakLog;
     const logType = this.#bot.registry.itemsByName.oak_log;
     const plankType = this.#bot.registry.itemsByName.oak_planks;
     if (logType === undefined || plankType === undefined) {
       throw new Error('Mineflayer registry lacks the required oak log or plank item');
     }
-    const recipe = this.#bot.recipesFor(plankType.id, null, intent.resultCount, null)
+    const recipe = this.#bot.recipesFor(plankType.id, null, resultCount, null)
       .find((candidate) => candidate.result.id === plankType.id
-        && candidate.result.count === 4
+        && candidate.result.count === planksPerOakLog
         && candidate.delta.reduce((count, entry) => count + (entry.id === logType.id ? entry.count : 0), 0) === -1
-        && candidate.delta.reduce((count, entry) => count + (entry.id === plankType.id ? entry.count : 0), 0) === 4
+        && candidate.delta.reduce((count, entry) => count + (entry.id === plankType.id ? entry.count : 0), 0) === planksPerOakLog
         && candidate.delta.every((entry) => entry.id === logType.id || entry.id === plankType.id));
-    if (recipe === undefined || intent.resultCount % recipe.result.count !== 0) {
-      throw new SkillFault('preconditionsNotMet', 'no legal four-log oak plank recipe is available in this client inventory');
+    if (recipe === undefined) {
+      throw new SkillFault('preconditionsNotMet', 'no legal one-log to four-plank oak recipe is available in this client inventory');
     }
-    const craftCount = intent.resultCount / recipe.result.count;
     const logsBefore = countInventoryItemByName(this.#bot, 'oak_log');
     const planksBefore = countInventoryItemByName(this.#bot, 'oak_planks');
-    if (logsBefore < OUTPOST_LOGS_REQUIRED) {
-      throw new SkillFault('preconditionsNotMet', 'crafting the outpost planks requires four available oak logs');
+    if (logsBefore < craftCount) {
+      throw new SkillFault('preconditionsNotMet', `crafting ${resultCount} oak planks requires ${craftCount} available oak logs`);
     }
     try {
       await this.#awaitInventoryOperation(
@@ -804,14 +813,14 @@ export class SkillOwner {
     throwIfInterrupted(active.controller.signal);
     await waitForCondition(
       this.#bot,
-      () => countInventoryItemByName(this.#bot, 'oak_log') === logsBefore - OUTPOST_LOGS_REQUIRED
-        && countInventoryItemByName(this.#bot, 'oak_planks') === planksBefore + OUTPOST_PLANKS_REQUIRED,
+      () => countInventoryItemByName(this.#bot, 'oak_log') === logsBefore - craftCount
+        && countInventoryItemByName(this.#bot, 'oak_planks') === planksBefore + resultCount,
       active.controller.signal,
       ACTION_TIMEOUT_MS,
     );
-    if (countInventoryItemByName(this.#bot, 'oak_log') !== logsBefore - OUTPOST_LOGS_REQUIRED
-      || countInventoryItemByName(this.#bot, 'oak_planks') !== planksBefore + OUTPOST_PLANKS_REQUIRED) {
-      throw new SkillFault('noProgress', 'the client did not observe the four-log to sixteen-plank inventory change');
+    if (countInventoryItemByName(this.#bot, 'oak_log') !== logsBefore - craftCount
+      || countInventoryItemByName(this.#bot, 'oak_planks') !== planksBefore + resultCount) {
+      throw new SkillFault('noProgress', `the client did not observe consuming ${craftCount} oak logs for ${resultCount} oak planks`);
     }
   }
 
