@@ -13,10 +13,10 @@
 | Java | Eclipse Temurin JDK 25.0.4.1+1; runtime build `25.0.4.1+1-LTS` |
 | Gradle | 9.6.1 wrapper; wrapper JAR and distribution SHA-256 are checked against `versions.lock.toml` |
 
-Mineflayer 4.39.0 and `minecraft-protocol` 1.68.0 advertise Minecraft 26.1 support, and the protocol data maps Minecraft 26.1.2 to protocol 775. These upstream declarations justify the selected pairing; they do not establish Arena's gameplay compatibility. The exact server artifact and matching Paper API are pinned in `versions.lock.toml`.
+Mineflayer 4.39.0 and `minecraft-protocol` 1.68.0 advertise Minecraft 26.1 support, and the protocol data maps Minecraft 26.1.2 to protocol 775. The exact server artifact and matching Paper API are pinned in `versions.lock.toml`.
 
-**Arena live compatibility status: pending.** The required two-client Mineflayer smoke must verify login, chunks, movement, chest transfer, an ordinary hit observed by the server, disconnect, and rejection of a wrong-version client against the locked Paper build. No live Mineflayer/Paper proof is recorded yet.
+**Arena live compatibility status: confirmed on macOS arm64 for the two-client stack smoke.** `./arena test --suite integration --case stack` passed with the locked Node.js 24.21.0, Mineflayer 4.39.0, and Paper 26.1.2 build 74 (protocol 775). Both clients logged in, received fixture chunks, moved, transferred chest items, produced a server-observed ordinary hit, and disconnected; the wrong-protocol control was rejected. This proves the stack smoke on macOS arm64 only. Linux x86_64 and full gameplay acceptance remain unverified. The smoke is a compatibility check, not a performance measurement.
 
-The pinned Node and npm bootstrap completed on macOS arm64. Linux x86_64 is the other supported native target and still needs a host run.
+The pinned Node and npm bootstrap also completed on macOS arm64. Linux x86_64 is the other supported native target and still needs a host run.
 
 Sources: [Mineflayer 4.39.0 supported versions](https://raw.githubusercontent.com/PrismarineJS/mineflayer/4.39.0/lib/version.js), [Mineflayer 4.39.0 package metadata](https://raw.githubusercontent.com/PrismarineJS/mineflayer/4.39.0/package.json), [minecraft-protocol 1.68.0 protocol versions](https://raw.githubusercontent.com/PrismarineJS/node-minecraft-protocol/1.68.0/src/version.js), [Minecraft 26.1.2 protocol mapping](https://raw.githubusercontent.com/PrismarineJS/minecraft-data/master/data/pc/common/protocolVersions.json), [Node.js release schedule](https://nodejs.org/en/about/previous-releases), [Paper Java requirements](https://docs.papermc.io/paper/getting-started/).
