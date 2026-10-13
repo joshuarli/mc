@@ -207,6 +207,11 @@ const ABORT_REASONS = new Set<AbortReason>([
 ]);
 const PHASES = new Set(["waiting", "countdown", "grace", "active", "finished", "aborted"]);
 
+type StrictJsonObject = { readonly [key: string]: StrictJsonValue };
+type RequiredObject<Keys extends readonly string[]> = StrictJsonObject & {
+  readonly [Key in Keys[number]]: StrictJsonValue;
+};
+
 function isPluginEvent(message: ControlMessage): boolean {
   return message.type === "heartbeat" || message.type === "build_progress" || message.type === "public_clock"
     || message.type === "public_state" || message.type === "elimination" || message.type === "outcome"
@@ -452,8 +457,7 @@ function readElimination(value: StrictJsonValue): EliminationPayload {
     const seat = readSafeInteger(elimination.seat, `${path}.seat`, 0, 5);
     if (seat <= previousSeat) invalid(`${path}.seat`, "eliminations must be ordered by unique seat");
     previousSeat = seat;
-    const cause = readString(elimination.cause, `${path}.cause`, 1, 32);
-    if (cause !== "death" && cause !== "disconnect") invalid(`${path}.cause`, "unknown elimination cause");
+    const cause = readEliminationCause(elimination.cause, `${path}.cause`);
     return { seat, cause };
   });
   return { at: readTick(payload.at, "payload.at"), eliminations };
@@ -539,17 +543,23 @@ function readAbortReason(value: StrictJsonValue | undefined, path: string): Abor
   return reason as AbortReason;
 }
 
+function readEliminationCause(value: StrictJsonValue | undefined, path: string): "death" | "disconnect" {
+  const cause = readString(value, path, 1, 32);
+  if (cause === "death" || cause === "disconnect") return cause;
+  return invalid(path, "unknown elimination cause");
+}
+
 function readEmpty(value: StrictJsonValue, path: string): Record<string, never> {
   const object = readObject(value, path, [], []);
   return object as Record<string, never>;
 }
 
-function readObject(
+function readObject<const Keys extends readonly string[]>(
   value: StrictJsonValue | undefined,
   path: string,
   allowed: readonly string[],
-  required: readonly string[]
-): { readonly [key: string]: StrictJsonValue } {
+  required: Keys
+): RequiredObject<Keys> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) invalid(path, "must be an object");
   const object = value as { readonly [key: string]: StrictJsonValue };
   for (const key of Object.keys(object)) {
@@ -558,7 +568,7 @@ function readObject(
   for (const key of required) {
     if (!Object.hasOwn(object, key)) invalid(`${path}.${key}`, "required field is missing");
   }
-  return object;
+  return object as RequiredObject<Keys>;
 }
 
 function readArray(value: StrictJsonValue | undefined, path: string, minLength: number, maxLength: number): readonly StrictJsonValue[] {
@@ -662,12 +672,16 @@ function toStrictJsonValue(value: unknown, seen: Set<object>): StrictJsonValue {
 
 function sortObjectKeys(value: StrictJsonValue): StrictJsonValue {
   if (Array.isArray(value)) return value.map(sortObjectKeys);
-  if (value !== null && typeof value === "object") {
+  if (isStrictJsonObject(value)) {
     const sorted: { [key: string]: StrictJsonValue } = Object.create(null) as { [key: string]: StrictJsonValue };
     for (const key of Object.keys(value).sort()) sorted[key] = sortObjectKeys(value[key]!);
     return sorted;
   }
   return value;
+}
+
+function isStrictJsonObject(value: StrictJsonValue): value is StrictJsonObject {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 function invalid(path: string, message: string): never {
