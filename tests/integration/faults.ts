@@ -401,7 +401,7 @@ function assertInterruptedTrace(segments: readonly TraceSegment[], category: "ca
   const abortIndex = evidence.records.findIndex((record) => record.direction === "runner" && record.type === "abort");
   assert.ok(abortIndex >= 0 && abortIndex < outcomeIndex, "an operator abort must follow its recorded runner command");
   const { direction: _direction, ...abortEnvelope } = evidence.records[abortIndex]!;
-  const abortCommand = decodeControlEnvelope(abortEnvelope);
+  const abortCommand = decodeControlEnvelope(JSON.stringify(abortEnvelope));
   assert.ok(abortCommand.type === "abort");
   assert.equal(abortCommand.payload.reason, "operator");
   const { report } = reconstructRunEvidence(evidence);
