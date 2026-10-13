@@ -239,8 +239,18 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
             event.setCancelled(true);
             return;
         }
-        if (event instanceof EntityDamageByEntityEvent byEntity
-                && isPreReleaseDamageSource(byEntity.getDamager())) {
+        if (!(event instanceof EntityDamageByEntityEvent byEntity)) {
+            return;
+        }
+        if (isPreReleaseDamageSource(byEntity.getDamager())) {
+            event.setCancelled(true);
+            return;
+        }
+        if (event.getEntity() instanceof Player victim
+                && matchController != null
+                && !matchController.phase().allowsCompetitorPvp()
+                && isArenaCompetitor(victim)
+                && isArenaCompetitorDamageSource(byEntity.getDamager())) {
             event.setCancelled(true);
         }
     }
@@ -616,18 +626,35 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
     }
 
     private boolean isPreReleaseCompetitor(Player player) {
-        return startupMode == StartupMode.PLAN && matchController != null
+        return matchController != null
                 && matchController.phase().isPreRelease()
-                && seatsByPlayer.containsKey(player.getUniqueId());
+                && isArenaCompetitor(player);
+    }
+
+    private boolean isArenaCompetitor(Player player) {
+        return startupMode == StartupMode.PLAN && seatsByPlayer.containsKey(player.getUniqueId());
     }
 
     private boolean isPreReleaseDamageSource(Entity entity) {
-        if (entity instanceof Player player) {
-            return isPreReleaseCompetitor(player);
+        return matchController != null
+                && matchController.phase().isPreRelease()
+                && isArenaCompetitorDamageSource(entity);
+    }
+
+    private boolean isArenaCompetitorDamageSource(Entity entity) {
+        return startupMode == StartupMode.PLAN
+                && isDamageFromCompetitor(entity, seatsByPlayer.keySet());
+    }
+
+    // Paper reports projectiles as the damager, so resolve their player shooter before checking the roster.
+    static boolean isDamageFromCompetitor(Entity source, Set<UUID> competitorIds) {
+        if (source instanceof Player player) {
+            return competitorIds.contains(player.getUniqueId());
         }
-        return entity instanceof Projectile projectile
-                && projectile.getShooter() instanceof Player player
-                && isPreReleaseCompetitor(player);
+        if (source instanceof Projectile projectile && projectile.getShooter() instanceof Player player) {
+            return competitorIds.contains(player.getUniqueId());
+        }
+        return false;
     }
 
     private static boolean isArenaWorld(World world) {

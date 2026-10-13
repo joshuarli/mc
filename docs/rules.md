@@ -68,10 +68,15 @@ Each seat bind in `WAITING` clears the bot's inventory and ender chest, health,
 hunger, effects, experience, and other transient player state. Bound bots remain
 at their assigned position while waiting and during countdown; they may change
 yaw and pitch. Inventory opens and changes, item drops and pickups, item use,
-block interactions, and damage are blocked until release. Block breaking and
-placing are enabled only in `GRACE` or `ACTIVE` when the resolved match settings
-allow them. The explicit test-fixture mode does not apply these plan-mode player
-guards.
+block interactions, all damage to a bound bot, and damage caused by a bound bot
+are blocked during `WAITING` and `COUNTDOWN`.
+
+During `GRACE`, direct competitor attacks and projectiles shot by a competitor
+cannot damage another bound competitor. Environmental damage remains enabled,
+and competitors may still damage noncompetitors. Competitor PvP is enabled in
+`ACTIVE` only. Block breaking and placing are enabled only in `GRACE` or
+`ACTIVE` when the resolved match settings allow them. The explicit test-fixture
+mode does not apply these plan-mode player guards.
 
 ## Match timeline
 

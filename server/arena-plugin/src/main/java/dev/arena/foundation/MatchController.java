@@ -27,6 +27,10 @@ final class MatchController {
         boolean allowsCompetitiveActions() {
             return this == GRACE || this == ACTIVE;
         }
+
+        boolean allowsCompetitorPvp() {
+            return this == ACTIVE;
+        }
     }
 
     enum EliminationCause {

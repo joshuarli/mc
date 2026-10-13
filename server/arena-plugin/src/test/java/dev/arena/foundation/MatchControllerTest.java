@@ -50,6 +50,13 @@ final class MatchControllerTest {
         assertPhasePolicy(aborted, Phase.ABORTED, false, false);
     }
 
+    @Test
+    void competitorPvpIsAllowedOnlyDuringActivePlay() {
+        for (Phase phase : Phase.values()) {
+            assertEquals(phase == Phase.ACTIVE, phase.allowsCompetitorPvp(), phase.name());
+        }
+    }
+
     private static void assertPhasePolicy(
             MatchController match,
             Phase expectedPhase,
