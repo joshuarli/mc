@@ -323,6 +323,7 @@ Append one line per execution judgment that a reader would otherwise miss: date,
 - 2026-10-12 — P1: keep Paper API and Gson production `compileOnly`, add them to Java test compile/runtime, and lock the resolved Paper test graph with strict checksums so generator tests run without bundling server APIs.
 - 2026-10-12 — P1: cap each chest inventory at 27 one-item entries in the map and resolved-plan contracts because one entry occupies one of the chest's 27 slots; the Rust compiler owns the limit and a drift test checks both schemas and the user-facing docs.
 - 2026-10-12 — P1: cap resolved world-plan JSON at 128 MiB and pregeneration at 8,192 chunks to bound staging, parsing, and startup while covering the declared 192×192 map and 32-chunk view distance.
+- 2026-10-13 — J1: require the protocol fixture to be selected with `-Darena.test-fixture=true`; missing plan configuration must fail instead of silently starting the smoke world.
 
 ## 9. Campaign log
 
