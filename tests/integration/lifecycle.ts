@@ -96,8 +96,8 @@ async function archiveCompletedCycles(cycles: readonly CompletedCycle[]): Promis
   assert.ok(cycles.every(({ prepared }) => prepared.helperPath === helperPath));
   const selectedRuns = cycles.flatMap(({ completed }) => ["--run-id", completed.runId]);
   const preview = await runCliWithHelper(helperPath, ["gc", "--dry-run", ...selectedRuns]);
-  assert.equal(preview.kind, "success", preview.kind === "failure" ? preview.stderr : "");
   if (preview.kind !== "success") throw new Error(`GC preflight failed: ${preview.stderr}`);
+  assert.equal(preview.kind, "success");
   const previewResult = parseJsonObject(preview.stdout, "GC preflight must return a JSON object");
   assert.equal(previewResult.mode, "dry_run");
   assert.ok(Array.isArray(previewResult.runs));
@@ -113,8 +113,8 @@ async function archiveCompletedCycles(cycles: readonly CompletedCycle[]): Promis
 
   const args = ["gc", "--apply", ...selectedRuns];
   const gc = await runCliWithHelper(helperPath, args);
-  assert.equal(gc.kind, "success", gc.kind === "failure" ? gc.stderr : "");
   if (gc.kind !== "success") throw new Error(`GC failed: ${gc.stderr}`);
+  assert.equal(gc.kind, "success");
   const result = parseJsonObject(gc.stdout, "GC must return a JSON object");
   assert.equal(result.mode, "apply");
   assert.ok(Array.isArray(result.runs));
@@ -130,8 +130,8 @@ async function archiveCompletedCycles(cycles: readonly CompletedCycle[]): Promis
     assert.equal(typeof decision.evidence_path, "string");
 
     const inspected = await runCliWithHelper(prepared.helperPath, ["inspect", "--run-id", completed.runId]);
-    assert.equal(inspected.kind, "success", inspected.kind === "failure" ? inspected.stderr : "");
     if (inspected.kind !== "success") throw new Error(`archived run inspection failed: ${inspected.stderr}`);
+    assert.equal(inspected.kind, "success");
     const archive = parseJsonObject(inspected.stdout, "archive inspection must return a JSON object");
     assert.equal(archive.run_id, completed.runId);
     assert.ok(archive.report !== null && typeof archive.report === "object");

@@ -89,7 +89,11 @@ test("faults", { timeout: 900_000 }, async (t) => {
       ...prepared,
       evaluate: async (active, signal) => {
         await active.start();
-        await waitForTraceCheckpoint(prepared, signal, 90_000);
+        await waitForTraceCheckpoint({
+          helperPath: prepared.helperPath,
+          ownedRoot: prepared.ownedRoot,
+          runId: prepared.preparedRun.runId,
+        }, signal, 90_000);
         const server = await waitForOwnedJavaProcess(prepared.preparedRun.runId, process.pid, signal, 10_000);
         process.kill(server.pid, "SIGKILL");
         await active.waitForOutcome();
