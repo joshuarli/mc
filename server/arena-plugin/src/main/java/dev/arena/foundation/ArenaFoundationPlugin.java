@@ -25,7 +25,8 @@ import org.bukkit.inventory.ItemStack;
 import org.bukkit.plugin.java.JavaPlugin;
 
 public final class ArenaFoundationPlugin extends JavaPlugin implements Listener {
-    private static final int FLOOR_Y = 63;
+    // Paper 26.2's default flat world surface is at Y -60.
+    private static final int FLOOR_Y = -60;
     private static final int CHEST_X = 2;
     private static final int CHEST_Z = 0;
     private final Set<UUID> reportedMovement = new HashSet<>();
