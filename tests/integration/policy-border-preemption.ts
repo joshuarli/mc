@@ -1,13 +1,19 @@
 import assert from "node:assert/strict";
+import { resolve } from "node:path";
 import { test } from "node:test";
 
+import { isNearOrOutsideBorder, rehydratePolicyReplayInput } from "@arena/core";
+import { stageOwnedFile } from "../../packages/arena-runner/src/owned-files/index.js";
+import { replayPolicyJson } from "../../packages/arena-runner/src/policy-replay.js";
+import { readRunEvidence } from "../../packages/arena-runner/src/runtime/inspect.js";
 import type { PolicyActivityEvent } from "../../packages/arena-runner/src/runtime/live-policy-loop.js";
 import { runOwnedAcceptanceScenario } from "./support/owned-run.js";
 
+type DecisionReceipt = Extract<PolicyActivityEvent, { kind: "decision" }>;
+type ActionReceipt = Extract<PolicyActivityEvent, { kind: "action" }>;
 const STRATEGY_INTERVAL_TICKS = 4;
-const FIRST_POLICY_TICK = 0;
-const BORDER_ESCAPE_TICK = FIRST_POLICY_TICK + STRATEGY_INTERVAL_TICKS;
-const BASELINE_BORDER_MARGIN_BLOCKS = 2;
+const MAX_TICKS = 120;
+const SUMMARY_MAX_BYTES = 16 * 1024;
 
 test("policy-border-preemption", { timeout: 300_000 }, async (t) => {
   const activity: PolicyActivityEvent[] = [];
@@ -16,118 +22,114 @@ test("policy-border-preemption", { timeout: 300_000 }, async (t) => {
     "policy-border-preemption",
     async (active) => {
       const scenario = active.preparedRun.scenario;
-      const seatZeroSpawn = scenario.map.spawns.find(({ seat }) => seat === 0);
-      assert.deepStrictEqual(seatZeroSpawn?.position, { x: 4, y: 65, z: 32 },
-        "the policy probe must begin at its validated western spawn");
-      assert.equal(scenario.matchSettings.authoritativeMaxTicks, 120n,
-        "the diagnostic run must end shortly after the bounded replacement window");
-      assert.equal(scenario.matchSettings.graceTicks, 0n, "policy tick zero must begin in the active phase");
+      assert.deepStrictEqual(scenario.map.spawns.find(({ seat }) => seat === 0)?.position,
+        { x: 4, y: 65, z: 32 });
+      assert.equal(scenario.matchSettings.authoritativeMaxTicks, BigInt(MAX_TICKS));
+      assert.equal(scenario.matchSettings.graceTicks, 0n);
       assert.equal(scenario.bots.strategyIntervalTicks, BigInt(STRATEGY_INTERVAL_TICKS));
       assert.deepStrictEqual(scenario.border, {
-        initialDiameterBlocks: 62,
-        shrinkStartTick: 0n,
-        shrinkEndTick: 4n,
-        finalDiameterBlocks: 56,
-      }, "natural border geometry must cross the policy threshold at tick four");
-      const spawnDistance = Math.abs(seatZeroSpawn!.position.x - scenario.map.dimensions.width / 2);
-      const initialSafeRadius = scenario.border.initialDiameterBlocks / 2 - BASELINE_BORDER_MARGIN_BLOCKS;
-      const finalPhysicalRadius = scenario.border.finalDiameterBlocks / 2;
-      const finalSafeRadius = finalPhysicalRadius - BASELINE_BORDER_MARGIN_BLOCKS;
-      assert.ok(spawnDistance < initialSafeRadius, "seat zero must start safely inside the policy margin");
-      assert.ok(spawnDistance >= finalSafeRadius, "the final natural border must make seat zero policy-unsafe");
-      assert.ok(spawnDistance <= finalPhysicalRadius, "the final natural border must still contain the spawn physically");
+        initialDiameterBlocks: 62, shrinkStartTick: 0n,
+        shrinkEndTick: 4n, finalDiameterBlocks: 56,
+      });
       await active.start();
       await active.waitForOutcome();
     },
     t.signal,
     {
-      competitorDriver: "baselinePolicy",
-      onPolicyActivity: (event) => activity.push(event),
+      onPolicyActivity: (event) => {
+        if (activity.length >= MAX_TICKS * 2) throw new Error("bounded preemption activity overflow");
+        activity.push(event);
+      },
     },
   );
+  assert.equal(run.outcome.kind, "draw");
+  if (run.outcome.kind !== "draw") throw new Error("the diagnostic match did not reach a draw");
+  assert.equal(run.outcome.reason, "tick_limit");
+  assert.deepStrictEqual(run.outcome.at, { domain: "match", value: BigInt(MAX_TICKS) });
+  assert.deepStrictEqual(run.outcome.survivors, [0, 1]);
 
-  assertObserved(
-    run.outcome.kind === "draw"
-      && run.outcome.reason === "tick_limit"
-      && run.outcome.at.domain === "match"
-      && run.outcome.at.value === 120n
-      && run.outcome.survivors.length === 2,
-    "baseline policy fixture must reach its natural two-survivor tick-limit draw",
-    activity,
-  );
+  const helperPath = process.env.ARENA_FS_HELPER ?? resolve(process.cwd(), ".work/arena-fs/arena-fs");
+  const ownedRoot = Buffer.from(process.cwd(), "utf8");
+  const runPath = Buffer.from(`.work/arena/runs/${run.runId}`, "ascii");
+  const { evidence } = await readRunEvidence(helperPath, ownedRoot, runPath, run.runId);
+  const replay = replayPolicyJson(evidence);
+  assert.equal(replay.verified, true);
+  const inputs = evidence.records.flatMap((record) => {
+    if (record.schema !== "policy-replay-v2" || record.seat !== 0) return [];
+    const input = rehydratePolicyReplayInput(record.input);
+    assert.equal(input.schema, "policy-input-v2");
+    const { agent, border } = input.observation;
+    if (agent.kind !== "current" || border.kind !== "current") return [];
+    const receipt = activity.find((event): event is DecisionReceipt =>
+      event.kind === "decision" && event.seat === 0 && event.sequence === record.sequence);
+    assert.ok(receipt, "every recorded decision must have its actual timing receipt");
+    assert.equal(receipt.tick, input.observation.tick);
+    const decision = record.decision;
+    assert.ok(decision !== null && typeof decision === "object" && !Array.isArray(decision));
+    assert.ok("goal" in decision && "intent" in decision);
+    assert.deepStrictEqual(receipt.goal, decision.goal);
+    assert.deepStrictEqual(receipt.intent, decision.intent);
+    assert.deepStrictEqual(receipt.disposition, record.disposition);
+    return [{ receipt, position: agent.value.position, border: border.value,
+      unsafe: isNearOrOutsideBorder(border.value, agent.value.position, input.params.values.borderMarginBlocks) }];
+  });
+  const firstUnsafe = inputs.findIndex(({ unsafe }) => unsafe);
+  const escape = inputs[firstUnsafe];
+  const previous = inputs[firstUnsafe - 1];
+  const replacement = escape?.receipt.disposition;
+  const priorSequence = replacement?.kind === "replace" ? replacement.replaces_action_sequence : undefined;
+  const priorDecision = activity.find((event): event is DecisionReceipt =>
+    event.kind === "decision" && event.seat === 0 && event.sequence === priorSequence);
+  const priorAction = actionReceipt(activity, priorSequence);
+  const escapeAction = actionReceipt(activity, escape?.receipt.sequence);
+  const cleanupWaitNs = escape !== undefined && priorAction !== undefined
+    ? priorAction.settledAtNs - escape.receipt.acceptedAtNs : null;
+  const successorWaitNs = priorAction !== undefined && escapeAction?.startedAtNs !== null
+      && escapeAction?.startedAtNs !== undefined
+    ? escapeAction.startedAtNs - priorAction.settledAtNs : null;
 
-  const firstNavigation = activity.find((event) => event.kind === "decision"
-    && event.seat === 0 && event.tick === FIRST_POLICY_TICK);
-  assertObserved(firstNavigation?.kind === "decision", "seat zero must receive its tick-zero policy decision", activity);
-  assertObserved(firstNavigation.goal.kind === "loot", "seat zero must choose the visible chest before border danger", activity);
-  assertObserved(firstNavigation.intent.kind === "navigate", "the lower-priority chest goal must be an active navigation", activity);
-  assertObserved(firstNavigation.disposition.kind === "start", "the tick-zero navigation must start a new action", activity);
+  // Clock messages and Minecraft border packets arrive independently; only recorded client inputs establish danger.
+  const summary = {
+    schema: 1, run_id: run.runId, outcome: run.outcome, replay,
+    previous_safe_input: previous ?? null, first_unsafe_input: escape ?? null,
+    replaced_decision: priorDecision ?? null, replaced_action: priorAction ?? null,
+    replacement_action: escapeAction ?? null,
+    cancel_settlement_after_acceptance_ns: cleanupWaitNs,
+    replacement_start_after_settlement_ns: successorWaitNs,
+  };
+  const contents = Buffer.from(`${JSON.stringify(summary, (_key, value: unknown) =>
+    typeof value === "bigint" ? value.toString() : value)}\n`, "utf8");
+  assert.ok(contents.length <= SUMMARY_MAX_BYTES, "compact preemption summary must fit its fixed byte bound");
+  await stageOwnedFile({ helperPath, ownedRoot,
+    relativePath: Buffer.concat([runPath, Buffer.from("/policy-preemption-summary.json", "ascii")]),
+    contents, maxBytes: SUMMARY_MAX_BYTES });
 
-  const escape = activity.find((event) => event.kind === "decision"
-    && event.seat === 0 && event.tick === BORDER_ESCAPE_TICK);
-  assertObserved(escape?.kind === "decision", "seat zero must be reobserved at the next configured policy tick", activity);
-  assertObserved(escape.goal.kind === "escapeBorder", "the natural shrink must make the policy choose border escape", activity);
-  assertObserved(escape.intent.kind === "navigate"
-    && escape.intent.target.x === 32 && escape.intent.target.z === 32,
-  "the border policy must navigate toward the authoritative map center", activity);
-  assertObserved(escape.disposition.kind === "replace", "border escape must replace the active navigation", activity);
-  if (escape.disposition.kind !== "replace") throw new Error("border escape replacement was not recorded");
-  assertObserved(
-    escape.disposition.reason === "higherPriority"
-      && escape.disposition.replaces_action_sequence === firstNavigation.sequence,
-    "border escape must replace the exact lower-priority action for priority reasons",
-    activity,
-  );
-
-  const priorAction = actionEvent(activity, firstNavigation.sequence);
-  const escapeAction = actionEvent(activity, escape.sequence);
-  assertObserved(priorAction.startedAtNs !== null, "the original navigation must have started before preemption", activity);
-  assertObserved(priorAction.outcome.kind === "cancelled" && priorAction.outcome.reason === "replaced",
-    "the original navigation must settle through replacement cancellation", activity);
-  assertObserved(priorAction.cleanupIncluded, "the original action settlement must include resource cleanup", activity);
-  assertObserved(escapeAction.startedAtNs !== null, "the border-escape navigation must start after replacement", activity);
-
-  const cleanupWaitNs = priorAction.settledAtNs - escape.acceptedAtNs;
-  const successorStartDelayNs = escapeAction.startedAtNs - priorAction.settledAtNs;
-  assertObserved(cleanupWaitNs > 0n, "the border decision must be accepted while the original action is still unsettled", activity);
-  assertObserved(successorStartDelayNs >= 0n, "the replacement must start only after prior cleanup settles", activity);
-  t.diagnostic(`seat 0 ticks ${firstNavigation.tick}->${escape.tick}; cancel settlement ${formatMilliseconds(cleanupWaitNs)} ms after acceptance; border action start ${formatMilliseconds(successorStartDelayNs)} ms after settlement`);
+  assert.ok(escape && previous, "the first unsafe eligible input must follow a safe eligible input");
+  assert.equal(previous.unsafe, false);
+  assert.equal(escape.receipt.tick - previous.receipt.tick, STRATEGY_INTERVAL_TICKS);
+  assert.equal(escape.receipt.goal.kind, "escapeBorder");
+  assert.equal(escape.receipt.intent.kind, "navigate");
+  if (escape.receipt.intent.kind !== "navigate") throw new Error("escape intent was not navigation");
+  assert.deepStrictEqual(escape.receipt.intent.target,
+    { x: escape.border.centerX, y: escape.position.y, z: escape.border.centerZ });
+  assert.ok(replacement?.kind === "replace");
+  assert.equal(replacement.reason, "higherPriority");
+  assert.ok(priorDecision && priorAction && escapeAction);
+  assert.ok(priorDecision.goal.kind === "loot" || priorDecision.goal.kind === "explore");
+  assert.equal(priorDecision.intent.kind, "navigate");
+  assert.ok(priorAction.startedAtNs !== null && priorAction.startedAtNs < escape.receipt.acceptedAtNs);
+  assert.deepStrictEqual(priorAction.outcome, { kind: "cancelled", reason: "replaced" });
+  assert.equal(priorAction.cleanupIncluded, true);
+  assert.ok(cleanupWaitNs !== null && cleanupWaitNs > 0n,
+    "danger must be accepted while the replaced navigation is still unsettled");
+  assert.ok(successorWaitNs !== null && successorWaitNs >= 0n,
+    "replacement controls must start after prior cleanup settles");
+  t.diagnostic(`seat 0 ticks ${previous.receipt.tick}->${escape.receipt.tick}; `
+    + `cancellation settles ${Number(cleanupWaitNs) / 1e6} ms after acceptance; `
+    + `replacement starts ${Number(successorWaitNs) / 1e6} ms after settlement`);
 });
 
-function actionEvent(
-  events: readonly PolicyActivityEvent[],
-  sequence: string,
-): Extract<PolicyActivityEvent, { readonly kind: "action" }> {
-  const event = events.find((candidate): candidate is Extract<PolicyActivityEvent, { readonly kind: "action" }> =>
-    candidate.kind === "action" && candidate.seat === 0 && candidate.actionSequence === sequence,
-  );
-  assertObserved(event !== undefined, `seat-zero action ${sequence} must settle`, events);
-  return event;
-}
-
-function assertObserved(condition: boolean, message: string, events: readonly PolicyActivityEvent[]): asserts condition {
-  assert.ok(condition, `${message}; recent policy activity: ${summarizeActivity(events)}`);
-}
-
-function summarizeActivity(events: readonly PolicyActivityEvent[]): string {
-  const relevant = events.filter((event) => event.seat === 0 && (
-    event.kind === "decision" ? event.tick <= BORDER_ESCAPE_TICK : true
-  ));
-  const summaries = relevant.slice(0, 12).map((event) => {
-    if (event.kind === "decision") {
-      return { kind: event.kind, tick: event.tick, sequence: event.sequence, goal: event.goal.kind,
-        intent: event.intent.kind, disposition: event.disposition };
-    }
-    if (event.kind === "action") {
-      return { kind: event.kind, sequence: event.actionSequence, startedAtNs: event.startedAtNs?.toString() ?? null,
-        settledAtNs: event.settledAtNs.toString(), outcome: event.outcome, cleanupIncluded: event.cleanupIncluded };
-    }
-    return { kind: event.kind, sequence: event.actionSequence, startedAtNs: event.startedAtNs?.toString() ?? null,
-      settledAtNs: event.settledAtNs.toString() };
-  });
-  return JSON.stringify(summaries);
-}
-
-function formatMilliseconds(nanoseconds: bigint): string {
-  return (Number(nanoseconds) / 1_000_000).toFixed(3);
+function actionReceipt(events: readonly PolicyActivityEvent[], sequence: string | undefined): ActionReceipt | undefined {
+  return events.find((event): event is ActionReceipt =>
+    event.kind === "action" && event.seat === 0 && event.actionSequence === sequence);
 }
