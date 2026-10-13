@@ -25,9 +25,9 @@ Use `./arena help` for launcher syntax. The implemented runner commands are:
 ```sh
 ./arena doctor
 ./arena prepare --scenario scenarios/hunger-six.toml --run-id smoke-001
-./arena inspect tests/fixtures/replay-report/segment-0001.json
-./arena report tests/fixtures/replay-report/segment-0002.json tests/fixtures/replay-report/segment-0001.json
-./arena compare tests/fixtures/replay-report/segment-0001.json tests/fixtures/replay-report/segment-0001-other-run.json
+./arena inspect tests/fixtures/replay-report-v2/segment-0001.json
+./arena report tests/fixtures/replay-report-v2/segment-0002.json tests/fixtures/replay-report-v2/segment-0001.json
+./arena compare tests/fixtures/replay-report-v2/segment-0001.json tests/fixtures/replay-report-v2/segment-0001-other-run.json
 ```
 
 `prepare` compiles a scenario and stages its world plan. `inspect` and `report` read complete trace segments; `compare` checks two single-segment streams. These evidence commands do not start Paper or run a match. See [runner operations](docs/operations.md) for input and output details.
