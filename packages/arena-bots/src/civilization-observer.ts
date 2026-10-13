@@ -109,30 +109,10 @@ export class MineflayerCivilizationObserver {
       this.#inventorySynchronized = false;
       this.#containerWindows.clear();
     };
-    const detach: (() => void)[] = [];
-    try {
-      this.#client.on('window_items', this.#onWindowItems);
-      detach.push(() => this.#client.removeListener('window_items', this.#onWindowItems));
-      this.#bot.on('windowClose', this.#onWindowClose);
-      detach.push(() => this.#bot.removeListener('windowClose', this.#onWindowClose));
-      this.#bot.on('respawn', this.#onRespawn);
-      detach.push(() => this.#bot.removeListener('respawn', this.#onRespawn));
-      this.#bot.on('end', this.#onEnd);
-      detach.push(() => this.#bot.removeListener('end', this.#onEnd));
-    } catch (error) {
-      const cleanupErrors: unknown[] = [];
-      for (const removeListener of detach.reverse()) {
-        try {
-          removeListener();
-        } catch (cleanupError) {
-          cleanupErrors.push(cleanupError);
-        }
-      }
-      if (cleanupErrors.length > 0) {
-        throw new AggregateError([error, ...cleanupErrors], 'civilization observer setup and cleanup failed');
-      }
-      throw error;
-    }
+    this.#client.on('window_items', this.#onWindowItems);
+    this.#bot.on('windowClose', this.#onWindowClose);
+    this.#bot.on('respawn', this.#onRespawn);
+    this.#bot.on('end', this.#onEnd);
   }
 
   observe(tickValue: number, base: ReturnType<MineflayerObserver['observe']>): CivilizationObservation {

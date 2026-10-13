@@ -31,6 +31,11 @@ test('own materials stay unknown until this client receives a full inventory sna
     observer.close();
     base.close();
   }
+
+  assert.equal(bot._client.listenerCount('window_items'), 0);
+  assert.equal(bot.listenerCount('windowClose'), 0);
+  assert.equal(bot.listenerCount('respawn'), 0);
+  assert.equal(bot.listenerCount('end'), 0);
 });
 
 test('own material knowledge becomes stale across respawn until a new full snapshot', () => {
@@ -97,14 +102,14 @@ test('team reports reject stale, future, malformed, over-rate, and over-capacity
   assert.throws(() => atTick(0, (observer) => observer.receiveTeamReport(1, { ...report(0), extra: true }, 0)), /unknown fields/);
   assert.throws(() => atTick(0, (observer) => observer.receiveTeamReport(1, { ...report(0), resource: 'diamonds' }, 0)), /unknown civilization reported resource/);
 
-  const validBoundary = atTick(200, (observer) => {
+  const ageBoundary = atTick(200, (observer) => {
     observer.receiveTeamReport(1, {
       ...report(0),
       position: blockPosition(Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER),
     }, 200);
   });
-  assert.equal(validBoundary.teamMessages.length, 1);
-  assert.ok(Buffer.byteLength(JSON.stringify(validBoundary.teamMessages[0]), 'utf8') <= CIVILIZATION_TEAM_MESSAGE_MAX_BYTES);
+  assert.equal(ageBoundary.teamMessages.length, 1);
+  assert.ok(Buffer.byteLength(JSON.stringify(ageBoundary.teamMessages[0]), 'utf8') <= CIVILIZATION_TEAM_MESSAGE_MAX_BYTES);
 
   const rateBot = makeBot();
   const rateBase = new MineflayerObserver(rateBot as unknown as Bot);
