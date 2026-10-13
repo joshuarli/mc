@@ -96,7 +96,7 @@ export function reconstructRunEvidence(evidence: Evidence): ReconstructedRunEvid
   let outcomeSeen = false;
   let startSeen = false;
   let abortSeen = false;
-  let pendingRunnerSequence: bigint | undefined;
+  let pendingRunnerCommand: { readonly type: 'prepare' | 'start' | 'abort'; readonly sequence: bigint } | undefined;
   let lastAcknowledgedRunnerSequence = 0n;
   const lastSequence = new Map<'runner' | 'plugin', bigint>();
   const events: ControlMessage[] = [];
@@ -139,7 +139,7 @@ export function reconstructRunEvidence(evidence: Evidence): ReconstructedRunEvid
     }
 
     if (direction === 'runner') {
-      if (message.correlation !== undefined || pendingRunnerSequence !== undefined) {
+      if (message.correlation !== undefined || pendingRunnerCommand !== undefined) {
         throw eventRecordFailure('invalid_runner_command_correlation', recordNumber);
       }
       if (message.type === 'prepare') {
@@ -147,7 +147,7 @@ export function reconstructRunEvidence(evidence: Evidence): ReconstructedRunEvid
           throw eventRecordFailure('unexpected_runner_event', recordNumber);
         }
         prepare = message.payload;
-        pendingRunnerSequence = message.sequence;
+        pendingRunnerCommand = { type: message.type, sequence: message.sequence };
         continue;
       }
       if (message.type === 'start') {
@@ -155,7 +155,7 @@ export function reconstructRunEvidence(evidence: Evidence): ReconstructedRunEvid
           throw eventRecordFailure('unexpected_runner_event', recordNumber);
         }
         startSeen = true;
-        pendingRunnerSequence = message.sequence;
+        pendingRunnerCommand = { type: message.type, sequence: message.sequence };
         continue;
       }
       if (message.type === 'abort') {
@@ -163,7 +163,7 @@ export function reconstructRunEvidence(evidence: Evidence): ReconstructedRunEvid
           throw eventRecordFailure('unexpected_runner_event', recordNumber);
         }
         abortSeen = true;
-        pendingRunnerSequence = message.sequence;
+        pendingRunnerCommand = { type: message.type, sequence: message.sequence };
         continue;
       }
       throw eventRecordFailure('unexpected_runner_event', recordNumber);
@@ -171,12 +171,12 @@ export function reconstructRunEvidence(evidence: Evidence): ReconstructedRunEvid
 
     if (message.type === 'ready') throw eventRecordFailure('repeated_readiness', recordNumber);
     if (message.type === 'ack' || message.type === 'error') {
-      if (pendingRunnerSequence === undefined || message.correlation !== pendingRunnerSequence
+      if (pendingRunnerCommand === undefined || message.correlation !== pendingRunnerCommand.sequence
           || message.correlation <= lastAcknowledgedRunnerSequence) {
         throw eventRecordFailure('invalid_command_acknowledgment', recordNumber);
       }
       lastAcknowledgedRunnerSequence = message.correlation;
-      pendingRunnerSequence = undefined;
+      pendingRunnerCommand = undefined;
     } else if (message.correlation !== undefined) {
       throw eventRecordFailure('unexpected_event_correlation', recordNumber);
     }
@@ -187,8 +187,13 @@ export function reconstructRunEvidence(evidence: Evidence): ReconstructedRunEvid
     if (prepare === undefined) throw eventRecordFailure('prepare_context_missing', recordNumber);
     const authoritativeEvent = message.type === 'public_clock' || message.type === 'public_state'
       || message.type === 'elimination' || message.type === 'outcome';
-    if (authoritativeEvent && pendingRunnerSequence !== undefined) {
-      throw eventRecordFailure('event_before_command_acknowledgment', recordNumber);
+    if (authoritativeEvent && pendingRunnerCommand !== undefined) {
+      // Abort receipt is asynchronous; ongoing authority may already be in flight before it is processed.
+      // Terminal effects still require the matching acknowledgment before reconstruction accepts them.
+      const inFlightBeforeAbort = pendingRunnerCommand.type === 'abort'
+        && (message.type === 'public_state' || message.type === 'elimination'
+          || (message.type === 'public_clock' && message.payload.phase !== 'aborted' && message.payload.phase !== 'finished'));
+      if (!inFlightBeforeAbort) throw eventRecordFailure('event_before_command_acknowledgment', recordNumber);
     }
     if (message.type === 'public_state' || message.type === 'elimination'
         || (message.type === 'public_clock' && message.payload.phase !== 'waiting' && message.payload.phase !== 'aborted')
@@ -206,7 +211,7 @@ export function reconstructRunEvidence(evidence: Evidence): ReconstructedRunEvid
 
   if (!readySeen) throw eventRecordFailure('readiness_missing');
   if (prepare === undefined) throw eventRecordFailure('prepare_context_missing');
-  if (pendingRunnerSequence !== undefined) throw eventRecordFailure('unacknowledged_runner_command');
+  if (pendingRunnerCommand !== undefined) throw eventRecordFailure('unacknowledged_runner_command');
   if (!outcomeSeen) throw eventRecordFailure('missing_terminal_outcome');
   const report = reconstructEventResult(evidence.run_id, prepare, events);
   return {
