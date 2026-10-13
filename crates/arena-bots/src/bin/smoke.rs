@@ -185,20 +185,13 @@ impl SmokeClient {
     }
 
     async fn wait_until_attack_ready(&mut self) -> eyre::Result<()> {
+        let mut ticks = self.client.get_tick_broadcaster();
         timeout(EVENT_TIMEOUT, async {
             while self.client.has_attack_cooldown() {
-                match self.events.recv().await {
-                    Some(Event::Disconnect(reason)) => {
-                        bail!("client disconnected while waiting for attack cooldown: {reason:?}");
-                    }
-                    Some(Event::ConnectionFailed(error)) => {
-                        bail!("client connection failed while waiting for attack cooldown: {error}");
-                    }
-                    Some(_) => {}
-                    None => {
-                        bail!("client event stream ended while waiting for attack cooldown");
-                    }
-                }
+                ticks
+                    .recv()
+                    .await
+                    .map_err(|error| eyre::eyre!("Azalea tick stream ended while waiting for attack cooldown: {error}"))?;
             }
             Ok(())
         })
@@ -207,22 +200,14 @@ impl SmokeClient {
     }
 
     async fn wait_for_ticks(&mut self, ticks: usize) -> eyre::Result<()> {
+        // Pathfinding can leave older tick events queued on the client event stream.
+        let mut tick_broadcaster = self.client.get_tick_broadcaster();
         timeout(EVENT_TIMEOUT, async {
-            let mut elapsed = 0;
-            while elapsed < ticks {
-                match self.events.recv().await {
-                    Some(Event::Tick) => elapsed += 1,
-                    Some(Event::Disconnect(reason)) => {
-                        bail!("client disconnected before action completed: {reason:?}");
-                    }
-                    Some(Event::ConnectionFailed(error)) => {
-                        bail!("client connection failed before action completed: {error}");
-                    }
-                    Some(_) => {}
-                    None => {
-                        bail!("client event stream ended before action completed");
-                    }
-                }
+            for _ in 0..ticks {
+                tick_broadcaster
+                    .recv()
+                    .await
+                    .map_err(|error| eyre::eyre!("Azalea tick stream ended before action completed: {error}"))?;
             }
             Ok(())
         })
