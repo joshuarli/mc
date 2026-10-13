@@ -1,4 +1,5 @@
 import { performance } from 'node:perf_hooks';
+import { createRequire } from 'node:module';
 import {
   agentObservation,
   agentState,
@@ -32,6 +33,16 @@ import { ClientWorldBorder } from './world-border.js';
 const MAX_ENTITY_RANGE_BLOCKS = 40;
 const MAX_LOOT_CANDIDATES = 64;
 const ATTACKING_RECENCY_MS = 1_500;
+const packageRequire = createRequire(import.meta.url);
+const mineflayerRequire = createRequire(packageRequire.resolve('mineflayer'));
+const { SingleValueContainer } = mineflayerRequire('prismarine-chunk/src/pc/common/PaletteContainer') as {
+  readonly SingleValueContainer: new (...args: unknown[]) => { readonly value: number };
+};
+const { OctahedronIterator } = mineflayerRequire('prismarine-world').iterators as {
+  readonly OctahedronIterator: new (
+    start: Bot['entity']['position'], radius: number,
+  ) => { next(): Bot['entity']['position'] | null };
+};
 
 interface PacketEventSource {
   on(event: string, listener: (packet: { readonly windowId?: unknown }) => void): unknown;
@@ -273,6 +284,7 @@ export class MineflayerObserver {
       this.#bot.registry.blocksByName.trapped_chest?.id,
     ].filter((id): id is number => id !== undefined);
     if (chestIds.length === 0) throw new Error('Mineflayer registry has no chest block IDs');
+    prepareLootSearchPalettes(this.#bot);
     const chests = this.#bot.findBlocks({
       point: this.#bot.entity.position,
       matching: chestIds,
@@ -344,6 +356,37 @@ export class MineflayerObserver {
 
   #assertOpen(): void {
     if (this.#closed) throw new Error('Mineflayer observer is closed');
+  }
+}
+
+/**
+ * Native discovery treats a missing palette as a global palette and scans every voxel,
+ * including uniform air. Derive metadata only on this client's loaded search sections.
+ * Native section setters replace it from the new data on every write or promotion;
+ * chunk replacement and unload discard the section object with its derived metadata.
+ */
+function prepareLootSearchPalettes(bot: Bot): void {
+  const game = bot.game as Bot['game'] & { readonly minY: number; readonly height: number };
+  const point = bot.entity.position.floored();
+  const start = point.offset(
+    Math.floor(point.x / 16) - point.x,
+    Math.floor(point.y / 16) - point.y,
+    Math.floor(point.z / 16) - point.z,
+  );
+  const iterator = new OctahedronIterator(start, Math.ceil((MAX_ENTITY_RANGE_BLOCKS + 8) / 16));
+  let next: Bot['entity']['position'] | null = start;
+  while (next !== null) {
+    const sectionY = next.y + Math.abs(game.minY >> 4);
+    if (sectionY >= 0 && sectionY < (game.height >> 4)) {
+      const column = bot.world.getColumn(next.x, next.z) as unknown as {
+        readonly sections: readonly { readonly data: unknown; palette: number[] | undefined }[];
+      } | undefined;
+      const section = column?.sections[sectionY];
+      if (section !== undefined && section.palette === undefined && section.data instanceof SingleValueContainer) {
+        section.palette = [section.data.value];
+      }
+    }
+    next = iterator.next();
   }
 }
 
