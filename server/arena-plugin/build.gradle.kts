@@ -16,6 +16,8 @@ val pluginApiVersion = providers.gradleProperty("pluginApiVersion").get()
 
 dependencies {
     compileOnly("$paperApiGroup:$paperApiArtifact:$paperApiVersion")
+    testImplementation("org.junit.jupiter:junit-jupiter:6.1.3")
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher:6.1.3")
 }
 
 dependencyLocking {
@@ -35,6 +37,10 @@ tasks.processResources {
     filesMatching("plugin.yml") {
         expand("pluginApiVersion" to pluginApiVersion)
     }
+}
+
+tasks.withType<org.gradle.api.tasks.testing.Test>().configureEach {
+    useJUnitPlatform()
 }
 
 layout.buildDirectory.set(file("../../.work/arena/gradle-build"))
