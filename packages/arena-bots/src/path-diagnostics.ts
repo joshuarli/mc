@@ -208,6 +208,7 @@ const POSITION_CORRECTION_FLAGS = [
   'dz',
   'yawDelta',
 ] as const;
+const POSITION_CORRECTION_FLAGS_MASK = (1 << POSITION_CORRECTION_FLAGS.length) - 1;
 
 type PhysicsEntity = Bot['entity'] & {
   readonly isCollidedHorizontally?: boolean;
@@ -576,9 +577,16 @@ function copyCorrectionFlags(value: unknown): Readonly<{
 }> {
   if (value === null || typeof value !== 'object') throw new TypeError('position correction flags must be an object');
   const flags = value as Readonly<Record<string, unknown>>;
-  const unknownFlags = Object.keys(flags).filter((name) => !POSITION_CORRECTION_FLAGS.some((known) => known === name));
+  const unknownFlags = Object.keys(flags).filter((name) => name !== '_value' && !POSITION_CORRECTION_FLAGS.some((known) => known === name));
   if (unknownFlags.length > 0) throw new TypeError(`unknown position correction flag: ${unknownFlags[0]}`);
-  return Object.freeze({
+  const rawValue = flags._value;
+  if (typeof rawValue !== 'number' || !Number.isSafeInteger(rawValue) || rawValue < 0 || rawValue > 0xffff_ffff) {
+    throw new RangeError('position correction raw flags must be an unsigned 32-bit integer');
+  }
+  if ((rawValue & ~POSITION_CORRECTION_FLAGS_MASK) !== 0) {
+    throw new TypeError('unknown position correction flag bits');
+  }
+  const decodedFlags = {
     x: requiredBooleanFlag(flags, 'x'),
     y: requiredBooleanFlag(flags, 'y'),
     z: requiredBooleanFlag(flags, 'z'),
@@ -588,7 +596,15 @@ function copyCorrectionFlags(value: unknown): Readonly<{
     dy: requiredBooleanFlag(flags, 'dy'),
     dz: requiredBooleanFlag(flags, 'dz'),
     yawDelta: requiredBooleanFlag(flags, 'yawDelta'),
-  });
+  };
+  const derivedRawValue = POSITION_CORRECTION_FLAGS.reduce(
+    (raw, name, bit) => raw | (decodedFlags[name] ? 1 << bit : 0),
+    0,
+  );
+  if (rawValue !== derivedRawValue) {
+    throw new TypeError('position correction boolean flags do not match the raw flags value');
+  }
+  return Object.freeze(decodedFlags);
 }
 
 function requiredBooleanFlag(flags: Readonly<Record<string, unknown>>, name: string): boolean {

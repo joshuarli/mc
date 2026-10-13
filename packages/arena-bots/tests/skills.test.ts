@@ -30,6 +30,17 @@ const PathMove = createRequire(import.meta.url)('mineflayer-pathfinder/lib/move'
   parkour: boolean;
   hash: string;
 };
+const packageRequire = createRequire(import.meta.url);
+const mineflayerRequire = createRequire(packageRequire.resolve('mineflayer'));
+const protocol = mineflayerRequire('minecraft-protocol') as {
+  readonly states: { readonly PLAY: string };
+  createSerializer(options: { readonly state: string; readonly isServer: boolean; readonly version: string }): {
+    createPacketBuffer(packet: { readonly name: string; readonly params: unknown }): Buffer;
+  };
+  createDeserializer(options: { readonly state: string; readonly isServer: boolean; readonly version: string }): {
+    parsePacketBuffer(buffer: Buffer): { readonly data: { readonly params: unknown } };
+  };
+};
 
 test('cancellation stops the owned path and clears client controls before settling', async () => {
   const harness = makeHarness();
@@ -443,7 +454,7 @@ test('opt-in path diagnostics capture bounded local movement evidence and detach
       dz: 0.08,
       yaw: 0,
       pitch: 0,
-      flags: { x: false, y: false, z: false, yaw: false, pitch: false, dx: true, dy: false, dz: true, yawDelta: false },
+      flags: { _value: 160, x: false, y: false, z: false, yaw: false, pitch: false, dx: true, dy: false, dz: true, yawDelta: false },
       teleportId: 3,
     });
 
@@ -597,6 +608,7 @@ test('opt-in path diagnostics reject malformed position correction deltas', asyn
       yaw: 0,
       pitch: 0,
       flags: {
+        _value: 0,
         x: false,
         y: false,
         z: false,
@@ -617,8 +629,59 @@ test('opt-in path diagnostics reject malformed position correction deltas', asyn
   }
 });
 
+test('opt-in path diagnostics accept position flags decoded from the 26.1 packet', async () => {
+  const harness = makeHarness();
+  Object.assign(harness.bot, {
+    entity: {
+      id: 1,
+      position: new TestPosition(0, 64, 0),
+      velocity: new TestPosition(0, 0, 0),
+      onGround: true,
+    },
+  });
+  const ring = new PathDiagnosticRing(harness.bot, {
+    clientLabel: 'decoded-correction-test',
+    clock: () => ({ clientMs: 0, authorityTick: null }),
+  });
+
+  try {
+    const packet = decodePositionPacket();
+    assert.deepEqual(packet.flags, {
+      _value: 9,
+      x: true,
+      y: false,
+      z: false,
+      yaw: true,
+      pitch: false,
+      dx: false,
+      dy: false,
+      dz: false,
+      yawDelta: false,
+    });
+    (harness.bot._client as unknown as EventEmitter).emit('position', packet);
+    const correction = ring.snapshot().find((record) => record.kind === 'positionCorrection');
+    assert.ok(correction);
+    assert.deepEqual(correction.packet.flags, {
+      x: true,
+      y: false,
+      z: false,
+      yaw: true,
+      pitch: false,
+      dx: false,
+      dy: false,
+      dz: false,
+      yawDelta: false,
+    });
+  } finally {
+    ring.close();
+    await harness.owner.close();
+    harness.observer.close();
+  }
+});
+
 test('opt-in path diagnostics require the complete 26.1 position correction flags', async () => {
   const completeFlags = {
+    _value: 0,
     x: false,
     y: false,
     z: false,
@@ -635,6 +698,10 @@ test('opt-in path diagnostics require the complete 26.1 position correction flag
     missingFlag,
     { ...completeFlags, dx: 0 },
     { ...completeFlags, futureFlag: false },
+    { ...completeFlags, _value: 1 },
+    { ...completeFlags, _value: 512 },
+    { ...completeFlags, _value: -1 },
+    { ...completeFlags, _value: 1.5 },
     0,
   ];
 
@@ -1189,4 +1256,37 @@ async function waitUntil(predicate: () => boolean): Promise<void> {
     await new Promise<void>((resolve) => setImmediate(resolve));
   }
   assert.fail('condition did not become true');
+}
+
+function decodePositionPacket(): Record<string, unknown> {
+  const options = { state: protocol.states.PLAY, version: '26.1' };
+  const serializer = protocol.createSerializer({ ...options, isServer: true });
+  const deserializer = protocol.createDeserializer({ ...options, isServer: false });
+  const encoded = serializer.createPacketBuffer({
+    name: 'position',
+    params: {
+      teleportId: 1,
+      x: 1,
+      y: 2,
+      z: 3,
+      dx: 0.25,
+      dy: 0,
+      dz: -0.25,
+      yaw: 45,
+      pitch: 10,
+      flags: {
+        _value: 0,
+        x: true,
+        y: false,
+        z: false,
+        yaw: true,
+        pitch: false,
+        dx: false,
+        dy: false,
+        dz: false,
+        yawDelta: false,
+      },
+    },
+  });
+  return deserializer.parsePacketBuffer(encoded).data.params as Record<string, unknown>;
 }
