@@ -133,3 +133,8 @@ test("control schema rejects duplicate JSON keys before DTO validation", () => {
   const duplicate = '{"protocol":1,"protocol":1,"run_id":"fixture-run","sequence":"1","type":"heartbeat","payload":{}}';
   assert.throws(() => decodeControlEnvelope(duplicate), ControlCodecError);
 });
+
+test("ready protocol identity remains within the schema integer range", () => {
+  const ready = '{"protocol":1,"run_id":"fixture-run","sequence":"1","correlation":"1","type":"ready","payload":{"server":{"name":"paper","version":"1","minecraft_version":"1","protocol_version":2147483648},"plugin":{"name":"arena-foundation","version":"1"},"capabilities":["hunger_games_v1"]}}';
+  assert.throws(() => decodeControlEnvelope(ready), ControlCodecError);
+});

@@ -283,7 +283,7 @@ function readReady(value: StrictJsonValue): ReadyPayload {
       name: readString(server.name, "payload.server.name", 1, 128),
       version: readString(server.version, "payload.server.version", 1, 128),
       minecraft_version: readString(server.minecraft_version, "payload.server.minecraft_version", 1, 64),
-      protocol_version: readSafeInteger(server.protocol_version, "payload.server.protocol_version", 0)
+      protocol_version: readSafeInteger(server.protocol_version, "payload.server.protocol_version", 0, 2_147_483_647)
     },
     plugin: {
       name: readString(plugin.name, "payload.plugin.name", 1, 128),
