@@ -61,6 +61,7 @@ fn run_stack(run: &RunDirectory) -> Result<(), String> {
             "ARENA_CHEST_OPEN|ArenaOne",
             "ARENA_CHEST_CLICK|ArenaOne|0",
             "ARENA_TRANSFER|ArenaOne|diamonds=2",
+            "ARENA_SWING|ArenaOne",
             "ARENA_DAMAGE|ArenaOne|ArenaTwo|amount=",
             "ARENA_QUIT|ArenaOne",
             "ARENA_QUIT|ArenaTwo",

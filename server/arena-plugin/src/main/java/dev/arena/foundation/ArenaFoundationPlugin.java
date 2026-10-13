@@ -17,6 +17,8 @@ import org.bukkit.event.Listener;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryOpenEvent;
+import org.bukkit.event.player.PlayerAnimationEvent;
+import org.bukkit.event.player.PlayerAnimationType;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerMoveEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
@@ -111,10 +113,20 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onPlayerDamage(EntityDamageByEntityEvent event) {
         if (event.getDamager() instanceof Player attacker
-                && event.getEntity() instanceof Player victim
-                && event.getFinalDamage() > 0.0) {
-            getLogger().info("ARENA_DAMAGE|" + attacker.getName() + "|" + victim.getName()
-                    + "|amount=" + event.getFinalDamage());
+                && event.getEntity() instanceof Player victim) {
+            getLogger().info("ARENA_DAMAGE_ATTEMPT|" + attacker.getName() + "|" + victim.getName()
+                    + "|cancelled=" + event.isCancelled() + "|amount=" + event.getFinalDamage());
+            if (!event.isCancelled() && event.getFinalDamage() > 0.0) {
+                getLogger().info("ARENA_DAMAGE|" + attacker.getName() + "|" + victim.getName()
+                        + "|amount=" + event.getFinalDamage());
+            }
+        }
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onAnimation(PlayerAnimationEvent event) {
+        if (event.getAnimationType() == PlayerAnimationType.ARM_SWING) {
+            getLogger().info("ARENA_SWING|" + event.getPlayer().getName());
         }
     }
 
