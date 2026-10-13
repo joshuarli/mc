@@ -186,6 +186,111 @@ test('close waits only for the bounded window receipt when activation never sett
   }
 });
 
+test('container open synchronizes each withdrawn item from the full window snapshot', async () => {
+  const harness = makeHarness();
+  const transfer = prepareContainerTransfer(harness, true);
+
+  try {
+    assert.deepEqual(await harness.owner.run({
+      kind: 'containerOpen',
+      position: blockPosition(1, 64, 0),
+    }), { kind: 'succeeded' });
+    assert.equal(transfer.clicks(), 2);
+    assert.equal(transfer.syncs(), 2);
+    assert.deepEqual(harness.bot.inventory.items().map((item) => item.name), ['bread', 'iron_sword']);
+    assert.equal(transfer.window.slots[0], null);
+    assert.equal(transfer.window.slots[1], null);
+    assert.equal(harness.bot.currentWindow, null);
+    assert.equal(harness.observer.isContainerOpened(blockPosition(1, 64, 0)), true);
+  } finally {
+    await harness.owner.close();
+    harness.observer.close();
+  }
+});
+
+test('container open reports noProgress when the server snapshot rolls back a click', async () => {
+  const harness = makeHarness();
+  const transfer = prepareContainerTransfer(harness, false);
+
+  try {
+    assert.deepEqual(await harness.owner.run({
+      kind: 'containerOpen',
+      position: blockPosition(1, 64, 0),
+    }), { kind: 'failed', cause: 'noProgress' });
+    assert.equal(transfer.clicks(), 1);
+    assert.equal(transfer.syncs(), 1);
+    assert.equal(transfer.window.slots[0]?.name, 'bread');
+    assert.equal(harness.bot.inventory.items().length, 0);
+    assert.equal(harness.bot.currentWindow, null);
+  } finally {
+    await harness.owner.close();
+    harness.observer.close();
+  }
+});
+
+function prepareContainerTransfer(harness: ReturnType<typeof makeHarness>, applyWithdrawal: boolean) {
+  prepareChest(harness.bot);
+  Object.assign(harness.bot.registry.foodsByName, { bread: {} });
+  type Item = NonNullable<Bot['inventory']['slots'][number]>;
+  const bread = { name: 'bread', type: 3, metadata: 0, count: 1, slot: 0, stackSize: 64 } as Item;
+  const sword = { name: 'iron_sword', type: 4, metadata: 0, count: 1, slot: 1, stackSize: 64 } as Item;
+  const slots = new Array(63).fill(null) as (Item | null)[];
+  slots[0] = bread;
+  slots[1] = sword;
+  const serverSlots = [...slots];
+  const window = {
+    id: 2,
+    inventoryStart: 27,
+    inventoryEnd: 63,
+    slots,
+    selectedItem: null,
+    withdraw: async () => undefined,
+  } as unknown as NonNullable<Bot['currentWindow']>;
+  let clicks = 0;
+  let syncs = 0;
+  Object.assign(harness.bot, {
+    supportFeature: (feature: string) => feature === 'stateIdUsed',
+    lookAt: async () => undefined,
+    activateBlock: async () => {
+      Object.assign(harness.bot, { currentWindow: window });
+      harness.bot.emit('windowOpen', window as never);
+    },
+    clickWindow: async (sourceSlot: number, mouseButton: number, mode: number) => {
+      assert.equal(mouseButton, 0);
+      assert.equal(mode, 1);
+      const received = serverSlots[sourceSlot];
+      assert.ok(received);
+      const destinationSlot = serverSlots.findIndex((item, slot) => slot >= window.inventoryStart && item === null);
+      assert.notEqual(destinationSlot, -1);
+      if (applyWithdrawal) {
+        serverSlots[sourceSlot] = null;
+        serverSlots[destinationSlot] = { ...received, slot: destinationSlot } as Item;
+      }
+      clicks += 1;
+    },
+    _syncWindow: async (receivedWindow: NonNullable<Bot['currentWindow']>) => {
+      assert.equal(receivedWindow, window);
+      syncs += 1;
+      for (let slot = 0; slot < serverSlots.length; slot += 1) {
+        window.slots[slot] = serverSlots[slot] ?? null;
+      }
+      for (let slot = window.inventoryStart; slot < window.inventoryEnd; slot += 1) {
+        const inventorySlot = slot - (window.inventoryStart - harness.bot.inventory.inventoryStart);
+        harness.bot.inventory.slots[inventorySlot] = serverSlots[slot] ?? null;
+      }
+    },
+    closeWindow: async () => {
+      for (let slot = window.inventoryStart; slot < window.inventoryEnd; slot += 1) {
+        const inventorySlot = slot - (window.inventoryStart - harness.bot.inventory.inventoryStart);
+        harness.bot.inventory.slots[inventorySlot] = window.slots[slot] ?? null;
+      }
+      Object.assign(harness.bot, { currentWindow: null });
+      harness.bot.emit('windowClose', window as never);
+    },
+  });
+  return { window, clicks: () => clicks, syncs: () => syncs };
+}
+
 function makeHarness(onPathStarted: () => void = () => undefined, onPathStopped: () => void = () => undefined) {
   const botEmitter = new EventEmitter();
   const client = new EventEmitter();

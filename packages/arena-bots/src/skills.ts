@@ -39,6 +39,10 @@ type MineflayerEntity = Bot['entity'];
 type BoundedPathfinder = Bot['pathfinder'] & { searchRadius: number };
 type PathfinderGoal = import('mineflayer-pathfinder').goals.Goal;
 
+type MineflayerWindowSynchronizer = Bot & {
+  readonly _syncWindow?: (window: MineflayerWindow) => Promise<void>;
+};
+
 interface ActiveSkill {
   readonly controller: AbortController;
   readonly resources: SkillResources;
@@ -518,26 +522,32 @@ export class SkillOwner {
       }
       const item = window.slots[slot];
       if (item === null || item === undefined || classifyItem(this.#bot, item) === null) continue;
-      if (this.#bot.inventory.emptySlotCount() === 0) continue;
-      const before = countInventoryItem(this.#bot, item);
+      if (countWindowEmptySlots(window) === 0) continue;
+      const inventoryBefore = countWindowItem(window, item, window.inventoryStart, window.inventoryEnd);
+      const containerBefore = countWindowItem(window, item, 0, window.inventoryStart);
+      const syncWindow = requireWindowSynchronizer(this.#bot);
       try {
         await this.#awaitInventoryOperation(
           active,
           `withdraw ${item.name}`,
           () => this.#bot.clickWindow(slot, 0, 1),
         );
+        await this.#awaitInventoryOperation(
+          active,
+          `synchronize window after withdrawing ${item.name}`,
+          () => syncWindow(window),
+        );
       } catch (error) {
         if (active.controller.signal.aborted) throw new SkillInterrupted();
+        if (error instanceof SkillFault) throw error;
         throw new SkillFault('serverRejected', errorMessage(error));
       }
       throwIfInterrupted(active.controller.signal);
-      await waitForCondition(
-        this.#bot,
-        () => countInventoryItem(this.#bot, item) > before,
-        active.controller.signal,
-        ACTION_TIMEOUT_MS,
-      );
-      if (countInventoryItem(this.#bot, item) <= before) {
+      if (this.#bot.currentWindow !== window) {
+        throw new SkillFault('serverRejected', 'container window closed during inventory synchronization');
+      }
+      if (countWindowItem(window, item, window.inventoryStart, window.inventoryEnd) <= inventoryBefore
+        || countWindowItem(window, item, 0, window.inventoryStart) >= containerBefore) {
         throw new SkillFault('noProgress', `container item ${item.name} did not enter the player inventory`);
       }
     }
@@ -1015,10 +1025,37 @@ function inventoryItem(bot: Bot, slot: number): MineflayerItem | null {
   return item === undefined ? null : item;
 }
 
-function countInventoryItem(bot: Bot, target: MineflayerItem): number {
-  return bot.inventory.items()
-    .filter((item) => item.type === target.type && item.metadata === target.metadata)
-    .reduce((count, item) => count + item.count, 0);
+function countWindowItem(
+  window: MineflayerWindow,
+  target: MineflayerItem,
+  start: number,
+  end: number,
+): number {
+  let count = 0;
+  for (let slot = start; slot < end; slot += 1) {
+    const item = window.slots[slot];
+    if (item !== null && item !== undefined && item.type === target.type && item.metadata === target.metadata) {
+      count += item.count;
+    }
+  }
+  return count;
+}
+
+function countWindowEmptySlots(window: MineflayerWindow): number {
+  let count = 0;
+  for (let slot = window.inventoryStart; slot < window.inventoryEnd; slot += 1) {
+    if (window.slots[slot] === null || window.slots[slot] === undefined) count += 1;
+  }
+  return count;
+}
+
+/** Mineflayer's narrow internal hook requests a full authoritative snapshot for an open window. */
+function requireWindowSynchronizer(bot: Bot): (window: MineflayerWindow) => Promise<void> {
+  const synchronize = (bot as MineflayerWindowSynchronizer)._syncWindow;
+  if (typeof synchronize !== 'function' || !bot.supportFeature('stateIdUsed')) {
+    throw new SkillFault('preconditionsNotMet', 'Mineflayer cannot synchronize the open container window');
+  }
+  return (window) => synchronize.call(bot, window);
 }
 
 function slotCount(bot: Bot, slot: number, target: MineflayerItem): number {
