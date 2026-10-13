@@ -84,10 +84,10 @@ async function runLifecycleCycle(
   assert.ok(completed.events.some((event) => event.type === "outcome"));
   assert.ok(completed.trace.segments.length > 0);
   assert.equal(ownedJavaProcesses(completed.runId).length, 0, "the runtime must reap its Paper process");
-  await assertGamePortReleased();
   await nextTurn();
   assert.equal(activeResourceCount("TCPServerWrap"), beforeServers, "the control listener must be closed");
   assert.equal(activeResourceCount("TCPSocketWrap"), beforeSockets, "the runtime must close its control and bot sockets");
+  await assertGamePortReleased();
   return { prepared, completed };
 }
 
