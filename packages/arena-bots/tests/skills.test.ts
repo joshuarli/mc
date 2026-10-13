@@ -1081,7 +1081,10 @@ test('attack waits for tick-driven non-forced look before launching', async () =
   }
 });
 
-test('cancellation quarantines a look operation that never settles', async () => {
+test('cancellation quarantines a look operation that never settles', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let now = 0;
+  t.mock.method(performance, 'now', () => now);
   const harness = makeHarness();
   prepareChest(harness.bot);
   let lookStarted = false;
@@ -1101,14 +1104,257 @@ test('cancellation quarantines a look operation that never settles', async () =>
     const running = harness.owner.run({ kind: 'containerOpen', position: blockPosition(1, 64, 0) });
     await waitUntil(() => lookStarted);
     const cancellation = harness.owner.cancel('shutdown');
-    await assert.rejects(running, /client is quarantined/);
-    await assert.rejects(cancellation, /client is quarantined/);
+    const rejectedRunning = assert.rejects(running, /client is quarantined/);
+    const rejectedCancellation = assert.rejects(cancellation, /client is quarantined/);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    now = 5_000;
+    t.mock.timers.tick(5_000);
+    await rejectedRunning;
+    await rejectedCancellation;
     assert.equal(activationStarted, false);
     assert.ok(harness.controlsCleared() > 0);
     await assert.rejects(
       harness.owner.run({ kind: 'hold', reason: 'agentStateUnknown' }),
       /client is quarantined/,
     );
+  } finally {
+    await harness.owner.close();
+    harness.observer.close();
+  }
+});
+
+function installPinnedLook(bot: Bot): {
+  readonly lookStarted: Promise<void>;
+  readonly forces: (boolean | undefined)[];
+  pendingLooks(): number;
+  finishPendingLook(): Promise<void>;
+} {
+  const registry = mineflayerRequire('prismarine-registry')('26.1.2') as Bot['registry'];
+  Object.assign(bot, { registry, version: '26.1.2', supportFeature: registry.supportFeature.bind(registry) });
+  Object.assign(bot._client, { write: () => undefined });
+  const injectPhysics = mineflayerRequire('mineflayer/lib/plugins/physics') as (
+    bot: Bot, options: { physicsEnabled: boolean },
+  ) => void;
+  injectPhysics(bot, { physicsEnabled: false });
+  const nativeLook = bot.look.bind(bot);
+  const forces: (boolean | undefined)[] = [];
+  bot.look = (yaw, pitch, force) => {
+    forces.push(force);
+    return nativeLook(yaw, pitch, force);
+  };
+  let started!: () => void;
+  const lookStarted = new Promise<void>((resolve) => { started = resolve; });
+  const nativeLookAt = bot.lookAt.bind(bot);
+  let pendingLooks = 0;
+  bot.lookAt = (point, force) => {
+    pendingLooks += 1;
+    const pending = nativeLookAt(point, force).finally(() => { pendingLooks -= 1; });
+    started();
+    return pending;
+  };
+  return {
+    lookStarted,
+    forces,
+    pendingLooks: () => pendingLooks,
+    finishPendingLook: () => nativeLook(bot.entity.yaw, bot.entity.pitch),
+  };
+}
+
+test('replacement drains the actual pinned container look before the next skill starts', async () => {
+  const harness = makeHarness();
+  prepareChest(harness.bot);
+  const native = installPinnedLook(harness.bot);
+  let activated = false;
+  Object.assign(harness.bot, { activateBlock: async () => { activated = true; } });
+  const running = harness.owner.run({ kind: 'containerOpen', position: blockPosition(1, 64, 0) });
+  const observedRunning = running.then((outcome) => outcome, (error: unknown) => error);
+  try {
+    await native.lookStarted;
+    const yaw = harness.bot.entity.yaw;
+    const pitch = harness.bot.entity.pitch;
+    const controls = { ...harness.bot.controlState };
+    const replacement = harness.owner.run({ kind: 'hold', reason: 'agentStateUnknown' });
+    await assert.doesNotReject(replacement);
+    assert.equal(native.pendingLooks(), 0, 'replacement must await the original native look promise');
+    assert.deepEqual(await observedRunning, { kind: 'cancelled', reason: 'replaced' });
+    assert.equal(harness.bot.entity.yaw, yaw);
+    assert.equal(harness.bot.entity.pitch, pitch);
+    assert.deepEqual({ ...harness.bot.controlState }, controls);
+    assert.equal(activated, false);
+    assert.ok(native.forces.every((force) => force === undefined), 'neither action nor cancellation may force a turn');
+  } finally {
+    await native.finishPendingLook();
+    await observedRunning;
+    await harness.owner.close();
+    harness.observer.close();
+  }
+});
+
+test('pinned owned look settles on shutdown and eligibility cancellation', async () => {
+  for (const reason of ['shutdown', 'agentEliminated'] as const) {
+    const harness = makeHarness();
+    prepareChest(harness.bot);
+    const native = installPinnedLook(harness.bot);
+    try {
+      const running = harness.owner.run({ kind: 'containerOpen', position: blockPosition(1, 64, 0) });
+      await native.lookStarted;
+      const yaw = harness.bot.entity.yaw;
+      const pitch = harness.bot.entity.pitch;
+      if (reason === 'shutdown') await harness.owner.close();
+      else await harness.owner.cancel(reason);
+      assert.deepEqual(await running, { kind: 'cancelled', reason });
+      assert.equal(native.pendingLooks(), 0);
+      assert.equal(harness.bot.entity.yaw, yaw);
+      assert.equal(harness.bot.entity.pitch, pitch);
+    } finally {
+      await native.finishPendingLook();
+      await harness.owner.close();
+      harness.observer.close();
+    }
+  }
+});
+
+test('pinned owned look settles on its original timeout without quarantine or activation', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let now = 0;
+  t.mock.method(performance, 'now', () => now);
+  const harness = makeHarness();
+  prepareChest(harness.bot);
+  const native = installPinnedLook(harness.bot);
+  let activated = false;
+  Object.assign(harness.bot, { activateBlock: async () => { activated = true; } });
+  try {
+    const running = harness.owner.run({ kind: 'containerOpen', position: blockPosition(1, 64, 0) });
+    await native.lookStarted;
+    now = 5_000;
+    t.mock.timers.tick(5_000);
+    assert.deepEqual(await running, { kind: 'failed', cause: 'timedOut' });
+    assert.equal(native.pendingLooks(), 0);
+    assert.equal(activated, false);
+    assert.deepEqual(await harness.owner.run({ kind: 'hold', reason: 'agentStateUnknown' }), { kind: 'succeeded' });
+  } finally {
+    await native.finishPendingLook();
+    await harness.owner.close();
+    harness.observer.close();
+  }
+});
+
+test('look cancellation preserves its initiating error and a distinct native drain failure', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let now = 0;
+  t.mock.method(performance, 'now', () => now);
+  const harness = makeHarness();
+  prepareChest(harness.bot);
+  const native = installPinnedLook(harness.bot);
+  const drainFailure = new Error('native look drain failed');
+  const running = harness.owner.run({ kind: 'containerOpen', position: blockPosition(1, 64, 0) });
+  const observedRunning = running.then((outcome) => outcome, (error: unknown) => error);
+  try {
+    await native.lookStarted;
+    let drainStarted!: () => void;
+    const drainCalled = new Promise<void>((resolve) => { drainStarted = resolve; });
+    Object.assign(harness.bot, { look: () => { drainStarted(); throw drainFailure; } });
+    let returned = false;
+    const cancellation = harness.owner.cancel('shutdown').finally(() => { returned = true; });
+    const rejected = assert.rejects(cancellation, (error) => {
+      assert.ok(error instanceof AggregateError);
+      assert.ok(error.errors.includes(drainFailure));
+      assert.ok(error.cause instanceof Error);
+      assert.equal(error.cause.message, 'skill was cancelled');
+      assert.match(error.message, /client is quarantined/);
+      return true;
+    });
+    await drainCalled;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(returned, false, 'a rejected drain must not release the still-pending original look');
+    now = 5_000;
+    t.mock.timers.tick(5_000);
+    await rejected;
+    assert.ok(await observedRunning instanceof AggregateError);
+    await assert.rejects(harness.owner.run({ kind: 'hold', reason: 'agentStateUnknown' }), /client is quarantined/);
+  } finally {
+    await native.finishPendingLook();
+    await harness.owner.close();
+    harness.observer.close();
+  }
+});
+
+test('look cancellation owns a pending drain after original settlement within the remaining deadline', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let now = 0;
+  t.mock.method(performance, 'now', () => now);
+  const harness = makeHarness();
+  prepareChest(harness.bot);
+  const native = installPinnedLook(harness.bot);
+  const running = harness.owner.run({ kind: 'containerOpen', position: blockPosition(1, 64, 0) });
+  const observedRunning = running.then((outcome) => outcome, (error: unknown) => error);
+  let finishDrain!: () => void;
+  const drainPending = new Promise<void>((resolve) => { finishDrain = resolve; });
+  try {
+    await native.lookStarted;
+    now = 4_000;
+    t.mock.timers.tick(4_000);
+    let drainStarted!: () => void;
+    const drainCalled = new Promise<void>((resolve) => { drainStarted = resolve; });
+    Object.assign(harness.bot, { look: async () => {
+      await native.finishPendingLook();
+      drainStarted();
+      await drainPending;
+    } });
+    let returned = false;
+    const cancellation = harness.owner.cancel('shutdown').finally(() => { returned = true; });
+    const rejected = assert.rejects(cancellation, (error) => {
+      assert.ok(error instanceof AggregateError);
+      assert.ok(error.cause instanceof Error);
+      assert.equal(error.cause.message, 'skill was cancelled');
+      assert.match(error.message, /client is quarantined/);
+      return true;
+    });
+    await drainCalled;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(native.pendingLooks(), 0);
+    assert.equal(returned, false);
+    now = 4_999;
+    t.mock.timers.tick(999);
+    await Promise.resolve();
+    assert.equal(returned, false);
+    now = 5_000;
+    t.mock.timers.tick(1);
+    await rejected;
+    assert.ok(await observedRunning instanceof AggregateError);
+    finishDrain();
+    await drainPending;
+    await assert.rejects(harness.owner.run({ kind: 'hold', reason: 'agentStateUnknown' }), /client is quarantined/);
+  } finally {
+    finishDrain();
+    await native.finishPendingLook();
+    await harness.owner.close();
+    harness.observer.close();
+  }
+});
+
+test('pinned unchanged nonforced look settles its predecessor and leaves the next look independent', async () => {
+  const harness = makeHarness();
+  prepareChest(harness.bot);
+  const native = installPinnedLook(harness.bot);
+  try {
+    let firstSettled = false;
+    const first = harness.bot.lookAt(new TestPosition(1.5, 64.5, 0.5)).then(() => { firstSettled = true; });
+    await native.lookStarted;
+    await Promise.resolve();
+    assert.equal(firstSettled, false);
+    const yaw = harness.bot.entity.yaw;
+    const pitch = harness.bot.entity.pitch;
+    await native.finishPendingLook();
+    await first;
+    assert.equal(harness.bot.entity.yaw, yaw);
+    assert.equal(harness.bot.entity.pitch, pitch);
+    let secondSettled = false;
+    const second = harness.bot.lookAt(new TestPosition(-1.5, 64.5, 0.5)).then(() => { secondSettled = true; });
+    await Promise.resolve();
+    assert.equal(secondSettled, false, 'the orphan zero-change native task must not settle a later look');
+    await native.finishPendingLook();
+    await second;
   } finally {
     await harness.owner.close();
     harness.observer.close();
