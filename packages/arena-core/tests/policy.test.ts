@@ -1,4 +1,4 @@
-import { deepStrictEqual, equal, notDeepStrictEqual } from 'node:assert/strict';
+import { deepStrictEqual, equal, notDeepStrictEqual, throws } from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
@@ -11,6 +11,7 @@ import {
   emptyPolicyMemory,
   entityId,
   foodStack,
+  inventorySlot,
   InvalidPolicyParamsError,
   PolicyParams,
   policyMemory,
@@ -167,9 +168,9 @@ test('a recent remembered opponent prevents eating after visibility becomes empt
 
 test('equipment upgrades compare confirmed armor by slot and select the exact inventory slot', () => {
   const upgrades: readonly EquipmentUpgrade[] = [
-    { inventorySlot: 12, equipmentSlot: 'helmet', rating: 2 },
-    { inventorySlot: 13, equipmentSlot: 'leggings', rating: 5 },
-    { inventorySlot: 14, equipmentSlot: 'boots', rating: 1 },
+    { inventorySlot: inventorySlot(12), equipmentSlot: 'helmet', rating: 2 },
+    { inventorySlot: inventorySlot(13), equipmentSlot: 'leggings', rating: 5 },
+    { inventorySlot: inventorySlot(14), equipmentSlot: 'boots', rating: 1 },
   ];
   const observation = makeObservation({
     agent: currentKnowledge(makeAgent({

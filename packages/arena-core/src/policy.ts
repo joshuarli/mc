@@ -1,4 +1,5 @@
 import {
+  blockPosition,
   borderCenter,
   compareBlockPositions,
   isNearOrOutsideBorder,
@@ -9,7 +10,6 @@ import {
 } from './geometry.js';
 import {
   assertValidatedAgentObservation,
-  blockPosition,
   entityId,
   inventorySlot,
   lootTarget,
@@ -296,7 +296,7 @@ export function decide(
     }, { ...currentMemory, lastGoal: goal });
   }
 
-  const opponent = currentOpponents === null
+  const opponent = currentOpponents === null || currentOpponents.length === 0
     ? null
     : nearestOpponent(agent.position, currentOpponents);
   if (opponent !== null
@@ -478,8 +478,9 @@ function selectLoot(
     return null;
   }
 
-  if (memory.lastGoal?.kind === 'loot') {
-    const previous = candidates.find((candidate) => sameLootTarget(candidate.target, memory.lastGoal!.target));
+  const lastGoal = memory.lastGoal;
+  if (lastGoal?.kind === 'loot') {
+    const previous = candidates.find((candidate) => sameLootTarget(candidate.target, lastGoal.target));
     if (previous !== undefined
         && previous.utility === best.utility
         && previous.distance <= best.distance + BigInt(params.lootHysteresisBlocks)) {
