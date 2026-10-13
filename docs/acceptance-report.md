@@ -1,6 +1,6 @@
 # Acceptance report
 
-**Status: initial D1 stack acceptance passed; remaining gameplay cases are unverified.** The isolated commit `6c553f2` passed the revised `stack` smoke after the Paper fixture set the actual spawn-radius game rule to zero. The same fix is present on the campaign mainline as `af84687`. This establishes the ordinary two-client stack path and wrong-protocol rejection only; it does not establish configured-map gameplay, reset, or fairness.
+**Status: stack and configured map reset passed; remaining gameplay cases are unverified.** The isolated commit `6c553f2` passed the revised `stack` smoke after the Paper fixture set the actual spawn-radius game rule to zero. The same fix is present on the campaign mainline as `af84687`. At `a44e0ab`, the configured `maps-reset` case passed three independent runs, including ordinary loot, death, stopped stats, and clean resets. Match rules, fairness, and six-seat behavior still require live proof.
 
 ## Environment and selected stack
 
@@ -17,7 +17,7 @@
 | Case | Status | Evidence or blocker |
 | --- | --- | --- |
 | `stack` | Pass | `./arena test --suite integration --case stack` on isolated commit `6c553f2`; includes ordinary two-client actions, per-client receipt checks, damage/disconnect outcome, and wrong-protocol rejection. |
-| `maps-reset` | Failing | The first configured attempt at `26a07a7` failed before client startup. After the injection fix, the retry at `60dfce6` logged in all three clients and passed both initial semantic-world comparisons, then failed during chest collection because the skill read the stale closed-window inventory. Both attempts stopped their JVMs and retained operational failure artifacts. Three-run reset and stopped stats remain unverified. |
+| `maps-reset` | Pass | `./arena test --suite integration --case maps-reset` at `a44e0ab` passed all three runs: both clients observed the declared blocks, spawns, and chest contents; ordinary collection and fall death occurred; stopped inspection recorded the death; both subsequent clones had empty inventories and zero deaths. |
 | `match-rules` | Parked | Not run. No ordinary two-client duel or independently reconstructed typed result has been observed. |
 | `legal-player` | Parked | Not run. No configured live route, container interaction, and attack sequence has been exercised through the Mineflayer skill client. |
 | `fairness` | Parked | Not run. Independent client receipt histories, complete current perception, and a live hidden-state perturbation remain unproven. |
@@ -31,9 +31,11 @@ All acceptance cases are unattended and headless, using bot clients for every pa
 
 The Java plugin emits startup diagnostics for the prepared map and server readiness. Those diagnostics are useful for locating startup failures, but a marker alone does not prove generated blocks, chest contents, reset behavior, a legal action, or an authoritative match result. Acceptance cases must read block and inventory state through Mineflayer and consume the plugin's typed outcome stream. Match actions must use ordinary client mechanics; no administrative damage or injected live inventory is accepted.
 
-The TypeScript support oracle compares the full declared block sequence, client-observed spawn positions in seat order, and all 27 slots of every declared chest against a compiled map. Both competitors passed these initial comparisons in the configured retry at `60dfce6`. The required recorded death and zero deaths after reset remain unverified. `arena inspect --run-id` reads stopped-run stats for the same offline UUID from `<run>/server/world/players/stats/<offline-uuid>.json`; its configured live use remains unverified. Tests consume `inspect` output rather than probing server files directly.
+The TypeScript support oracle compares the full declared block sequence, client-observed spawn positions in seat order, and all 27 slots of every declared chest against a compiled map. Both competitors passed these comparisons across three runs at `a44e0ab`. The first run collected bread and a stone sword, recorded an ordinary fall death, and exposed its death counter through stopped inspection. Both subsequent clones matched the initial world and reset inventories and death counters. `arena inspect --run-id` reads stopped-run stats for the same offline UUID from `<run>/server/world/players/stats/<offline-uuid>.json`. Tests consume `inspect` output rather than probing server files directly.
 
-The retry retained run `maps-reset-first-04bbeca2-b91a-4f7e-aeb4-642c6783770e` in the isolated `verify-live-m1` worktree. Its assertion message was lost during error mapping, and its cleanup field incorrectly repeated that assertion despite the JVM having stopped. Source fixes at `6945bec` preserve a bounded error reason and native error cause; the runtime cleanup correction and focused verification are pending. Neither failed attempt counts as reset acceptance.
+Four earlier attempts exposed adapter startup before plugin injection, stale inventory reads, stale full-window resync receipts, and an unreliable void-fall fixture. The reset fixture now uses a lower landing deck and ordinary fall damage. The adapter waits for a full server snapshot confirming both inventory gain and chest loss. Error mapping preserves bounded messages and native causes; cleanup compares error identity and cause chains. Focused regressions passed, and the completed live retry exercised the fixes. Historical failure artifacts retain their original contents, including the second attempt's incorrect cleanup field.
+
+The passing runs in `verify-live-m1` are `maps-reset-first-dc582f54-71fa-42a4-b872-ba2171612e55`, `maps-reset-second-60b19df5-ebae-4b77-b540-f67c1f81bfe8`, and `maps-reset-third-1610de8d-237f-4ef2-92a3-6c684ee73daf`. Each published a completed authority trace after its JVM stopped.
 
 At `1cd0a60`, the strict TypeScript stack build and `all live acceptance scenario and policy sources compile offline` passed. This check compiles every live fixture's scenario, referenced map, and policy. It caught malformed recording fields and a border end tick equal to the match limit before a server was started. The native helper's strict C build and 19 owned-file cases also passed, including bounded resource accounting and rejection of symlinked work roots. These are offline checks.
 
@@ -41,7 +43,7 @@ At `e6357db`, the five focused Java test classes passed all 44 cases, including 
 
 ## Contract changes and measurements
 
-The runtime now exposes `run --scenario`, read-only `validate --scenario`, and stopped-run inspection. Scripted acceptance cases select an evaluator driver; normal Hunger runs retain the baseline policy. Conflict and cancellation errors use exits 4 and 130 respectively. Configured live behavior remains unverified. No startup, six-seat, or performance gate measurements were collected.
+The runtime exposes `run --scenario`, read-only `validate --scenario`, stopped-run inspection, and explicit selected-run `gc --dry-run` / `gc --apply`. Scripted acceptance cases select an evaluator driver; normal Hunger runs retain the baseline policy and configured strategy cadence. Conflict and cancellation errors use exits 4 and 130, including independent cleanup failures. Evaluators may finish their assertions after outcome before cancellation, and baseline policy actions stop on actual death or spectator mode. Configured reset and stopped inspection passed. No six-seat or performance gate measurements were collected.
 
 ## Remaining prerequisites
 
