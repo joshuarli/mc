@@ -10,12 +10,6 @@ const packages = new Map([
   ["bots", "arena-bots"],
   ["runner", "arena-runner"]
 ]);
-const dependencies = new Map([
-  ["core", []],
-  ["spec", ["core"]],
-  ["bots", ["core"]],
-  ["runner", ["core", "spec", "bots"]]
-]);
 
 function fail(message) {
   process.stderr.write(`typescript build: ${message}\n`);
@@ -50,6 +44,25 @@ function ensureOutputDirectories() {
   ensureDirectory(join(build, "tsbuildinfo"));
 }
 
+function packageManifest(name) {
+  const directory = packages.get(name);
+  if (!directory) fail(`unknown TypeScript package: ${name}`);
+  const path = join(root, "packages", directory, "package.json");
+  const manifest = JSON.parse(readFileSync(path, "utf8"));
+  if (manifest.name !== `@arena/${name}`) fail(`package name does not match its workspace path: ${path}`);
+  return manifest;
+}
+
+function packageDependencies(name) {
+  const dependencies = packageManifest(name).dependencies ?? {};
+  return Object.keys(dependencies).filter((dependency) => {
+    if (!dependency.startsWith("@arena/")) return false;
+    const target = dependency.slice("@arena/".length);
+    if (!packages.has(target)) fail(`unknown Arena workspace dependency: ${dependency}`);
+    return true;
+  }).map((dependency) => dependency.slice("@arena/".length));
+}
+
 function stagePackageAliases() {
   const buildRoot = join(root, ".work", "build");
   const nodeModules = join(buildRoot, "node_modules");
@@ -60,9 +73,11 @@ function stagePackageAliases() {
   for (const [name, directory] of packages) {
     const outputDirectory = join(buildRoot, "packages", directory);
     ensureDirectory(outputDirectory);
-    copyFileSync(join(root, "packages", directory, "package.json"), join(outputDirectory, "package.json"));
+    const manifestPath = join(root, "packages", directory, "package.json");
+    packageManifest(name);
+    copyFileSync(manifestPath, join(outputDirectory, "package.json"));
 
-    const manifest = JSON.parse(readFileSync(join(root, "packages", directory, "package.json"), "utf8"));
+    const manifest = packageManifest(name);
     for (const dependency of Object.keys(manifest.dependencies ?? {})) {
       const aliasPath = join(nodeModules, dependency);
       let targetDirectory;
@@ -88,21 +103,25 @@ function stagePackageAliases() {
   }
 }
 
-function compilePackage(name, compiled = new Set()) {
+function compilePackage(name, compiled, compiling) {
   if (compiled.has(name)) return;
-  for (const dependency of dependencies.get(name) ?? []) compilePackage(dependency, compiled);
+  if (compiling.has(name)) fail(`cyclic TypeScript workspace dependency at ${name}`);
+  compiling.add(name);
+  for (const dependency of packageDependencies(name)) compilePackage(dependency, compiled, compiling);
   compile(join("packages", packages.get(name), "tsconfig.json"));
+  compiling.delete(name);
   compiled.add(name);
 }
 
 const target = process.argv[2];
 if (target === "all") {
   const compiled = new Set();
-  for (const name of packages.keys()) compilePackage(name, compiled);
+  const compiling = new Set();
+  for (const name of packages.keys()) compilePackage(name, compiled, compiling);
 } else if (target === "stack") {
   compile(join("tests", "tsconfig.json"));
 } else if (packages.has(target)) {
-  compilePackage(target);
+  compilePackage(target, new Set(), new Set());
 } else {
   fail("expected all, stack, core, spec, bots, or runner");
 }
