@@ -116,10 +116,10 @@ final class CivilizationMaterialCensusTest {
                         + "\"match_tick\":\"7\",\"seat\":1,\"cause\":\"death\","
                         + "\"before_checkpoint_sequence\":\"1\",\"oak_logs\":2,\"oak_planks\":3,"
                         + "\"dropped_oak_logs\":2,\"dropped_oak_planks\":3}", markers.get(1));
-        String afterDeath = markers.getLast();
-        assertTrue(afterDeath.contains("{\"seat\":1,\"oak_logs\":0,\"oak_planks\":0}"));
-        assertTrue(afterDeath.contains("{\"seat\":2,\"oak_logs\":2,\"oak_planks\":3}"));
-        assertTrue(afterDeath.contains("\"item_entities\":[]"));
+        String deathCheckpoint = markers.getLast();
+        assertTrue(deathCheckpoint.contains("{\"seat\":1,\"oak_logs\":0,\"oak_planks\":0}"));
+        assertTrue(deathCheckpoint.contains("{\"seat\":2,\"oak_logs\":2,\"oak_planks\":3}"));
+        assertTrue(deathCheckpoint.contains("\"item_entities\":[]"));
     }
 
     @Test
@@ -161,8 +161,8 @@ final class CivilizationMaterialCensusTest {
 
     @Test
     void playerSamplerCountsCraftingInputsButNotPreviewOrContainerTop() {
-        ItemStack oakLog = new ItemStack(Material.OAK_LOG, 1);
-        ItemStack plankPreview = new ItemStack(Material.OAK_PLANKS, 4);
+        ItemStack oakLog = new TestItemStack(Material.OAK_LOG, 1);
+        ItemStack plankPreview = new TestItemStack(Material.OAK_PLANKS, 4);
         PlayerInventory emptyPlayerInventory = playerInventory(new ItemStack[0]);
         CraftingInventory craftingMatrix = craftingInventory(new ItemStack[] {oakLog, null, null, null},
                 plankPreview);
@@ -249,13 +249,18 @@ final class CivilizationMaterialCensusTest {
     @Test
     void requiresTickZeroInitialAndEmitsOnlyChangedMaterialStates() {
         List<String> markers = new ArrayList<>();
-        CivilizationMaterialCensus.Recorder recorder = new CivilizationMaterialCensus.Recorder(
+        CivilizationMaterialCensus.Recorder invalidRecorder = new CivilizationMaterialCensus.Recorder(
                 "run-changes", markers::add);
         CivilizationMaterialCensus.MaterialState initial = state(List.of());
 
-        assertThrows(IllegalStateException.class,
-                () -> recorder.checkpoint(BigInteger.ONE, initial));
+        IllegalStateException invalidInitialTick = assertThrows(IllegalStateException.class,
+                () -> invalidRecorder.checkpoint(BigInteger.ONE, initial));
         assertTrue(markers.isEmpty());
+        assertSame(invalidInitialTick, assertThrows(IllegalStateException.class,
+                () -> invalidRecorder.checkpoint(BigInteger.ZERO, initial)));
+
+        CivilizationMaterialCensus.Recorder recorder = new CivilizationMaterialCensus.Recorder(
+                "run-changes", markers::add);
 
         recorder.checkpoint(BigInteger.ZERO, initial);
         recorder.checkpoint(BigInteger.ONE, initial);
@@ -351,7 +356,7 @@ final class CivilizationMaterialCensusTest {
     private static long materialCount(List<CivilizationMaterialCensus.StackCount> items, String material) {
         return items.stream()
                 .filter(item -> item.material().equals(material))
-                .mapToLong(CivilizationMaterialCensus.StackCount::amount)
+                .mapToLong(CivilizationMaterialCensus.StackCount::count)
                 .sum();
     }
 
@@ -412,5 +417,26 @@ final class CivilizationMaterialCensusTest {
             return results.get(method.getName());
         }
         throw new AssertionError("unexpected Bukkit API call: " + method);
+    }
+
+    private static final class TestItemStack extends ItemStack {
+        private final Material material;
+        private final int amount;
+
+        TestItemStack(Material material, int amount) {
+            super();
+            this.material = material;
+            this.amount = amount;
+        }
+
+        @Override
+        public Material getType() {
+            return material;
+        }
+
+        @Override
+        public int getAmount() {
+            return amount;
+        }
     }
 }
