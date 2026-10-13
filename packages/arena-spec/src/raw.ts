@@ -151,11 +151,11 @@ function appendArrayTable(
   location: { readonly line: number; readonly column: number },
   document: string,
 ): void {
-  if (path.length === 0) {
-    throw new SpecError(SpecErrorKind.Syntax, document, "array table has an empty key", location);
-  }
   const parent = tableAtPath(root, path.slice(0, -1), location, document);
   const key = path[path.length - 1];
+  if (key === undefined) {
+    throw new SpecError(SpecErrorKind.Syntax, document, "array table has an empty key", location);
+  }
   const current = parent.get(key);
   if (current === undefined) {
     parent.set(key, { value: { kind: "array", value: [{ kind: "table", value: table }] }, sourceLocation: location });
@@ -200,11 +200,11 @@ function insertPath(
   location: { readonly line: number; readonly column: number },
   document: string,
 ): void {
-  if (path.length === 0) {
-    throw new SpecError(SpecErrorKind.Syntax, document, "key is empty", location);
-  }
   const parent = tableAtPath(root, path.slice(0, -1), location, document);
   const key = path[path.length - 1];
+  if (key === undefined) {
+    throw new SpecError(SpecErrorKind.Syntax, document, "key is empty", location);
+  }
   if (parent.has(key)) {
     throw new SpecError(SpecErrorKind.Syntax, document, `key ${key} is defined more than once`, location);
   }

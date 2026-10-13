@@ -187,7 +187,9 @@ test("chest_inventory_limit_matches_cross_language_contracts", () => {
     'inventory = ["minecraft:bread", "minecraft:stone_sword"]',
     `inventory = [${inventory}]`,
   );
-  assert.equal(compileMap(accepted).lootContainers[0].inventory.length, maxItems);
+  const acceptedContainer = compileMap(accepted).lootContainers[0];
+  assert.ok(acceptedContainer);
+  assert.equal(acceptedContainer.inventory.length, maxItems);
 
   const overLimit = Array.from({ length: maxItems + 1 }, () => '"minecraft:bread"').join(", ");
   const rejected = HUNGER_MAP.replace(
@@ -325,11 +327,14 @@ max_y = 8
 
 test("map_positions_use_shared_core_geometry_and_stable_order", () => {
   const map = compileMap(HUNGER_MAP);
-  assert.deepEqual(map.spawns[0].position, blockPosition(64, 65, 40));
-  assert.ok(Object.isFrozen(map.spawns[0].position));
+  const firstSpawn = map.spawns[0];
+  assert.ok(firstSpawn);
+  assert.deepEqual(firstSpawn.position, blockPosition(64, 65, 40));
+  assert.ok(Object.isFrozen(firstSpawn.position));
   for (let index = 1; index < map.blocks.length; index += 1) {
-    const previous = map.blocks[index - 1].position;
-    const current = map.blocks[index].position;
+    const previous = map.blocks[index - 1]?.position;
+    const current = map.blocks[index]?.position;
+    assert.ok(previous && current);
     assert.ok(previous.x < current.x
       || (previous.x === current.x && previous.y < current.y)
       || (previous.x === current.x && previous.y === current.y && previous.z <= current.z));

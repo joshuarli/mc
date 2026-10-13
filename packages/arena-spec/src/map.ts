@@ -168,7 +168,9 @@ export function compileMap(source: string): MapIr {
   const surfaceY = buildWalkableSurface(blocks, dimensions);
   const components = labelSurfaceComponents(surfaceY);
   validateSpawns(spawnPoints, surfaceY, components);
-  validateLoot(lootContainers, blocks, surfaceY, components, spawnPoints[0]);
+  const firstSpawn = spawnPoints[0];
+  if (firstSpawn === undefined) throw new Error("validated map has no spawn points");
+  validateLoot(lootContainers, blocks, surfaceY, components, firstSpawn);
   const blockPlacements = [...blocks.values()]
     .sort((left, right) => comparePositions(left.position, right.position))
     .map(({ position, block }) => Object.freeze({ position, block }));
@@ -414,8 +416,10 @@ function labelSurfaceComponents(surface: ReadonlyMap<string, number>): Map<strin
     labels.set(start, component);
     for (let cursor = 0; cursor < queue.length; cursor += 1) {
       const current = queue[cursor];
+      if (current === undefined) throw new Error("surface traversal queue is missing a pending column");
       const [x, z] = parseColumnKey(current);
-      const y = surface.get(current)!;
+      const y = surface.get(current);
+      if (y === undefined) throw new Error("surface traversal reached a missing column");
       for (const [nextX, nextZ] of cardinalNeighbors(x, z)) {
         const next = columnKey(nextX, nextZ);
         const nextY = surface.get(next);

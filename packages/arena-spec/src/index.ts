@@ -6,7 +6,6 @@ export { GameMode, compileScenario, scenarioMapReference } from "./scenario.js";
 export type {
   BorderSettings,
   BotSettings,
-  GameMode,
   MatchSettings,
   RecordSettings,
   ResourceReference,
