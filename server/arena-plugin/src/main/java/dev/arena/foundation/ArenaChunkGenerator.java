@@ -15,24 +15,62 @@ import org.bukkit.generator.WorldInfo;
 
 /** Generates resolved map blocks from immutable data without querying or mutating other chunks. */
 final class ArenaChunkGenerator extends ChunkGenerator {
+    /**
+     * Paper resolves material kind information through its initialized registries. Keeping those facts
+     * behind this boundary lets offline tests use deterministic material properties.
+     */
+    interface MaterialCatalog {
+        boolean isBlock(Material material);
+
+        boolean isAir(Material material);
+
+        boolean isItem(Material material);
+    }
+
+    private static final class PaperMaterialCatalog implements MaterialCatalog {
+        @Override
+        public boolean isBlock(Material material) {
+            return material.isBlock();
+        }
+
+        @Override
+        public boolean isAir(Material material) {
+            return material.isAir();
+        }
+
+        @Override
+        public boolean isItem(Material material) {
+            return material.isItem();
+        }
+    }
+
     private record GeneratedBlock(MapPlan.Position position, Material material) {}
+
+    private static final MaterialCatalog PAPER_MATERIALS = new PaperMaterialCatalog();
 
     private final MapPlan plan;
     private final Map<MapPlan.ChunkPosition, List<GeneratedBlock>> blocksByChunk;
 
     ArenaChunkGenerator(MapPlan plan) {
+        this(plan, PAPER_MATERIALS);
+    }
+
+    ArenaChunkGenerator(MapPlan plan, MaterialCatalog materials) {
         if (plan == null) {
             throw new IllegalArgumentException("resolved map plan is required");
+        }
+        if (materials == null) {
+            throw new IllegalArgumentException("material catalog is required");
         }
         this.plan = plan;
         for (MapPlan.LootContainer container : plan.lootContainers()) {
             for (String item : container.inventory()) {
-                requireItemMaterial(item);
+                requireItemMaterial(item, materials);
             }
         }
         Map<MapPlan.ChunkPosition, List<GeneratedBlock>> mutableIndex = new HashMap<>();
         for (MapPlan.BlockPlacement placement : plan.blocks()) {
-            Material material = requireBlockMaterial(placement.material());
+            Material material = requireBlockMaterial(placement.material(), materials);
             MapPlan.Position position = placement.position();
             MapPlan.ChunkPosition chunk = new MapPlan.ChunkPosition(
                     MapPlan.chunkCoordinate(position.x()), MapPlan.chunkCoordinate(position.z()));
@@ -101,17 +139,17 @@ final class ArenaChunkGenerator extends ChunkGenerator {
         return new Location(world, spawn.x() + 0.5, spawn.y(), spawn.z() + 0.5);
     }
 
-    static Material requireBlockMaterial(String resourceId) {
+    private static Material requireBlockMaterial(String resourceId, MaterialCatalog materials) {
         Material material = requireMinecraftMaterial(resourceId);
-        if (!material.isBlock() || material.isAir()) {
+        if (!materials.isBlock(material) || materials.isAir(material)) {
             throw new IllegalArgumentException("map block id is not a placeable non-air block: " + resourceId);
         }
         return material;
     }
 
-    static Material requireItemMaterial(String resourceId) {
+    private static Material requireItemMaterial(String resourceId, MaterialCatalog materials) {
         Material material = requireMinecraftMaterial(resourceId);
-        if (!material.isItem()) {
+        if (!materials.isItem(material)) {
             throw new IllegalArgumentException("loot id is not an obtainable Minecraft item: " + resourceId);
         }
         return material;

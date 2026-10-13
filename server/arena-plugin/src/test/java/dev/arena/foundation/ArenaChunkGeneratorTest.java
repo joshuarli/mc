@@ -20,9 +20,27 @@ import org.junit.jupiter.api.Test;
 final class ArenaChunkGeneratorTest {
     private record Generated(int x, int y, int z, Material material) {}
 
+    private static final ArenaChunkGenerator.MaterialCatalog TEST_MATERIALS =
+            new ArenaChunkGenerator.MaterialCatalog() {
+                @Override
+                public boolean isBlock(Material material) {
+                    return material == Material.STONE || material == Material.CHEST;
+                }
+
+                @Override
+                public boolean isAir(Material material) {
+                    return material == Material.AIR || material == Material.CAVE_AIR || material == Material.VOID_AIR;
+                }
+
+                @Override
+                public boolean isItem(Material material) {
+                    return material == Material.STONE || material == Material.CHEST || material == Material.BREAD;
+                }
+            };
+
     @Test
     void generatesOnlyThePassedChunkFromResolvedImmutablePlacements() {
-        ArenaChunkGenerator generator = new ArenaChunkGenerator(plan());
+        ArenaChunkGenerator generator = new ArenaChunkGenerator(plan(), TEST_MATERIALS);
         List<Generated> chunkZero = new ArrayList<>();
         List<Generated> chunkOne = new ArrayList<>();
 
@@ -39,7 +57,7 @@ final class ArenaChunkGeneratorTest {
 
     @Test
     void outsideMapChunksGenerateNoVanillaTerrainOrDecoration() {
-        ArenaChunkGenerator generator = new ArenaChunkGenerator(plan());
+        ArenaChunkGenerator generator = new ArenaChunkGenerator(plan(), TEST_MATERIALS);
         List<Generated> generated = new ArrayList<>();
 
         generator.generateNoise(null, new Random(0), -1, -1, chunkData(generated, -64, 320));
@@ -55,7 +73,7 @@ final class ArenaChunkGeneratorTest {
 
     @Test
     void rejectsResolvedBlocksOutsideThePaperWorldHeight() {
-        ArenaChunkGenerator generator = new ArenaChunkGenerator(plan());
+        ArenaChunkGenerator generator = new ArenaChunkGenerator(plan(), TEST_MATERIALS);
 
         assertThrows(IllegalStateException.class,
                 () -> generator.generateNoise(null, new Random(0), 0, 0, chunkData(new ArrayList<>(), -64, 65)));
@@ -64,19 +82,19 @@ final class ArenaChunkGeneratorTest {
     @Test
     void rejectsUnknownAndNonBlockMaterialIdsBeforeGenerationStarts() {
         assertThrows(IllegalArgumentException.class,
-                () -> new ArenaChunkGenerator(planWithBlock("minecraft:not_a_real_block")));
+                () -> new ArenaChunkGenerator(planWithBlock("minecraft:not_a_real_block"), TEST_MATERIALS));
         assertThrows(IllegalArgumentException.class,
-                () -> new ArenaChunkGenerator(planWithBlock("minecraft:bread")));
+                () -> new ArenaChunkGenerator(planWithBlock("minecraft:bread"), TEST_MATERIALS));
         assertThrows(IllegalArgumentException.class,
-                () -> new ArenaChunkGenerator(planWithBlock("custom:stone")));
+                () -> new ArenaChunkGenerator(planWithBlock("custom:stone"), TEST_MATERIALS));
     }
 
     @Test
     void rejectsUnknownAndNonItemLootIdsBeforeGenerationStarts() {
         assertThrows(IllegalArgumentException.class,
-                () -> new ArenaChunkGenerator(planWithLootItem("minecraft:not_a_real_item")));
+                () -> new ArenaChunkGenerator(planWithLootItem("minecraft:not_a_real_item"), TEST_MATERIALS));
         assertThrows(IllegalArgumentException.class,
-                () -> new ArenaChunkGenerator(planWithLootItem("minecraft:water")));
+                () -> new ArenaChunkGenerator(planWithLootItem("minecraft:water"), TEST_MATERIALS));
     }
 
     private static ChunkGenerator.ChunkData chunkData(List<Generated> generated, int minHeight, int maxHeight) {
