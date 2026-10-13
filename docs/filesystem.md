@@ -72,6 +72,17 @@ Before unlinking, the helper atomically moves the leaf to a random sibling name,
 checks that moved entry's identity, and restores it if the identity differs.
 Directory removal is non-recursive.
 
+`inspectOwnedResources` reads available bytes on the filesystem containing
+`.work/arena` and totals logical leaf sizes beneath that directory. If the
+arena directory is absent, its usage and run count are zero; available bytes
+come from the nearest existing directory among the owned root, `.work`, and
+`.work/arena`. `workBytes` includes run data and traces. `dependencyBytes`
+excludes only the top-level `runs` and `traces` trees. Symlinks count by their
+own link size and are never followed. `runCount` counts immediate real
+directories in `runs`. The scan fails on special files, filesystem crossings,
+more than 1,000,000 entries, nesting beyond 64 directories, or more than 64
+GiB of logical leaf data.
+
 The owned root is a private, single-owner runtime namespace. Only its owning
 runner may mutate it, and it must serialize operations that can change the same
 artifact. The helper verifies a staged inode after publication and moves a

@@ -45,6 +45,7 @@ type NativeOperation =
   | 'stage-world-plan'
   | 'stage-owned-file'
   | 'clone-owned-tree'
+  | 'inspect-owned-resources'
   | 'hold-run-lease'
   | 'read-owned-file'
   | 'unlink-created-file'
@@ -64,6 +65,17 @@ type NativeSuccess = Readonly<{
   device?: string;
   inode?: string;
   data?: string;
+  free_bytes?: string;
+  work_bytes?: string;
+  dependency_bytes?: string;
+  run_count?: number;
+}>;
+
+export type OwnedResourceSnapshot = Readonly<{
+  freeBytes: bigint;
+  workBytes: bigint;
+  dependencyBytes: bigint;
+  runCount: number;
 }>;
 
 type NativeFailure = Readonly<{
@@ -1281,6 +1293,48 @@ export async function readOwnedFile(options: Readonly<{
     }
     return contents;
   });
+}
+
+function resourceByteCount(value: unknown, field: string): bigint {
+  if (typeof value !== 'string' || value.length > 20 || !/^(?:0|[1-9][0-9]*)$/.test(value)) {
+    throw new OwnedFilesError({
+      message: `native inspect-owned-resources result has invalid ${field}`,
+      category: 'protocol_error',
+      operation: 'inspect-owned-resources',
+    });
+  }
+  const byteCount = BigInt(value);
+  if (byteCount > (1n << 64n) - 1n) {
+    throw new OwnedFilesError({
+      message: `native inspect-owned-resources result has invalid ${field}`,
+      category: 'protocol_error',
+      operation: 'inspect-owned-resources',
+    });
+  }
+  return byteCount;
+}
+
+export async function inspectOwnedResources(options: Readonly<{
+  helperPath: string;
+  ownedRoot: Buffer;
+}>): Promise<OwnedResourceSnapshot> {
+  const { helperPath, ownedRoot } = options;
+  const { result } = await spawnHelper(helperPath, 'inspect-owned-resources', [
+    encodePath(ownedRoot, 'owned root', 'inspect-owned-resources'),
+  ], undefined, undefined);
+  if (!Number.isSafeInteger(result.run_count) || (result.run_count as number) < 0) {
+    throw new OwnedFilesError({
+      message: 'native inspect-owned-resources result has invalid run_count',
+      category: 'protocol_error',
+      operation: 'inspect-owned-resources',
+    });
+  }
+  return {
+    freeBytes: resourceByteCount(result.free_bytes, 'free_bytes'),
+    workBytes: resourceByteCount(result.work_bytes, 'work_bytes'),
+    dependencyBytes: resourceByteCount(result.dependency_bytes, 'dependency_bytes'),
+    runCount: result.run_count as number,
+  };
 }
 
 export async function removeCreatedFile(options: Readonly<{
