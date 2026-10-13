@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://arena.invalid/schemas/trace-v2.schema.json",
+  "title": "Arena trace segment schema version 2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "run_id",
+    "first_sequence",
+    "last_sequence",
+    "records",
+    "sha256",
+    "trailer"
+  ],
+  "properties": {
+    "schema": {
+      "const": 2
+    },
+    "run_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "first_sequence": {
+      "$ref": "#/$defs/sequence"
+    },
+    "last_sequence": {
+      "$ref": "#/$defs/sequence"
+    },
+    "records": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "trailer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "complete"
+      ],
+      "properties": {
+        "complete": {
+          "const": true
+        }
+      }
+    }
+  },
+  "$defs": {
+    "sequence": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 20,
+      "pattern": "^[1-9][0-9]*$"
+    }
+  }
+}

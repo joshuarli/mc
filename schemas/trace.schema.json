@@ -4,20 +4,12 @@
   "title": "Arena trace segment schema version 1",
   "type": "object",
   "additionalProperties": false,
-  "$defs": {
-    "sequence": {
-      "type": "string",
-      "minLength": 1,
-      "maxLength": 20,
-      "pattern": "^[1-9][0-9]*$"
-    }
-  },
   "required": ["schema", "run_id", "first_sequence", "last_sequence", "records", "sha256", "trailer"],
   "properties": {
     "schema": { "const": 1 },
     "run_id": { "type": "string", "minLength": 1 },
-    "first_sequence": { "$ref": "#/$defs/sequence" },
-    "last_sequence": { "$ref": "#/$defs/sequence" },
+    "first_sequence": { "type": "integer", "minimum": 1 },
+    "last_sequence": { "type": "integer", "minimum": 1 },
     "records": { "type": "array", "items": { "type": "object" } },
     "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
     "trailer": {
