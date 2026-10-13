@@ -1,11 +1,31 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
+import { createRequire } from 'node:module';
 import test from 'node:test';
 import { blockPosition, entityId, type CivilizationPolicyContextInput } from '@arena/core';
 import type { Bot } from 'mineflayer';
 import { MineflayerCivilizationObserver } from '../src/civilization-observer.js';
 import { MineflayerObserver } from '../src/observer.js';
 import { SkillOwner } from '../src/skills.js';
+
+const packageRequire = createRequire(import.meta.url);
+const mineflayerRequire = createRequire(packageRequire.resolve('mineflayer'));
+const MINECRAFT_VERSION = '26.1.2';
+type MineflayerItem = NonNullable<Bot['inventory']['slots'][number]>;
+type MineflayerWindow = NonNullable<Bot['currentWindow']>;
+
+const loadPrismarineRegistry = mineflayerRequire('prismarine-registry') as (version: string) => {
+  readonly itemsByName: { readonly oak_planks: { readonly id: number } };
+};
+const loadPrismarineItem = mineflayerRequire('prismarine-item') as (registry: unknown) => new (
+  type: number,
+  count: number,
+  metadata: number,
+  nbt: null,
+) => MineflayerItem;
+const loadPrismarineWindows = mineflayerRequire('prismarine-windows') as (registry: unknown) => {
+  createWindow: (id: number, type: string, title: string) => MineflayerWindow | null;
+};
 
 test('craft spends four observed oak logs for sixteen observed oak planks', async () => {
   const harness = makeHarness();
@@ -224,8 +244,7 @@ test('container transfer moves an exact partial stack and returns the remainder 
   harness.inventory.slots[9] = planks;
   const chestPosition = new TestVector(1, 64, 0);
   harness.blocks.set(key(chestPosition), block('chest', chestPosition));
-  const chestWindow = makeChestWindow();
-  chestWindow.slots[27] = planks;
+  const chestWindow = makePinnedChestWindow(32);
   Object.assign(harness.bot, {
     lookAt: async () => undefined,
     activateBlock: async () => {
@@ -234,27 +253,14 @@ test('container transfer moves an exact partial stack and returns the remainder 
     },
     clickWindow: async (slot: number, button: number, mode: number) => {
       assert.equal(mode, 0);
-      if (slot === 27 && button === 0 && chestWindow.selectedItem === null) {
-        harness.inventory.slots[9] = null;
-        chestWindow.slots[27] = null;
-        chestWindow.selectedItem = planks;
-        return;
-      }
-      if (slot === 0 && button === 1 && chestWindow.selectedItem !== null) {
-        const selected = chestWindow.selectedItem;
-        const existing = chestWindow.slots[0];
-        chestWindow.slots[0] = existing == null
-          ? { ...selected, count: 1, slot: 0 }
-          : { ...existing, count: existing.count + 1 };
-        chestWindow.selectedItem = selected.count === 1 ? null : { ...selected, count: selected.count - 1 };
-        return;
-      }
-      if (slot === 27 && button === 0 && chestWindow.selectedItem !== null) {
-        harness.inventory.slots[9] = { ...chestWindow.selectedItem, slot: 9 };
-        chestWindow.selectedItem = null;
-        return;
-      }
-      throw new Error(`unexpected window click ${slot}/${button}/${mode}`);
+      const click = {
+        slot,
+        mouseButton: button,
+        mode,
+        item: chestWindow.slots[slot] ?? null,
+      };
+      chestWindow.acceptClick(click, 0);
+      syncInventoryFromChestWindow(harness, chestWindow);
     },
     closeWindow: async () => {
       Object.assign(harness.bot, { currentWindow: null });
@@ -356,7 +362,7 @@ function makeHarness() {
   const blocks = new Map<string, ReturnType<typeof block>>();
   const names = ['chest', 'trapped_chest', 'stone', 'oak_log', 'oak_planks', 'air', 'fire', 'cobweb', 'web', 'lava', 'water', 'sand', 'gravel', 'ladder'];
   const registry = {
-    version: { type: 'pc', minecraftVersion: '26.1.2', '>=': () => true },
+    version: { type: 'pc', minecraftVersion: MINECRAFT_VERSION, '>=': () => true },
     supportFeature: () => false,
     blocksByName: Object.fromEntries(names.map((name, id) => [name, { id }])),
     blocksArray: [],
@@ -502,6 +508,38 @@ function makeChestWindow() {
     },
   };
   return window;
+}
+
+function makePinnedChestWindow(plankCount: number): MineflayerWindow {
+  const registry = loadPrismarineRegistry(MINECRAFT_VERSION);
+  const chestWindow = loadPrismarineWindows(registry).createWindow(1, 'minecraft:generic_9x3', 'Chest');
+  if (chestWindow === null) throw new Error('pinned Mineflayer registry has no generic chest window');
+  Object.assign(chestWindow, {
+    withdraw: async () => { throw new Error('unexpected withdrawal in partial-transfer fixture'); },
+  });
+  const Item = loadPrismarineItem(registry);
+  chestWindow.updateSlot(27, new Item(registry.itemsByName.oak_planks.id, plankCount, 0, null));
+  return chestWindow;
+}
+
+function syncInventoryFromChestWindow(
+  harness: ReturnType<typeof makeHarness>,
+  chestWindow: MineflayerWindow,
+): void {
+  for (let windowSlot = chestWindow.inventoryStart; windowSlot < chestWindow.inventoryEnd; windowSlot += 1) {
+    const inventorySlot = windowSlot - chestWindow.inventoryStart + 9;
+    const chestItem = chestWindow.slots[windowSlot];
+    harness.inventory.slots[inventorySlot] = chestItem == null
+      ? null
+      : {
+        name: chestItem.name,
+        type: chestItem.type,
+        metadata: chestItem.metadata,
+        count: chestItem.count,
+        slot: inventorySlot,
+        stackSize: chestItem.stackSize,
+      };
+  }
 }
 
 function key(position: { readonly x: number; readonly y: number; readonly z: number }): string {

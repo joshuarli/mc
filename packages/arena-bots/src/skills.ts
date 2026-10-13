@@ -855,14 +855,16 @@ export class SkillOwner {
       if (nextSource === null) {
         throw new SkillFault('noProgress', `no synchronized ${intent.item} stack remains during transfer`);
       }
+      // Prismarine can reuse the source Item as the selected cursor, mutating its count after a click.
+      const sourceCount = nextSource.item.count;
       const destination = findTransferDestination(window, intent.direction, nextSource.item);
       if (destination === null || destination.capacity <= 0) {
         throw new SkillFault('preconditionsNotMet', `container transfer destination has no room for ${intent.item}`);
       }
-      const amount = Math.min(remaining, nextSource.item.count, destination.capacity);
+      const amount = Math.min(remaining, sourceCount, destination.capacity);
       const operationTimeout = transferOperationTimeout(deadline);
       try {
-        if (amount === nextSource.item.count) {
+        if (amount === sourceCount) {
           await this.#awaitInventoryOperation(
             active,
             `${intent.direction} ${amount} ${intent.item}`,
@@ -877,7 +879,7 @@ export class SkillOwner {
             () => this.#bot.clickWindow(nextSource.slot, 0, 0),
             operationTimeout,
           );
-          if (window.selectedItem?.name !== intent.item || window.selectedItem.count !== nextSource.item.count) {
+          if (window.selectedItem?.name !== intent.item || window.selectedItem.count !== sourceCount) {
             throw new SkillFault('noProgress', 'the client did not observe the selected transfer stack');
           }
           for (let moved = 0; moved < amount; moved += 1) {
@@ -887,7 +889,7 @@ export class SkillOwner {
               () => this.#bot.clickWindow(destination.slot, 1, 0),
               transferOperationTimeout(deadline),
             );
-            const expectedCursorCount = nextSource.item.count - moved - 1;
+            const expectedCursorCount = sourceCount - moved - 1;
             if ((window.selectedItem?.count ?? 0) !== expectedCursorCount) {
               throw new SkillFault('noProgress', 'the client did not observe the requested one-item transfer');
             }
