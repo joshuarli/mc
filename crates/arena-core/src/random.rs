@@ -68,8 +68,8 @@ mod tests {
 
     #[test]
     fn stream_keys_are_repeatable_and_separate() {
-        let first_seat = SeatId::new(0).unwrap();
-        let second_seat = SeatId::new(1).unwrap();
+        let first_seat = SeatId::new(0);
+        let second_seat = SeatId::new(1);
         let first = RandomStream::Search { seat: first_seat };
         let second = RandomStream::Search { seat: second_seat };
         let other_purpose = RandomStream::Policy { seat: first_seat };

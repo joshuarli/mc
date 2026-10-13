@@ -57,24 +57,33 @@ impl BlockPosition {
         (dx * dx + dy * dy + dz * dz) as u128
     }
 
-    pub const fn offset(self, dx: i32, dy: i32, dz: i32) -> Self {
-        Self {
-            x: self.x.saturating_add(dx),
-            y: self.y.saturating_add(dy),
-            z: self.z.saturating_add(dz),
-        }
+    /// Returns `None` if adding any block offset leaves the representable world
+    /// coordinate range.
+    pub const fn checked_offset(self, dx: i32, dy: i32, dz: i32) -> Option<Self> {
+        let Some(x) = self.x.checked_add(dx) else {
+            return None;
+        };
+        let Some(y) = self.y.checked_add(dy) else {
+            return None;
+        };
+        let Some(z) = self.z.checked_add(dz) else {
+            return None;
+        };
+
+        Some(Self { x, y, z })
     }
 
     /// Returns a block-level point four steps away from `threat`. A coincident
     /// pair uses the caller-provided stable bit so zero distance has a direction.
-    pub fn retreat_target(self, threat: Self, tie_bit: bool) -> Self {
+    /// Returns `None` if the target is outside the representable coordinate range.
+    pub fn retreat_target(self, threat: Self, tie_bit: bool) -> Option<Self> {
         let dx = (i64::from(self.x) - i64::from(threat.x)).signum() as i32;
         let dz = (i64::from(self.z) - i64::from(threat.z)).signum() as i32;
         if dx == 0 && dz == 0 {
-            return self.offset(if tie_bit { 4 } else { -4 }, 0, 0);
+            return self.checked_offset(if tie_bit { 4 } else { -4 }, 0, 0);
         }
 
-        self.offset(dx * 4, 0, dz * 4)
+        self.checked_offset(dx * 4, 0, dz * 4)
     }
 }
 
@@ -150,6 +159,23 @@ mod tests {
         let high = BlockPosition::new(i32::MAX, i32::MAX, i32::MAX);
         assert_eq!(low.squared_distance(high), 55_340_232_195_358_851_075);
         assert_eq!(low.manhattan_distance(high), 12_884_901_885);
+    }
+
+    #[test]
+    fn checked_offset_rejects_overflow_on_every_axis() {
+        let max = BlockPosition::new(i32::MAX, 64, 0);
+        let min = BlockPosition::new(i32::MIN, 64, 0);
+
+        assert_eq!(max.checked_offset(1, 0, 0), None);
+        assert_eq!(min.checked_offset(-1, 0, 0), None);
+        assert_eq!(BlockPosition::new(0, i32::MAX, 0).checked_offset(0, 1, 0), None);
+        assert_eq!(BlockPosition::new(0, i32::MIN, 0).checked_offset(0, -1, 0), None);
+        assert_eq!(BlockPosition::new(0, 0, i32::MIN).checked_offset(0, 0, -1), None);
+        assert_eq!(BlockPosition::new(0, 0, i32::MAX).checked_offset(0, 0, 1), None);
+        assert_eq!(
+            max.checked_offset(-1, 0, 0),
+            Some(BlockPosition::new(i32::MAX - 1, 64, 0))
+        );
     }
 
     #[test]

@@ -5,19 +5,15 @@ use std::num::NonZeroU64;
 
 use crate::geometry::{BlockPosition, Tick, WorldBorder};
 
-/// Stable match seat identity; usernames and runtime entity IDs are not seats.
+/// Stable roster-slot identity; all `u8` values are valid here. Scenario seat
+/// limits belong to the spec and runner, while usernames and entity IDs do not
+/// identify a roster slot.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct SeatId(u8);
 
 impl SeatId {
-    pub const SEAT_COUNT: u8 = 6;
-
-    pub const fn new(value: u8) -> Option<Self> {
-        if value < Self::SEAT_COUNT {
-            Some(Self(value))
-        } else {
-            None
-        }
+    pub const fn new(value: u8) -> Self {
+        Self(value)
     }
 
     pub const fn get(self) -> u8 {

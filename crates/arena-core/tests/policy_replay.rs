@@ -20,7 +20,7 @@ fn random() -> DeterministicRandom {
     DeterministicRandom::for_stream(
         481_516,
         RandomStream::Search {
-            seat: arena_core::observation::SeatId::new(0).unwrap(),
+            seat: arena_core::observation::SeatId::new(0),
         },
     )
 }
@@ -427,4 +427,59 @@ fn observation_rejects_invalid_stale_ticks_and_duplicate_entities() {
             id,
         }) if id == EntityId::new(2).unwrap()
     ));
+}
+
+#[test]
+fn benchmark_seat_ids_accept_slot_255() {
+    let highest_slot = arena_core::observation::SeatId::new(u8::MAX);
+    assert_eq!(highest_slot.get(), u8::MAX);
+
+    let mut highest_stream = DeterministicRandom::for_stream(
+        481_516,
+        RandomStream::Search { seat: highest_slot },
+    );
+    let mut first_stream = random();
+    assert_ne!(highest_stream.next_u64(), first_stream.next_u64());
+}
+
+#[test]
+fn retreat_target_overflow_returns_explicit_wait() {
+    let position = BlockPosition::new(i32::MAX, 64, 0);
+    let observation = fixtures::observation(
+        80,
+        Knowledge::Current(fixtures::agent(position, 6, 20, 0)),
+        Knowledge::Current(WorldBorder::new(i32::MAX, 0, 100).unwrap()),
+        Knowledge::Current(vec![fixtures::opponent(
+            9,
+            BlockPosition::new(i32::MAX - 2, 64, 0),
+        )]),
+        Knowledge::Current(Vec::new()),
+    );
+
+    let decision = decide_for(&observation, &PolicyMemory::new());
+    let reason = WaitReason::UnrepresentableTarget;
+    assert_eq!(decision.goal(), Goal::Wait(reason));
+    assert_eq!(decision.intent(), Intent::Hold(reason));
+}
+
+#[test]
+fn exploration_target_overflow_returns_explicit_wait() {
+    let observation = fixtures::observation(
+        81,
+        Knowledge::Current(fixtures::agent(
+            BlockPosition::new(i32::MAX, 64, 0),
+            40,
+            20,
+            0,
+        )),
+        Knowledge::Current(WorldBorder::new(i32::MAX, 0, 100).unwrap()),
+        Knowledge::Current(Vec::new()),
+        Knowledge::Current(Vec::new()),
+    );
+    let mut random = DeterministicRandom::new(0);
+
+    let decision = decide(&observation, &PolicyMemory::new(), &params(), &mut random);
+    let reason = WaitReason::UnrepresentableTarget;
+    assert_eq!(decision.goal(), Goal::Wait(reason));
+    assert_eq!(decision.intent(), Intent::Hold(reason));
 }

@@ -54,7 +54,7 @@ All policy parameters enter as named `PolicyParamValues` and become `PolicyParam
 
 `DeterministicRandom` pins SplitMix64 and its reference constants in `arena-core`. `RandomStream` derives separate streams for policy and search by stable seat ID, plus a setup stream. The fallback exploration choice uses the supplied stream; candidate order and hysteresis never depend on randomness. Replay must record the stream seed/key and the normalized `AgentObservation`, memory, params, and decisions. This proves only deterministic core decisions for those recorded inputs; it does not prove live client path determinism or cross-architecture replay.
 
-Geometry uses integer block coordinates. Distances and border checks avoid floating-point comparison, and full `i32` coordinates cannot overflow squared-distance calculations. Skill outcomes are closed variants; progress is strictly between pending and succeeded, timeout is a failure cause, and cancellation has its own outcome.
+`SeatId` accepts all 256 `u8` roster slots so benchmark streams remain distinct; the ordinary six-seat scenario limit is enforced by the spec and runner. Geometry uses integer block coordinates. Distances and border checks avoid floating-point comparison, and full `i32` coordinates cannot overflow squared-distance calculations. Checked offsets report coordinate overflow, and the policy returns `Wait(UnrepresentableTarget)` with `Hold` when retreat or exploration cannot be represented. Skill outcomes are closed variants; progress is strictly between pending and succeeded, timeout is a failure cause, and cancellation has its own outcome.
 
 ## Adapter and fairness proof seam
 

@@ -113,6 +113,7 @@ pub enum WaitReason {
     AgentEliminated,
     BorderUnknown,
     BorderStale,
+    UnrepresentableTarget,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -276,7 +277,10 @@ pub fn decide(
     if low_health {
         if let Some(threat) = nearest_known_threat {
             let tie_bit = threat.id().get() & 1 == 1;
-            let retreat_target = agent.position().retreat_target(threat.position(), tie_bit);
+            let Some(retreat_target) = agent.position().retreat_target(threat.position(), tie_bit)
+            else {
+                return unrepresentable_target(next_memory);
+            };
             let goal = Goal::RetreatFromOpponent {
                 target: threat.id(),
             };
@@ -367,7 +371,10 @@ pub fn decide(
         return decision(goal, Intent::NavigateTo(remembered.position), next_memory);
     }
 
-    let target = exploration_target(agent.position(), values.search_radius_blocks, random);
+    let Some(target) = exploration_target(agent.position(), values.search_radius_blocks, random)
+    else {
+        return unrepresentable_target(next_memory);
+    };
     next_memory.last_goal = Some(Goal::Explore);
     decision(Goal::Explore, Intent::NavigateTo(target), next_memory)
 }
@@ -378,6 +385,11 @@ fn decision(goal: Goal, intent: Intent, memory: PolicyMemory) -> Decision {
         intent,
         memory,
     }
+}
+
+fn unrepresentable_target(memory: PolicyMemory) -> Decision {
+    let reason = WaitReason::UnrepresentableTarget;
+    decision(Goal::Wait(reason), Intent::Hold(reason), memory)
 }
 
 fn nearest_opponent(
@@ -566,18 +578,18 @@ fn exploration_target(
     position: BlockPosition,
     radius: u32,
     random: &mut DeterministicRandom,
-) -> BlockPosition {
+) -> Option<BlockPosition> {
     let radius = radius.min(i32::MAX as u32) as i32;
     let half = (radius / 2).max(1);
     match random.next_eight_way() {
-        0 => position.offset(radius, 0, 0),
-        1 => position.offset(radius, 0, half),
-        2 => position.offset(0, 0, radius),
-        3 => position.offset(-half, 0, radius),
-        4 => position.offset(-radius, 0, 0),
-        5 => position.offset(-radius, 0, -half),
-        6 => position.offset(0, 0, -radius),
-        _ => position.offset(half, 0, -radius),
+        0 => position.checked_offset(radius, 0, 0),
+        1 => position.checked_offset(radius, 0, half),
+        2 => position.checked_offset(0, 0, radius),
+        3 => position.checked_offset(-half, 0, radius),
+        4 => position.checked_offset(-radius, 0, 0),
+        5 => position.checked_offset(-radius, 0, -half),
+        6 => position.checked_offset(0, 0, -radius),
+        _ => position.checked_offset(half, 0, -radius),
     }
 }
 
