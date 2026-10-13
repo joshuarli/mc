@@ -195,6 +195,24 @@ test('report derives the terminal result from prepared competitors and typed eve
       survivor_seats: [0],
     });
     assert.equal(report.outcome_status, 'reconstructed_from_authoritative_events');
+
+    const withoutStart = messages
+      .filter(([, message]) => message.type !== 'start'
+        && !(message.type === 'ack' && message.correlation === 3n))
+      .map(([direction, message]) => event(direction, message));
+    await writeFile(segmentPath, canonicalJson({
+      schema: 1,
+      run_id: runId,
+      first_sequence: '1',
+      last_sequence: String(withoutStart.length),
+      records: withoutStart,
+      sha256: sha256Json(withoutStart),
+      trailer: { complete: true },
+    }));
+    const invalidReport = await runCli(['report', segmentPath]);
+    assert.equal(invalidReport.kind, 'failure');
+    if (invalidReport.kind !== 'failure') return;
+    assert.equal(JSON.parse(invalidReport.stderr).error.source.kind, 'event_before_start');
   } finally {
     await rm(scratch, { recursive: true, force: true });
   }
