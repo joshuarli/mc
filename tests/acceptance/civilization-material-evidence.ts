@@ -61,6 +61,7 @@ export interface CivilizationMaterialBaseline {
 
 /**
  * Reads only complete ArenaFoundation records from Paper's server-thread INFO log lines.
+ * Checkpoints must change material state, except for the mandatory same-tick checkpoint after death cargo.
  * Marker count, line size, run id, keys, decimal values, and ordering are strict.
  */
 export function parseCivilizationMaterialLog(log: string, expectedRunId: string): readonly CivilizationMaterialRecord[] {
@@ -72,6 +73,7 @@ export function parseCivilizationMaterialLog(log: string, expectedRunId: string)
   let previousCheckpointTick = -1n;
   let lastCheckpointSequence: bigint | undefined;
   let previousCheckpoint: CivilizationMaterialCheckpoint | undefined;
+  let pendingDeathTick: bigint | undefined;
   for (const [index, rawLine] of log.split(/\n/).entries()) {
     const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
     const recordPrefix = SERVER_RECORD_PREFIX.exec(line);
@@ -102,17 +104,29 @@ export function parseCivilizationMaterialLog(log: string, expectedRunId: string)
       throw new Error("civilization material log must begin with the tick-zero checkpoint");
     }
     if (record.kind === "checkpoint") {
-      if (atMatchTick <= previousCheckpointTick) {
+      if (atMatchTick < previousCheckpointTick
+        || (atMatchTick === previousCheckpointTick && pendingDeathTick === undefined)) {
         throw new Error(`civilization material checkpoints are not in increasing tick order at line ${index + 1}`);
       }
-      if (previousCheckpoint !== undefined && materialStateKey(previousCheckpoint) === materialStateKey(record.checkpoint)) {
+      if (pendingDeathTick !== undefined && pendingDeathTick !== atMatchTick) {
+        throw new Error(`post-death checkpoint does not match the pending death tick at line ${index + 1}`);
+      }
+      if (pendingDeathTick === undefined && previousCheckpoint !== undefined
+        && materialStateKey(previousCheckpoint) === materialStateKey(record.checkpoint)) {
         throw new Error(`civilization material checkpoint is unchanged at line ${index + 1}`);
       }
       previousCheckpointTick = atMatchTick;
       lastCheckpointSequence = sequence;
       previousCheckpoint = record.checkpoint;
-    } else if (record.death.beforeCheckpointSequence !== lastCheckpointSequence) {
-      throw new Error(`death cargo marker does not reference the latest prior checkpoint at line ${index + 1}`);
+      pendingDeathTick = undefined;
+    } else {
+      if (record.death.beforeCheckpointSequence !== lastCheckpointSequence) {
+        throw new Error(`death cargo marker does not reference the latest prior checkpoint at line ${index + 1}`);
+      }
+      if (pendingDeathTick !== undefined && pendingDeathTick !== atMatchTick) {
+        throw new Error(`death cargo marker precedes the pending death checkpoint at line ${index + 1}`);
+      }
+      pendingDeathTick = atMatchTick;
     }
 
     previousSequence = sequence;
@@ -121,6 +135,7 @@ export function parseCivilizationMaterialLog(log: string, expectedRunId: string)
   }
 
   if (records.length === 0) throw new Error("civilization material log contains no server marker records");
+  if (pendingDeathTick !== undefined) throw new Error("civilization death cargo has no same-tick end-of-tick checkpoint");
   return Object.freeze(records);
 }
 
@@ -131,6 +146,14 @@ export function parseCivilizationMaterialLog(log: string, expectedRunId: string)
 export function assertCivilizationMaterialConservation(
   checkpoints: readonly CivilizationMaterialCheckpoint[],
   baseline: CivilizationMaterialBaseline,
+): void {
+  assertMaterialConservation(checkpoints, baseline, new Set<bigint>());
+}
+
+function assertMaterialConservation(
+  checkpoints: readonly CivilizationMaterialCheckpoint[],
+  baseline: CivilizationMaterialBaseline,
+  postDeathCheckpointSequences: ReadonlySet<bigint>,
 ): void {
   if (checkpoints.length === 0) throw new Error("material conservation requires the initial server checkpoint");
   validateBaseline(baseline);
@@ -156,10 +179,12 @@ export function assertCivilizationMaterialConservation(
     if (checkpoint.sequence <= previousSequence) {
       throw new Error(`material checkpoint sequences are not strictly increasing at index ${index}`);
     }
-    if (checkpoint.atMatchTick <= previousTick) {
+    if (checkpoint.atMatchTick < previousTick
+      || (checkpoint.atMatchTick === previousTick && !postDeathCheckpointSequences.has(checkpoint.sequence))) {
       throw new Error(`material checkpoints are not in increasing match-tick order at index ${index}`);
     }
-    if (previousCheckpoint !== undefined && materialStateKey(previousCheckpoint) === materialStateKey(checkpoint)) {
+    if (previousCheckpoint !== undefined && materialStateKey(previousCheckpoint) === materialStateKey(checkpoint)
+      && !postDeathCheckpointSequences.has(checkpoint.sequence)) {
       throw new Error(`material checkpoint ${index} is unchanged from its predecessor`);
     }
     previousTick = checkpoint.atMatchTick;
@@ -212,7 +237,15 @@ export function assertCivilizationCargoDeaths(
   const checkpoints = records.flatMap((record) => record.kind === "checkpoint" ? [record.checkpoint] : []);
   const deaths = records.flatMap((record) => record.kind === "death_cargo" ? [record.death] : []);
   if (deaths.length === 0) throw new Error("civilization cargo evidence requires an ordinary death cargo marker");
-  assertCivilizationMaterialConservation(checkpoints, baseline);
+  const postDeathCheckpointSequences = new Set<bigint>();
+  for (const death of deaths) {
+    const after = checkpoints.find(({ sequence }) => sequence > death.sequence);
+    if (after === undefined || after.atMatchTick !== death.atMatchTick) {
+      throw new Error("death cargo marker must be followed by its same-tick end-of-tick material checkpoint");
+    }
+    postDeathCheckpointSequences.add(after.sequence);
+  }
+  assertMaterialConservation(checkpoints, baseline, postDeathCheckpointSequences);
 
   const markerDeaths = new Set<string>();
   for (const death of deaths) {
@@ -220,12 +253,12 @@ export function assertCivilizationCargoDeaths(
     if (markerDeaths.has(deathKey)) throw new Error("civilization log repeats a death cargo marker");
     markerDeaths.add(deathKey);
     const before = checkpoints.find(({ sequence }) => sequence === death.beforeCheckpointSequence);
-    if (before === undefined || before.atMatchTick >= death.atMatchTick) {
+    if (before === undefined || before.sequence >= death.sequence || before.atMatchTick > death.atMatchTick) {
       throw new Error("death cargo marker must follow an earlier material checkpoint");
     }
     const after = checkpoints.find(({ sequence }) => sequence > death.sequence);
     if (after === undefined || after.atMatchTick !== death.atMatchTick) {
-      throw new Error("death cargo marker must be followed by its end-of-tick material checkpoint");
+      throw new Error("death cargo marker must be followed by its same-tick end-of-tick material checkpoint");
     }
     validateDeathCargo(death);
     if (death.droppedOakLogs !== death.oakLogs || death.droppedOakPlanks !== death.oakPlanks) {

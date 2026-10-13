@@ -44,6 +44,18 @@ test("civilization material log rejects malformed, truncated, wrong-run, and ext
     () => parseCivilizationMaterialLog(logFor([checkpointMarker(1, 0), checkpointMarker(2, 1)]), "run-1"),
     /checkpoint is unchanged/,
   );
+  assert.throws(
+    () => parseCivilizationMaterialLog(logFor([checkpointMarker(1, 0), deathCargoMarker(2, 0, 1)]), "run-1"),
+    /no same-tick end-of-tick checkpoint/,
+  );
+  assert.throws(
+    () => parseCivilizationMaterialLog(logFor([
+      checkpointMarker(1, 0),
+      deathCargoMarker(2, 0, 1),
+      checkpointMarker(3, 2),
+    ]), "run-1"),
+    /does not match the pending death tick/,
+  );
   const atRecordCap = Array.from({ length: 257 }, (_, index) => checkpointMarker(index + 1, index, "run-1",
     index === 0 ? [] : [{ entity_id: itemId(index), oak_logs: 0, oak_planks: 1 }]));
   assert.throws(() => parseCivilizationMaterialLog(logFor(atRecordCap), "run-1"), /record limit exceeded/);
@@ -198,6 +210,24 @@ test("civilization death evidence requires an empty dead inventory and every eve
   );
 });
 
+test("zero-cargo deaths retain an unchanged same-tick checkpoint, including a shared multi-death checkpoint", () => {
+  const baseline = materialBaseline();
+  const oneDeath = parseCivilizationMaterialLog(logFor([
+    checkpointMarker(1, 0),
+    deathCargoMarker(2, 0, 0),
+    checkpointMarker(3, 0, "run-1", [], [position(1)]),
+  ]), "run-1");
+  assertCivilizationCargoDeaths(oneDeath, [deathEvent(0n)], baseline);
+
+  const twoDeaths = parseCivilizationMaterialLog(logFor([
+    checkpointMarker(1, 0),
+    deathCargoMarker(2, 0, 1),
+    deathCargoMarker(3, 1, 1),
+    checkpointMarker(4, 1, "run-1", [], [position(1)]),
+  ]), "run-1");
+  assertCivilizationCargoDeaths(twoDeaths, [deathBatchEvent(1n, [0, 1])], baseline);
+});
+
 function materialBaseline(): CivilizationMaterialBaseline {
   return {
     naturalOakLogSources: [position(1)],
@@ -248,23 +278,42 @@ function deathRecords(oakLogs: number, droppedOakLogs: number): CivilizationMate
   ];
 }
 
-function deathEvent(tick: bigint, seat = 0): RuntimeAuthorityEvent {
+function deathEvent(tick: bigint, seat = 0, sequence = 1): RuntimeAuthorityEvent {
   return {
     protocol: 1,
     run_id: "run-1",
-    sequence: tick,
+    sequence: BigInt(sequence),
     type: "elimination",
     payload: { at: { domain: "match", value: tick }, eliminations: [{ seat, cause: "death" }] },
   };
 }
 
-function checkpointMarker(sequence: number, tick: number, runId = "run-1", itemEntities: readonly unknown[] = []) {
+function deathBatchEvent(tick: bigint, seats: readonly number[]): RuntimeAuthorityEvent {
+  return {
+    protocol: 1,
+    run_id: "run-1",
+    sequence: 1n,
+    type: "elimination",
+    payload: {
+      at: { domain: "match", value: tick },
+      eliminations: seats.map((seat) => ({ seat, cause: "death" as const })),
+    },
+  };
+}
+
+function checkpointMarker(
+  sequence: number,
+  tick: number,
+  runId = "run-1",
+  itemEntities: readonly unknown[] = [],
+  naturalLogPositions: readonly ReturnType<typeof position>[] = tick === 0 ? [position(1)] : [],
+) {
   return {
     kind: "checkpoint",
     run_id: runId,
     sequence: String(sequence),
     match_tick: String(tick),
-    natural_log_positions: tick === 0 ? [position(1)] : [],
+    natural_log_positions: naturalLogPositions,
     inventories: Array.from({ length: 6 }, (_, seat) => ({ seat, oak_logs: 0, oak_planks: 0 })),
     item_entities: itemEntities,
     containers: materialBaseline().containerPositions.map((containerPosition) => ({
@@ -273,6 +322,22 @@ function checkpointMarker(sequence: number, tick: number, runId = "run-1", itemE
       oak_planks: 0,
     })),
     placed_oak_planks: [],
+  };
+}
+
+function deathCargoMarker(sequence: number, seat: number, tick: number) {
+  return {
+    kind: "death_cargo",
+    run_id: "run-1",
+    sequence: String(sequence),
+    match_tick: String(tick),
+    seat,
+    cause: "death",
+    before_checkpoint_sequence: "1",
+    oak_logs: 0,
+    oak_planks: 0,
+    dropped_oak_logs: 0,
+    dropped_oak_planks: 0,
   };
 }
 
