@@ -176,7 +176,7 @@ function grantQueuedPathSearches(): void {
   }
 }
 
-/** Runs one Mineflayer operation at a time and settles it before replacing or closing it. */
+/** Serializes skill intents and quarantines Mineflayer operations that outlive cancellation. */
 export class SkillOwner {
   readonly #bot: Bot;
   readonly #observer: MineflayerObserver;
@@ -204,7 +204,7 @@ export class SkillOwner {
     const started = this.#enqueue(async () => {
       if (this.#closed) throw new Error('Mineflayer skill owner is closed');
       if (this.#cleanupFailure !== null || this.#quarantinedOperation !== null) {
-        throw this.#cleanupFailure ?? new Error('Mineflayer inventory operation is still pending; this client is quarantined');
+        throw this.#cleanupFailure ?? new Error('Mineflayer operation is still pending; this client is quarantined');
       }
       await this.#cancelActive('replaced');
       const active: ActiveSkill = {
@@ -396,13 +396,17 @@ export class SkillOwner {
       throw new SkillFault('preconditionsNotMet', `opponent ${targetId} is outside melee reach`);
     }
     const aim = target.position.offset(0, target.height * 0.65, 0);
-    await this.#bot.lookAt(aim, false);
+    await this.#awaitOwnedOperation(active, 'look at opponent', () => this.#bot.lookAt(aim, true));
     throwIfInterrupted(active.controller.signal);
     target = this.#visibleOpponent(targetId);
     if (distance(this.#bot.entity.position, target.position) > APPROACH_RANGE_BLOCKS) {
       throw new SkillFault('noProgress', `opponent ${targetId} moved out of melee reach`);
     }
-    await this.#bot.lookAt(target.position.offset(0, target.height * 0.65, 0), false);
+    await this.#awaitOwnedOperation(
+      active,
+      'look at opponent',
+      () => this.#bot.lookAt(target.position.offset(0, target.height * 0.65, 0), true),
+    );
     throwIfInterrupted(active.controller.signal);
     target = this.#visibleOpponent(targetId);
     if (distance(this.#bot.entity.position, target.position) > APPROACH_RANGE_BLOCKS) {
@@ -429,7 +433,7 @@ export class SkillOwner {
       }
     }
     const drop = this.#visibleDrop(entityIdValue);
-    await this.#bot.lookAt(drop.position.offset(0, 0.15, 0), false);
+    await this.#awaitOwnedOperation(active, 'look at dropped item', () => this.#bot.lookAt(drop.position.offset(0, 0.15, 0), true));
     throwIfInterrupted(active.controller.signal);
     this.#visibleDrop(entityIdValue);
     const confirmation = waitForDropCollection(this.#bot, entityIdValue, active.controller.signal, ACTION_TIMEOUT_MS);
@@ -446,7 +450,7 @@ export class SkillOwner {
       position.y + 0.5 - this.#bot.entity.position.y,
       position.z + 0.5 - this.#bot.entity.position.z,
     );
-    let block = this.#bot.blockAt(blockPosition);
+    const block = this.#bot.blockAt(blockPosition);
     if (block === null || (block.name !== 'chest' && block.name !== 'trapped_chest')) {
       throw new SkillFault('preconditionsNotMet', `container ${key} is not present in this client's loaded world`);
     }
@@ -463,7 +467,11 @@ export class SkillOwner {
       throw new SkillFault('preconditionsNotMet', 'another inventory window is already open');
     }
 
-    await this.#bot.lookAt(block.position.offset(0.5, 0.5, 0.5), true);
+    await this.#awaitOwnedOperation(
+      active,
+      'look at container',
+      () => this.#bot.lookAt(block.position.offset(0.5, 0.5, 0.5), true),
+    );
     throwIfInterrupted(active.controller.signal);
     const currentBlock = this.#bot.blockAt(block.position);
     if (currentBlock === null || (currentBlock.name !== 'chest' && currentBlock.name !== 'trapped_chest')) {
@@ -479,27 +487,25 @@ export class SkillOwner {
     if (this.#bot.inventory.selectedItem !== null) {
       throw new SkillFault('preconditionsNotMet', 'inventory cursor became occupied before container activation');
     }
-    block = currentBlock;
+    // Attach handlers to both bounded operations before either can reject.
     const opening = waitForChestWindow(this.#bot, ACTION_TIMEOUT_MS);
-    let activationError: unknown;
-    try {
-      await this.#bot.activateBlock(block);
-    } catch (error) {
-      activationError = error;
+    const activation = this.#awaitOwnedOperation(
+      active,
+      `activate container ${key}`,
+      () => this.#bot.activateBlock(currentBlock),
+    );
+    const [activationResult, openingResult] = await Promise.allSettled([activation, opening]);
+    if (openingResult.status === 'fulfilled') {
+      active.resources.window = openingResult.value;
+      this.#observer.markContainerOpened(position);
     }
-    // Once activation may have sent a packet, wait for its possible window so cancellation can close it.
-    let window: MineflayerChest;
-    try {
-      window = await opening;
-    } catch (error) {
-      if (activationError !== undefined) {
-        throw new SkillFault('serverRejected', errorMessage(activationError));
-      }
-      throw error;
+    if (activationResult.status === 'rejected') {
+      const error = activationResult.reason;
+      if (error instanceof SkillInterrupted || error instanceof SkillFault) throw error;
+      throw new SkillFault('serverRejected', errorMessage(error));
     }
-    active.resources.window = window;
-    this.#observer.markContainerOpened(position);
-    if (activationError !== undefined) throw new SkillFault('serverRejected', errorMessage(activationError));
+    if (openingResult.status === 'rejected') throw openingResult.reason;
+    const window = openingResult.value;
     throwIfInterrupted(active.controller.signal);
     await this.#collectKnownContainerItems(window, active);
   }
@@ -644,17 +650,15 @@ export class SkillOwner {
       }
       active.resources.navigationActive = false;
     }
-    if (active.resources.inventoryTouched) {
-      if (this.#cleanupFailure !== null) {
+    if (this.#cleanupFailure !== null) {
+      cursorRestored = false;
+      failures.push(this.#cleanupFailure);
+    } else if (active.resources.inventoryTouched) {
+      try {
+        await this.#restoreCursor(active, active.resources.window);
+      } catch (error) {
         cursorRestored = false;
-        failures.push(this.#cleanupFailure);
-      } else {
-        try {
-          await this.#restoreCursor(active, active.resources.window);
-        } catch (error) {
-          cursorRestored = false;
-          failures.push(error);
-        }
+        failures.push(error);
       }
     }
     if (cursorRestored && this.#cleanupFailure === null
@@ -722,6 +726,18 @@ export class SkillOwner {
     if (signal !== null) throwIfInterrupted(signal);
     if (signal?.aborted) throw new SkillInterrupted();
     active.resources.inventoryTouched = true;
+    await this.#awaitOwnedOperation(active, name, action, timeoutMs, signal);
+  }
+
+  async #awaitOwnedOperation(
+    active: ActiveSkill,
+    name: string,
+    action: () => Promise<void>,
+    timeoutMs = ACTION_TIMEOUT_MS,
+    signal: AbortSignal | null = active.controller.signal,
+  ): Promise<void> {
+    if (signal !== null) throwIfInterrupted(signal);
+    if (signal?.aborted) throw new SkillInterrupted();
     let settled = false;
     const pendingOperation = action();
     const operation = Promise.resolve(pendingOperation)
@@ -736,7 +752,7 @@ export class SkillOwner {
       await waitForBoundedOperation(operation, signal, timeoutMs, name);
     } catch (error) {
       if (!settled) {
-        const quarantineFailure = new Error(`Mineflayer inventory operation "${name}" did not settle; this client is quarantined`);
+        const quarantineFailure = new Error(`Mineflayer operation "${name}" did not settle; this client is quarantined`);
         this.#cleanupFailure ??= quarantineFailure;
         this.#quarantinedOperation = operation;
         void operation.then(
@@ -796,7 +812,7 @@ async function waitForBoundedOperation(
   await new Promise<void>((resolve, reject) => {
     let settled = false;
     const timeout = setTimeout(
-      () => finish(new SkillFault('timedOut', `inventory operation ${name} did not settle before its deadline`)),
+      () => finish(new SkillFault('timedOut', `Mineflayer operation ${name} did not settle before its deadline`)),
       timeoutMs,
     );
     const onAbort = () => finish(new SkillInterrupted());
@@ -810,7 +826,7 @@ async function waitForBoundedOperation(
     };
     operation.then(
       () => finish(),
-      (error: unknown) => finish(error ?? new Error(`inventory operation ${name} rejected without an error`)),
+      (error: unknown) => finish(error ?? new Error(`Mineflayer operation ${name} rejected without an error`)),
     );
     signal?.addEventListener('abort', onAbort, { once: true });
     if (signal?.aborted) onAbort();

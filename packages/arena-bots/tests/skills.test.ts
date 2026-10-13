@@ -121,6 +121,71 @@ test('cancellation quarantines an inventory operation that never receives its up
   }
 });
 
+test('cancellation quarantines a look operation that never settles', async () => {
+  const harness = makeHarness();
+  prepareChest(harness.bot);
+  let lookStarted = false;
+  let activationStarted = false;
+  Object.assign(harness.bot, {
+    lookAt: () => {
+      lookStarted = true;
+      return new Promise<void>(() => undefined);
+    },
+    activateBlock: () => {
+      activationStarted = true;
+      return Promise.resolve();
+    },
+  });
+
+  try {
+    const running = harness.owner.run({ kind: 'containerOpen', position: blockPosition(1, 64, 0) });
+    await waitUntil(() => lookStarted);
+    const cancellation = harness.owner.cancel('shutdown');
+    await assert.rejects(running, /client is quarantined/);
+    await assert.rejects(cancellation, /client is quarantined/);
+    assert.equal(activationStarted, false);
+    assert.ok(harness.controlsCleared() > 0);
+    await assert.rejects(
+      harness.owner.run({ kind: 'hold', reason: 'agentStateUnknown' }),
+      /client is quarantined/,
+    );
+  } finally {
+    await harness.owner.close();
+    harness.observer.close();
+  }
+});
+
+test('close waits only for the bounded window receipt when activation never settles', async () => {
+  const harness = makeHarness();
+  prepareChest(harness.bot);
+  let activationStarted = false;
+  let finishActivation!: () => void;
+  Object.assign(harness.bot, {
+    lookAt: async () => undefined,
+    activateBlock: () => {
+      activationStarted = true;
+      return new Promise<void>((resolve) => { finishActivation = resolve; });
+    },
+  });
+
+  try {
+    const running = harness.owner.run({ kind: 'containerOpen', position: blockPosition(1, 64, 0) });
+    await waitUntil(() => activationStarted);
+    const closing = harness.owner.close();
+    await assert.rejects(running, /client is quarantined/);
+    await assert.rejects(closing, /client is quarantined/);
+    assert.equal(harness.bot.listenerCount('windowOpen'), 0);
+    assert.ok(harness.controlsCleared() > 0);
+
+    finishActivation();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(harness.bot.listenerCount('windowOpen'), 0);
+  } finally {
+    await harness.owner.close();
+    harness.observer.close();
+  }
+});
+
 function makeHarness(onPathStarted: () => void = () => undefined, onPathStopped: () => void = () => undefined) {
   const botEmitter = new EventEmitter();
   const client = new EventEmitter();
@@ -202,6 +267,34 @@ function makeHarness(onPathStarted: () => void = () => undefined, onPathStopped:
   });
   const owner = new SkillOwner(bot, observer);
   return { bot, observer, owner, pathfinder, controlsCleared: () => controlsCleared };
+}
+
+function prepareChest(bot: Bot): void {
+  const block = {
+    name: 'chest',
+    position: new TestPosition(1, 64, 0),
+  } as NonNullable<ReturnType<Bot['blockAt']>>;
+  Object.assign(bot, {
+    entity: { id: 1, position: new TestPosition(0, 64, 0) },
+    blockAt: () => block,
+    canSeeBlock: () => true,
+  });
+}
+
+class TestPosition {
+  constructor(
+    readonly x: number,
+    readonly y: number,
+    readonly z: number,
+  ) {}
+
+  floored(): TestPosition {
+    return new TestPosition(Math.floor(this.x), Math.floor(this.y), Math.floor(this.z));
+  }
+
+  offset(x: number, y: number, z: number): TestPosition {
+    return new TestPosition(this.x + x, this.y + y, this.z + z);
+  }
 }
 
 async function waitUntil(predicate: () => boolean): Promise<void> {
