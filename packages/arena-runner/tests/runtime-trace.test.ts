@@ -397,10 +397,10 @@ test('live runtime persists exact decision watermarks with a pending effect and 
   const failures: unknown[] = [];
   const loop = new LivePolicyLoop({ trace, params: PolicyParams.baseline(), seed: 1n, strategyIntervalTicks: 1n,
     recordPolicy: true, competitors: () => [
-      { seat: 0, bot, client: policyClient },
+      { seat: 0, bot, gameplay: { mode: 'hunger_games' as const, client: policyClient } },
       ...Array.from({ length: 5 }, (_, index) => ({ seat: index + 1,
         bot: Object.assign(new EventEmitter(), { health: 20, game: { gameMode: 'survival' } }) as unknown as Bot,
-        client: { ...policyClient, run: async () => ({ kind: 'succeeded' as const }), cancel: async () => {} },
+        gameplay: { mode: 'hunger_games' as const, client: { ...policyClient, run: async () => ({ kind: 'succeeded' as const }), cancel: async () => {} } },
       })),
     ], fail: (error) => failures.push(error) });
   const flush = async (sequence: bigint) => {

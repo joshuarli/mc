@@ -118,3 +118,8 @@ test('civilization replay preserves current feedback and its resulting memory', 
   assert.equal(record.decision.memory.failedTargets.length, 1);
   assert.equal(replayPolicyJson(evidence([record])).verified, true);
 });
+
+test('civilization replay refuses decisions after the terminal control outcome', () => {
+  assert.throws(() => replayPolicyJson(evidence([{ direction: 'plugin', type: 'outcome' }, sample()])),
+    (error: unknown) => error instanceof TraceError && error.source.kind === 'policy_decision_after_outcome');
+});

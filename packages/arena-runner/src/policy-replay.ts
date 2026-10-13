@@ -218,10 +218,15 @@ export function replayPolicyJson(evidence: Evidence): PolicyReplaySummary {
   let effectCount = 0;
   let pathUpdateCount = 0;
   const effects = new Set<string>();
+  let terminalOutcomeSeen = false;
 
   for (const [index, record] of evidence.records.entries()) {
+    if (record.direction === 'plugin' && record.type === 'outcome') terminalOutcomeSeen = true;
     if (record.schema === 'policy-replay-v1' || record.schema === 'policy-replay-v2' || record.schema === 'civilization-policy-replay-v1') {
       const decision = readPolicyDecision(record, index + 1);
+      if (decision.schema === 'civilization-policy-replay-v1' && terminalOutcomeSeen) {
+        throw replayFailure('policy_decision_after_outcome', index + 1);
+      }
       if (prepared !== undefined && !prepared.seats.has(decision.seat)) {
         throw replayFailure('policy_seat_not_in_roster', index + 1, 'seat');
       }
