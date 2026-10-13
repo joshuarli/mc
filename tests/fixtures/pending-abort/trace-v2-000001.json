@@ -1,0 +1,220 @@
+{
+  "schema": 2,
+  "run_id": "legal-player-33c10d37-2479-4c68-b38f-85c9fe42f1db",
+  "first_sequence": "1",
+  "last_sequence": "13",
+  "records": [
+    {
+      "correlation": "1",
+      "direction": "plugin",
+      "payload": {
+        "capabilities": [
+          "hunger_games_v1"
+        ],
+        "plugin": {
+          "name": "ArenaFoundation",
+          "version": "0.1.0"
+        },
+        "server": {
+          "minecraft_version": "26.1.2",
+          "name": "Paper",
+          "protocol_version": 775,
+          "version": "26.1.2-74-e4e17fc (MC: 26.1.2)"
+        }
+      },
+      "protocol": 1,
+      "run_id": "legal-player-33c10d37-2479-4c68-b38f-85c9fe42f1db",
+      "sequence": "2",
+      "type": "ready"
+    },
+    {
+      "direction": "runner",
+      "payload": {
+        "map_semantic_id": "7a6d1caec0fff893bc2c11889dca3df84821615321210941a55bfdde14b4a380",
+        "mode": "hunger_games",
+        "roster": [
+          {
+            "kind": "bot",
+            "offline_uuid": "4f09a200-722b-3800-a45e-e2061f874719",
+            "participant_id": "seat-0",
+            "seat": 0,
+            "username": "ArenaBot0"
+          },
+          {
+            "kind": "bot",
+            "offline_uuid": "fd3d4f76-4d81-3cb3-9a92-682f3c04f721",
+            "participant_id": "seat-1",
+            "seat": 1,
+            "username": "ArenaBot1"
+          }
+        ],
+        "scenario_semantic_id": "95779faab26d4d2ab27b959a8da3d2660fad041817e3bbad148d68911eeb0746",
+        "seed": "88172645463325252",
+        "settings": {
+          "border": {
+            "final_diameter_blocks": 16,
+            "initial_diameter_blocks": 62,
+            "shrink_end_tick": "6000",
+            "shrink_start_tick": "1200"
+          },
+          "match": {
+            "authoritative_max_ticks": "7200",
+            "block_breaking": false,
+            "block_placing": false,
+            "countdown_ticks": "100",
+            "grace_ticks": "200",
+            "natural_mobs": false,
+            "natural_random_ticks": false,
+            "respawn": false
+          }
+        }
+      },
+      "protocol": 1,
+      "run_id": "legal-player-33c10d37-2479-4c68-b38f-85c9fe42f1db",
+      "sequence": "2",
+      "type": "prepare"
+    },
+    {
+      "correlation": "2",
+      "direction": "plugin",
+      "payload": {},
+      "protocol": 1,
+      "run_id": "legal-player-33c10d37-2479-4c68-b38f-85c9fe42f1db",
+      "sequence": "3",
+      "type": "ack"
+    },
+    {
+      "direction": "plugin",
+      "payload": {
+        "border_diameter_blocks": 62,
+        "phase": "waiting",
+        "tick": null
+      },
+      "protocol": 1,
+      "run_id": "legal-player-33c10d37-2479-4c68-b38f-85c9fe42f1db",
+      "sequence": "4",
+      "type": "public_clock"
+    },
+    {
+      "direction": "runner",
+      "payload": {},
+      "protocol": 1,
+      "run_id": "legal-player-33c10d37-2479-4c68-b38f-85c9fe42f1db",
+      "sequence": "3",
+      "type": "start"
+    },
+    {
+      "correlation": "3",
+      "direction": "plugin",
+      "payload": {},
+      "protocol": 1,
+      "run_id": "legal-player-33c10d37-2479-4c68-b38f-85c9fe42f1db",
+      "sequence": "6",
+      "type": "ack"
+    },
+    {
+      "direction": "plugin",
+      "payload": {
+        "border_diameter_blocks": 62,
+        "phase": "countdown",
+        "tick": {
+          "domain": "countdown",
+          "value": "0"
+        }
+      },
+      "protocol": 1,
+      "run_id": "legal-player-33c10d37-2479-4c68-b38f-85c9fe42f1db",
+      "sequence": "7",
+      "type": "public_clock"
+    },
+    {
+      "direction": "plugin",
+      "payload": {
+        "alive_seats": [
+          0,
+          1
+        ],
+        "at": {
+          "domain": "countdown",
+          "value": "0"
+        }
+      },
+      "protocol": 1,
+      "run_id": "legal-player-33c10d37-2479-4c68-b38f-85c9fe42f1db",
+      "sequence": "8",
+      "type": "public_state"
+    },
+    {
+      "direction": "runner",
+      "payload": {
+        "reason": "protocol_error"
+      },
+      "protocol": 1,
+      "run_id": "legal-player-33c10d37-2479-4c68-b38f-85c9fe42f1db",
+      "sequence": "4",
+      "type": "abort"
+    },
+    {
+      "direction": "plugin",
+      "payload": {
+        "border_diameter_blocks": 60.31333333333333,
+        "phase": "active",
+        "tick": {
+          "domain": "match",
+          "value": "1376"
+        }
+      },
+      "protocol": 1,
+      "run_id": "legal-player-33c10d37-2479-4c68-b38f-85c9fe42f1db",
+      "sequence": "1557",
+      "type": "public_clock"
+    },
+    {
+      "correlation": "4",
+      "direction": "plugin",
+      "payload": {},
+      "protocol": 1,
+      "run_id": "legal-player-33c10d37-2479-4c68-b38f-85c9fe42f1db",
+      "sequence": "1561",
+      "type": "ack"
+    },
+    {
+      "direction": "plugin",
+      "payload": {
+        "border_diameter_blocks": 60.28458333333333,
+        "phase": "aborted",
+        "tick": {
+          "domain": "match",
+          "value": "1379"
+        }
+      },
+      "protocol": 1,
+      "run_id": "legal-player-33c10d37-2479-4c68-b38f-85c9fe42f1db",
+      "sequence": "1562",
+      "type": "public_clock"
+    },
+    {
+      "direction": "plugin",
+      "payload": {
+        "at": {
+          "domain": "match",
+          "value": "1379"
+        },
+        "kind": "abort",
+        "reason": "protocol_error",
+        "survivors": [
+          0,
+          1
+        ]
+      },
+      "protocol": 1,
+      "run_id": "legal-player-33c10d37-2479-4c68-b38f-85c9fe42f1db",
+      "sequence": "1563",
+      "type": "outcome"
+    }
+  ],
+  "sha256": "b924d51c876c29590b007991bd590478d7faf6c8ea7b88a1f3687add21af2c21",
+  "trailer": {
+    "complete": true
+  }
+}
