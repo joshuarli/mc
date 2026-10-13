@@ -53,6 +53,7 @@ name = "arena-runner"
 version = "0.1.0"
 dependencies = [
  "arena-core",
+ "arena-spec",
  "serde",
  "serde_json",
  "sha2",
