@@ -1,0 +1,135 @@
+import assert from "node:assert/strict";
+
+import type { BlockPosition, MapIr } from "@arena/spec";
+
+export interface ObservedBlock {
+  readonly position: { readonly x: number; readonly y: number; readonly z: number };
+  readonly block: string;
+}
+
+export interface ObservedContainer {
+  readonly position: { readonly x: number; readonly y: number; readonly z: number };
+  readonly slots: readonly (ObservedItem | null)[];
+}
+
+export interface ObservedItem {
+  readonly item: string;
+  readonly count: number;
+}
+
+export interface ObservedPlayerItem extends ObservedItem {
+  readonly slot: number;
+}
+
+/** A client-read snapshot of only the map content that has declared meaning. */
+export interface SemanticWorldObservation {
+  readonly blocks: readonly ObservedBlock[];
+  readonly spawns: readonly {
+    readonly seat: number;
+    readonly position: { readonly x: number; readonly y: number; readonly z: number };
+  }[];
+  readonly containers: readonly ObservedContainer[];
+}
+
+export interface PlayerInventoryObservation {
+  readonly items: readonly ObservedPlayerItem[];
+}
+
+/**
+ * Case-owned adapters over ordinary Mineflayer clients. `readContainer` must
+ * open the real container and close its window before it settles; `readSpawn`
+ * must report the position received by that seat's client.
+ */
+export interface SemanticWorldReader {
+  waitForMapChunks(map: MapIr, signal: AbortSignal): Promise<void>;
+  readBlock(position: BlockPosition): ObservedBlock | null;
+  readSpawn(seat: number, signal: AbortSignal): Promise<{
+    readonly seat: number;
+    readonly position: BlockPosition;
+  }>;
+  readContainer(position: BlockPosition, signal: AbortSignal): Promise<ObservedContainer>;
+}
+
+/** Reads one client's loaded map blocks and chest windows in spec order. */
+export async function captureSemanticWorld(
+  map: MapIr,
+  reader: SemanticWorldReader,
+  signal: AbortSignal,
+): Promise<SemanticWorldObservation> {
+  await reader.waitForMapChunks(map, signal);
+
+  const blocks: ObservedBlock[] = [];
+  for (const { position } of map.blocks) {
+    signal.throwIfAborted();
+    const observed = reader.readBlock(position);
+    assert.ok(observed, `client has not received map block at ${position.x},${position.y},${position.z}`);
+    blocks.push(observed);
+  }
+
+  const containers: ObservedContainer[] = [];
+  for (const { position } of map.lootContainers) {
+    signal.throwIfAborted();
+    containers.push(await reader.readContainer(position, signal));
+  }
+
+  const spawns: SemanticWorldObservation["spawns"][number][] = [];
+  for (const { seat } of map.spawns) {
+    signal.throwIfAborted();
+    spawns.push(await reader.readSpawn(seat, signal));
+  }
+
+  return {
+    blocks,
+    spawns,
+    containers,
+  };
+}
+
+/**
+ * Compares client-observed blocks and every chest slot with the compiled map.
+ * The caller must query positions in the order supplied by the compiled map.
+ */
+export function assertSemanticWorldMatchesMap(map: MapIr, observed: SemanticWorldObservation): void {
+  assert.deepStrictEqual(
+    observed.blocks,
+    map.blocks.map(({ position, block }) => ({ position, block })),
+    "client-observed map blocks must match the compiled semantic world in canonical order",
+  );
+  assert.deepStrictEqual(
+    observed.spawns,
+    map.spawns.map(({ seat, position }) => ({ seat, position })),
+    "prepared spawn positions must retain their stable seat order",
+  );
+  assert.deepStrictEqual(
+    observed.containers,
+    map.lootContainers.map(({ position, inventory }) => ({
+      position,
+      slots: chestSlots(inventory),
+    })),
+    "client-observed chest inventories must match every declared slot",
+  );
+}
+
+/**
+ * Reset is correct only when the independently observed world state is exact.
+ * Inventory slot and event order are deliberately part of this comparison.
+ */
+export function assertResetWorldMatchesFirst(
+  first: SemanticWorldObservation,
+  reset: SemanticWorldObservation,
+): void {
+  assert.deepStrictEqual(reset, first, "reset must reproduce the exact semantic world observation");
+}
+
+/** A fresh reset must not restore any item collected in the earlier run. */
+export function assertPlayerInventoryEmpty(observed: PlayerInventoryObservation): void {
+  assert.deepStrictEqual(observed.items, [], "a reset player must not retain items from the earlier run");
+}
+
+function chestSlots(items: readonly string[]): readonly (ObservedItem | null)[] {
+  const slots: (ObservedItem | null)[] = Array.from({ length: 27 }, () => null);
+  for (const [slot, item] of items.entries()) {
+    slots[slot] = { item, count: 1 };
+  }
+  return slots;
+}
