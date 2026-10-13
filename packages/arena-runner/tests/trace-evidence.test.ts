@@ -4,26 +4,33 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import test from 'node:test';
 import { canonicalJson } from '../src/canonical.js';
-import { reconstruct, reportJson } from '../src/evidence.js';
+import { inspectJson, reconstruct, reportJson } from '../src/evidence.js';
 import { parseSegment, readSegment, TraceError } from '../src/trace.js';
 
 const repositoryRoot = process.cwd();
 const replayFixtures = join(repositoryRoot, 'tests/fixtures/replay-report');
 
-test('reconstructs adjacent trace segments in sequence order and leaves outcome unavailable', async () => {
+test('reconstructs generic segments for inspection and requires typed events for result reporting', async () => {
   const second = await readSegment(join(replayFixtures, 'segment-0002.json'), 1);
   const first = await readSegment(join(replayFixtures, 'segment-0001.json'), 2);
-  const report = reportJson(reconstruct([second, first]));
+  const evidence = reconstruct([second, first]);
+  const inspection = inspectJson(evidence);
 
-  assert.deepEqual(JSON.parse(JSON.stringify(report)), {
+  assert.deepEqual(JSON.parse(JSON.stringify(inspection)), {
     schema: 1,
     run_id: 'fixture-run',
     sequence_range: { first: '1', last: '2' },
-    segment_count: 2,
+    segments: [
+      { first_sequence: '1', last_sequence: '1', record_count: 1, sha256: first.sha256 },
+      { first_sequence: '2', last_sequence: '2', record_count: 1, sha256: second.sha256 },
+    ],
     record_count: 2,
     records: [{ a: 1 }, { b: 2 }],
-    outcome: null,
-    outcome_status: 'unavailable_without_authoritative_event_contract',
+  });
+  assert.throws(() => reportJson(evidence), (error: unknown) => {
+    assert.ok(error instanceof TraceError);
+    assert.equal(error.source.kind, 'invalid_event_direction');
+    return true;
   });
 });
 

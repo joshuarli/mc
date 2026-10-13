@@ -6,6 +6,7 @@ import { comparisonJson, inspectJson, reconstruct, reportJson, type Evidence } f
 import { canonicalJson } from './canonical.js';
 import { RunnerError } from './errors.js';
 import { prepareRun } from './prepare.js';
+import { replayPolicyJson } from './policy-replay.js';
 import { readSegment, TraceError, type TraceSegment } from './trace.js';
 
 export type CliResult =
@@ -32,6 +33,10 @@ async function runCliBytes(args: readonly Buffer[]): Promise<CliResult> {
     if (command === 'inspect' || command === 'report') {
       const evidence = await loadEvidence(rest);
       return success(command === 'inspect' ? inspectJson(evidence) : reportJson(evidence));
+    }
+    if (command === 'replay-policy') {
+      const evidence = await loadEvidence(rest);
+      return success(replayPolicyJson(evidence));
     }
     if (command === 'compare') {
       if (rest.length !== 2) throw invalidInput('compare_requires_two_trace_sets');
@@ -173,9 +178,10 @@ function helpJson(): object {
     commands: {
       doctor: 'Report offline evidence capabilities and parked integrations.',
       'inspect <segment>...': 'Validate and display ordered records from completed trace segments.',
-      'report <segment>...': 'Build an offline evidence report from completed trace segments.',
+      'report <segment>...': 'Reconstruct the terminal result from prepared-roster and authoritative event records.',
       'compare <left-segment> <right-segment>': 'Compare two single-segment record streams exactly.',
       'prepare --scenario <path> --run-id <id>': 'Compile a scenario and stage its world plan in a new run directory.',
+      'replay-policy <segment>...': 'Replay recorded core policy decisions and validate correlated skill/path effect records.',
     },
     errors: {
       2: 'invalid input or configuration',
@@ -194,8 +200,8 @@ function doctorJson(): object {
       trace_validation: 'available',
       ordered_record_reconstruction: 'available',
       generic_record_comparison: 'available',
-      policy_replay: 'parked_missing_recorded_input_and_policy_contracts',
-      authoritative_result_reporting: 'parked_missing_j1_event_contract',
+      policy_replay: 'available_for_recorded_policy_frames',
+      authoritative_result_reporting: 'available_from_typed_event_stream',
       process_supervision_and_world_reset: 'parked_missing_live_prerequisites',
       scenario_compilation: 'available',
       world_plan_staging: 'available',

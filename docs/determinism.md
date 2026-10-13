@@ -2,7 +2,7 @@
 
 ## Trace-v1 reading
 
-The TypeScript runner accepts only trace schema version 1. A segment has exactly the required envelope fields and its trailer is exactly `{ "complete": true }`. Record objects are opaque to this reader because J1 has not supplied an authoritative event contract. Duplicate JSON object names are rejected recursively before a JavaScript object can overwrite one.
+The TypeScript runner accepts only trace schema version 1. A segment has exactly the required envelope fields and its trailer is exactly `{ "complete": true }`. Generic inspection preserves record objects as written; `report` and `replay-policy` interpret only their documented typed records. Duplicate JSON object names are rejected recursively before a JavaScript object can overwrite one.
 
 A segment's `records` array is the sequential stream. JSON nesting is limited to 32 containers per segment. `first_sequence` and `last_sequence` are canonical unsigned decimal strings from 1 through 18446744073709551615. The number of records must equal `last_sequence - first_sequence + 1`, calculated without integer overflow; array index therefore determines each record's sequence. Across supplied segments, the runner orders by `first_sequence`, requires one `run_id`, and rejects gaps, overlaps, and sequence overflow. This reconstructs a complete ordered span from the supplied files; it cannot establish that the span covers the full run.
 
@@ -14,6 +14,8 @@ The TypeScript encoder writes world-plan schema version 1 in the field shape con
 
 ## Replay and reports
 
-`inspect` exposes generic ordered records. `report` emits the validated record stream and sequence span, with no inferred event meanings or outcome. `compare` performs exact record and range comparison while ignoring only the outer run ID. None of these operations demonstrates policy replay or cross-run semantic equivalence.
+`inspect` exposes generic ordered records. `replay-policy` rehydrates each `policy-replay-v1` input through `@arena/core`, runs the policy again, and checks both the recorded decision and post-decision RNG state. A separate `policy-effect-v1` record may correlate a returned skill outcome and the last actual path update to a decision sequence. Those effects are validated and counted; replay does not reproduce client or server actions.
 
-D1 semantic world determinism is not implemented by the runner. D2 is parked until B1 supplies the policy decision API and normalized observation, memory, RNG, and skill/path result contracts. D3 is parked until J1 supplies the authoritative event stream and terminal outcome contract. No live trajectory or cross-architecture replay claim is made by these offline checks.
+`report` starts from the runner's prepared roster, applies ordered elimination events, checks public states and terminal clocks, and rejects a terminal outcome that contradicts those records. It reports resolved death and disconnect causes from the authoritative elimination stream. It does not infer player actions from policy decisions or raw client events. `compare` performs exact record and range comparison while ignoring only the outer run ID; it does not establish semantic equivalence across runs.
+
+D1 semantic world determinism is not implemented by the runner. D2 verifies recorded core policy decisions for the supplied inputs, not the full Mineflayer or Paper trajectory. D3 derives terminal statistics from the supplied control event stream and cannot establish that the stream covers the full run unless its sequence range does. No cross-architecture replay claim is made by these offline checks.

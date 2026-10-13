@@ -31,6 +31,8 @@ export interface TraceSegment {
 
 export interface TraceFailureSource {
   readonly kind: string;
+  readonly record?: number;
+  readonly field?: string;
   readonly line?: number;
   readonly column?: number;
 }

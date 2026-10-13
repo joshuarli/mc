@@ -6,6 +6,7 @@ export interface ErrorSource {
   readonly kind: string;
   readonly argument?: number;
   readonly field?: string;
+  readonly record?: number;
   readonly line?: number;
   readonly column?: number;
   readonly os_code?: number;

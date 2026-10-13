@@ -1,4 +1,7 @@
 import { canonicalJson } from './canonical.js';
+import { ControlCodecError, decodeControlEnvelope } from './control/index.js';
+import type { ControlMessage, PreparePayload } from './control/types.js';
+import { reconstructEventResult } from './event-report.js';
 import { MAX_EVIDENCE_BYTES, TraceError, type TraceRecord, type TraceSegment } from './trace.js';
 
 const MAX_SEQUENCE = (1n << 64n) - 1n;
@@ -67,6 +70,7 @@ export function inspectJson(evidence: Evidence): object {
 }
 
 export function reportJson(evidence: Evidence): object {
+  const eventResult = reconstructRecordedEvents(evidence);
   return {
     schema: 1,
     run_id: evidence.run_id,
@@ -74,9 +78,137 @@ export function reportJson(evidence: Evidence): object {
     segment_count: evidence.segments.length,
     record_count: evidence.records.length,
     records: evidence.records,
-    outcome: null,
-    outcome_status: 'unavailable_without_authoritative_event_contract',
+    ...eventResult,
   };
+}
+
+function reconstructRecordedEvents(evidence: Evidence): ReturnType<typeof reconstructEventResult> {
+  let readySeen = false;
+  let prepare: PreparePayload | undefined;
+  let outcomeSeen = false;
+  let startSeen = false;
+  let abortSeen = false;
+  let pendingRunnerSequence: bigint | undefined;
+  let lastAcknowledgedRunnerSequence = 0n;
+  const lastSequence = new Map<'runner' | 'plugin', bigint>();
+  const events: ControlMessage[] = [];
+
+  for (const [index, record] of evidence.records.entries()) {
+    const recordNumber = index + 1;
+    if (record.schema === 'policy-replay-v1' || record.schema === 'policy-effect-v1') continue;
+    const direction = record.direction;
+    if (direction !== 'runner' && direction !== 'plugin') {
+      throw eventRecordFailure('invalid_event_direction', recordNumber);
+    }
+    const envelope: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(record)) {
+      if (key !== 'direction') envelope[key] = value;
+    }
+
+    let message: ControlMessage;
+    try {
+      message = decodeControlEnvelope(canonicalJson(envelope));
+    } catch (error) {
+      if (error instanceof ControlCodecError) {
+        throw eventRecordFailure('invalid_control_event', recordNumber, error.path ?? undefined);
+      }
+      throw error;
+    }
+    if (message.run_id !== evidence.run_id) throw eventRecordFailure('event_run_id_mismatch', recordNumber);
+    const previousSequence = lastSequence.get(direction) ?? 0n;
+    if (message.sequence <= previousSequence) throw eventRecordFailure('event_sequence_not_increasing', recordNumber);
+    lastSequence.set(direction, message.sequence);
+
+    if (!readySeen) {
+      if (recordNumber !== 1 || direction !== 'plugin' || message.type !== 'ready') {
+        throw eventRecordFailure('readiness_missing_or_out_of_order', recordNumber);
+      }
+      readySeen = true;
+      if (message.correlation === undefined) throw eventRecordFailure('invalid_readiness_correlation', recordNumber);
+      lastSequence.set('runner', message.correlation);
+      lastAcknowledgedRunnerSequence = message.correlation;
+      continue;
+    }
+
+    if (direction === 'runner') {
+      if (message.correlation !== undefined || pendingRunnerSequence !== undefined) {
+        throw eventRecordFailure('invalid_runner_command_correlation', recordNumber);
+      }
+      if (message.type === 'prepare') {
+        if (prepare !== undefined || events.length > 0 || startSeen || abortSeen) {
+          throw eventRecordFailure('unexpected_runner_event', recordNumber);
+        }
+        prepare = message.payload;
+        pendingRunnerSequence = message.sequence;
+        continue;
+      }
+      if (message.type === 'start') {
+        if (prepare === undefined || startSeen || abortSeen || outcomeSeen) {
+          throw eventRecordFailure('unexpected_runner_event', recordNumber);
+        }
+        startSeen = true;
+        pendingRunnerSequence = message.sequence;
+        continue;
+      }
+      if (message.type === 'abort') {
+        if (prepare === undefined || abortSeen || outcomeSeen) {
+          throw eventRecordFailure('unexpected_runner_event', recordNumber);
+        }
+        abortSeen = true;
+        pendingRunnerSequence = message.sequence;
+        continue;
+      }
+      throw eventRecordFailure('unexpected_runner_event', recordNumber);
+    }
+
+    if (message.type === 'ready') throw eventRecordFailure('repeated_readiness', recordNumber);
+    if (message.type === 'ack' || message.type === 'error') {
+      if (pendingRunnerSequence === undefined || message.correlation !== pendingRunnerSequence
+          || message.correlation <= lastAcknowledgedRunnerSequence) {
+        throw eventRecordFailure('invalid_command_acknowledgment', recordNumber);
+      }
+      lastAcknowledgedRunnerSequence = message.correlation;
+      pendingRunnerSequence = undefined;
+    } else if (message.correlation !== undefined) {
+      throw eventRecordFailure('unexpected_event_correlation', recordNumber);
+    }
+    if (outcomeSeen) throw eventRecordFailure('event_after_outcome', recordNumber);
+    if (message.type === 'build_progress' || message.type === 'ack') continue;
+    if (message.type === 'error') throw eventRecordFailure('plugin_reported_error', recordNumber);
+    if (message.type === 'heartbeat' || message.type === 'metrics') continue;
+    if (prepare === undefined) throw eventRecordFailure('prepare_context_missing', recordNumber);
+    const authoritativeEvent = message.type === 'public_clock' || message.type === 'public_state'
+      || message.type === 'elimination' || message.type === 'outcome';
+    if (authoritativeEvent && pendingRunnerSequence !== undefined) {
+      throw eventRecordFailure('event_before_command_acknowledgment', recordNumber);
+    }
+    if (message.type === 'public_state' || message.type === 'elimination'
+        || (message.type === 'public_clock' && message.payload.phase !== 'waiting' && message.payload.phase !== 'aborted')
+        || (message.type === 'outcome' && message.payload.kind !== 'abort')) {
+      if (!startSeen) throw eventRecordFailure('event_before_start', recordNumber);
+    }
+    if (message.type === 'outcome') outcomeSeen = true;
+    if (message.type === 'public_clock' || message.type === 'public_state'
+        || message.type === 'elimination' || message.type === 'outcome') {
+      events.push(message);
+      continue;
+    }
+    throw eventRecordFailure('unexpected_plugin_event', recordNumber);
+  }
+
+  if (!readySeen) throw eventRecordFailure('readiness_missing');
+  if (prepare === undefined) throw eventRecordFailure('prepare_context_missing');
+  if (pendingRunnerSequence !== undefined) throw eventRecordFailure('unacknowledged_runner_command');
+  if (!outcomeSeen) throw eventRecordFailure('missing_terminal_outcome');
+  return reconstructEventResult(evidence.run_id, prepare, events);
+}
+
+function eventRecordFailure(kind: string, record?: number, field?: string): TraceError {
+  return new TraceError({
+    kind,
+    ...(record === undefined ? {} : { record }),
+    ...(field === undefined ? {} : { field }),
+  });
 }
 
 export function comparisonJson(left: Evidence, right: Evidence): object {
