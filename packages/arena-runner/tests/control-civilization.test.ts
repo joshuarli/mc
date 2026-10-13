@@ -289,3 +289,22 @@ test("civilization prepare rejects noncanonical roles and negative coordinates",
     ControlCodecError
   );
 });
+
+test("civilization control preserves signed safe-integer heights and nonnegative horizontal indices", () => {
+  const wire = (axis: 'x' | 'y' | 'z', coordinate: number) => envelope("prepare", {
+    map_semantic_id: "a".repeat(64), scenario_semantic_id: "b".repeat(64), seed: "1", mode: "civilization", roster,
+    settings: { ...civilizationSettings, civilization: { ...civilizationSettings.civilization,
+      capture_zone: { ...civilizationSettings.civilization.capture_zone,
+        min: { x: 80, y: -35, z: 80, [axis]: coordinate }, max: { x: 88, y: 68, z: 88 } } } },
+  });
+  for (const height of [-35, -Number.MAX_SAFE_INTEGER]) {
+    const message = decodeControlEnvelope(wire('y', height));
+    assert.deepEqual(decodeControlEnvelope(encodeControlEnvelope(message)), message);
+    if (message.type !== 'prepare' || message.payload.mode !== 'civilization') assert.fail('civilization prepare required');
+    assert.equal(message.payload.settings.civilization.capture_zone.min.y, height);
+  }
+  for (const [axis, coordinate] of [['x', -1], ['z', -1], ['y', -Number.MAX_SAFE_INTEGER - 1], ['y', -35.5]] as const) {
+    assert.throws(() => decodeControlEnvelope(wire(axis, coordinate)),
+      (error: unknown) => error instanceof ControlCodecError && error.code === 'invalid_message');
+  }
+});

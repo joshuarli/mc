@@ -541,7 +541,7 @@ function readBlockPosition(value: StrictJsonValue | undefined, path: string): Bl
   const position = readObject(value, path, ["x", "y", "z"], ["x", "y", "z"]);
   return {
     x: readSafeInteger(position.x, `${path}.x`, 0, Number.MAX_SAFE_INTEGER, position, "x"),
-    y: readSafeInteger(position.y, `${path}.y`, 0, Number.MAX_SAFE_INTEGER, position, "y"),
+    y: readSafeInteger(position.y, `${path}.y`, -Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER, position, "y"),
     z: readSafeInteger(position.z, `${path}.z`, 0, Number.MAX_SAFE_INTEGER, position, "z")
   };
 }
