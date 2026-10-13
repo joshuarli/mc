@@ -25,9 +25,9 @@
       "@arena/spec": ["packages/arena-spec/src/index.ts"],
       "@arena/bots": ["packages/arena-bots/src/index.ts"],
       "@arena/runner": ["packages/arena-runner/src/index.ts"],
-      "mineflayer": [".work/arena/npm-workspace/node_modules/mineflayer"],
+      "mineflayer": [".work/arena/npm-workspace/node_modules/mineflayer/index.d.ts"],
       "mineflayer-pathfinder": [".work/arena/npm-workspace/node_modules/mineflayer-pathfinder"],
-      "toml-eslint-parser": [".work/arena/npm-workspace/node_modules/toml-eslint-parser"]
+      "toml-eslint-parser": [".work/arena/npm-workspace/node_modules/toml-eslint-parser/lib/index.d.mts"]
     }
   },
   "files": [],
