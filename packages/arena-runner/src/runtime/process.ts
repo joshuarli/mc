@@ -112,6 +112,9 @@ class SpawnedServerProcess implements OwnedServerProcess {
   #shutdownPromise: Promise<ServerProcessExit> | undefined;
   #processFailure: Error | undefined;
   #stdinFailure: Error | undefined;
+  #stdinFailureDuringStopWrite = false;
+  #shutdownStopWriteAttempted = false;
+  #ownerRequestedTermination = false;
   #fatalOutputFailure: RunnerError | undefined;
 
   constructor(child: ChildProcess, stdout: Writable, stderr: Writable) {
@@ -135,7 +138,9 @@ class SpawnedServerProcess implements OwnedServerProcess {
       this.#processFailure ??= error;
     });
     child.stdin?.on('error', (error) => {
-      this.#stdinFailure ??= error;
+      if (this.#stdinFailure !== undefined) return;
+      this.#stdinFailure = error;
+      this.#stdinFailureDuringStopWrite = this.#shutdownStopWriteAttempted;
     });
     const bindFailure = (): void => {
       this.#recordOutputFailure(new RunnerError('owner_conflict', 'Paper server port', {
@@ -158,13 +163,17 @@ class SpawnedServerProcess implements OwnedServerProcess {
   async #shutdown(): Promise<ServerProcessExit> {
     if (!isExited(this.#child)) {
       const input = this.#child.stdin;
-      if (input !== null && !input.destroyed && input.writable) input.end('stop\n');
-      else this.#child.kill('SIGTERM');
+      if (input !== null && !input.destroyed && input.writable) {
+        this.#shutdownStopWriteAttempted = true;
+        input.end('stop\n');
+      } else {
+        this.#requestTermination('SIGTERM');
+      }
 
       if (await waitForExit(this.exited, GRACEFUL_STOP_MS) === undefined) {
-        this.#child.kill('SIGTERM');
+        this.#requestTermination('SIGTERM');
         if (await waitForExit(this.exited, TERMINATION_GRACE_MS) === undefined) {
-          this.#child.kill('SIGKILL');
+          this.#requestTermination('SIGKILL');
           if (await waitForExit(this.exited, FORCE_REAP_MS) === undefined) {
             throw new RunnerError('runtime_failure', 'server process', { kind: 'child_reap_timeout' });
           }
@@ -177,10 +186,23 @@ class SpawnedServerProcess implements OwnedServerProcess {
     if (this.#processFailure !== undefined) {
       throw new RunnerError('runtime_failure', 'server process', { kind: 'process_error' });
     }
-    if (this.#stdinFailure !== undefined) {
+    if (this.#stdinFailure !== undefined && !this.#isExpectedStopWriteEpipe(this.#stdinFailure, exit)) {
       throw new RunnerError('runtime_failure', 'server process', { kind: 'console_write_failed' });
     }
     return exit;
+  }
+
+  #isExpectedStopWriteEpipe(error: Error, exit: ServerProcessExit): boolean {
+    // A signal-exited child can close its input before Node delivers the exit event.
+    return this.#stdinFailureDuringStopWrite
+      && isBrokenPipe(error)
+      && exit.signal !== null
+      && !this.#ownerRequestedTermination;
+  }
+
+  #requestTermination(signal: NodeJS.Signals): void {
+    this.#ownerRequestedTermination = true;
+    this.#child.kill(signal);
   }
 
   #recordRelayFailure(error: Error): void {
@@ -194,12 +216,16 @@ class SpawnedServerProcess implements OwnedServerProcess {
     if (this.#fatalOutputFailure !== undefined) return;
     this.#fatalOutputFailure = error;
     this.#resolveFatalOutputError(error);
-    this.#child.kill('SIGTERM');
+    this.#requestTermination('SIGTERM');
   }
 
   #detachOutput(): void {
     for (const binding of this.#outputBindings) binding.close();
   }
+}
+
+function isBrokenPipe(error: Error): boolean {
+  return 'code' in error && error.code === 'EPIPE';
 }
 
 interface OutputBinding {
