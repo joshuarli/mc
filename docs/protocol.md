@@ -37,6 +37,9 @@ Minecraft, protocol, plugin, and capability identities. The runner accepts no
 commands until this handshake completes. The plugin sends a heartbeat every
 second. `ControlReceiver` performs run, sequence, authentication, capability,
 and handshake checks before returning an accepted message to the caller.
+The runtime also requires the announced plugin name and version to match the
+shipped `server/arena-plugin/src/main/resources/plugin.yml` descriptor before
+it prepares the match.
 
 ## Message contract
 

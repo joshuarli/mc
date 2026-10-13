@@ -52,6 +52,11 @@ import {
 } from './server.js';
 import type { RuntimeServerInputs } from './server.js';
 import { readStoppedPlayerStats } from './observations.js';
+import {
+  assertRuntimePluginIdentity,
+  readRuntimePluginIdentity,
+  type RuntimePluginIdentity,
+} from './plugin-identity.js';
 import type {
   ActiveRunEvaluator,
   ActiveRunEvaluationContext,
@@ -134,6 +139,7 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
     const javaTmpDir = validateJavaTempDirectory(options.ownedRoot);
     const policy = await loadPolicy(options, runSignal);
     const serverInputs: RuntimeServerInputs = { ...options, javaTmpDir, signal: runSignal };
+    const pluginIdentity = await readRuntimePluginIdentity(serverInputs);
     const pluginBytes = await readRuntimePluginJar(serverInputs);
     const roster = createRuntimeRoster(scenario);
     const preparePayload = createPreparePayload(scenario, roster.competitors);
@@ -186,6 +192,7 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
       createBootstrapWorld: async () => await createBootstrapWorld({
         options,
         inputs: serverInputs,
+        pluginIdentity,
         pluginBytes,
         signal: runSignal,
         abortPromise,
@@ -218,6 +225,7 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
     );
     coldStartDeadline.clear();
     await runtimeTrace.recordReady(session.ready);
+    assertRuntimePluginIdentity(session.ready, pluginIdentity);
 
     const outcome = deferred<OutcomePayload>();
     void outcome.promise.catch(() => {});
@@ -853,6 +861,7 @@ async function loadPolicy(options: RunPreparedRunOptions, signal: AbortSignal) {
 async function createBootstrapWorld(options: Readonly<{
   options: RunPreparedRunOptions;
   inputs: RuntimeServerInputs;
+  pluginIdentity: RuntimePluginIdentity;
   pluginBytes: Buffer;
   signal: AbortSignal;
   abortPromise: Promise<never>;
@@ -899,6 +908,7 @@ async function createBootstrapWorld(options: Readonly<{
       options.abortPromise,
       options.leaseLost,
     );
+    assertRuntimePluginIdentity(session.ready, options.pluginIdentity);
     await stopResourceMonitor(resourceMonitor);
     resourceMonitor = undefined;
     assertSuccessfulExit(await server.shutdown());
