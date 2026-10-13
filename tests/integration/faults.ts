@@ -252,7 +252,7 @@ async function runSigint(scenario: FaultScenario, testContext: TestContext): Pro
   const javaExecutable = join(javaHome, "bin", "java");
   const cliPath = join(ROOT, ".work", "build", "packages", "arena-runner", "src", "cli.js");
   const marker = `ARENA_FAULT_RESULT_${runId}:`;
-  const args = ["run", "--scenario", scenario.path, "--run-id", runId];
+  const args = ["run", "--scenario", scenario.path, "--run-id", runId, "--accept-minecraft-eula"];
   const childSource = [
     `import { runCli } from ${JSON.stringify(pathToFileURL(cliPath).href)};`,
     `const result = await runCli(${JSON.stringify(args)});`,

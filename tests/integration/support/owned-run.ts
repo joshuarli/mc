@@ -46,6 +46,7 @@ export async function prepareOwnedAcceptanceRun(
     javaExecutable,
     paperJarPath,
     pluginJarPath,
+    acceptMinecraftEula: true,
     signal,
   };
 }

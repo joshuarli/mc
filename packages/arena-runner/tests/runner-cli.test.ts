@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import { mkdtemp, mkdir, symlink, writeFile, rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
 import { runCli } from '../src/index.js';
+import { runPreparedRun } from '../src/runtime/run.js';
 import { canonicalJson, sha256Json } from '../src/canonical.js';
 import { encodeControlEnvelope } from '../src/control/index.js';
 import { assertPrepareResourceCapacity } from '../src/prepare.js';
@@ -133,6 +136,64 @@ test('prepare rejects a non-ASCII run id before reading scenario sources', async
   if (result.kind !== 'failure') return;
   assert.equal(result.exitCode, 2);
   assert.equal(JSON.parse(result.stderr).error.source.kind, 'invalid_run_id');
+});
+
+test('run requires explicit EULA acceptance before looking up artifacts or preparing a run', async () => {
+  const runId = `unaccepted-${randomUUID()}`;
+  const runDirectory = join(repositoryRoot, '.work/arena/runs', runId);
+  const previousHelper = process.env.ARENA_FS_HELPER;
+  process.env.ARENA_FS_HELPER = 'relative-helper-path';
+  try {
+    const result = await runCli([
+      'run', '--scenario', 'scenarios/hunger-six.toml', '--run-id', runId,
+    ]);
+    assert.equal(result.kind, 'failure');
+    if (result.kind !== 'failure') return;
+    assert.equal(result.exitCode, 3);
+    assert.deepEqual(JSON.parse(result.stderr).error, {
+      category: 'missing_prerequisite',
+      resource: 'Minecraft EULA',
+      source: { kind: 'missing_eula' },
+    });
+    assert.equal(existsSync(runDirectory), false, 'an unaccepted run must not prepare its run directory');
+  } finally {
+    if (previousHelper === undefined) delete process.env.ARENA_FS_HELPER;
+    else process.env.ARENA_FS_HELPER = previousHelper;
+  }
+});
+
+test('run accepts explicit EULA option and rejects unknown options', async () => {
+  const previousHelper = process.env.ARENA_FS_HELPER;
+  process.env.ARENA_FS_HELPER = 'relative-helper-path';
+  try {
+    const accepted = await runCli([
+      'run', '--scenario', 'scenarios/hunger-six.toml', '--accept-minecraft-eula',
+    ]);
+    assert.equal(accepted.kind, 'failure');
+    if (accepted.kind !== 'failure') return;
+    assert.equal(JSON.parse(accepted.stderr).error.source.kind, 'path_not_absolute');
+
+    const unknown = await runCli([
+      'run', '--scenario', 'scenarios/hunger-six.toml', '--accept-minecraft-eula', '--unknown-option',
+    ]);
+    assert.equal(unknown.kind, 'failure');
+    if (unknown.kind !== 'failure') return;
+    assert.equal(JSON.parse(unknown.stderr).error.source.kind, 'unexpected_argument');
+  } finally {
+    if (previousHelper === undefined) delete process.env.ARENA_FS_HELPER;
+    else process.env.ARENA_FS_HELPER = previousHelper;
+  }
+});
+
+test('direct runtime calls require explicit EULA acceptance before reading run inputs', async () => {
+  await assert.rejects(
+    runPreparedRun({ acceptMinecraftEula: false } as unknown as Parameters<typeof runPreparedRun>[0]),
+    (error: unknown) => {
+      assert.equal((error as { category?: string }).category, 'missing_prerequisite');
+      assert.equal((error as { source?: { kind?: string } }).source?.kind, 'missing_eula');
+      return true;
+    },
+  );
 });
 
 test('inspect and compare work with generic traces while report requires typed lifecycle events', async () => {

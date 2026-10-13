@@ -77,16 +77,26 @@ export interface RunPreparedRunOptions {
   readonly javaExecutable: string;
   readonly paperJarPath: string;
   readonly pluginJarPath: string;
+  readonly acceptMinecraftEula: true;
   readonly signal?: AbortSignal;
   readonly coldStartDeadline?: RuntimeDeadline;
   readonly evaluate?: ActiveRunEvaluator;
   readonly competitorDriver?: 'baselinePolicy' | 'evaluator';
   readonly onPolicyActivity?: (event: PolicyActivityEvent) => void;
   readonly onResourceSample?: (event: ResourceMonitorSampleEvent) => void;
+  readonly onRosterReady?: (details: Readonly<{
+    host: typeof CLIENT_HOST;
+    port: typeof GAME_PORT;
+    minecraftVersion: string;
+    protocolVersion: number;
+  }>) => void;
 }
 
-/** Owns a headless Paper run from its pristine world through stopped evidence. */
+/** Owns a Paper run from its pristine world through stopped evidence. */
 export async function runPreparedRun(options: RunPreparedRunOptions): Promise<CompletedOwnedRun> {
+  if (options.acceptMinecraftEula !== true) {
+    throw new RunnerError('missing_prerequisite', 'Minecraft EULA', { kind: 'missing_eula' });
+  }
   const controller = new AbortController();
   const onParentAbort = (): void => controller.abort(abortFailure(options.signal!));
   options.signal?.addEventListener('abort', onParentAbort, { once: true });
@@ -266,6 +276,12 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
     );
     const startupFailure = collectClientFailures(clients, spectators);
     if (startupFailure !== undefined) throw startupFailure;
+    options.onRosterReady?.({
+      host: CLIENT_HOST,
+      port: GAME_PORT,
+      minecraftVersion: session.ready.payload.server.minecraft_version,
+      protocolVersion: session.ready.payload.server.protocol_version,
+    });
 
     const start = async (): Promise<void> => {
       if (startAttempted) throw new RunnerError('runtime_failure', 'match start', { kind: 'start_already_called' });

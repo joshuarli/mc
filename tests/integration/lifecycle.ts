@@ -62,10 +62,23 @@ async function runLifecycleCycle(
   const prepared = await prepareOwnedAcceptanceRun(scenarioPath, `lifecycle-${cycle}`, signal);
   const beforeServers = activeResourceCount("TCPServerWrap");
   const beforeSockets = activeResourceCount("TCPSocketWrap");
+  let connectionDetails: Readonly<{
+    host: string;
+    port: number;
+    minecraftVersion: string;
+    protocolVersion: number;
+  }> | undefined;
   const completed = await runPreparedRun({
     ...prepared,
     competitorDriver: "evaluator",
+    onRosterReady: (details) => { connectionDetails = details; },
     evaluate: async (active) => {
+      assert.deepEqual(connectionDetails, {
+        host: active.gameAddress.host,
+        port: active.gameAddress.port,
+        minecraftVersion: active.ready.payload.server.minecraft_version,
+        protocolVersion: active.ready.payload.server.protocol_version,
+      }, "connection details must follow real-server readiness and bot roster connection");
       assert.equal(
         activeResourceCount("TCPServerWrap"),
         beforeServers,

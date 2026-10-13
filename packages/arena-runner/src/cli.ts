@@ -239,6 +239,7 @@ async function validateCommand(args: readonly Buffer[]): Promise<CliResult> {
 async function runCommand(args: readonly Buffer[]): Promise<CliResult> {
   let scenarioArgument: Buffer | undefined;
   let runId: string | undefined;
+  let acceptMinecraftEula = false;
   for (let index = 0; index < args.length;) {
     const option = argumentText(args[index]!, index + 1);
     if (option === '--scenario') {
@@ -255,9 +256,18 @@ async function runCommand(args: readonly Buffer[]): Promise<CliResult> {
       index += 2;
       continue;
     }
+    if (option === '--accept-minecraft-eula') {
+      if (acceptMinecraftEula) throw invalidInput('run_accept_minecraft_eula_repeated');
+      acceptMinecraftEula = true;
+      index += 1;
+      continue;
+    }
     throw invalidInput('unexpected_argument');
   }
   if (scenarioArgument === undefined) throw invalidInput('run_requires_scenario');
+  if (!acceptMinecraftEula) {
+    throw new RunnerError('missing_prerequisite', 'Minecraft EULA', { kind: 'missing_eula' });
+  }
   const scenarioPath = normalizeScenarioPath(scenarioArgument);
   runId ??= randomUUID();
   if (!isValidRunId(runId)) {
@@ -282,8 +292,19 @@ async function runCommand(args: readonly Buffer[]): Promise<CliResult> {
           javaExecutable: resolve(javaHome, 'bin', 'java'),
           paperJarPath,
           pluginJarPath,
+          acceptMinecraftEula: true,
           signal,
           coldStartDeadline,
+          onRosterReady: (details) => {
+            process.stderr.write([
+              'Arena server ready for graphical clients.',
+              `Minecraft Java Edition: ${details.minecraftVersion}`,
+              `Address: ${details.host}:${details.port}`,
+              'Role: spectator',
+              'Press Ctrl-C to stop the server; it also stops when the match ends.',
+              '',
+            ].join('\n'));
+          },
         });
         if (completed.outcome.kind === 'abort') {
           const finalTrace = completed.trace.segments.at(-1);
@@ -503,7 +524,7 @@ function helpJson(): object {
       'compare <left-segment> <right-segment>': 'Compare two single-segment record streams exactly.',
       'prepare --scenario <path> --run-id <id>': 'Compile a scenario and stage its world plan in a new run directory.',
       'validate --scenario <path>': 'Compile the scenario, map, and policy without staging a run.',
-      'run --scenario <path> [--run-id <id>]': 'Run a headless match and report its stopped result.',
+      'run --scenario <path> --accept-minecraft-eula [--run-id <id>]': 'Run a match and report its stopped result.',
       'replay-policy <segment>...': 'Replay recorded core policy decisions and validate correlated skill/path effect records.',
     },
     errors: {
