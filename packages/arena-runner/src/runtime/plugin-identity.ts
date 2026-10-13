@@ -38,7 +38,7 @@ export async function readRuntimePluginIdentity(options: Readonly<{
 export function parseRuntimePluginIdentity(source: string): RuntimePluginIdentity {
   const values = new Map<string, string>();
   for (const line of source.split(/\r?\n/)) {
-    if (!/^(?:name|version)\s*:/.test(line)) continue;
+    if (!/^\s*(?:name|version)\s*:/.test(line)) continue;
     const match = /^(name|version): ([A-Za-z0-9][A-Za-z0-9._+-]{0,127})$/.exec(line);
     if (match === null) throw invalidPluginDescriptor();
     const [, key, value] = match;

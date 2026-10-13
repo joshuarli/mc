@@ -15,6 +15,7 @@ const PLUGIN_DESCRIPTOR = 'server/arena-plugin/src/main/resources/plugin.yml';
 
 test('runtime rejects a ready message with a plugin identity different from the shipped descriptor', () => {
   const identity = parseRuntimePluginIdentity(readFileSync(join(process.cwd(), PLUGIN_DESCRIPTOR), 'utf8'));
+  assert.doesNotThrow(() => assertRuntimePluginIdentity(readyMessage(identity), identity));
   const ready = readyMessage({
     name: `Other${identity.name}`,
     version: identity.version,
@@ -46,6 +47,9 @@ test('runtime plugin descriptor requires exactly one supported name and version'
   ), /plugin_descriptor_invalid/);
   assert.throws(() => parseRuntimePluginIdentity(
     'name: ArenaFoundation\nversion : 0.1.0\n',
+  ), /plugin_descriptor_invalid/);
+  assert.throws(() => parseRuntimePluginIdentity(
+    'name: ArenaFoundation\n  version: 0.1.0\nversion: 0.1.0\n',
   ), /plugin_descriptor_invalid/);
 });
 
