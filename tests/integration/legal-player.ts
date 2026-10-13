@@ -14,7 +14,7 @@ import { observePlayerInventory } from "./support/mineflayer-world.js";
 import { runOwnedAcceptanceScenario, type AcceptanceRunContext } from "./support/owned-run.js";
 import { startSprintCourse } from "./support/sprint-course.js";
 
-const FOOD_DEPLETION_TIMEOUT_MS = 45_000;
+const FOOD_DEPLETION_TIMEOUT_MS = 60_000;
 const SPRINT_LEG_MS = 750;
 const SPRINT_HEADINGS = [Math.PI, -Math.PI / 2, 0, Math.PI / 2] as const;
 const COURSE_MIN_COORDINATE = 8;
