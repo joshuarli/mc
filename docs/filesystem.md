@@ -82,7 +82,9 @@ process or host crash is not reused as a completed clone.
 `readOwnedFile` opens the leaf without following symlinks, requires a regular
 file, and reads at most 16 MiB or the smaller caller limit. It checks the
 opened handle while reading, so growth during the read cannot exceed the
-limit. `removeCreatedFile` and `removeCreatedDirectory` accept the identity
+limit. `readOwnedFileWithIdentity` also returns the device and inode from that
+opened handle; `readOwnedFile` returns only the bytes. `removeCreatedFile` and
+`removeCreatedDirectory` accept the identity
 returned at creation and reject an entry whose type or device/inode differs.
 Before unlinking, the helper atomically moves the leaf to a random sibling name,
 checks that moved entry's identity, and restores it if the identity differs.

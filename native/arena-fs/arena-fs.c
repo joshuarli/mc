@@ -938,7 +938,8 @@ static void print_error(const char *operation, const struct fs_error *error) {
     fflush(stdout);
 }
 
-static void print_read_success(const unsigned char *bytes, size_t length) {
+static void print_read_success(const unsigned char *bytes, size_t length,
+                              const struct stat *file_status) {
     size_t encoded_length = 0;
     if (base64_encoded_length(length, &encoded_length) != 0) {
         struct fs_error failure = {.code = EOVERFLOW};
@@ -952,8 +953,9 @@ static void print_read_success(const unsigned char *bytes, size_t length) {
         return;
     }
     encode_base64(bytes, length, encoded);
-    printf("{\"v\":1,\"ok\":true,\"operation\":\"read-owned-file\",\"data\":\"%s\"}\n",
-           encoded);
+    printf("{\"v\":1,\"ok\":true,\"operation\":\"read-owned-file\","
+           "\"device\":\"%ju\",\"inode\":\"%ju\",\"data\":\"%s\"}\n",
+           (uintmax_t)file_status->st_dev, (uintmax_t)file_status->st_ino, encoded);
     fflush(stdout);
     free(encoded);
 }
@@ -2631,7 +2633,8 @@ static int remove_created_entry(const char *root, const char *relative, size_t r
 /* Read through one opened regular-file handle and enforce the limit even if it grows. */
 static int read_owned_file(const char *root, const char *relative, size_t relative_length,
                            uint64_t caller_limit, struct fs_error *failure,
-                           unsigned char **contents, size_t *contents_length) {
+                           unsigned char **contents, size_t *contents_length,
+                           struct stat *file_status_out) {
     int root_fd = open_owned_root(root);
     if (root_fd < 0) {
         failure->code = -root_fd;
@@ -2706,6 +2709,7 @@ static int read_owned_file(const char *root, const char *relative, size_t relati
     }
     *contents = buffer;
     *contents_length = length;
+    *file_status_out = initial_status;
 
 done:
     close(parent_fd);
@@ -2935,14 +2939,15 @@ static int run_read(int argc, char **argv) {
     uint64_t limit = 0;
     unsigned char *contents = NULL;
     size_t contents_length = 0;
+    struct stat file_status = {0};
     int error = parse_u64(argv[4], &limit);
     if (error == 0 && limit > MAX_READ_BYTES) error = EFBIG;
     if (error == 0) error = decode_root_and_relative(argv[2], argv[3], &root, &relative,
                                                     &relative_length, &failure);
     if (error == 0) error = read_owned_file(root, relative, relative_length, limit, &failure,
-                                            &contents, &contents_length);
+                                            &contents, &contents_length, &file_status);
     else failure.code = error;
-    if (error == 0) print_read_success(contents, contents_length);
+    if (error == 0) print_read_success(contents, contents_length, &file_status);
     else print_error("read-owned-file", &failure);
     free(contents);
     free(root);

@@ -1321,13 +1321,13 @@ export async function cloneOwnedTree(options: Readonly<{
     }));
 }
 
-export async function readOwnedFile(options: Readonly<{
+export async function readOwnedFileWithIdentity(options: Readonly<{
   helperPath: string;
   ownedRoot: Buffer;
   relativePath: Buffer;
   maxBytes: number;
   signal?: AbortSignal;
-}>): Promise<Buffer> {
+}>): Promise<Readonly<{ contents: Buffer; identity: FileIdentity }>> {
   const { helperPath, ownedRoot, relativePath, maxBytes, signal } = options;
   return await withRelativePath(relativePath, async () => {
     validateByteLimit(maxBytes, MAX_OWNED_READ_BYTES, 'read-owned-file');
@@ -1351,8 +1351,18 @@ export async function readOwnedFile(options: Readonly<{
         operation: 'read-owned-file',
       });
     }
-    return contents;
+    return Object.freeze({ contents, identity: resultIdentity(result, 'read-owned-file') });
   });
+}
+
+export async function readOwnedFile(options: Readonly<{
+  helperPath: string;
+  ownedRoot: Buffer;
+  relativePath: Buffer;
+  maxBytes: number;
+  signal?: AbortSignal;
+}>): Promise<Buffer> {
+  return (await readOwnedFileWithIdentity(options)).contents;
 }
 
 function resourceByteCount(value: unknown, field: string): bigint {

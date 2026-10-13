@@ -18,6 +18,7 @@ import {
   MAX_OWNED_TREE_FILES,
   OwnedFilesError,
   readOwnedFile,
+  readOwnedFileWithIdentity,
   removeCreatedDirectory,
   removeCreatedFile,
   removeOwnedRun,
@@ -286,6 +287,11 @@ test('creates a fresh run, stages without overwrite, reads, and removes by ident
       helperPath, ownedRoot: root, destinationRelativePath: planPath, contents, maxBytes: 1024,
     });
 
+    const read = await readOwnedFileWithIdentity({
+      helperPath, ownedRoot: root, relativePath: planPath, maxBytes: 1024,
+    });
+    assert.deepEqual(read.contents, contents);
+    assert.deepEqual(read.identity, planIdentity);
     assert.deepEqual(await readOwnedFile({ helperPath, ownedRoot: root, relativePath: planPath, maxBytes: 1024 }), contents);
     await assert.rejects(stageWorldPlan({
       helperPath, ownedRoot: root, destinationRelativePath: planPath,
