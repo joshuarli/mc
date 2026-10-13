@@ -17,7 +17,7 @@ import { readSegment, TraceError, type TraceSegment } from './trace.js';
 
 export type CliResult =
   | { readonly kind: 'success'; readonly exitCode: 0; readonly stdout: string }
-  | { readonly kind: 'failure'; readonly exitCode: 2 | 3 | 5 | 6; readonly stderr: string };
+  | { readonly kind: 'failure'; readonly exitCode: 2 | 3 | 4 | 5 | 6 | 130; readonly stderr: string };
 
 const SOURCE_UTF8 = new TextDecoder('utf-8', { fatal: true });
 
@@ -330,12 +330,14 @@ async function readSource(
     });
   } catch (error) {
     if (!(error instanceof OwnedFilesError)) throw error;
-    const category = error.category === 'not_found' || error.category === 'helper_start'
-      ? 'missing_prerequisite'
-      : error.category === 'too_large' || error.category === 'invalid_path'
-        || error.category === 'unsupported_file_type' || error.category === 'symlink_rejected'
-        ? 'invalid_input'
-        : 'runtime_failure';
+    const category = error.category === 'cancelled'
+      ? 'cancelled'
+      : error.category === 'not_found' || error.category === 'helper_start'
+        ? 'missing_prerequisite'
+        : error.category === 'too_large' || error.category === 'invalid_path'
+          || error.category === 'unsupported_file_type' || error.category === 'symlink_rejected'
+          ? 'invalid_input'
+          : 'runtime_failure';
     throw new RunnerError(category, resource, {
       kind: error.category,
       ...(error.errno === undefined ? {} : { os_code: error.errno }),
@@ -444,8 +446,10 @@ function helpJson(): object {
     errors: {
       2: 'invalid input or configuration',
       3: 'missing prerequisite or resource',
+      4: 'owned resource or port conflict',
       5: 'corrupt or incomplete evidence',
       6: 'runtime failure',
+      130: 'cancelled by the operator',
     },
   };
 }

@@ -72,9 +72,11 @@ test('inspect rejects active runs while holding the owned run lease', async (t) 
   const result = await runCli(['inspect', '--run-id', runId]);
   assert.equal(result.kind, 'failure');
   if (result.kind !== 'failure') return;
+  assert.equal(result.exitCode, 4);
   const error = JSON.parse(result.stderr);
   assert.equal(error.error.resource, 'run lease');
-  assert.equal(error.error.source.kind, 'conflict');
+  assert.equal(error.error.category, 'owner_conflict');
+  assert.equal(error.error.source.kind, 'owner_conflict');
 });
 
 test('inspect marks missing stats files absent with explicit null counters', async (t) => {

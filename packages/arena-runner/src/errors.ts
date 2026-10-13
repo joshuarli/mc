@@ -1,6 +1,12 @@
 import { canonicalJson } from './canonical.js';
 
-export type ErrorCategory = 'invalid_input' | 'missing_prerequisite' | 'corrupt_evidence' | 'runtime_failure';
+export type ErrorCategory =
+  | 'invalid_input'
+  | 'missing_prerequisite'
+  | 'owner_conflict'
+  | 'corrupt_evidence'
+  | 'runtime_failure'
+  | 'cancelled';
 
 export interface ErrorSource {
   readonly kind: string;
@@ -11,6 +17,7 @@ export interface ErrorSource {
   readonly column?: number;
   readonly os_code?: number;
   readonly cleanup_os_code?: number;
+  readonly cleanup_kind?: string;
   readonly published?: boolean;
   readonly reason?: string;
   readonly run_id?: string;
@@ -26,12 +33,14 @@ export class RunnerError extends Error {
     super(source.kind);
   }
 
-  exitCode(): 2 | 3 | 5 | 6 {
+  exitCode(): 2 | 3 | 4 | 5 | 6 | 130 {
     switch (this.category) {
       case 'invalid_input': return 2;
       case 'missing_prerequisite': return 3;
+      case 'owner_conflict': return 4;
       case 'corrupt_evidence': return 5;
       case 'runtime_failure': return 6;
+      case 'cancelled': return 130;
     }
   }
 

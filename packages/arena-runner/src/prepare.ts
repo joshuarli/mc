@@ -223,14 +223,19 @@ function mapOwnedFilesError(error: unknown, resource: string, published?: boolea
     return new RunnerError('runtime_failure', resource, { kind: 'owned_file_operation' });
   }
 
-  let category: 'invalid_input' | 'missing_prerequisite' | 'runtime_failure';
+  let category: 'invalid_input' | 'missing_prerequisite' | 'owner_conflict' | 'runtime_failure' | 'cancelled';
   switch (error.category) {
     case 'not_found':
     case 'helper_start':
       category = 'missing_prerequisite';
       break;
-    case 'invalid_path':
     case 'conflict':
+      category = 'owner_conflict';
+      break;
+    case 'cancelled':
+      category = 'cancelled';
+      break;
+    case 'invalid_path':
     case 'symlink_rejected':
     case 'too_large':
     case 'unsupported_file_type':

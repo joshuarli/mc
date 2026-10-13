@@ -143,7 +143,12 @@ function mapRunLeaseError(error: unknown): RunnerError {
   if (!(error instanceof OwnedFilesError)) {
     return new RunnerError('runtime_failure', 'run lease', { kind: 'lease_failed' });
   }
-  const category = error.category === 'helper_start' ? 'missing_prerequisite' : 'runtime_failure';
+  if (error.category === 'conflict' && error.operation === 'hold-run-lease') {
+    return new RunnerError('owner_conflict', 'run lease', { kind: 'owner_conflict' });
+  }
+  const category = error.category === 'helper_start'
+    ? 'missing_prerequisite'
+    : 'runtime_failure';
   return new RunnerError(category, 'run lease', {
     kind: error.category,
     ...(error.errno === undefined ? {} : { os_code: error.errno }),

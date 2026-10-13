@@ -34,6 +34,18 @@ test('doctor describes runner, runtime, and evidence capabilities', async () => 
   });
 });
 
+test('help documents the stable conflict and cancellation exit codes', async () => {
+  const result = output(await runCli(['help']));
+  assert.deepEqual(result.errors, {
+    2: 'invalid input or configuration',
+    3: 'missing prerequisite or resource',
+    4: 'owned resource or port conflict',
+    5: 'corrupt or incomplete evidence',
+    6: 'runtime failure',
+    130: 'cancelled by the operator',
+  });
+});
+
 test('validate compiles a scenario, map, and policy without preparing a run', async () => {
   const helperPath = resolve(repositoryRoot, '.work/arena-fs/arena-fs');
   const previousHelper = process.env.ARENA_FS_HELPER;
