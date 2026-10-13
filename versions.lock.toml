@@ -45,6 +45,7 @@ archive_sha256 = "dbb698396d478e7fa2b1e50f4103324b2a99b90569ee27c33f2261f9215cf4
 version = "9.6.1"
 distribution = "https://services.gradle.org/distributions/gradle-9.6.1-bin.zip"
 distribution_sha256 = "9c0f7faeeb306cb14e4279a3e084ca6b596894089a0638e68a07c945a32c9e14"
+wrapper_jar_sha256 = "497c8c2a7e5031f6aa847f88104aa80a93532ec32ee17bdb8d1d2f67a194a9c7"
 
 [limits]
 max_download_bytes = 536870912

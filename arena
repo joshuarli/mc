@@ -36,12 +36,10 @@ export GRADLE_USER_HOME="$root/.work/arena/gradle"
 ensure_work_directory "$GRADLE_USER_HOME"
 download_tmp=
 jdk_stage=
-extract_stage=
 
 cleanup_work_files() {
     [ -z "$download_tmp" ] || rm -f -- "$download_tmp"
     [ -z "$jdk_stage" ] || rm -rf -- "$jdk_stage"
-    [ -z "$extract_stage" ] || rm -rf -- "$extract_stage"
 }
 trap cleanup_work_files EXIT
 
@@ -183,65 +181,27 @@ prepare_jdk() {
     export PATH="$JAVA_HOME/bin:$PATH"
 }
 
-prepare_gradle() {
+verify_gradle_wrapper() {
     gradle_version=$(locked_section_value gradle version)
     distribution_url=$(locked_section_value gradle distribution)
     distribution_sha=$(locked_section_value gradle distribution_sha256)
-    download_limit=$(locked_section_number limits max_download_bytes)
-    distribution_file=${distribution_url##*/}
-    distribution_root="gradle-$gradle_version"
-    [ "$distribution_file" = "$distribution_root-bin.zip" ] || fail "Gradle distribution filename does not match its locked version"
-    [ "$distribution_url" = "https://services.gradle.org/distributions/$distribution_file" ] || fail "Gradle URL is not the official versioned distribution"
-
-    download_root="$root/.work/arena/downloads"
-    ensure_work_directory "$download_root"
-    distribution_path="$download_root/$distribution_file"
-    [ ! -L "$distribution_path" ] || fail "locked Gradle distribution path must not be a symlink"
-    if [ -e "$distribution_path" ] && [ ! -f "$distribution_path" ]; then
-        fail "locked Gradle distribution path must be a regular file"
-    fi
-    if [ ! -f "$distribution_path" ]; then
-        download_tmp=$(mktemp "$download_root/.gradle.XXXXXXXX") || fail "create Gradle download staging file"
-        curl --fail --location --proto '=https' --tlsv1.2 --max-filesize "$download_limit" \
-            --output "$download_tmp" "$distribution_url" || fail "download locked Gradle distribution"
-        actual_sha=$(sha256_file "$download_tmp")
-        [ "$actual_sha" = "$distribution_sha" ] || fail "Gradle distribution SHA-256 mismatch: expected $distribution_sha, got $actual_sha"
-        mv "$download_tmp" "$distribution_path" || fail "install verified Gradle distribution"
-        download_tmp=
-    fi
-    actual_sha=$(sha256_file "$distribution_path")
-    [ "$actual_sha" = "$distribution_sha" ] || fail "cached Gradle distribution SHA-256 mismatch: expected $distribution_sha, got $actual_sha"
-
-    toolchains="$root/.work/arena/toolchains"
-    ensure_work_directory "$toolchains"
-    gradle_home="$toolchains/$distribution_root"
-    if [ ! -e "$gradle_home" ]; then
-        extract_stage=$(mktemp -d "$toolchains/.gradle.XXXXXXXX") || fail "create Gradle extraction directory"
-        entries="$extract_stage/archive.entries"
-        unzip -Z1 "$distribution_path" > "$entries" || fail "list locked Gradle archive contents"
-        while IFS= read -r entry; do
-            entry_path=${entry%/}
-            case "$entry_path" in
-                "$distribution_root"|"$distribution_root"/*) ;;
-                *) fail "Gradle archive entry escaped its locked root: $entry" ;;
-            esac
-            case "/$entry_path/" in
-                *"/../"*|*"/./"*|*"//"*) fail "unsafe path in Gradle archive: $entry" ;;
-            esac
-        done < "$entries"
-        unzip -q "$distribution_path" -d "$extract_stage" || fail "extract locked Gradle distribution"
-        [ -x "$extract_stage/$distribution_root/bin/gradle" ] || fail "verified Gradle launcher is unavailable"
-        mv -n "$extract_stage/$distribution_root" "$gradle_home" || fail "install verified Gradle distribution"
-        [ -d "$gradle_home" ] && [ ! -L "$gradle_home" ] || fail "Gradle distribution was not installed"
-        rm -rf -- "$extract_stage"
-        extract_stage=
-    elif [ ! -d "$gradle_home" ] || [ -L "$gradle_home" ]; then
-        fail "project-local Gradle path must be a real directory"
-    fi
-    [ -x "$gradle_home/bin/gradle" ] || fail "project-local Gradle launcher is unavailable"
-    gradle_output=$("$gradle_home/bin/gradle" --version 2>&1) || fail "pinned Gradle launcher does not start"
-    printf '%s\n' "$gradle_output" | awk -v version="Gradle $gradle_version" 'index($0, version) { found = 1 } END { exit !found }' || fail "project-local Gradle version does not match versions.lock.toml"
-    GRADLE_BIN="$gradle_home/bin/gradle"
+    wrapper_jar_sha=$(locked_section_value gradle wrapper_jar_sha256)
+    wrapper_root="$root/server/arena-plugin"
+    wrapper_script="$wrapper_root/gradlew"
+    wrapper_jar="$wrapper_root/gradle/wrapper/gradle-wrapper.jar"
+    wrapper_properties="$wrapper_root/gradle/wrapper/gradle-wrapper.properties"
+    [ "$distribution_url" = "https://services.gradle.org/distributions/gradle-$gradle_version-bin.zip" ] || fail "Gradle URL does not match its locked version"
+    for path in "$wrapper_script" "$wrapper_jar" "$wrapper_properties"; do
+        [ ! -L "$path" ] || fail "Gradle wrapper path must not be a symlink: $path"
+        [ -f "$path" ] || fail "Gradle wrapper file is unavailable: $path"
+    done
+    [ -x "$wrapper_script" ] || fail "Gradle wrapper launcher is not executable"
+    actual_sha=$(sha256_file "$wrapper_jar")
+    [ "$actual_sha" = "$wrapper_jar_sha" ] || fail "Gradle wrapper JAR SHA-256 mismatch: expected $wrapper_jar_sha, got $actual_sha"
+    wrapper_url=$(awk -F '=' '/^distributionUrl=/ { value = substr($0, index($0, "=") + 1); gsub(/\\:/, ":", value); print value; matches++ } END { if (matches != 1) exit 1 }' "$wrapper_properties") || fail "Gradle wrapper properties must contain one distribution URL"
+    wrapper_distribution_sha=$(awk -F '=' '/^distributionSha256Sum=/ { print $2; matches++ } END { if (matches != 1) exit 1 }' "$wrapper_properties") || fail "Gradle wrapper properties must contain one distribution checksum"
+    [ "$wrapper_url" = "$distribution_url" ] || fail "Gradle wrapper URL does not match versions.lock.toml"
+    [ "$wrapper_distribution_sha" = "$distribution_sha" ] || fail "Gradle wrapper checksum does not match versions.lock.toml"
 }
 
 build_plugin() {
@@ -251,7 +211,8 @@ build_plugin() {
     plugin_api_version=$(locked_section_value paper plugin_api_version)
     project_cache="$root/.work/arena/gradle-project"
     ensure_work_directory "$project_cache"
-    (cd "$root/server/arena-plugin" && "$GRADLE_BIN" --project-cache-dir "$project_cache" --no-daemon \
+    verify_gradle_wrapper
+    (cd "$root/server/arena-plugin" && ./gradlew --dependency-verification=strict --project-cache-dir "$project_cache" --no-daemon \
         -PpaperApiGroup="$api_group" \
         -PpaperApiArtifact="$api_artifact" \
         -PpaperApiVersion="$api_version" \
@@ -338,13 +299,11 @@ done
 case "$suite:$case_name" in
     java:plugin)
         prepare_jdk
-        prepare_gradle
         build_plugin
         ;;
     integration:stack)
         [ -f "$root/tests/integration/stack.rs" ] || fail "blocked: stack smoke harness is not ready"
         prepare_jdk
-        prepare_gradle
         build_plugin
         ensure_paper_artifact
         exec cargo test --locked --offline --package arena-bots --test stack -- --exact stack --nocapture

@@ -8,7 +8,7 @@
 | Paper server | Stable 26.2 build 133, `paper-26.2-133.jar` |
 | Paper API | `io.papermc.paper:paper-api:26.2.build.133-stable`, plugin API version `26.2` |
 | Java | Eclipse Temurin JDK 25.0.4.1+1; runtime build `25.0.4.1+1-LTS` |
-| Gradle | 9.6.1 binary distribution, bootstrapped from its locked SHA-256 under `.work/arena/toolchains` |
+| Gradle | 9.6.1 wrapper; wrapper JAR and distribution SHA-256 are checked against `versions.lock.toml` |
 
 The Paper server artifact was downloaded from the official Fill v3 URL with `Arena/0.1 (dankmeme133769@proton.me)`. Its 64,525,509 bytes match the official SHA-256 in `versions.lock.toml`. The Paper API 133 coordinate is published. The server and API use the same build number; the API docs page inspected during research showed build 130, so API Javadocs were not treated as evidence for build 133.
 
