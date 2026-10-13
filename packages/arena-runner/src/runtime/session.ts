@@ -83,7 +83,11 @@ class TcpControlListenerLease implements ControlListenerLease {
 
   constructor(server: Server, address: AddressInfo, options: ControlListenerOptions) {
     this.#server = server;
-    this.#options = options;
+    this.#options = Object.freeze({
+      runId: options.runId,
+      token: options.token,
+      capabilities: Object.freeze([...options.capabilities]),
+    });
     this.address = Object.freeze({ host: CONTROL_HOST, port: address.port });
     this.#server.on('connection', (socket) => this.#onConnection(socket));
     this.#server.on('error', (error) => {

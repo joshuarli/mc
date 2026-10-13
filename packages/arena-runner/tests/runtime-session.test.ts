@@ -6,6 +6,7 @@ import {
   decodeControlFrame,
   encodeControlFrame,
   MAX_CONTROL_FRAME_BYTES,
+  type ControlCapability,
 } from '../src/control/index.js';
 import { bindControlListener, createControlToken } from '../src/runtime/session.js';
 
@@ -111,6 +112,49 @@ test('control listener authenticates one loopback plugin and sequences commands'
   assert.equal(outcome.value?.type, 'outcome');
   assert.equal((await messages.next()).done, true);
   await messages.return?.();
+  await session.close();
+});
+
+test('control listener snapshots the supported capabilities at bind time', async (t) => {
+  const capabilities: ControlCapability[] = ['hunger_games_v1'];
+  const listener = await bindControlListener({
+    runId: RUN_ID,
+    token: TOKEN,
+    capabilities,
+  });
+  capabilities.length = 0;
+  const client = connectTo(listener.address.port);
+  const reader = new TestFrameReader(client);
+  t.after(async () => {
+    await listener.close();
+    client.destroy();
+  });
+
+  const accepting = listener.accept();
+  await once(client, 'connect');
+  client.write(encodeControlFrame({
+    protocol: 1,
+    run_id: RUN_ID,
+    sequence: 1n,
+    type: 'hello',
+    payload: { token: TOKEN, capabilities: CAPABILITIES },
+  }));
+  const helloAck = decodeControlFrame(await reader.readFrame());
+  if (helloAck.type !== 'ack') throw new Error('expected hello acknowledgment');
+  client.write(encodeControlFrame({
+    protocol: 1,
+    run_id: RUN_ID,
+    sequence: 2n,
+    correlation: helloAck.sequence,
+    type: 'ready',
+    payload: {
+      server: { name: 'Paper', version: 'test', minecraft_version: 'test', protocol_version: 1 },
+      plugin: { name: 'Arena', version: 'test' },
+      capabilities: CAPABILITIES,
+    },
+  }));
+
+  const session = await accepting;
   await session.close();
 });
 
