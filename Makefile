@@ -3,6 +3,7 @@ ifeq ($(ARENA_MAKEFILE),)
 $(error cannot resolve the Arena Makefile path)
 endif
 ARENA_ROOT := $(patsubst %/,%,$(dir $(ARENA_MAKEFILE)))
+.DEFAULT_GOAL := help
 
 -include $(ARENA_ROOT)/.work/arena/server.mk
 
@@ -12,7 +13,10 @@ $(error ACCEPT_MINECRAFT_EULA must be exactly 1 when set)
 endif
 endif
 
-.PHONY: server
+.PHONY: help server
+help:
+	@printf '%s\n' 'make server: start the local bot match and print Minecraft connection details'
+
 
 ifeq ($(ACCEPT_MINECRAFT_EULA),1)
 server:
