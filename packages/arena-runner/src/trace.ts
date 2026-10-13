@@ -6,7 +6,7 @@ import { sha256Json } from './canonical.js';
 import { parseStrictJson, StrictJsonError, type StrictJsonValue } from './control/strict-json.js';
 import { RunnerError } from './errors.js';
 
-const TRACE_SCHEMA_VERSION = 1;
+export const TRACE_SCHEMA_VERSION = 2;
 const MAX_TRACE_BYTES = 8 * 1024 * 1024;
 export const MAX_EVIDENCE_BYTES = 256 * 1024 * 1024;
 const MAX_SEQUENCE = (1n << 64n) - 1n;

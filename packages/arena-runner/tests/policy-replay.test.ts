@@ -95,7 +95,7 @@ test('replay-policy CLI verifies mixed trace segments containing policy frames',
     const frame = policyRecord();
     const records = [frame];
     const segment = canonicalJson({
-      schema: 1,
+      schema: 2,
       run_id: runId,
       first_sequence: '1',
       last_sequence: '1',

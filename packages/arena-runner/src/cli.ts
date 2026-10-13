@@ -7,6 +7,7 @@ import { canonicalJson } from './canonical.js';
 import { RunnerError } from './errors.js';
 import { prepareRun } from './prepare.js';
 import { replayPolicyJson } from './policy-replay.js';
+import { isValidRunId } from './run-id.js';
 import { readSegment, TraceError, type TraceSegment } from './trace.js';
 
 export type CliResult =
@@ -122,6 +123,9 @@ async function prepareCommand(args: readonly Buffer[]): Promise<CliResult> {
 
   const scenarioPath = normalizeScenarioPath(args[1]!);
   const runId = argumentText(args[3]!, 4);
+  if (!isValidRunId(runId)) {
+    throw new RunnerError('invalid_input', 'run id', { kind: 'invalid_run_id' });
+  }
   const helperPath = process.env.ARENA_FS_HELPER;
   if (helperPath === undefined || helperPath.length === 0) {
     throw new RunnerError('missing_prerequisite', 'filesystem helper', { kind: 'helper_not_configured' });

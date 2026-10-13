@@ -1,5 +1,6 @@
 import type { MapIr } from '@arena/spec';
 import { MAX_WORLD_PLAN_BYTES } from './owned-files/index.js';
+import { isValidRunId } from './run-id.js';
 
 const WORLD_PLAN_SCHEMA_VERSION = 1;
 
@@ -68,7 +69,7 @@ export function encodeWorldPlanV1(runId: string, map: MapIr): Buffer {
 }
 
 function validateRunId(runId: string): void {
-  if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(runId)) {
+  if (!isValidRunId(runId)) {
     throw new WorldPlanError('invalid_run_id');
   }
 }

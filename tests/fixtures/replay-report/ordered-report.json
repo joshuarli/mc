@@ -1,1 +1,1 @@
-{"schema":1,"run_id":"fixture-run","sequence_range":{"first":"1","last":"2"},"segment_count":2,"record_count":2,"records":[{"a":1},{"b":2}],"outcome":null,"outcome_status":"unavailable_without_authoritative_event_contract"}
+{"schema":1,"run_id":"fixture-run","sequence_range":{"first":1,"last":2},"segment_count":2,"record_count":2,"records":[{"a":1},{"b":2}],"outcome":null,"outcome_status":"unavailable_without_authoritative_event_contract"}

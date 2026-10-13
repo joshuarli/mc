@@ -8,7 +8,7 @@ import { inspectJson, reconstruct, reportJson } from '../src/evidence.js';
 import { parseSegment, readSegment, TraceError } from '../src/trace.js';
 
 const repositoryRoot = process.cwd();
-const replayFixtures = join(repositoryRoot, 'tests/fixtures/replay-report');
+const replayFixtures = join(repositoryRoot, 'tests/fixtures/replay-report-v2');
 
 test('reconstructs generic segments for inspection and requires typed events for result reporting', async () => {
   const second = await readSegment(join(replayFixtures, 'segment-0002.json'), 1);
@@ -45,11 +45,20 @@ test('rejects duplicate object names at every depth before checksum validation',
   });
 });
 
+test('rejects historical Rust trace-v1 without a compatibility fallback', async () => {
+  const historical = await readFile(join(repositoryRoot, 'tests/fixtures/replay-report/segment-0001.json'), 'utf8');
+  assert.throws(() => parseSegment(historical), (error: unknown) => {
+    assert.ok(error instanceof TraceError);
+    assert.equal(error.source.kind, 'unsupported_schema');
+    return true;
+  });
+});
+
 test('hashes nested records with the TypeScript canonical key ordering', () => {
   const records = '[{"z":0,"a":{"y":2,"x":1}}]';
   const canonicalRecords = '[{"a":{"x":1,"y":2},"z":0}]';
   const digest = createHash('sha256').update(canonicalRecords, 'utf8').digest('hex');
-  const input = `{"schema":1,"run_id":"ordered","first_sequence":"7","last_sequence":"7","records":${records},"sha256":"${digest}","trailer":{"complete":true}}`;
+  const input = `{"schema":2,"run_id":"ordered","first_sequence":"7","last_sequence":"7","records":${records},"sha256":"${digest}","trailer":{"complete":true}}`;
 
   const segment = parseSegment(input);
 
@@ -60,7 +69,7 @@ test('hashes nested records with the TypeScript canonical key ordering', () => {
 test('preserves full u64 sequence values as decimal strings', () => {
   const maximum = '18446744073709551615';
   const digest = createHash('sha256').update('[{"a":1}]', 'utf8').digest('hex');
-  const input = `{"schema":1,"run_id":"max-sequence","first_sequence":"${maximum}","last_sequence":"${maximum}","records":[{"a":1}],"sha256":"${digest}","trailer":{"complete":true}}`;
+  const input = `{"schema":2,"run_id":"max-sequence","first_sequence":"${maximum}","last_sequence":"${maximum}","records":[{"a":1}],"sha256":"${digest}","trailer":{"complete":true}}`;
 
   const segment = parseSegment(input);
 
@@ -70,14 +79,14 @@ test('preserves full u64 sequence values as decimal strings', () => {
 
 test('rejects malformed sequence strings, unsafe record integers, and excessive nesting', () => {
   const digest = createHash('sha256').update('[{"a":1}]', 'utf8').digest('hex');
-  const base = `"schema":1,"run_id":"bad","first_sequence":"1","last_sequence":"1","records":[{"a":1}],"sha256":"${digest}","trailer":{"complete":true}`;
+  const base = `"schema":2,"run_id":"bad","first_sequence":"1","last_sequence":"1","records":[{"a":1}],"sha256":"${digest}","trailer":{"complete":true}`;
   for (const invalidSequence of ['"01"', '"-1"', '"18446744073709551616"']) {
     assert.throws(() => parseSegment(`{${base.replace('"first_sequence":"1"', `"first_sequence":${invalidSequence}`)}}`));
   }
   assert.throws(() => parseSegment(`{${base.replace('{"a":1}', '{"a":9007199254740992}')}}`));
 
   const deepRecords = `[ {"nested":${'['.repeat(30)}0${']'.repeat(30)}} ]`;
-  const deep = `{"schema":1,"run_id":"deep","first_sequence":"1","last_sequence":"1","records":${deepRecords},"sha256":"${digest}","trailer":{"complete":true}}`;
+  const deep = `{"schema":2,"run_id":"deep","first_sequence":"1","last_sequence":"1","records":${deepRecords},"sha256":"${digest}","trailer":{"complete":true}}`;
   assert.throws(() => parseSegment(deep), (error: unknown) => {
     assert.ok(error instanceof TraceError);
     assert.equal(error.source.kind, 'nesting_limit_exceeded');

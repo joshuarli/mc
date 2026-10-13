@@ -8,7 +8,7 @@ import { encodeControlEnvelope } from '../src/control/index.js';
 import type { ControlMessage } from '../src/control/types.js';
 
 const repositoryRoot = process.cwd();
-const replayFixtures = join(repositoryRoot, 'tests/fixtures/replay-report');
+const replayFixtures = join(repositoryRoot, 'tests/fixtures/replay-report-v2');
 const temporaryRoot = resolve(repositoryRoot, '.work/tmp');
 
 function output(result: Awaited<ReturnType<typeof runCli>>): Record<string, unknown> {
@@ -47,6 +47,14 @@ test('prepare rejects scenario paths outside the repository root', async () => {
   if (result.kind !== 'failure') return;
   assert.equal(result.exitCode, 2);
   assert.equal(result.stderr, '{"error":{"category":"invalid_input","resource":"scenario path","source":{"kind":"outside_repository"}}}');
+});
+
+test('prepare rejects a non-ASCII run id before reading scenario sources', async () => {
+  const result = await runCli(['prepare', '--scenario', 'scenarios/hunger-six.toml', '--run-id', 'é-run']);
+  assert.equal(result.kind, 'failure');
+  if (result.kind !== 'failure') return;
+  assert.equal(result.exitCode, 2);
+  assert.equal(JSON.parse(result.stderr).error.source.kind, 'invalid_run_id');
 });
 
 test('inspect and compare work with generic traces while report requires typed lifecycle events', async () => {
@@ -169,7 +177,7 @@ test('report derives the terminal result from prepared competitors and typed eve
     ];
     const records = messages.map(([direction, message]) => event(direction, message));
     const bytes = canonicalJson({
-      schema: 1,
+      schema: 2,
       run_id: runId,
       first_sequence: '1',
       last_sequence: String(records.length),
@@ -201,7 +209,7 @@ test('report derives the terminal result from prepared competitors and typed eve
         && !(message.type === 'ack' && message.correlation === 3n))
       .map(([direction, message]) => event(direction, message));
     await writeFile(segmentPath, canonicalJson({
-      schema: 1,
+      schema: 2,
       run_id: runId,
       first_sequence: '1',
       last_sequence: String(withoutStart.length),

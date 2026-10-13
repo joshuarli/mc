@@ -1,1 +1,1 @@
-{"schema":1,"run_id":"fixture-run","first_sequence":"2","last_sequence":"2","records":[{"b":2}],"sha256":"e3c77c410917eec55f1d8faa000d1af356ca3ca284a8aa21deffe73580d700ae","trailer":{"complete":true}}
+{"schema":1,"run_id":"fixture-run","first_sequence":2,"last_sequence":2,"records":[{"b":2}],"sha256":"e3c77c410917eec55f1d8faa000d1af356ca3ca284a8aa21deffe73580d700ae","trailer":{"complete":true}}

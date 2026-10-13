@@ -1,12 +1,12 @@
 # Determinism and evidence
 
-## Trace-v1 reading
+## TypeScript trace-v2 reading
 
-The TypeScript runner accepts only trace schema version 1. A segment has exactly the required envelope fields and its trailer is exactly `{ "complete": true }`. Generic inspection preserves record objects as written; `report` and `replay-policy` interpret only their documented typed records. Duplicate JSON object names are rejected recursively before a JavaScript object can overwrite one.
+The TypeScript runner accepts only trace schema version 2. A segment has exactly the required envelope fields and its trailer is exactly `{ "complete": true }`. Generic inspection preserves record objects as written; `report` and `replay-policy` interpret only their documented typed records. Duplicate JSON object names are rejected recursively before a JavaScript object can overwrite one.
 
 A segment's `records` array is the sequential stream. JSON nesting is limited to 32 containers per segment. `first_sequence` and `last_sequence` are canonical unsigned decimal strings from 1 through 18446744073709551615. The number of records must equal `last_sequence - first_sequence + 1`, calculated without integer overflow; array index therefore determines each record's sequence. Across supplied segments, the runner orders by `first_sequence`, requires one `run_id`, and rejects gaps, overlaps, and sequence overflow. This reconstructs a complete ordered span from the supplied files; it cannot establish that the span covers the full run.
 
-The `sha256` field is the lowercase SHA-256 digest of the compact serialization of the `records` array only. The byte sequence is UTF-8 with no whitespace: object keys use JavaScript's default string sort order, arrays keep their order, and numbers use `JSON.stringify` serialization. Non-finite values and integer-valued numbers outside JavaScript's safe integer range are rejected. The digest excludes the envelope, `run_id`, trailer, and checksum text. Producers must use the same canonicalization. This TypeScript trace-v1 contract is intentionally incompatible with historical Rust trace-v1 files, whose sequence fields were JSON numbers and whose checksum used serde_json ordering/number formatting; there is no compatibility fallback. There are no revised persisted consumers.
+The `sha256` field is the lowercase SHA-256 digest of the compact serialization of the `records` array only. The byte sequence is UTF-8 with no whitespace: object keys use JavaScript's default string sort order, arrays keep their order, and numbers use `JSON.stringify` serialization. Non-finite values and integer-valued numbers outside JavaScript's safe integer range are rejected. The digest excludes the envelope, `run_id`, trailer, and checksum text. Producers must use the same canonicalization. Historical Rust trace-v1 files use numeric sequence fields and serde_json canonicalization; the TypeScript reader rejects them instead of interpreting them as schema 2.
 
 ## Java world-plan transfer
 
