@@ -38,7 +38,9 @@ export function assertMatchOutcomeEvents(
   const terminalPhase = expected.kind === "abort" ? "aborted" : "finished";
   const terminalClock = events.findLast((event) => event.type === "public_clock"
     && event.payload.phase === terminalPhase);
-  assert.ok(terminalClock, `the authenticated event stream must end with phase ${terminalPhase}`);
+  if (terminalClock?.type !== "public_clock") {
+    throw new Error(`the authenticated event stream must end with phase ${terminalPhase}`);
+  }
   assert.deepStrictEqual(terminalClock.payload.tick, expected.at);
 
   const eliminations = events.flatMap((event) => event.type === "elimination"

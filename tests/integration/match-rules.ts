@@ -3,6 +3,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { resolve } from "node:path";
 import { test } from "node:test";
 
+import type { ClockPayload } from "../../packages/arena-runner/src/control/index.js";
 import { MAX_OWNED_READ_BYTES, readOwnedFile } from "../../packages/arena-runner/src/owned-files/index.js";
 import {
   assertDeathWinner,
@@ -133,7 +134,7 @@ async function assertPreReleaseLocked(
 
 async function waitForPhase(
   active: AcceptanceRunContext,
-  phase: "waiting" | "countdown",
+  phase: ClockPayload["phase"],
   signal: AbortSignal,
 ): Promise<void> {
   const deadline = Date.now() + PHASE_TIMEOUT_MS;
@@ -145,7 +146,7 @@ async function waitForPhase(
   throw new Error(`match did not reach ${phase} within ${PHASE_TIMEOUT_MS} ms`);
 }
 
-function latestPhase(active: AcceptanceRunContext): string | undefined {
+function latestPhase(active: AcceptanceRunContext): ClockPayload["phase"] | undefined {
   return active.events().findLast((event) => event.type === "public_clock")?.payload.phase;
 }
 

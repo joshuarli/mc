@@ -247,7 +247,7 @@ test("match-rules-duplicate-identity", { timeout: 240_000 }, async (t) => {
       });
       let replacementEnded = false;
       const replacementErrors: Error[] = [];
-      replacement.on("error", (error) => replacementErrors.push(error));
+      replacement.on("error", (error) => { replacementErrors.push(error); });
       replacement.once("end", () => { replacementEnded = true; });
       try {
         await Promise.all([originalEnded, waitForBotSpawn(replacement, signal)]);
