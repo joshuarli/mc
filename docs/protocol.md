@@ -41,6 +41,12 @@ The runtime also requires the announced plugin name and version to match the
 shipped `server/arena-plugin/src/main/resources/plugin.yml` descriptor before
 it prepares the match.
 
+The plugin's inbound command queue holds at most 128 `prepare`, `start`, and
+`abort` messages until the server thread drains them. A 129th undrained command
+fails the session and closes the connection. The outbound message queue is
+separately bounded at 256 messages; it also fails the session on overflow
+rather than dropping messages.
+
 ## Message contract
 
 `schemas/control.schema.json` is the wire shape authority. Java DTOs mirror the

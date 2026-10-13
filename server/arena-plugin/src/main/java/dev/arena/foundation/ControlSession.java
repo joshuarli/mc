@@ -17,7 +17,8 @@ import java.util.concurrent.atomic.AtomicReference;
 
 /** Owns the one-shot loopback connection; socket I/O never runs on Paper's server thread. */
 final class ControlSession implements AutoCloseable {
-    private static final int QUEUE_CAPACITY = 256;
+    private static final int INBOUND_COMMAND_CAPACITY = 128;
+    private static final int OUTBOUND_MESSAGE_CAPACITY = 256;
     private static final int CONNECT_TIMEOUT_MILLIS = 10_000;
 
     private record Outbound(ControlProtocol.Type type, ControlProtocol.Payload payload,
@@ -26,8 +27,9 @@ final class ControlSession implements AutoCloseable {
     private final String runId;
     private final int port;
     private final String token;
-    private final ArrayBlockingQueue<ControlProtocol.Envelope> inbound = new ArrayBlockingQueue<>(QUEUE_CAPACITY);
-    private final ArrayBlockingQueue<Outbound> outbound = new ArrayBlockingQueue<>(QUEUE_CAPACITY);
+    private final ArrayBlockingQueue<ControlProtocol.Envelope> inbound =
+            new ArrayBlockingQueue<>(INBOUND_COMMAND_CAPACITY);
+    private final ArrayBlockingQueue<Outbound> outbound = new ArrayBlockingQueue<>(OUTBOUND_MESSAGE_CAPACITY);
     private final CountDownLatch helloAcknowledged = new CountDownLatch(1);
     private final CountDownLatch readinessSent = new CountDownLatch(1);
     private final AtomicReference<IOException> failure = new AtomicReference<>();
@@ -238,7 +240,7 @@ final class ControlSession implements AutoCloseable {
                     throw new IOException("runner sent a plugin-only control event");
                 }
                 if (!inbound.offer(message)) {
-                    throw new IOException("control inbound queue reached its fixed capacity");
+                    throw new IOException("control inbound command queue reached its fixed capacity");
                 }
             }
         } catch (IOException | RuntimeException protocolFailure) {
