@@ -54,7 +54,7 @@ export function failureCleanup(error: unknown, primaryFailure: unknown): Operati
 export function withCleanupFailure(primaryFailure: unknown, cleanupFailure: unknown): RunnerError {
   const primary = mapRuntimeFailure(primaryFailure);
   const cleanupOsCode = systemErrorCode(cleanupFailure);
-  return new RunnerError('runtime_failure', primary.resource, {
+  return new RunnerError(primary.category, primary.resource, {
     ...primary.source,
     cleanup_kind: errorKind(cleanupFailure),
     ...(cleanupOsCode === undefined ? {} : { cleanup_os_code: cleanupOsCode }),

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { failureCleanup, mapRuntimeFailure } from '../src/runtime/failures.js';
+import { RunnerError } from '../src/errors.js';
+import { failureCleanup, mapRuntimeFailure, withCleanupFailure } from '../src/runtime/failures.js';
 
 test('joining the evaluator primary error records successful cleanup', () => {
   const evaluatorError = new Error('expected a ready client state');
@@ -45,5 +46,20 @@ test('cleanup cause walks terminate when error causes form a cycle', () => {
   assert.deepEqual(failureCleanup(first, primary), {
     status: 'failed',
     source: { kind: 'Error', reason: 'first' },
+  });
+});
+
+test('an independent cleanup failure preserves a cancelled primary category', () => {
+  const primary = new RunnerError('cancelled', 'arena run', { kind: 'cancelled' });
+  const cleanup = new RunnerError('runtime_failure', 'control session', { kind: 'socket_close_failed' });
+
+  const failure = withCleanupFailure(primary, cleanup);
+
+  assert.equal(failure.category, 'cancelled');
+  assert.equal(failure.exitCode(), 130);
+  assert.equal(failure.cause, primary);
+  assert.deepEqual(failure.source, {
+    kind: 'cancelled',
+    cleanup_kind: 'socket_close_failed',
   });
 });
