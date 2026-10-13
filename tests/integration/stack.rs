@@ -130,6 +130,7 @@ impl PaperProcess {
         let mut child = Command::new(java)
             .arg("-Xms512m")
             .arg("-Xmx2g")
+            .arg("-Darena.test-fixture=true")
             .arg("-Dterminal.jline=false")
             .arg("-Dterminal.ansi=false")
             .arg("-jar")
