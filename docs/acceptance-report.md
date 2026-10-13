@@ -1,6 +1,6 @@
 # Acceptance report
 
-**Status: campaign execution continues; M1 remains blocked by the exact ramp arrival failure. The owner authorized a one-time archival exception for two never-started preparations, restoring two run slots. Recorded-decision checkpoints, policy preemption, and search scheduling have focused proofs; the baseline policy also passed a real border-preemption check. The initiating ramp rejection remains unknown. Six-seed gameplay has not run.** Historical map, duel, authority, fairness, replay, and lifecycle passes below apply to their recorded revisions.
+**Status: campaign execution continues; M1 remains blocked by the exact ramp arrival failure. Server diagnostics and the pinned collision classes identify a client/server player-width mismatch; its correction awaits verification. The owner authorized a one-time archival exception for two never-started preparations, restoring two run slots. Recorded-decision checkpoints, policy preemption, and search scheduling have focused proofs; the baseline policy also passed a real border-preemption check. Six-seed gameplay has not run.** Historical map, duel, authority, fairness, replay, and lifecycle passes below apply to their recorded revisions.
 
 ## Environment and selected stack
 
@@ -11,7 +11,7 @@ The continuation starts at `0672d9afe92d7640259165b7ab156bc0afe93fa5`, after the
 | Review item | Current classification | Required proof |
 | --- | --- | --- |
 | Checkpoint progress depends on skill completion | Reproduced and fixed | Actual-loop tests cross 199/200/201 and 399/400/401 out of order; native persisted watermarks retain pending effects and withhold terminal publication until join |
-| Ramp navigation timeout | Reproduced with new live evidence; initiating cause unknown | Successful one-step path and active jump controls coexist with repeated server corrections; neither arrival receipt exists |
+| Ramp navigation timeout | Reproduced; collision-dimension mismatch identified | The first server rejection and actual pinned collision classes expose strict full-cube overlap from the double client half-width; exact arrival after correction remains unverified |
 | Policy stops observing during a skill | Reproduced and fixed | Fourteen actual-loop tests and the passing live `policy-border-preemption` selector separate danger acceptance, cancellation settlement, and replacement start |
 | Search permit covers path following | Reproduced and fixed | A fourth search progresses while three valid routes continue; pinned AStar initial calls, partial continuations, replans, FIFO servicing, and cancellation are accounted |
 | Peer-ended connection retains a timer | Already fixed at `86f7e2f`; current regression passed | Real TCP half-close child test releases the process |
