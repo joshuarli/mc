@@ -1,6 +1,7 @@
 import { createBot, type Bot } from 'mineflayer';
 import type { PartiallyComputedPath } from 'mineflayer-pathfinder';
 import { createMineflayerArenaClient, type MineflayerArenaClient } from '@arena/bots';
+import { performance } from 'node:perf_hooks';
 import { RunnerError } from '../errors.js';
 import type { ScenarioIr } from '@arena/spec';
 import type {
@@ -146,20 +147,73 @@ interface RuntimeBotConnection {
 
 class OwnedBotConnection implements RuntimeBotConnection {
   readonly bot: Bot;
-  readonly client: MineflayerArenaClient;
   readonly ended: Promise<void>;
   readonly receipts: ReceiptRecorder;
+  readonly #injectionAllowed: Promise<void>;
+  readonly #spawned: Promise<void>;
+  readonly #resolveEnded: () => void;
+  readonly #resolveInjectionAllowed: () => void;
+  readonly #rejectInjectionAllowed: (error: RunnerError) => void;
+  readonly #resolveSpawned: () => void;
+  readonly #rejectSpawned: (error: RunnerError) => void;
+  #client: MineflayerArenaClient | undefined;
   #failure: RunnerError | undefined;
   #closePromise: Promise<void> | undefined;
+  #injectionWasAllowed = false;
+  #spawnedAlready = false;
+  #closing = false;
 
-  constructor(bot: Bot, client: MineflayerArenaClient, receipts: ReceiptRecorder) {
+  constructor(bot: Bot, receipts: ReceiptRecorder) {
     this.bot = bot;
-    this.client = client;
     this.receipts = receipts;
-    this.ended = new Promise<void>((resolve) => bot.once('end', () => resolve()));
-    bot.on('error', (error) => {
-      this.#failure ??= new RunnerError('runtime_failure', 'Mineflayer client', { kind: 'client_error' });
+    let resolveEnded!: () => void;
+    let resolveInjectionAllowed!: () => void;
+    let rejectInjectionAllowed!: (error: RunnerError) => void;
+    let resolveSpawned!: () => void;
+    let rejectSpawned!: (error: RunnerError) => void;
+    this.ended = new Promise<void>((resolve) => { resolveEnded = resolve; });
+    this.#injectionAllowed = new Promise<void>((resolve, reject) => {
+      resolveInjectionAllowed = resolve;
+      rejectInjectionAllowed = reject;
     });
+    this.#spawned = new Promise<void>((resolve, reject) => {
+      resolveSpawned = resolve;
+      rejectSpawned = reject;
+    });
+    this.#resolveEnded = resolveEnded;
+    this.#resolveInjectionAllowed = resolveInjectionAllowed;
+    this.#rejectInjectionAllowed = rejectInjectionAllowed;
+    this.#resolveSpawned = resolveSpawned;
+    this.#rejectSpawned = rejectSpawned;
+    void this.#injectionAllowed.catch(() => {});
+    void this.#spawned.catch(() => {});
+    bot.once('inject_allowed', this.#onInjectionAllowed);
+    bot.once('spawn', this.#onSpawn);
+    bot.on('error', this.#onError);
+    bot.on('end', this.#onEnd);
+  }
+
+  get client(): MineflayerArenaClient {
+    if (this.#client === undefined) {
+      throw new RunnerError('runtime_failure', 'Mineflayer client', { kind: 'client_adapter_not_ready' });
+    }
+    return this.#client;
+  }
+
+  setClient(client: MineflayerArenaClient): void {
+    if (this.#client !== undefined) {
+      throw new RunnerError('runtime_failure', 'Mineflayer client', { kind: 'client_adapter_already_ready' });
+    }
+    this.#client = client;
+  }
+
+  /** Mineflayer's plugin loader runs before this listener so adapter setup sees injected plugins. */
+  waitForInjectionAllowed(signal: AbortSignal, deadline: number): Promise<void> {
+    return waitForStartup(this.#injectionAllowed, signal, deadline, 'client_injection_timeout');
+  }
+
+  waitForSpawn(signal: AbortSignal, deadline: number): Promise<void> {
+    return waitForStartup(this.#spawned, signal, deadline, 'client_spawn_timeout');
   }
 
   get failure(): RunnerError | undefined {
@@ -171,13 +225,58 @@ class OwnedBotConnection implements RuntimeBotConnection {
     return this.#closePromise;
   }
 
+  #onInjectionAllowed = (): void => {
+    this.#injectionWasAllowed = true;
+    this.#resolveInjectionAllowed();
+  };
+
+  #onSpawn = (): void => {
+    this.#spawnedAlready = true;
+    this.#resolveSpawned();
+  };
+
+  #onError = (error: Error): void => {
+    if (this.#closing) return;
+    this.#failure ??= new RunnerError('runtime_failure', 'Mineflayer client', {
+      kind: 'client_error',
+      reason: errorReason(error),
+    });
+    this.#rejectPendingStartup(this.#failure);
+  };
+
+  #onEnd = (): void => {
+    this.#resolveEnded();
+    if (!this.#injectionWasAllowed) {
+      this.#rejectInjectionAllowed(new RunnerError('runtime_failure', 'Mineflayer client', {
+        kind: 'client_ended_before_injection',
+      }));
+    }
+    if (!this.#spawnedAlready) {
+      this.#rejectSpawned(new RunnerError('runtime_failure', 'Mineflayer client', {
+        kind: this.#injectionWasAllowed ? 'client_ended_before_spawn' : 'client_ended_before_injection',
+      }));
+    }
+  };
+
+  #rejectPendingStartup(error: RunnerError): void {
+    if (!this.#injectionWasAllowed) this.#rejectInjectionAllowed(error);
+    if (!this.#spawnedAlready) this.#rejectSpawned(error);
+  }
+
   async #close(): Promise<void> {
-    const adapterClose = this.client.close();
-    this.bot.end('arena runtime cleanup');
+    this.#closing = true;
+    const existingFailure = this.#failure;
+    const adapterClose = this.#client?.close();
+    const socket = this.bot._client.socket;
+    // Mineflayer starts a close timer in end(); after the socket closes, no later close event clears it.
+    if (!socket.destroyed) {
+      this.bot.end('arena runtime cleanup');
+      socket.destroy();
+    }
     this.receipts.close();
-    await withTimeout(adapterClose, 10_000, 'client skill shutdown');
+    if (adapterClose !== undefined) await withTimeout(adapterClose, 10_000, 'client skill shutdown');
     await withTimeout(this.ended, 5_000, 'client disconnect');
-    if (this.#failure !== undefined) throw this.#failure;
+    if (existingFailure !== undefined) throw existingFailure;
   }
 }
 
@@ -219,60 +318,80 @@ async function connectRuntimeBot(
       auth: 'offline',
       version: options.scenario.server.minecraft,
       viewDistance: options.scenario.server.viewDistanceChunks,
+      logErrors: false,
     });
-  } catch {
-    throw new RunnerError('runtime_failure', 'Mineflayer client', { kind: 'client_start_failed' });
+  } catch (error) {
+    throw new RunnerError('runtime_failure', 'Mineflayer client', {
+      kind: 'client_start_failed',
+      reason: errorReason(error),
+    });
   }
 
-  let client: MineflayerArenaClient;
-  try {
-    client = createMineflayerArenaClient(bot);
-  } catch {
-    bot.end('arena runtime client initialization failed');
-    throw new RunnerError('runtime_failure', 'Mineflayer client', { kind: 'client_adapter_failed' });
-  }
   const receipts = new ReceiptRecorder(bot);
-  const connection = new OwnedBotConnection(bot, client, receipts);
+  const connection = new OwnedBotConnection(bot, receipts);
+  const deadline = performance.now() + CLIENT_SPAWN_TIMEOUT_MS;
   try {
-    await waitForSpawn(bot, connection.ended, options.signal);
+    await connection.waitForInjectionAllowed(options.signal, deadline);
+    if (connection.failure !== undefined) throw connection.failure;
+    let client: MineflayerArenaClient;
+    try {
+      client = createMineflayerArenaClient(bot);
+    } catch (error) {
+      throw new RunnerError('runtime_failure', 'Mineflayer client', {
+        kind: 'client_adapter_failed',
+        reason: errorReason(error),
+      });
+    }
+    connection.setClient(client);
+    await connection.waitForSpawn(options.signal, deadline);
     if (connection.failure !== undefined) throw connection.failure;
     return connection;
   } catch (error) {
-    await connection.close().catch(() => undefined);
-    if (options.signal.aborted) throw cancelledClient();
-    if (error instanceof RunnerError) throw error;
-    throw new RunnerError('runtime_failure', 'Mineflayer client', { kind: 'client_spawn_failed' });
+    const primary = options.signal.aborted
+      ? cancelledClient()
+      : error instanceof RunnerError ? error : new RunnerError('runtime_failure', 'Mineflayer client', {
+        kind: 'client_spawn_failed',
+        reason: errorReason(error),
+      });
+    let cleanupFailure: unknown;
+    try {
+      await connection.close();
+    } catch (cleanupError) {
+      if (cleanupError !== error && cleanupError !== primary) cleanupFailure = cleanupError;
+    }
+    if (cleanupFailure !== undefined) throw clientCleanupFailure(primary, cleanupFailure);
+    throw primary;
   }
 }
 
-function waitForSpawn(bot: Bot, ended: Promise<void>, signal: AbortSignal): Promise<void> {
+function waitForStartup(
+  event: Promise<void>,
+  signal: AbortSignal,
+  deadline: number,
+  timeoutKind: string,
+): Promise<void> {
   if (signal.aborted) return Promise.reject(cancelledClient());
   return new Promise<void>((resolve, reject) => {
     let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const cleanup = (): void => {
-      clearTimeout(timer);
-      bot.removeListener('spawn', onSpawn);
-      bot.removeListener('error', onError);
+      if (timer !== undefined) clearTimeout(timer);
       signal.removeEventListener('abort', onAbort);
     };
-    const finish = (error?: RunnerError): void => {
+    const finish = (error?: unknown): void => {
       if (settled) return;
       settled = true;
       cleanup();
       if (error === undefined) resolve();
       else reject(error);
     };
-    const onSpawn = (): void => finish();
-    const onError = (): void => finish(new RunnerError('runtime_failure', 'Mineflayer client', { kind: 'client_error' }));
     const onAbort = (): void => finish(cancelledClient());
-    const timer = setTimeout(
-      () => finish(new RunnerError('runtime_failure', 'Mineflayer client', { kind: 'client_spawn_timeout' })),
-      CLIENT_SPAWN_TIMEOUT_MS,
+    timer = setTimeout(
+      () => finish(new RunnerError('runtime_failure', 'Mineflayer client', { kind: timeoutKind })),
+      Math.max(0, deadline - performance.now()),
     );
-    bot.once('spawn', onSpawn);
-    bot.once('error', onError);
     signal.addEventListener('abort', onAbort, { once: true });
-    void ended.then(() => finish(new RunnerError('runtime_failure', 'Mineflayer client', { kind: 'client_ended_before_spawn' })));
+    void event.then(() => finish(), (error: unknown) => finish(error));
     if (signal.aborted) onAbort();
   });
 }
@@ -359,5 +478,18 @@ function withTimeout(promise: Promise<unknown>, timeoutMs: number, kind: string)
 }
 
 function cancelledClient(): RunnerError {
-  return new RunnerError('runtime_failure', 'Mineflayer client', { kind: 'cancelled' });
+  return new RunnerError('cancelled', 'Mineflayer client', { kind: 'cancelled' });
+}
+
+function errorReason(error: unknown): string {
+  if (error instanceof Error) return error.name || 'Error';
+  return typeof error === 'string' ? error : typeof error;
+}
+
+function clientCleanupFailure(primary: RunnerError, cleanup: unknown): RunnerError {
+  const cleanupKind = cleanup instanceof RunnerError ? cleanup.source.kind : errorReason(cleanup);
+  return new RunnerError('runtime_failure', primary.resource, {
+    ...primary.source,
+    cleanup_kind: cleanupKind,
+  });
 }

@@ -109,6 +109,8 @@ export function paperArguments(
     '-Xms512m',
     '-Xmx2g',
     `-Djava.io.tmpdir=${options.javaTmpDir}`,
+    '-Dterminal.jline=false',
+    '-Dterminal.ansi=false',
     `-Darena.control-port=${controlPort}`,
     `-Darena.run-id=${runId}`,
     `-Darena.generation-plan=${generationPlanAbsolutePath(options.ownedRoot, options.preparedRun)}`,

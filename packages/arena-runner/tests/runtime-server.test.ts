@@ -19,4 +19,6 @@ test('Paper starts with the required bounded heap', () => {
 
   const args = paperArguments(inputs, 43_217, inputs.preparedRun.runId);
   assert.deepEqual(args.slice(0, 2), ['-Xms512m', '-Xmx2g']);
+  assert.ok(args.includes('-Dterminal.jline=false'));
+  assert.ok(args.includes('-Dterminal.ansi=false'));
 });
