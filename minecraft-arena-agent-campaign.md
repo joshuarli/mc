@@ -315,6 +315,8 @@ Append one line per execution judgment that a reader would otherwise miss: date,
 
 Decisions dated 2026-10-12 are historical and are superseded where they select Rust, Azalea, or Paper 26.2 for bots. Their evidence remains valid only for the exact earlier stack.
 
+- 2026-10-13 — M1 continuation at `0672d9a`: prioritize the owner's six-player steering; reproduce checkpoint scheduling and policy responsiveness deterministically, reopen ramp navigation only with bounded live diagnostics, and account for path searches separately from following. Preserve the locked stack, gameplay floors, local failure evidence, and serialized Paper ownership. GitHub Actions work is omitted by the owner's later instruction. Current review classifications are recorded in the acceptance report.
+
 - 2026-10-12 — P1: start independent S1, B1, and R1 offline halves after the F0 workspace/schema seam merged, because these paths can progress without the still-pending live stack proof; defer their proof-dependent integrations.
 - 2026-10-12 — P1: admit parse-only `toml_edit`, `serde`, `serde_json`, and `sha2` for source-aware TOML validation, strict JSON evidence, and SHA-256 identity/checksums; all versions were already locked, so the graph adds no package versions; record release-size and startup budgets for P3 because this offline slice forbids release builds.
 - 2026-10-12 — P1: use the already locked Gson 2.14.0 for strict streaming reads of resolved world plans; declare it directly for compilation and Java test runtime, with no package version added to the graph.

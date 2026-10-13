@@ -4,6 +4,22 @@
 
 ## Environment and selected stack
 
+### Six-player steering reconciliation
+
+The continuation starts at `0672d9afe92d7640259165b7ab156bc0afe93fa5`, after the source review at `40edfbc3aac1125144a56440b8f45b7783b5fed5`. Historical passes below apply to their recorded revisions; the current merged gameplay milestone still requires verification.
+
+| Review item | Current classification | Required proof |
+| --- | --- | --- |
+| Checkpoint progress depends on skill completion | Still present in source: the shared observation count is sampled after asynchronous settlement | Deterministic actual-loop regression across 200 and 400 with out-of-order completion, and ordered recorded-decision checkpoints with pending effects kept distinct |
+| Ramp navigation timeout | Unresolved live failure; source cause unknown | Bounded client collision/control diagnostics, exact geometry reproducer, then the complete legal-player chain |
+| Policy stops observing during a skill | Still present in source: occupied seats are skipped until the task settles | Next-strategy-tick danger decision, stable unchanged intent, bounded exclusive ownership handoff |
+| Search permit covers path following | Still present in source: a permit remains held until navigation finishes | Pinned dependency search/replan accounting and independent progress while other bots follow viable routes |
+| Peer-ended connection retains a timer | Already fixed at `86f7e2f` | Existing real-TCP child regression failed before and passed after the fix; rerun focused coverage on the merged continuation |
+| Crash/SIGINT verification loop | Partly fixed; live SIGINT remains unaccepted | The third SIGINT attempt failed on an actual `vm_stat` monitoring timeout before interruption; retain that failure and distinguish a real checkpoint from a finalized failure trace |
+| Six-seed normal-policy gameplay | Unverified | Registered Hunger acceptance with unchanged gameplay floors, independent outcomes, and observed resource envelope |
+
+GitHub Actions work is excluded by the owner's subsequent instruction. Local behavioral verification remains required.
+
 - Campaign host recorded at preflight: macOS arm64, 10 logical CPUs, 32 GiB RAM. This acceptance slice did not collect fresh host or resource measurements.
 - Current foundation source candidate: Paper 26.1.2 build 74, protocol 775; Eclipse Temurin JDK 25.0.4.1+1; Node.js 24.21.0 and npm 11.19.0; Mineflayer 4.39.0 and `mineflayer-pathfinder` 2.4.5.
 - The Mineflayer release lists 26.1 support and Minecraft data maps 26.1.2 to protocol 775. These upstream declarations do not prove the locked Paper build works with Arena's plugin or Mineflayer clients.
