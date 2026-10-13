@@ -59,7 +59,7 @@ test('owned server detects a Paper bind failure across output chunks as an owner
   const stderr = captureOutput();
   const server = await startOwnedServerProcess({
     executable: process.execPath,
-    args: ['-e', "process.stdout.write('[Server thread/ERROR]: Failed to bind'); process.stdin.once('data', () => process.stdout.write(' to server\\n'));"],
+    args: ['-e', "process.stdout.write('[Server thread/WARN]: **** FAILED TO BIND'); process.stdin.once('data', () => { process.stdout.write(' TO PORT!\\n'); process.exit(0); });"],
     cwd: process.cwd(),
     env: { ...process.env },
     output: { stdout: stdout.stream, stderr: stderr.stream },
@@ -69,12 +69,13 @@ test('owned server detects a Paper bind failure across output chunks as an owner
   assert.ok(fatalOutputError);
   await stdout.firstWrite;
   const shutdown = server.shutdown();
-  const failure = await fatalOutputError;
+  const failure = await Promise.race([fatalOutputError, server.exited.then(() => undefined)]);
+  assert.ok(failure, 'Paper bind failure must be classified before the server exits');
   assert.equal(failure.category, 'owner_conflict');
   assert.equal(failure.exitCode(), 4);
   assert.equal(failure.source.kind, 'paper_port_bind_failed');
   await assert.rejects(shutdown, (error: unknown) => error === failure);
-  assert.equal(stdout.text, '[Server thread/ERROR]: Failed to bind to server\n');
+  assert.equal(stdout.text, '[Server thread/WARN]: **** FAILED TO BIND TO PORT!\n');
 });
 
 function captureOutput(): {

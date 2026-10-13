@@ -5,7 +5,7 @@ import { RunnerError } from '../errors.js';
 const GRACEFUL_STOP_MS = 15_000;
 const TERMINATION_GRACE_MS = 1_000;
 const FORCE_REAP_MS = 4_000;
-const PAPER_BIND_ERROR_MARKER = 'failed to bind to server';
+const PAPER_BIND_ERROR_MARKER = 'failed to bind to port';
 const MAX_PARTIAL_OUTPUT_LINE_BYTES = 4_096;
 
 export interface ServerProcessExit {
