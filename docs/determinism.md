@@ -14,7 +14,7 @@ The TypeScript encoder writes world-plan schema version 1 in the field shape con
 
 ## Replay and reports
 
-`inspect` exposes generic ordered records. `replay-policy` rehydrates each `policy-replay-v1` input through `@arena/core`, runs the policy again, and checks both the recorded decision and post-decision RNG state. A separate `policy-effect-v1` record may correlate a returned skill outcome and the last actual path update to a decision sequence. Those effects are validated and counted; replay does not reproduce client or server actions.
+`inspect` exposes generic ordered records. `replay-policy` rehydrates each `policy-replay-v1` input through `@arena/core`, runs the policy again, and checks both the recorded decision and post-decision RNG state. A separate `policy-effect-v1` record may correlate a returned skill outcome and the last actual path update to a decision sequence. Pathfinder waypoints may contain fractional block coordinates; the writer and reader preserve finite fractional values, while integer-valued coordinates still follow the trace safe-integer rule above. Those effects are validated and counted; replay does not reproduce client or server actions.
 
 `report` starts from the runner's prepared roster, applies ordered elimination events, checks public states and terminal clocks, and rejects a terminal outcome that contradicts those records. It reports resolved death and disconnect causes from the authoritative elimination stream. It does not infer player actions from policy decisions or raw client events. `compare` performs exact record and range comparison while ignoring only the outer run ID; it does not establish semantic equivalence across runs.
 

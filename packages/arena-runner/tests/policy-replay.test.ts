@@ -88,17 +88,21 @@ test('replays exact core decisions and verifies full-u64 policy sequences and RN
   assert.equal(replayPolicyJson(evidence([policyRecord(1n, 0n)])).verified, true);
 });
 
-test('replay-policy CLI verifies mixed trace segments containing policy frames', async () => {
+test('replay-policy CLI preserves fractional Pathfinder positions in trace effects', async () => {
   await mkdir(temporaryRoot, { recursive: true });
   const scratch = await mkdtemp(join(temporaryRoot, 'policy-replay-'));
   try {
     const frame = policyRecord();
-    const records = [frame];
+    const effect = makePolicyEffectRecord(1n, { kind: 'succeeded' }, [{
+      status: 'success',
+      path: [{ x: 0.5, y: 64, z: 0.5 }],
+    }]);
+    const records = [frame, effect];
     const segment = canonicalJson({
       schema: 2,
       run_id: runId,
       first_sequence: '1',
-      last_sequence: '1',
+      last_sequence: '2',
       records,
       sha256: sha256Json(records),
       trailer: { complete: true },
@@ -115,9 +119,18 @@ test('replay-policy CLI verifies mixed trace segments containing policy frames',
       verified: true,
       decision_count: 1,
       policy_sequence_range: { first: '1', last: '1' },
-      effect_count: 0,
-      path_update_count: 0,
+      effect_count: 1,
+      path_update_count: 1,
     });
+
+    const inspection = await runCli(['inspect', path]);
+    assert.equal(inspection.kind, 'success');
+    if (inspection.kind !== 'success') return;
+    const inspectedRecords = JSON.parse(inspection.stdout).records as readonly TraceRecord[];
+    assert.deepEqual(inspectedRecords[1]?.path_updates, [{
+      status: 'success',
+      path: [{ x: 0.5, y: 64, z: 0.5 }],
+    }]);
   } finally {
     await rm(scratch, { recursive: true, force: true });
   }
@@ -223,10 +236,28 @@ test('checks policy seats against the prepared roster when the trace includes it
 
 test('rejects fabricated or malformed path results in effect evidence', () => {
   assert.throws(() => makePolicyEffectRecord(1n, { kind: 'succeeded' }, [
-    { status: 'success', path: [{ x: 0.5, y: 64, z: 0 }] },
+    { status: 'success', path: [{ x: Number.NaN, y: 64, z: 0 }] },
+  ]));
+  assert.throws(() => makePolicyEffectRecord(1n, { kind: 'succeeded' }, [
+    { status: 'success', path: [{ x: Number.POSITIVE_INFINITY, y: 64, z: 0 }] },
+  ]));
+  assert.throws(() => makePolicyEffectRecord(1n, { kind: 'succeeded' }, [
+    { status: 'success', path: [{ x: Number.MAX_SAFE_INTEGER + 1, y: 64, z: 0 }] },
   ]));
   assert.throws(() => makePolicyEffectRecord(1n, { kind: 'succeeded' }, [
     { status: 'unknown' as 'success', path: [] },
     { status: 'success', path: [] },
   ]));
+
+  const oversizedCoordinate = {
+    schema: 'policy-effect-v1',
+    decision_sequence: '1',
+    skill: { kind: 'succeeded' },
+    path_updates: [{ status: 'success', path: [{ x: Number.MAX_SAFE_INTEGER + 1, y: 64, z: 0 }] }],
+  };
+  assert.throws(() => replayPolicyJson(evidence([policyRecord(), oversizedCoordinate])), (error: unknown) => {
+    assert.ok(error instanceof TraceError);
+    assert.equal(error.source.kind, 'invalid_policy_path_position');
+    return true;
+  });
 });

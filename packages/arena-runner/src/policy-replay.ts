@@ -30,6 +30,7 @@ export interface PolicyReplayRecordV1 {
 }
 
 export interface PolicyPathPoint {
+  /** Pathfinder may place a waypoint at a fractional block coordinate. */
   readonly x: number;
   readonly y: number;
   readonly z: number;
@@ -280,7 +281,7 @@ function readPathUpdate(value: unknown, recordNumber: number, index: number): Po
     if (position === undefined) throw replayFailure('invalid_policy_path_position', recordNumber, field);
     assertExactFields(position, ['x', 'y', 'z'], recordNumber, field);
     for (const coordinate of ['x', 'y', 'z'] as const) {
-      if (typeof position[coordinate] !== 'number' || !Number.isSafeInteger(position[coordinate])) {
+      if (!isTracePathCoordinate(position[coordinate])) {
         throw replayFailure('invalid_policy_path_position', recordNumber, `${field}.${coordinate}`);
       }
     }
@@ -321,11 +322,19 @@ function copyPathUpdate(update: PolicyPathUpdate): PolicyPathUpdate {
     status: update.status,
     path: Object.freeze(update.path.map((position) => {
       for (const coordinate of [position.x, position.y, position.z]) {
-        if (!Number.isSafeInteger(coordinate)) throw new TypeError('path position coordinates must be safe integers');
+        if (!isTracePathCoordinate(coordinate)) {
+          throw new TypeError('path position coordinates must be finite and JSON-safe numbers');
+        }
       }
       return Object.freeze({ x: position.x, y: position.y, z: position.z });
     })),
   });
+}
+
+function isTracePathCoordinate(value: unknown): value is number {
+  return typeof value === 'number'
+    && Number.isFinite(value)
+    && (!Number.isInteger(value) || Number.isSafeInteger(value));
 }
 
 function assertSeat(seat: number): void {
