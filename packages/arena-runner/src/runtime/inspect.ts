@@ -20,6 +20,13 @@ import { readStoppedPlayerStats } from './observations.js';
 import type { StoppedPlayerStats } from './observations.js';
 
 const RUN_DIRECTORY_PREFIX = '.work/arena/runs/';
+const ARCHIVE_DIRECTORY_PREFIX = '.work/arena/traces/';
+
+export interface RunEvidenceFiles {
+  readonly evidence: Evidence;
+  readonly segmentContents: readonly Buffer[];
+}
+
 export interface StoppedRunInspection {
   readonly schema: 1;
   readonly run_id: string;
@@ -49,11 +56,20 @@ export async function inspectStoppedRun(options: Readonly<{
       relativePath: runDirectoryPath,
     });
   } catch (error) {
+    if (error instanceof OwnedFilesError && error.category === 'not_found'
+        && error.operation === 'hold-run-lease') {
+      return await inspectCompletedArchive(options, archiveDirectoryPath(options.runId));
+    }
     throw mapRunLeaseError(error);
   }
 
   try {
-    const evidence = await readRunEvidence(options.helperPath, options.ownedRoot, runDirectoryPath, options.runId);
+    const { evidence } = await readRunEvidence(
+      options.helperPath,
+      options.ownedRoot,
+      runDirectoryPath,
+      options.runId,
+    );
     const reconstructed = reconstructRunEvidence(evidence);
     const stats = await readStoppedPlayerStats({
       helperPath: options.helperPath,
@@ -72,13 +88,39 @@ export async function inspectStoppedRun(options: Readonly<{
   }
 }
 
-async function readRunEvidence(
+async function inspectCompletedArchive(
+  options: Readonly<{ helperPath: string; ownedRoot: Buffer; runId: string }>,
+  archiveDirectoryPath: Buffer,
+): Promise<StoppedRunInspection> {
+  const { evidence } = await readRunEvidence(
+    options.helperPath,
+    options.ownedRoot,
+    archiveDirectoryPath,
+    options.runId,
+  );
+  const reconstructed = reconstructRunEvidence(evidence);
+  const stats = await readStoppedPlayerStats({
+    helperPath: options.helperPath,
+    ownedRoot: options.ownedRoot,
+    runDirectoryPath: archiveDirectoryPath,
+    players: reconstructed.players,
+  });
+  return {
+    schema: 1,
+    run_id: options.runId,
+    report: reconstructed.report,
+    stats,
+  };
+}
+
+export async function readRunEvidence(
   helperPath: string,
   ownedRoot: Buffer,
   runDirectoryPath: Buffer,
   runId: string,
-): Promise<Evidence> {
+): Promise<RunEvidenceFiles> {
   const segments: TraceSegment[] = [];
+  const segmentContents: Buffer[] = [];
   let byteLength = 0;
   for (let index = 1; index <= MAX_TRACE_SEGMENTS + 1; index += 1) {
     const segmentPath = Buffer.concat([
@@ -120,6 +162,7 @@ async function readRunEvidence(
         });
       }
       segments.push(segment);
+      segmentContents.push(bytes);
     } catch (error) {
       if (error instanceof RunnerError) throw error;
       if (!(error instanceof TraceError)) throw error;
@@ -131,11 +174,18 @@ async function readRunEvidence(
   }
 
   try {
-    return reconstruct(segments);
+    return {
+      evidence: reconstruct(segments),
+      segmentContents: Object.freeze(segmentContents),
+    };
   } catch (error) {
     if (!(error instanceof TraceError)) throw error;
     throw new RunnerError('corrupt_evidence', 'run trace segment set', error.source);
   }
+}
+
+export function archiveDirectoryPath(runId: string): Buffer {
+  return Buffer.from(`${ARCHIVE_DIRECTORY_PREFIX}${runId}`, 'ascii');
 }
 
 function mapRunLeaseError(error: unknown): RunnerError {

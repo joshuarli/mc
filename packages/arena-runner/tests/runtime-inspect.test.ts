@@ -1,15 +1,17 @@
 import assert from 'node:assert/strict';
-import { rm } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
 import test from 'node:test';
 import { canonicalJson, sha256Json } from '../src/canonical.js';
 import { runCli } from '../src/cli.js';
+import { RunnerError } from '../src/errors.js';
 import {
   acquireOwnedRunLease,
   createOwnedDirectory,
   createRunDirectory,
   stageOwnedFile,
 } from '../src/owned-files/index.js';
+import { archiveDirectoryPath, inspectStoppedRun } from '../src/runtime/inspect.js';
 import { MAX_TRACE_SEGMENT_BYTES, TRACE_SCHEMA_VERSION } from '../src/trace.js';
 
 const repositoryRoot = process.cwd();
@@ -60,6 +62,20 @@ test('inspect derives outcome and reads stopped stats by prepared offline UUID',
 
 test('inspect rejects active runs while holding the owned run lease', async (t) => {
   const { runDirectoryPath, runId } = await createOwnedRun(t);
+  const archiveDirectory = archiveDirectoryPath(runId);
+  const ownedRoot = Buffer.from(repositoryRoot, 'utf8');
+  await createOwnedDirectory({ helperPath, ownedRoot, relativePath: archiveDirectory });
+  await stageOwnedFile({
+    helperPath,
+    ownedRoot,
+    relativePath: Buffer.concat([archiveDirectory, Buffer.from('/trace-v2-000001.json', 'ascii')]),
+    contents: Buffer.from('invalid partial archive'),
+    maxBytes: MAX_TRACE_SEGMENT_BYTES,
+  });
+  t.after(async () => await rm(resolve(repositoryRoot, archiveDirectory.toString('utf8')), {
+    recursive: true,
+    force: true,
+  }));
   const lease = await acquireOwnedRunLease({
     helperPath,
     ownedRoot: Buffer.from(repositoryRoot, 'utf8'),
@@ -77,6 +93,29 @@ test('inspect rejects active runs while holding the owned run lease', async (t) 
   assert.equal(error.error.resource, 'run lease');
   assert.equal(error.error.category, 'owner_conflict');
   assert.equal(error.error.source.kind, 'owner_conflict');
+});
+
+test('inspect rejects an incomplete archive when the owned run is absent', async (t) => {
+  await mkdir(resolve(repositoryRoot, '.work/tmp'), { recursive: true });
+  const rootText = await mkdtemp(join(repositoryRoot, '.work/tmp/arena-inspect-partial-'));
+  const ownedRoot = Buffer.from(rootText, 'utf8');
+  const runId = `inspect-partial-${process.pid}-${Date.now()}`;
+  t.after(async () => await rm(rootText, { recursive: true, force: true }));
+
+  const archiveDirectory = archiveDirectoryPath(runId);
+  await createOwnedDirectory({ helperPath, ownedRoot, relativePath: archiveDirectory });
+  await stageOwnedFile({
+    helperPath,
+    ownedRoot,
+    relativePath: Buffer.concat([archiveDirectory, Buffer.from('/trace-v2-000001.json', 'ascii')]),
+    contents: Buffer.from('invalid partial archive'),
+    maxBytes: MAX_TRACE_SEGMENT_BYTES,
+  });
+
+  await assert.rejects(
+    inspectStoppedRun({ helperPath, ownedRoot, runId }),
+    (error: unknown) => error instanceof RunnerError && error.category === 'corrupt_evidence',
+  );
 });
 
 test('inspect marks missing stats files absent with explicit null counters', async (t) => {

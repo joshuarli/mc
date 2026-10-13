@@ -1,8 +1,7 @@
-import { OwnedFilesError, readOwnedFile } from '../owned-files/index.js';
+import { MAX_OWNED_READ_BYTES, OwnedFilesError, readOwnedFile } from '../owned-files/index.js';
 import { RunnerError } from '../errors.js';
 import { parseStrictJson, strictJsonNumberToken, type StrictJsonValue } from '../control/strict-json.js';
 
-const MAX_STATS_BYTES = 16 * 1024 * 1024;
 const STATS_DIRECTORY = Buffer.from('/server/world/players/stats/', 'ascii');
 const STATS_SUFFIX = Buffer.from('.json', 'ascii');
 
@@ -17,6 +16,11 @@ export interface StoppedPlayerStats extends PlayerIdentity {
   readonly playerKills: number | null;
 }
 
+export interface StoppedPlayerStatsFile {
+  readonly stats: StoppedPlayerStats;
+  readonly contents: Buffer | null;
+}
+
 /** Reads Minecraft statistics through the owned-files helper after the server has stopped. */
 export async function readStoppedPlayerStats(options: Readonly<{
   helperPath: string;
@@ -27,46 +31,74 @@ export async function readStoppedPlayerStats(options: Readonly<{
 }>): Promise<readonly StoppedPlayerStats[]> {
   const results: StoppedPlayerStats[] = [];
   for (const player of options.players) {
-    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-3[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(player.offlineUuid)) {
-      throw new RunnerError('runtime_failure', 'player statistics', { kind: 'invalid_offline_uuid' });
-    }
-    const relativePath = Buffer.concat([
-      options.runDirectoryPath,
-      STATS_DIRECTORY,
-      Buffer.from(player.offlineUuid, 'ascii'),
-      STATS_SUFFIX,
-    ]);
-    let bytes: Buffer;
-    try {
-      bytes = await readOwnedFile({
-        helperPath: options.helperPath,
-        ownedRoot: options.ownedRoot,
-        relativePath,
-        maxBytes: MAX_STATS_BYTES,
-        ...(options.signal === undefined ? {} : { signal: options.signal }),
-      });
-    } catch (error) {
-      if (error instanceof OwnedFilesError && error.category === 'not_found') {
-        results.push(Object.freeze({
+    const file = await readStoppedPlayerStatsFile({
+      helperPath: options.helperPath,
+      ownedRoot: options.ownedRoot,
+      runDirectoryPath: options.runDirectoryPath,
+      player,
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
+    });
+    results.push(file.stats);
+  }
+  return Object.freeze(results);
+}
+
+/** Reads and validates one stopped stats file while retaining its exact bytes for archival. */
+export async function readStoppedPlayerStatsFile(options: Readonly<{
+  helperPath: string;
+  ownedRoot: Buffer;
+  runDirectoryPath: Buffer;
+  player: PlayerIdentity;
+  signal?: AbortSignal;
+}>): Promise<StoppedPlayerStatsFile> {
+  const { player } = options;
+  const relativePath = stoppedPlayerStatsPath(options.runDirectoryPath, player.offlineUuid);
+  let contents: Buffer;
+  try {
+    contents = await readOwnedFile({
+      helperPath: options.helperPath,
+      ownedRoot: options.ownedRoot,
+      relativePath,
+      maxBytes: MAX_OWNED_READ_BYTES,
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
+    });
+  } catch (error) {
+    if (error instanceof OwnedFilesError && error.category === 'not_found') {
+      return Object.freeze({
+        stats: Object.freeze({
           ...player,
           status: 'absent',
           deaths: null,
           playerKills: null,
-        }));
-        continue;
-      }
-      throw mapStatsReadError(error);
+        }),
+        contents: null,
+      });
     }
+    throw mapStatsReadError(error);
+  }
 
-    const stats = parseStats(bytes);
-    results.push(Object.freeze({
+  const stats = parseStats(contents);
+  return Object.freeze({
+    stats: Object.freeze({
       ...player,
       status: 'present',
       deaths: readCounter(stats, 'minecraft:deaths'),
       playerKills: readCounter(stats, 'minecraft:player_kills'),
-    }));
+    }),
+    contents,
+  });
+}
+
+export function stoppedPlayerStatsPath(runDirectoryPath: Buffer, offlineUuid: string): Buffer {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-3[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(offlineUuid)) {
+    throw new RunnerError('runtime_failure', 'player statistics', { kind: 'invalid_offline_uuid' });
   }
-  return Object.freeze(results);
+  return Buffer.concat([
+    runDirectoryPath,
+    STATS_DIRECTORY,
+    Buffer.from(offlineUuid, 'ascii'),
+    STATS_SUFFIX,
+  ]);
 }
 
 function parseStats(bytes: Buffer): Readonly<Record<string, StrictJsonValue>> {

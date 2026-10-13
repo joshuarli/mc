@@ -3,14 +3,18 @@ import { RunnerError } from '../errors.js';
 import {
   acquireOwnedRunLease,
   assertOwnedRunLeaseMatches,
+  createOwnedDirectory,
   listOwnedRuns,
+  MAX_OWNED_FILE_BYTES,
   MAX_OWNED_READ_BYTES,
   OwnedFilesError,
   readOwnedFileWithIdentity,
   removeOwnedRun,
+  stageOwnedFile,
   type OwnedRunLease,
   type OwnedRunSnapshot,
 } from '../owned-files/index.js';
+import { canonicalJson } from '../canonical.js';
 import { isValidRunId } from '../run-id.js';
 import {
   MAX_EVIDENCE_BYTES,
@@ -26,6 +30,17 @@ import {
   parseOperationalFailureArtifact,
   type OperationalFailureArtifactV1,
 } from './failure-artifact.js';
+import {
+  archiveDirectoryPath,
+  readRunEvidence,
+  type RunEvidenceFiles,
+} from './inspect.js';
+import {
+  readStoppedPlayerStats,
+  readStoppedPlayerStatsFile,
+  stoppedPlayerStatsPath,
+  type StoppedPlayerStatsFile,
+} from './observations.js';
 
 const RUN_DIRECTORY_PREFIX = '.work/arena/runs/';
 const LATEST_FAILURES_TO_RETAIN = 3;
@@ -230,6 +245,21 @@ export async function collectOwnedRuns(options: Readonly<{
         continue;
       }
 
+      let evidencePath = classification.evidencePath;
+      if (isArchivableRun(classification)) {
+        try {
+          assertOwnedRunLeaseMatches({
+            lease: held.lease,
+            ownedRoot: options.ownedRoot,
+            runId,
+            identity: snapshot.identity,
+          });
+        } catch (error) {
+          throw mapRunIdentityError(error, runId);
+        }
+        evidencePath = await archiveCompletedRun(options, snapshot, classification);
+      }
+
       try {
         await assertOwnedRunLeaseMatches({
           lease: held.lease,
@@ -252,7 +282,7 @@ export async function collectOwnedRuns(options: Readonly<{
         path: runDirectoryPathText(runId),
         status: 'removed',
         reason: removalReason,
-        evidence_path: classification.evidencePath,
+        evidence_path: evidencePath,
         ...(failureType === undefined ? {} : { failure_type: failureType }),
         ...(outcomeKind === undefined ? {} : { outcome_kind: outcomeKind }),
       });
@@ -390,35 +420,234 @@ async function readTerminalEvidence(
   options: Readonly<{ helperPath: string; ownedRoot: Buffer }>,
   snapshot: OwnedRunSnapshot,
 ): Promise<Evidence> {
-  const segments: TraceSegment[] = [];
-  let byteLength = 0;
   const segmentCount = snapshot.terminalTraceSequence!;
   if (segmentCount > MAX_TRACE_SEGMENTS) {
     throw new RunnerError('corrupt_evidence', 'run trace', { kind: 'segment_count_limit_exceeded' });
   }
-  for (let index = 1; index <= segmentCount; index += 1) {
-    const path = traceSegmentPath(snapshot.runId, index);
-    const { contents } = await readEvidenceFile(
-      options,
-      path,
-      Math.min(MAX_TRACE_SEGMENT_BYTES, MAX_OWNED_READ_BYTES),
-      'run trace',
-    );
-    if (contents.length > MAX_EVIDENCE_BYTES - byteLength) {
-      throw new RunnerError('corrupt_evidence', 'run trace', { kind: 'evidence_set_too_large' });
-    }
-    byteLength += contents.length;
-    segments.push(parseStoredSegment(contents, snapshot.runId, path.toString('ascii')));
-  }
-  if (segments.length !== segmentCount) {
+  const files = await readRunEvidence(
+    options.helperPath,
+    options.ownedRoot,
+    runDirectoryPath(snapshot.runId),
+    snapshot.runId,
+  );
+  if (files.segmentContents.length !== segmentCount) {
     throw new RunnerError('corrupt_evidence', 'run trace', { kind: 'terminal_trace_segment_count_mismatch' });
   }
-  try {
-    return reconstruct(segments);
-  } catch (error) {
-    if (!(error instanceof TraceError)) throw error;
-    throw new RunnerError('corrupt_evidence', 'run trace segment set', error.source);
+  return files.evidence;
+}
+
+function isArchivableRun(classification: ClassifiedRun): boolean {
+  return classification.kind === 'success'
+    || (classification.kind === 'failure' && classification.failureType === 'authority_abort');
+}
+
+// The final trace segment marks archive completion, so it is published after every prefix and stats file.
+async function archiveCompletedRun(
+  options: Readonly<{ helperPath: string; ownedRoot: Buffer }>,
+  snapshot: OwnedRunSnapshot,
+  classification: Extract<ClassifiedRun, { kind: 'success' | 'failure' }>,
+): Promise<string> {
+  const sourceDirectory = runDirectoryPath(snapshot.runId);
+  const archiveDirectory = archiveDirectoryPath(snapshot.runId);
+  const source = await readRunEvidence(
+    options.helperPath,
+    options.ownedRoot,
+    sourceDirectory,
+    snapshot.runId,
+  );
+  if (source.segmentContents.length !== snapshot.terminalTraceSequence) {
+    throw new RunnerError('corrupt_evidence', 'run trace', { kind: 'terminal_trace_segment_count_mismatch' });
   }
+  const sourceReconstruction = reconstructRunEvidence(source.evidence);
+  const sourceOutcome = sourceReconstruction.report.outcome;
+  const expectedOutcomeKind = classification.kind === 'success'
+    ? classification.outcomeKind
+    : classification.failureType === 'authority_abort' ? 'abort' : undefined;
+  if (expectedOutcomeKind === undefined || sourceOutcome.kind !== expectedOutcomeKind) {
+    throw new RunnerError('corrupt_evidence', 'run outcome', { kind: 'archive_outcome_changed' });
+  }
+
+  const statsFiles: StoppedPlayerStatsFile[] = [];
+  for (const player of sourceReconstruction.players) {
+    statsFiles.push(await readStoppedPlayerStatsFile({
+      helperPath: options.helperPath,
+      ownedRoot: options.ownedRoot,
+      runDirectoryPath: sourceDirectory,
+      player,
+    }));
+  }
+
+  await ensureArchiveDirectory(options, archiveDirectory);
+  for (let index = 0; index < source.segmentContents.length - 1; index += 1) {
+    const destination = traceSegmentPathAt(archiveDirectory, index + 1);
+    await publishOrCompareArchiveFile(options, destination, source.segmentContents[index]!);
+  }
+  if (statsFiles.some(({ contents }) => contents !== null)) {
+    const statsDirectory = Buffer.concat([
+      archiveDirectory,
+      Buffer.from('/server/world/players/stats', 'ascii'),
+    ]);
+    await ensureArchiveDirectory(options, statsDirectory);
+  }
+  for (const [index, player] of sourceReconstruction.players.entries()) {
+    const stats = statsFiles[index]!;
+    const destination = stoppedPlayerStatsPath(archiveDirectory, player.offlineUuid);
+    if (stats.contents === null) {
+      const archived = await readArchiveFile(options, destination, MAX_OWNED_READ_BYTES);
+      if (archived !== undefined) {
+        throw archiveMismatch(destination);
+      }
+      continue;
+    }
+    await publishOrCompareArchiveFile(options, destination, stats.contents);
+  }
+
+  const terminalIndex = source.segmentContents.length - 1;
+  const terminalPath = traceSegmentPathAt(archiveDirectory, terminalIndex + 1);
+  await publishOrCompareArchiveFile(options, terminalPath, source.segmentContents[terminalIndex]!);
+  const unexpectedNextSegment = await readArchiveFile(
+    options,
+    traceSegmentPathAt(archiveDirectory, terminalIndex + 2),
+    Math.min(MAX_TRACE_SEGMENT_BYTES, MAX_OWNED_READ_BYTES),
+  );
+  if (unexpectedNextSegment !== undefined) {
+    throw archiveMismatch(traceSegmentPathAt(archiveDirectory, terminalIndex + 2));
+  }
+
+  const archived: RunEvidenceFiles = await readRunEvidence(
+    options.helperPath,
+    options.ownedRoot,
+    archiveDirectory,
+    snapshot.runId,
+  );
+  if (archived.segmentContents.length !== source.segmentContents.length) {
+    throw new RunnerError('corrupt_evidence', 'run archive', { kind: 'archive_segment_count_mismatch' });
+  }
+  for (let index = 0; index < source.segmentContents.length; index += 1) {
+    if (!archived.segmentContents[index]!.equals(source.segmentContents[index]!)) {
+      throw archiveMismatch(traceSegmentPathAt(archiveDirectory, index + 1));
+    }
+  }
+  const archivedReconstruction = reconstructRunEvidence(archived.evidence);
+  if (canonicalJson(archivedReconstruction.report) !== canonicalJson(sourceReconstruction.report)) {
+    throw new RunnerError('corrupt_evidence', 'run archive', { kind: 'archive_report_mismatch' });
+  }
+  const archivedStats = await readStoppedPlayerStats({
+    helperPath: options.helperPath,
+    ownedRoot: options.ownedRoot,
+    runDirectoryPath: archiveDirectory,
+    players: archivedReconstruction.players,
+  });
+  const sourceStats = statsFiles.map(({ stats }) => stats);
+  if (canonicalJson(archivedStats) !== canonicalJson(sourceStats)) {
+    throw new RunnerError('corrupt_evidence', 'run archive', { kind: 'archive_statistics_mismatch' });
+  }
+  return terminalPath.toString('ascii');
+}
+
+async function ensureArchiveDirectory(
+  options: Readonly<{ helperPath: string; ownedRoot: Buffer }>,
+  relativePath: Buffer,
+): Promise<void> {
+  try {
+    await createOwnedDirectory({
+      helperPath: options.helperPath,
+      ownedRoot: options.ownedRoot,
+      relativePath,
+    });
+  } catch (error) {
+    if (error instanceof OwnedFilesError && error.category === 'conflict'
+        && error.operation === 'create-owned-directory') return;
+    throw mapArchiveWriteError(error, relativePath);
+  }
+}
+
+async function publishOrCompareArchiveFile(
+  options: Readonly<{ helperPath: string; ownedRoot: Buffer }>,
+  relativePath: Buffer,
+  expectedContents: Buffer,
+): Promise<void> {
+  try {
+    await stageOwnedFile({
+      helperPath: options.helperPath,
+      ownedRoot: options.ownedRoot,
+      relativePath,
+      contents: expectedContents,
+      maxBytes: MAX_OWNED_FILE_BYTES,
+    });
+  } catch (error) {
+    if (!(error instanceof OwnedFilesError && error.category === 'conflict'
+          && error.operation === 'stage-owned-file')) {
+      throw mapArchiveWriteError(error, relativePath);
+    }
+    const existing = await readArchiveFile(options, relativePath, MAX_OWNED_READ_BYTES);
+    if (existing === undefined || !existing.equals(expectedContents)) {
+      throw archiveMismatch(relativePath);
+    }
+    return;
+  }
+
+  const published = await readArchiveFile(options, relativePath, MAX_OWNED_READ_BYTES);
+  if (published === undefined || !published.equals(expectedContents)) {
+    throw archiveMismatch(relativePath);
+  }
+}
+
+async function readArchiveFile(
+  options: Readonly<{ helperPath: string; ownedRoot: Buffer }>,
+  relativePath: Buffer,
+  maxBytes: number,
+): Promise<Buffer | undefined> {
+  try {
+    return (await readOwnedFileWithIdentity({
+      helperPath: options.helperPath,
+      ownedRoot: options.ownedRoot,
+      relativePath,
+      maxBytes,
+    })).contents;
+  } catch (error) {
+    if (error instanceof OwnedFilesError && error.category === 'not_found') return undefined;
+    throw mapArchiveWriteError(error, relativePath);
+  }
+}
+
+function archiveMismatch(relativePath: Buffer): RunnerError {
+  return new RunnerError('corrupt_evidence', 'run archive', {
+    kind: 'archive_file_mismatch',
+    relative_artifact: relativePath.toString('ascii'),
+  });
+}
+
+function mapArchiveWriteError(error: unknown, relativePath: Buffer): RunnerError {
+  if (!(error instanceof OwnedFilesError)) {
+    return new RunnerError('runtime_failure', 'run archive', {
+      kind: 'archive_operation_failed',
+      relative_artifact: relativePath.toString('ascii'),
+    });
+  }
+  if (error.category === 'too_large' || error.category === 'unsupported_file_type'
+      || error.category === 'symlink_rejected') {
+    return new RunnerError('corrupt_evidence', 'run archive', {
+      kind: error.category,
+      relative_artifact: relativePath.toString('ascii'),
+    });
+  }
+  return new RunnerError(
+    error.category === 'helper_start' ? 'missing_prerequisite' : 'runtime_failure',
+    'run archive',
+    {
+      kind: error.category,
+      relative_artifact: relativePath.toString('ascii'),
+      ...(error.errno === undefined ? {} : { os_code: error.errno }),
+    },
+  );
+}
+
+function traceSegmentPathAt(directoryPath: Buffer, sequence: number): Buffer {
+  return Buffer.concat([
+    directoryPath,
+    Buffer.from(`/trace-v2-${String(sequence).padStart(6, '0')}.json`, 'ascii'),
+  ]);
 }
 
 function parseStoredSegment(contents: Buffer, runId: string, path: string): TraceSegment {
