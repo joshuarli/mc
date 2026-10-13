@@ -12,6 +12,7 @@ import {
 import type { Bot, BotEvents } from 'mineflayer';
 import { classifyItem, mineflayerEquipmentDestination } from './items.js';
 import { MineflayerObserver } from './observer.js';
+import { recordPathDiagnostic } from './path-diagnostics.js';
 import { isTargetablePlayer, isVisibleEntity, toBlockPosition } from './perception.js';
 import type { ArenaSkillIntent } from './skill-intent.js';
 import { hasLocalVoxelLineOfSight } from './visibility.js';
@@ -75,6 +76,7 @@ interface SkillResources {
 }
 
 interface PathSearchWaiter {
+  readonly bot: Bot;
   readonly pathfinder: Bot['pathfinder'];
   readonly signal: AbortSignal;
   readonly deadline: number;
@@ -107,18 +109,20 @@ const queuedPathfinders: PathSearchWaiter[] = [];
 
 /** Reserves only as many concurrent contexts as fit inside the worker path-search budget. */
 function acquirePathSearchShare(
-  pathfinderInstance: Bot['pathfinder'],
+  bot: Bot,
   signal: AbortSignal,
   deadline: number,
 ): Promise<() => void> {
   if (signal.aborted) return Promise.reject(new SkillInterrupted());
   if (performance.now() >= deadline) {
+    recordPathSearchEvent(bot, 'timedOut');
     return Promise.reject(new SkillFault('timedOut', 'bounded navigation exceeded its deadline while waiting for a path search'));
   }
 
   return new Promise<() => void>((resolve, reject) => {
     const waiter: PathSearchWaiter = {
-      pathfinder: pathfinderInstance,
+      bot,
+      pathfinder: bot.pathfinder,
       signal,
       deadline,
       resolve,
@@ -139,6 +143,7 @@ function acquirePathSearchShare(
     );
     signal.addEventListener('abort', waiter.onAbort, { once: true });
     queuedPathfinders.push(waiter);
+    recordPathSearchEvent(bot, 'queued');
     if (signal.aborted) waiter.onAbort();
   });
 }
@@ -146,21 +151,25 @@ function acquirePathSearchShare(
 function grantPathSearchShare(waiter: PathSearchWaiter): void {
   if (waiter.settled) return;
   if (waiter.signal.aborted) {
+    recordPathSearchEvent(waiter.bot, 'cancelled');
     rejectPathSearchWaiter(waiter, new SkillInterrupted());
     return;
   }
   if (performance.now() >= waiter.deadline) {
+    recordPathSearchEvent(waiter.bot, 'timedOut');
     rejectPathSearchWaiter(waiter, new SkillFault('timedOut', 'bounded navigation expired while waiting for a path search'));
     return;
   }
   waiter.settled = true;
   clearPathSearchWaiter(waiter);
   activePathfinders.add(waiter.pathfinder);
+  recordPathSearchEvent(waiter.bot, 'acquired');
   let released = false;
   waiter.resolve(() => {
     if (released) return;
     released = true;
     activePathfinders.delete(waiter.pathfinder);
+    recordPathSearchEvent(waiter.bot, 'released');
     grantQueuedPathSearches();
   });
 }
@@ -171,6 +180,7 @@ function removePathSearchWaiter(waiter: PathSearchWaiter, error: Error): void {
   const index = queuedPathfinders.indexOf(waiter);
   if (index >= 0) queuedPathfinders.splice(index, 1);
   clearPathSearchWaiter(waiter);
+  recordPathSearchEvent(waiter.bot, error instanceof SkillInterrupted ? 'cancelled' : 'timedOut');
   waiter.reject(error);
   grantQueuedPathSearches();
 }
@@ -194,6 +204,18 @@ function grantQueuedPathSearches(): void {
     const waiter = queuedPathfinders.shift();
     if (waiter !== undefined) grantPathSearchShare(waiter);
   }
+}
+
+function recordPathSearchEvent(
+  bot: Bot,
+  transition: 'queued' | 'acquired' | 'released' | 'cancelled' | 'timedOut',
+): void {
+  recordPathDiagnostic(bot, {
+    kind: 'pathSearch',
+    transition,
+    activeSearches: activePathfinders.size,
+    queuedSearches: queuedPathfinders.length,
+  });
 }
 
 /** Serializes skill intents and quarantines Mineflayer operations that outlive cancellation. */
@@ -240,6 +262,8 @@ export class SkillOwner {
         promise: Promise.resolve({ kind: 'pending' }),
       };
       this.#active = active;
+      recordPathDiagnostic(this.#bot, { kind: 'skillOwner', owner: intent.kind });
+      recordPathDiagnostic(this.#bot, { kind: 'navigation', active: false });
       active.promise = this.#runOwned(intent, active);
       return active;
     });
@@ -303,7 +327,10 @@ export class SkillOwner {
       cleanupFailure = error;
       this.#cleanupFailure = error instanceof Error ? error : new Error(String(error));
     } finally {
-      if (this.#active === active) this.#active = null;
+      if (this.#active === active) {
+        this.#active = null;
+        recordPathDiagnostic(this.#bot, { kind: 'skillOwner', owner: null });
+      }
     }
     if (cleanupFailed) {
       if (unhandled !== undefined) throw new AggregateError([unhandled, cleanupFailure], 'skill operation and cleanup both failed');
@@ -384,7 +411,7 @@ export class SkillOwner {
           waypoint.z,
           waypoint === position && arrival.kind === 'withinRange' ? arrival.range : 2,
         );
-      const releaseBudget = await acquirePathSearchShare(this.#bot.pathfinder, active.controller.signal, deadline);
+      const releaseBudget = await acquirePathSearchShare(this.#bot, active.controller.signal, deadline);
       const searchRemainingMs = deadline - performance.now();
       if (searchRemainingMs <= 0) {
         releaseBudget();
@@ -396,6 +423,7 @@ export class SkillOwner {
       const reached = waitForGoal(this.#bot, goal, stopWaits.signal, searchRemainingMs);
       const pathFailure = waitForPathFailure(this.#bot, stopWaits.signal, searchRemainingMs);
       active.resources.navigationActive = true;
+      recordPathDiagnostic(this.#bot, { kind: 'navigation', active: true });
       try {
         this.#bot.pathfinder.setGoal(goal, false);
         await Promise.race([reached, pathFailure]);
@@ -410,6 +438,7 @@ export class SkillOwner {
         try {
           await waitForPathStop(this.#bot, ACTION_TIMEOUT_MS);
           active.resources.navigationActive = false;
+          recordPathDiagnostic(this.#bot, { kind: 'navigation', active: false });
         } finally {
           releaseBudget();
         }

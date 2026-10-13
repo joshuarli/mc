@@ -10,6 +10,13 @@ import type { ArenaSkillIntent } from './skill-intent.js';
 import { SkillOwner } from './skills.js';
 
 export type { ArenaSkillIntent } from './skill-intent.js';
+export { PathDiagnosticRing } from './path-diagnostics.js';
+export type {
+  PathDiagnosticClock,
+  PathDiagnosticExternalOwner,
+  PathDiagnosticOptions,
+  PathDiagnosticRecord,
+} from './path-diagnostics.js';
 
 export interface MineflayerArenaClient {
   observe(tick: number): AgentObservation;

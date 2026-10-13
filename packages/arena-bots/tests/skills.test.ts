@@ -4,6 +4,7 @@ import { createRequire } from 'node:module';
 import test from 'node:test';
 import { blockPosition, entityId, inventorySlot } from '@arena/core';
 import type { Bot } from 'mineflayer';
+import { PathDiagnosticRing } from '../src/index.js';
 import { MineflayerObserver } from '../src/observer.js';
 import { SkillOwner } from '../src/skills.js';
 
@@ -116,6 +117,245 @@ test('worker caps active A-star searches and removes cancelled path waiters', as
   } finally {
     await Promise.all(harnesses.map((harness) => harness.owner.close()));
     for (const harness of harnesses) harness.observer.close();
+  }
+});
+
+test('opt-in path diagnostics capture bounded local movement evidence and detach cleanly', async () => {
+  const harness = makeHarness();
+  const block = {
+    name: 'cobblestone',
+    type: 1,
+    stateId: 42,
+    shapes: [[0, 0, 0, 1, 1, 1]],
+    position: new TestPosition(31, 65, 21),
+  } as NonNullable<ReturnType<Bot['blockAt']>>;
+  let clientMs = 0;
+  Object.assign(harness.bot, {
+    entity: {
+      id: 1,
+      position: new TestPosition(30.68, 65, 21.46),
+      velocity: new TestPosition(0.03, -0.08, 0.01),
+      onGround: false,
+      isCollidedHorizontally: true,
+      isCollidedVertically: false,
+    },
+    controlState: {
+      forward: true,
+      back: false,
+      left: false,
+      right: true,
+      jump: true,
+      sprint: true,
+      sneak: false,
+    },
+    blockAt: (position: TestPosition) => position.x === 31 && position.y === 65 && position.z === 21 ? block : null,
+  });
+  const basePhysicsListeners = harness.bot.listenerCount('physicsTick');
+  const basePositionListeners = (harness.bot._client as unknown as EventEmitter).listenerCount('position');
+  const ring = new PathDiagnosticRing(harness.bot, {
+    clientLabel: 'ramp-seat-zero',
+    clock: () => ({ clientMs: clientMs++, authorityTick: 120 }),
+  });
+
+  try {
+    ring.setExternalMovementOwner('sprintCourse');
+    harness.bot.emit('physicsTick');
+    const handoff = ring.snapshot().find((record) => record.kind === 'physicsTick');
+    assert.ok(handoff);
+    assert.equal(handoff.owner, 'sprintCourse');
+    assert.equal(handoff.navigationActive, false);
+    assert.equal(handoff.goal, null);
+    assert.equal(handoff.control.jump, true);
+
+    const running = harness.owner.run({ kind: 'navigateToBlock', target: blockPosition(31, 66, 21) });
+    await waitUntil(() => harness.pathfinder.goal !== null);
+    harness.bot.emit('path_update', {
+      status: 'partial',
+      cost: 1,
+      time: 0.75,
+      visitedNodes: 4,
+      generatedNodes: 7,
+      path: [{
+        x: 31,
+        y: 65,
+        z: 21,
+        cost: 1,
+        remainingBlocks: 0,
+        toBreak: [],
+        toPlace: [],
+        parkour: false,
+        hash: '31,65,21',
+      }],
+    } as never);
+    harness.bot.emit('physicsTick');
+    (harness.bot._client as unknown as EventEmitter).emit('position', {
+      x: 31,
+      y: 66,
+      z: 21,
+      dx: 0.12,
+      dy: -0.04,
+      dz: 0.08,
+      yaw: 0,
+      pitch: 0,
+      flags: { x: false, y: false, z: false, yaw: false, pitch: false, dx: true, dy: false, dz: true, yawDelta: false },
+      teleportId: 3,
+    });
+
+    const records = ring.snapshot();
+    const physics = records.filter((record) => record.kind === 'physicsTick').find((record) => record.owner === 'navigateToBlock');
+    assert.ok(physics);
+    assert.equal(physics.clientLabel, 'ramp-seat-zero');
+    assert.equal(physics.authorityTick, 120);
+    assert.deepEqual(physics.position, { x: 30.68, y: 65, z: 21.46 });
+    assert.deepEqual(physics.velocity, { x: 0.03, y: -0.08, z: 0.01 });
+    assert.equal(physics.collidedHorizontally, true);
+    assert.equal(physics.collidedVertically, false);
+    assert.equal(physics.control.jump, true);
+    assert.equal(physics.path?.contextTimeMs, 0.75);
+    assert.equal(physics.owner, 'navigateToBlock');
+    assert.equal(physics.goal?.type, 'GoalBlock');
+    assert.equal(physics.blocks.length, 36);
+    assert.deepEqual(
+      physics.blocks.find((sample) => sample.position.x === 31 && sample.position.y === 65 && sample.position.z === 21),
+      {
+        position: { x: 31, y: 65, z: 21 },
+        loaded: true,
+        name: 'cobblestone',
+        type: 1,
+        stateId: 42,
+        shapes: [{ values: [0, 0, 0, 1, 1, 1] }],
+        shapesTruncated: false,
+      },
+    );
+    assert.ok(records.some((record) => record.kind === 'pathSearch' && record.transition === 'acquired'));
+    assert.ok(records.some((record) => record.kind === 'pathUpdate' && record.path.status === 'partial'));
+    const correction = records.find((record) => record.kind === 'positionCorrection');
+    assert.ok(correction);
+    assert.equal(correction.packet.teleportId, 3);
+    assert.deepEqual(correction.packet.delta, { x: 0.12, y: -0.04, z: 0.08 });
+    assert.deepEqual(correction.packet.flags, {
+      x: false,
+      y: false,
+      z: false,
+      yaw: false,
+      pitch: false,
+      dx: true,
+      dy: false,
+      dz: true,
+      yawDelta: false,
+    });
+
+    const queuedCancellation = harness.owner.cancel('shutdown');
+    assert.deepEqual(await running, { kind: 'cancelled', reason: 'shutdown' });
+    await queuedCancellation;
+    harness.bot.emit('physicsTick');
+    const afterCleanup = ring.snapshot().filter((record) => record.kind === 'physicsTick').at(-1);
+    assert.ok(afterCleanup);
+    assert.equal(afterCleanup.owner, 'sprintCourse');
+    assert.equal(afterCleanup.navigationActive, false);
+    assert.equal(afterCleanup.goal, null);
+    assert.deepEqual(afterCleanup.control, {
+      forward: false,
+      back: false,
+      left: false,
+      right: false,
+      jump: false,
+      sprint: false,
+      sneak: false,
+    });
+    assert.ok(ring.snapshot().some((record) => record.kind === 'pathSearch' && record.transition === 'released'));
+  } finally {
+    ring.close();
+    const countAfterClose = ring.snapshot().length;
+    assert.equal(harness.bot.listenerCount('physicsTick'), basePhysicsListeners);
+    assert.equal((harness.bot._client as unknown as EventEmitter).listenerCount('position'), basePositionListeners);
+    harness.bot.emit('physicsTick');
+    (harness.bot._client as unknown as EventEmitter).emit('position', {
+      x: 0,
+      y: 0,
+      z: 0,
+      yaw: 0,
+      pitch: 0,
+      flags: 0,
+    });
+    assert.equal(ring.snapshot().length, countAfterClose);
+    await harness.owner.close();
+    harness.observer.close();
+  }
+});
+
+test('opt-in path diagnostics retain only the fixed number of newest entries', async () => {
+  const harness = makeHarness();
+  let clientMs = 0;
+  let pathResetCount = 0;
+  const ring = new PathDiagnosticRing(harness.bot, {
+    clientLabel: 'bounded-ring-test',
+    clock: () => ({ clientMs: clientMs++, authorityTick: null }),
+    onRecord: (record) => {
+      if (record.kind === 'pathReset') pathResetCount += 1;
+    },
+  });
+  try {
+    for (let index = 0; index < 520; index += 1) harness.bot.emit('path_reset', 'block_updated');
+    const records = ring.snapshot();
+    assert.equal(records.length, 512);
+    assert.equal(records[0]?.clientMs, 8);
+    assert.equal(records.at(-1)?.clientMs, 519);
+    assert.equal(pathResetCount, 520);
+  } finally {
+    ring.close();
+    await harness.owner.close();
+    harness.observer.close();
+  }
+});
+
+test('opt-in path diagnostics retain callback failures for snapshot callers', async () => {
+  const harness = makeHarness();
+  const ring = new PathDiagnosticRing(harness.bot, {
+    clientLabel: 'failed-collector-test',
+    clock: () => ({ clientMs: 0, authorityTick: null }),
+    onRecord: () => { throw new Error('test collector failed'); },
+  });
+  try {
+    harness.bot.emit('path_reset', 'block_updated');
+    assert.throws(
+      () => ring.snapshot(),
+      (error) => error instanceof Error
+        && error.message === 'path diagnostic capture failed'
+        && error.cause instanceof Error
+        && error.cause.message === 'test collector failed',
+    );
+  } finally {
+    ring.close();
+    await harness.owner.close();
+    harness.observer.close();
+  }
+});
+
+test('opt-in path diagnostics reject malformed position correction deltas', async () => {
+  const harness = makeHarness();
+  const ring = new PathDiagnosticRing(harness.bot, {
+    clientLabel: 'invalid-correction-test',
+    clock: () => ({ clientMs: 0, authorityTick: null }),
+  });
+  try {
+    (harness.bot._client as unknown as EventEmitter).emit('position', {
+      x: 1,
+      y: 2,
+      z: 3,
+      dx: Number.NaN,
+      dy: 0,
+      dz: 0,
+      yaw: 0,
+      pitch: 0,
+      flags: {},
+      teleportId: 1,
+    });
+    assert.throws(() => ring.snapshot(), /path diagnostic capture failed/);
+  } finally {
+    ring.close();
+    await harness.owner.close();
+    harness.observer.close();
   }
 });
 
@@ -545,7 +785,13 @@ function makeHarness(onPathStarted: () => void = () => undefined, onPathStopped:
     usingHeldItem: false,
     hasPlugin: () => true,
     setQuickBarSlot: (slot: number) => Object.assign(botEmitter, { quickBarSlot: slot }),
-    clearControlStates: () => { controlsCleared += 1; },
+    clearControlStates: () => {
+      controlsCleared += 1;
+      const controlState = (botEmitter as unknown as { controlState?: Record<string, boolean> }).controlState;
+      if (controlState !== undefined) {
+        for (const control of Object.keys(controlState)) controlState[control] = false;
+      }
+    },
     deactivateItem: () => Object.assign(botEmitter, { usingHeldItem: false }),
   });
   const bot = botEmitter as unknown as Bot;
