@@ -3,7 +3,11 @@ import { createRequire } from 'node:module';
 import { EventEmitter } from 'node:events';
 import test from 'node:test';
 import type { Bot } from 'mineflayer';
-import { bindEntityActionStringMapperFeature, bindPlayerCollisionDimensions } from '../src/mineflayer-compat.js';
+import {
+  bindEntityActionStringMapperFeature,
+  bindPlayerCollisionDimensions,
+  bindProtocol775VelocityUnits,
+} from '../src/mineflayer-compat.js';
 import { createMineflayerArenaClient } from '../src/index.js';
 
 const require = createRequire(import.meta.url);
@@ -12,6 +16,7 @@ const injectPhysics = mineflayerRequire('./lib/plugins/physics.js') as (
   bot: object,
   options: { readonly physicsEnabled: boolean },
 ) => void;
+const injectEntities = mineflayerRequire('./lib/plugins/entities.js') as (bot: Bot) => void;
 const minecraftData = mineflayerRequire('minecraft-data') as (version: string) => {
   readonly version: { readonly version: number };
   supportFeature(feature: string): boolean;
@@ -36,11 +41,136 @@ const protocol = mineflayerRequire('minecraft-protocol') as {
   };
   createDeserializer(options: { readonly state: string; readonly isServer: boolean; readonly version: string }): {
     parsePacketBuffer(buffer: Buffer): {
-      readonly data: { readonly params: { readonly actionId: string | number } };
+      readonly data: { readonly name: string; readonly params: unknown };
       readonly buffer: Buffer;
     };
   };
 };
+
+test('protocol 775 velocity is corrected before physics ticks and disposed idempotently', () => {
+  const { bot, client } = makeBot();
+  injectEntities(bot);
+  client.emit('login', { entityId: 7 });
+  const dispose = bindProtocol775VelocityUnits(bot);
+  const velocity = decodeClientboundPacket('entity_velocity', {
+    entityId: 7,
+    velocity: { x: 0.4, y: -0.2, z: 0.25 },
+  }) as { readonly entityId: number; readonly velocity: VelocityVector };
+  let physicsTickVelocity = 0;
+  const eventBot = bot as unknown as EventEmitter;
+  eventBot.once('physicsTick', () => { physicsTickVelocity = bot.entity.velocity.x; });
+
+  client.emit('entity_velocity', velocity);
+  eventBot.emit('physicsTick');
+
+  assert.ok(physicsTickVelocity > 0.39 && physicsTickVelocity < 0.41);
+  assert.ok(bot.entity.velocity.y < -0.19 && bot.entity.velocity.y > -0.21);
+  assert.ok(bot.entity.velocity.z > 0.24 && bot.entity.velocity.z < 0.26);
+
+  dispose();
+  dispose();
+  client.emit('entity_velocity', decodeClientboundPacket('entity_velocity', {
+    entityId: 7,
+    velocity: { x: 0.2, y: 0, z: 0 },
+  }));
+  assert.ok(bot.entity.velocity.x > 0.000024 && bot.entity.velocity.x < 0.000026);
+});
+
+test('protocol 775 spawn velocity is corrected after Mineflayer creates the entity', () => {
+  const { bot, client } = makeBot();
+  injectEntities(bot);
+  const dispose = bindProtocol775VelocityUnits(bot);
+
+  client.emit('spawn_entity', decodeClientboundPacket('spawn_entity', {
+    entityId: 23,
+    objectUUID: '00000000-0000-0000-0000-000000000001',
+    type: 1,
+    x: 0,
+    y: 64,
+    z: 0,
+    velocity: { x: -0.3, y: 0.15, z: 0.2 },
+    pitch: 0,
+    yaw: 0,
+    headPitch: 0,
+    objectData: 0,
+  }));
+
+  const entity = bot.entities[23];
+  assert.ok(entity);
+  const velocity = entity.velocity;
+  assert.ok(velocity.x < -0.29 && velocity.x > -0.31);
+  assert.ok(velocity.y > 0.14 && velocity.y < 0.16);
+  assert.ok(velocity.z > 0.19 && velocity.z < 0.21);
+  dispose();
+});
+
+test('malformed protocol 775 velocity is reported through the bot error event', () => {
+  const { bot, client } = makeBot();
+  injectEntities(bot);
+  client.emit('login', { entityId: 7 });
+  const dispose = bindProtocol775VelocityUnits(bot);
+  let reportedError: Error | undefined;
+  bot.on('error', (error) => { reportedError = error; });
+
+  client.emit('entity_velocity', { entityId: 7, velocity: { x: Number.POSITIVE_INFINITY, y: 0, z: 0 } });
+
+  assert.match(reportedError?.message ?? '', /Malformed protocol 775 entity velocity packet/);
+  dispose();
+});
+
+test('protocol 775 velocity binding rejects registry mismatch', () => {
+  const { bot } = makeBot();
+  bot.registry = Object.create(bot.registry, {
+    version: { value: { ...bot.registry.version, version: 776 } },
+  }) as Bot['registry'];
+
+  assert.throws(() => bindProtocol775VelocityUnits(bot), /protocol version does not match its registry/);
+});
+
+test('protocol 775 velocity correction does not bind to other protocol versions', () => {
+  const { bot, client } = makeBot();
+  bot.protocolVersion = '776';
+  const listenersBefore = client.listenerCount('entity_velocity');
+
+  const dispose = bindProtocol775VelocityUnits(bot);
+
+  assert.equal(client.listenerCount('entity_velocity'), listenersBefore);
+  dispose();
+});
+
+test('factory disposes protocol 775 velocity correction on close and constructor failure', async () => {
+  const { bot, client } = makePhysicsBot();
+  injectEntities(bot);
+  client.emit('login', { entityId: 7 });
+  injectPhysics(bot, { physicsEnabled: false });
+  const nativeVelocityListeners = client.listenerCount('entity_velocity');
+  const nativeSpawnListeners = client.listenerCount('spawn_entity');
+  const arenaClient = createMineflayerArenaClient(bot);
+
+  client.emit('entity_velocity', decodeClientboundPacket('entity_velocity', {
+    entityId: 7,
+    velocity: { x: 0.4, y: 0, z: 0 },
+  }));
+  assert.ok(bot.entity.velocity.x > 0.39 && bot.entity.velocity.x < 0.41);
+  await arenaClient.close();
+  client.emit('entity_velocity', decodeClientboundPacket('entity_velocity', {
+    entityId: 7,
+    velocity: { x: 0.2, y: 0, z: 0 },
+  }));
+  assert.ok(bot.entity.velocity.x > 0.000024 && bot.entity.velocity.x < 0.000026);
+  assert.equal(client.listenerCount('entity_velocity'), nativeVelocityListeners);
+  assert.equal(client.listenerCount('spawn_entity'), nativeSpawnListeners);
+
+  const failing = makePhysicsBot();
+  injectEntities(failing.bot);
+  injectPhysics(failing.bot, { physicsEnabled: false });
+  const failVelocityListeners = failing.client.listenerCount('entity_velocity');
+  const failSpawnListeners = failing.client.listenerCount('spawn_entity');
+  failing.bot.pathfinder.setMovements = () => { throw new Error('test setup failure'); };
+  assert.throws(() => createMineflayerArenaClient(failing.bot), /test setup failure/);
+  assert.equal(failing.client.listenerCount('entity_velocity'), failVelocityListeners);
+  assert.equal(failing.client.listenerCount('spawn_entity'), failSpawnListeners);
+});
 
 test('Mineflayer 4.39 encodes sprint actions with the protocol 775 mapper', () => {
   const native = makeBot();
@@ -109,6 +239,7 @@ test('rejects protocol 775 when the Mineflayer registry disagrees', () => {
 
 test('protocol 775 injected physics keeps a jump clear of a full cube', async () => {
   const { bot, world } = makePhysicsBot();
+  injectEntities(bot);
   injectPhysics(bot, { physicsEnabled: false });
   const client = createMineflayerArenaClient(bot);
   const paperPlayerHalfWidth = Math.fround(0.6) / 2;
@@ -177,11 +308,20 @@ test('player collision width binding is protocol-scoped, idempotent, and isolate
   assert.throws(() => bindPlayerCollisionDimensions(unexpectedWidth), /half width does not match/);
 });
 
-function makeBot(): { readonly bot: Bot; readonly actions: { readonly entityId: number; readonly actionId: string | number; readonly jumpBoost: number }[] } {
-  const registry = minecraftData('26.1');
-  const client = new EventEmitter() as EventEmitter & {
+function makeBot(): {
+  readonly bot: Bot;
+  readonly client: EventEmitter & {
+    username: string;
     write(name: string, packet: { readonly entityId: number; readonly actionId: string | number; readonly jumpBoost: number }): void;
   };
+  readonly actions: { readonly entityId: number; readonly actionId: string | number; readonly jumpBoost: number }[];
+} {
+  const registry = minecraftData('26.1');
+  const client = new EventEmitter() as EventEmitter & {
+    username: string;
+    write(name: string, packet: { readonly entityId: number; readonly actionId: string | number; readonly jumpBoost: number }): void;
+  };
+  client.username = 'arena-bot';
   const actions: { readonly entityId: number; readonly actionId: string | number; readonly jumpBoost: number }[] = [];
   client.write = (name, packet) => {
     if (name === 'entity_action') actions.push(packet);
@@ -202,7 +342,15 @@ function makeBot(): { readonly bot: Bot; readonly actions: { readonly entityId: 
     entity: { id: 7 },
     blockAt: () => null,
   });
-  return { bot: bot as unknown as Bot, actions };
+  return { bot: bot as unknown as Bot, client, actions };
+}
+
+function decodeClientboundPacket(name: string, params: unknown): unknown {
+  const options = { state: protocol.states.PLAY, version: '26.1.2' };
+  const encoded = protocol.createSerializer({ ...options, isServer: true }).createPacketBuffer({ name, params });
+  const decoded = protocol.createDeserializer({ ...options, isServer: false }).parsePacketBuffer(encoded).data;
+  assert.equal(decoded.name, name);
+  return decoded.params;
 }
 
 function serializeEntityAction(
@@ -214,8 +362,9 @@ function serializeEntityAction(
   const deserializer = protocol.createDeserializer({ ...options, isServer: true });
   const encoded = serializer.createPacketBuffer({ name: 'entity_action', params: packet });
   const parsed = deserializer.parsePacketBuffer(encoded);
+  const params = parsed.data.params as { readonly actionId: string | number };
   return {
-    actionName: parsed.data.params.actionId,
+    actionName: params.actionId,
     actionId: parsed.buffer[2] ?? -1,
   };
 }
@@ -231,6 +380,12 @@ interface PhysicsPosition {
   clone(): PhysicsPosition;
   offset(x: number, y: number, z: number): PhysicsPosition;
   floored(): PhysicsPosition;
+}
+
+interface VelocityVector {
+  readonly x: number;
+  readonly y: number;
+  readonly z: number;
 }
 
 interface PhysicsControls {
@@ -261,10 +416,14 @@ interface InjectedPhysics {
   ): { apply(bot: Bot): void };
 }
 
-function makePhysicsBot(): { readonly bot: Bot; readonly world: PhysicsWorld } {
+function makePhysicsBot(): {
+  readonly bot: Bot;
+  readonly client: ReturnType<typeof makeBot>['client'];
+  readonly world: PhysicsWorld;
+} {
   const registry = minecraftData('26.1');
   const Block = PrismarineBlock('26.1');
-  const bot = makeBot().bot;
+  const { bot, client } = makeBot();
   const world: PhysicsWorld = {
     getBlock: (position) => {
       const x = Math.floor(position.x);
@@ -310,5 +469,5 @@ function makePhysicsBot(): { readonly bot: Bot; readonly world: PhysicsWorld } {
       stop: () => undefined,
     },
   });
-  return { bot, world };
+  return { bot, client, world };
 }

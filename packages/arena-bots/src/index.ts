@@ -4,7 +4,11 @@ import type {
   SkillOutcome,
 } from '@arena/core';
 import type { Bot } from 'mineflayer';
-import { bindEntityActionStringMapperFeature, bindPlayerCollisionDimensions } from './mineflayer-compat.js';
+import {
+  bindEntityActionStringMapperFeature,
+  bindPlayerCollisionDimensions,
+  bindProtocol775VelocityUnits,
+} from './mineflayer-compat.js';
 import { MineflayerObserver } from './observer.js';
 import type { ArenaSkillIntent } from './skill-intent.js';
 import { SkillOwner } from './skills.js';
@@ -31,10 +35,13 @@ export function createMineflayerArenaClient(bot: Bot): MineflayerArenaClient {
   bindPlayerCollisionDimensions(bot);
   bindEntityActionStringMapperFeature(bot);
   const observer = new MineflayerObserver(bot);
+  let disposeVelocityUnits = (): void => undefined;
   let skills: SkillOwner;
   try {
+    disposeVelocityUnits = bindProtocol775VelocityUnits(bot);
     skills = new SkillOwner(bot, observer);
   } catch (error) {
+    disposeVelocityUnits();
     observer.close();
     throw error;
   }
@@ -45,7 +52,10 @@ export function createMineflayerArenaClient(bot: Bot): MineflayerArenaClient {
     run: (intent) => skills.run(intent),
     cancel: (reason) => skills.cancel(reason),
     close: () => {
-      closePromise ??= skills.close().finally(() => observer.close());
+      closePromise ??= skills.close().finally(() => {
+        disposeVelocityUnits();
+        observer.close();
+      });
       return closePromise;
     },
   };
