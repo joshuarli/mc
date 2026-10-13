@@ -1,8 +1,9 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { RunnerError } from '../errors.js';
 
-const GRACEFUL_STOP_MS = 30_000;
-const TERMINATION_GRACE_MS = 5_000;
+const GRACEFUL_STOP_MS = 15_000;
+const TERMINATION_GRACE_MS = 1_000;
+const FORCE_REAP_MS = 4_000;
 
 export interface ServerProcessExit {
   readonly code: number | null;
@@ -68,7 +69,9 @@ export async function startOwnedServerProcess(
   } catch (error) {
     if (options.signal?.aborted) {
       child.kill('SIGKILL');
-      await waitForChildClose(child);
+      if (!await waitForChildClose(child, FORCE_REAP_MS)) {
+        throw new RunnerError('runtime_failure', 'server process', { kind: 'child_reap_timeout' });
+      }
       throw new RunnerError('runtime_failure', 'server process', { kind: 'cancelled' });
     }
     throw error;
@@ -123,6 +126,9 @@ class SpawnedServerProcess implements OwnedServerProcess {
         this.#child.kill('SIGTERM');
         if (await waitForExit(this.exited, TERMINATION_GRACE_MS) === undefined) {
           this.#child.kill('SIGKILL');
+          if (await waitForExit(this.exited, FORCE_REAP_MS) === undefined) {
+            throw new RunnerError('runtime_failure', 'server process', { kind: 'child_reap_timeout' });
+          }
         }
       }
     }
@@ -148,9 +154,19 @@ function waitForExit(exit: Promise<ServerProcessExit>, timeoutMs: number): Promi
   });
 }
 
-function waitForChildClose(child: ChildProcess): Promise<void> {
-  if (isExited(child)) return Promise.resolve();
-  return new Promise((resolve) => child.once('close', () => resolve()));
+function waitForChildClose(child: ChildProcess, timeoutMs: number): Promise<boolean> {
+  if (isExited(child)) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    const onClose = (): void => {
+      clearTimeout(timer);
+      resolve(true);
+    };
+    const timer = setTimeout(() => {
+      child.removeListener('close', onClose);
+      resolve(false);
+    }, timeoutMs);
+    child.once('close', onClose);
+  });
 }
 
 function isExited(child: ChildProcess): boolean {
