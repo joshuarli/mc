@@ -14,6 +14,7 @@ import {
   competitorForSeat,
   eliminateOpponentWithSkillAttacks,
   runEvaluatorSkill,
+  stageOpponentForCombat,
   waitForActivePhase,
 } from "./support/duel.js";
 import { observePlayerInventory } from "./support/mineflayer-world.js";
@@ -21,6 +22,12 @@ import {
   runOwnedAcceptanceScenario,
   type AcceptanceRunContext,
 } from "./support/owned-run.js";
+import {
+  captureDuelCombatWindow,
+  MAX_DUEL_COMBAT_DIAGNOSTIC_BYTES,
+  serializeDuelCombatDiagnosticArtifact,
+  type DuelCombatDiagnosticArtifact,
+} from "./support/duel-diagnostics.js";
 import {
   serializeRampPathDiagnosticArtifact,
   type RampArrivalReceipt,
@@ -138,12 +145,20 @@ test("legal-player", { timeout: 300_000 }, async (t) => {
       assert.equal(equipped.agent.kind, "current");
       assert.equal(equipped.agent.value.equipped.weapon, weapon.rating);
 
+      // Keep the target's block inside the shrinking border throughout knockback and the final attack.
+      await stageOpponentForCombat(active, 1, blockPosition(40, 65, 32), signal);
       const knockback = recordKnockbackReceipt(seatOne.bot, seatZero.bot.entity.id);
-      try {
-        await eliminateOpponentWithSkillAttacks(active, 0, 1, signal);
-      } finally {
-        knockback.close();
-      }
+      await captureDuelCombatWindow(
+        {
+          active,
+          attackerSeat: 0,
+          targetSeat: 1,
+          snapshotKnockback: () => knockback.snapshot(),
+          closeKnockback: () => knockback.close(),
+          stageArtifact: async (artifact) => { await stageDuelCombatDiagnostics(active, artifact); },
+          runCombat: (diagnostics) => eliminateOpponentWithSkillAttacks(active, 0, 1, signal, diagnostics),
+        },
+      );
       const knockbackEvidence = knockback.snapshot();
       assert.ok(knockbackEvidence.damageEvents > 0, "the target client must receive a player-caused damage event");
       assert.ok(
@@ -482,6 +497,26 @@ async function stageRampPathDiagnostics(
     maxBytes: RAMP_DIAGNOSTIC_MAX_BYTES,
   });
   return relativePath.toString("utf8");
+}
+
+async function stageDuelCombatDiagnostics(
+  active: AcceptanceRunContext,
+  artifact: DuelCombatDiagnosticArtifact,
+): Promise<void> {
+  const repositoryRoot = process.cwd();
+  const helperPath = process.env.ARENA_FS_HELPER ?? resolve(repositoryRoot, ".work/arena-fs/arena-fs");
+  const relativePath = Buffer.concat([
+    active.preparedRun.runDirectoryPath,
+    Buffer.from("/duel-combat-diagnostics.json", "ascii"),
+  ]);
+  const contents = serializeDuelCombatDiagnosticArtifact(artifact);
+  await stageOwnedFile({
+    helperPath,
+    ownedRoot: Buffer.from(repositoryRoot, "utf8"),
+    relativePath,
+    contents,
+    maxBytes: MAX_DUEL_COMBAT_DIAGNOSTIC_BYTES,
+  });
 }
 
 function summarizeRampDiagnostics(

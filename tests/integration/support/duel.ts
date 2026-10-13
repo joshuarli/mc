@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { setTimeout as delay } from "node:timers/promises";
 import type { ArenaSkillIntent, MineflayerArenaClient } from "@arena/bots";
-import type { SkillOutcome } from "@arena/core";
+import type { BlockPosition, SkillOutcome } from "@arena/core";
 
 import { runOwnedAcceptanceScenario } from "./owned-run.js";
 import type { AcceptanceRunContext } from "./owned-run.js";
@@ -90,12 +90,38 @@ export async function waitForActivePhase(active: AcceptanceRunContext, signal: A
   throw new Error(`duel did not reach the active phase within ${ACTIVE_PHASE_TIMEOUT_MS} ms`);
 }
 
+/** Uses ordinary block navigation and verifies the competitor reaches the selected staging tile. */
+export async function stageOpponentForCombat(
+  active: AcceptanceRunContext,
+  opponentSeat: number,
+  destination: BlockPosition,
+  signal: AbortSignal,
+): Promise<void> {
+  const opponent = competitorForSeat(active, opponentSeat);
+  assert.deepStrictEqual(
+    await runEvaluatorSkill(opponent.client, { kind: "navigateToBlock", target: destination }, signal),
+    { kind: "succeeded" },
+    `the Mineflayer skill client must stage seat ${opponentSeat} at the selected combat tile`,
+  );
+  const position = opponent.bot.entity.position;
+  assert.deepStrictEqual(
+    { x: Math.floor(position.x), y: Math.floor(position.y), z: Math.floor(position.z) },
+    destination,
+    `seat ${opponentSeat} must arrive at the selected combat tile before attacks begin`,
+  );
+}
+
+interface DuelCombatMarker {
+  mark(kind: string, data?: Readonly<Record<string, unknown>>): void;
+}
+
 /** Eliminates a stationary competitor using visible upgrades, opponents, and Mineflayer skills. */
 export async function eliminateOpponentWithSkillAttacks(
   active: AcceptanceRunContext,
   attackerSeat: number,
   targetSeat: number,
   signal: AbortSignal,
+  diagnostics?: DuelCombatMarker,
 ): Promise<void> {
   const attacker = competitorForSeat(active, attackerSeat);
   const target = competitorForSeat(active, targetSeat);
@@ -118,27 +144,46 @@ export async function eliminateOpponentWithSkillAttacks(
 
   for (let attack = 0; attack < MAX_ATTACKS; attack += 1) {
     signal.throwIfAborted();
-    if (hasDeathElimination(active, targetSeat)) return;
+    if (hasDeathElimination(active, targetSeat)) {
+      diagnostics?.mark("targetEliminated", { attack: attack + 1 });
+      return;
+    }
+    diagnostics?.mark("attackIterationStarted", { attack: attack + 1 });
     const currentTargetEntity = targetEntityFor(attacker.bot, target.identity.username);
     await attacker.bot.lookAt(currentTargetEntity.position.offset(0, currentTargetEntity.height * 0.6, 0), true);
     const observation = await waitForOpponentObservation(active, attackerSeat, targetSeat, signal);
     assert.equal(observation.opponents.kind, "current");
     const visibleTarget = observation.opponents.value.find(({ id }) => id === currentTargetEntity.id);
     assert.ok(visibleTarget, "the attacker's complete current perception must identify its opponent before each attack");
+    diagnostics?.mark("approachStarted", { attack: attack + 1, targetEntityId: visibleTarget.id });
+    const approachOutcome = await runEvaluatorSkill(attacker.client, { kind: "approach", target: visibleTarget.id }, signal);
+    diagnostics?.mark("approachCompleted", { attack: attack + 1, outcome: approachOutcome });
     assert.deepStrictEqual(
-      await runEvaluatorSkill(attacker.client, { kind: "approach", target: visibleTarget.id }, signal),
+      approachOutcome,
       { kind: "succeeded" },
       `the Mineflayer skill client must approach the currently visible opponent before attack ${attack + 1}`,
     );
     const currentTarget = targetEntityFor(attacker.bot, target.identity.username);
     await attacker.bot.lookAt(currentTarget.position.offset(0, currentTarget.height * 0.6, 0), true);
+    diagnostics?.mark("attackStarted", {
+      attack: attack + 1,
+      targetEntityId: visibleTarget.id,
+      attackerPosition: { x: attacker.bot.entity.position.x, y: attacker.bot.entity.position.y, z: attacker.bot.entity.position.z },
+      targetPosition: { x: currentTarget.position.x, y: currentTarget.position.y, z: currentTarget.position.z },
+    });
+    const attackOutcome = await runEvaluatorSkill(attacker.client, { kind: "attack", target: visibleTarget.id }, signal);
+    diagnostics?.mark("attackCompleted", { attack: attack + 1, outcome: attackOutcome });
     assert.deepStrictEqual(
-      await runEvaluatorSkill(attacker.client, { kind: "attack", target: visibleTarget.id }, signal),
+      attackOutcome,
       { kind: "succeeded" },
       `ordinary Mineflayer attack ${attack + 1} must produce server-observed damage`,
     );
-    if (await waitForDeathElimination(active, targetSeat, signal)) return;
+    const eliminated = await waitForDeathElimination(active, targetSeat, signal);
+    diagnostics?.mark("deathWaitCompleted", { attack: attack + 1, eliminated });
+    if (eliminated) return;
+    diagnostics?.mark("attackCooldownStarted", { attack: attack + 1, cooldownMs: ATTACK_COOLDOWN_MS });
     await delay(ATTACK_COOLDOWN_MS, undefined, { signal });
+    diagnostics?.mark("attackCooldownCompleted", { attack: attack + 1 });
   }
   throw new Error(`seat ${targetSeat} survived ${MAX_ATTACKS} ordinary Mineflayer attacks`);
 }
