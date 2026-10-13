@@ -3,6 +3,7 @@ package dev.arena.foundation;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -194,14 +195,21 @@ final class CivilizationMaterialCensusTest {
         List<String> markers = new ArrayList<>();
         CivilizationMaterialCensus.Recorder recorder = new CivilizationMaterialCensus.Recorder(
                 "run-capped", markers::add);
-        recorder.checkpoint(BigInteger.ZERO, state(List.of()));
+        CivilizationMaterialCensus.MaterialState initial = state(List.of());
+        recorder.checkpoint(BigInteger.ZERO, initial);
         for (int marker = 1; marker < CivilizationMaterialCensus.MAX_MARKERS; marker++) {
             recorder.deathCargo(BigInteger.ZERO, 0, List.of(), List.of());
         }
         assertEquals(CivilizationMaterialCensus.MAX_MARKERS, markers.size());
-        assertThrows(IllegalStateException.class,
+        IllegalStateException firstFailure = assertThrows(IllegalStateException.class,
                 () -> recorder.deathCargo(BigInteger.ZERO, 0, List.of(), List.of()));
         assertEquals(CivilizationMaterialCensus.MAX_MARKERS, markers.size());
+        recorder.poison(new IllegalStateException("later evaluator failure"));
+        assertSame(firstFailure,
+                assertThrows(IllegalStateException.class, () -> recorder.checkpoint(BigInteger.ONE, initial)));
+        assertSame(firstFailure, assertThrows(IllegalStateException.class, () -> {
+            recorder.hasInitialCheckpoint();
+        }));
 
         List<CivilizationMaterialCensus.Position> manyLogs = new ArrayList<>();
         for (int x = 0; x < 2_000; x++) {
@@ -212,8 +220,11 @@ final class CivilizationMaterialCensusTest {
         List<String> oversizedMarkers = new ArrayList<>();
         CivilizationMaterialCensus.Recorder sizeLimited =
                 new CivilizationMaterialCensus.Recorder("run-capped", oversizedMarkers::add);
-        assertThrows(IllegalStateException.class, () -> sizeLimited.checkpoint(BigInteger.ZERO, oversized));
+        IllegalStateException sizeFailure = assertThrows(
+                IllegalStateException.class, () -> sizeLimited.checkpoint(BigInteger.ZERO, oversized));
         assertTrue(oversizedMarkers.isEmpty());
+        assertSame(sizeFailure, assertThrows(IllegalStateException.class,
+                () -> sizeLimited.checkpoint(BigInteger.ZERO, state(List.of()))));
     }
 
     private static CivilizationMaterialCensus.MaterialState state(

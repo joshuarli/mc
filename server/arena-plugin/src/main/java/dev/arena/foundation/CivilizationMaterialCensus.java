@@ -193,6 +193,7 @@ final class CivilizationMaterialCensus {
         private BigInteger lastCheckpointSequence;
         private MaterialState lastMaterialState;
         private int markerCount;
+        private RuntimeException failure;
 
         Recorder(String runId, Consumer<String> markerSink) {
             requireRunId(runId);
@@ -201,38 +202,64 @@ final class CivilizationMaterialCensus {
         }
 
         boolean hasInitialCheckpoint() {
+            requireHealthy();
             return lastCheckpointSequence != null;
         }
 
         void checkpoint(BigInteger matchTick, MaterialState state) {
-            requireMatchTick(matchTick);
-            Objects.requireNonNull(state, "material state");
-            if (lastCheckpointSequence == null && matchTick.signum() != 0) {
-                throw new IllegalStateException("material census initial checkpoint must be at match tick zero");
+            requireHealthy();
+            try {
+                requireMatchTick(matchTick);
+                Objects.requireNonNull(state, "material state");
+                if (lastCheckpointSequence == null && matchTick.signum() != 0) {
+                    throw new IllegalStateException("material census initial checkpoint must be at match tick zero");
+                }
+                if (state.equals(lastMaterialState)) {
+                    return;
+                }
+                BigInteger sequence = nextSequence;
+                String json = checkpointJson(runId, sequence, matchTick, state);
+                emit(json);
+                nextSequence = nextSequence.add(BigInteger.ONE);
+                lastCheckpointSequence = sequence;
+                lastMaterialState = state;
+            } catch (RuntimeException failedCheckpoint) {
+                poison(failedCheckpoint);
+                throw failedCheckpoint;
             }
-            if (state.equals(lastMaterialState)) {
-                return;
-            }
-            BigInteger sequence = nextSequence;
-            String json = checkpointJson(runId, sequence, matchTick, state);
-            emit(json);
-            nextSequence = nextSequence.add(BigInteger.ONE);
-            lastCheckpointSequence = sequence;
-            lastMaterialState = state;
         }
 
         void deathCargo(BigInteger matchTick, int seat, List<StackCount> inventoryItems, List<StackCount> eventDrops) {
-            requireMatchTick(matchTick);
-            if (lastCheckpointSequence == null) {
-                throw new IllegalStateException("material census death cargo has no preceding checkpoint");
+            requireHealthy();
+            try {
+                requireMatchTick(matchTick);
+                if (lastCheckpointSequence == null) {
+                    throw new IllegalStateException("material census death cargo has no preceding checkpoint");
+                }
+                MaterialCounts inventory = count(inventoryItems);
+                MaterialCounts drops = count(eventDrops);
+                BigInteger sequence = nextSequence;
+                DeathCargo cargo = new DeathCargo(runId, sequence, matchTick, seat, lastCheckpointSequence,
+                        inventory.oakLogs(), inventory.oakPlanks(), drops.oakLogs(), drops.oakPlanks());
+                emit(deathCargoJson(cargo));
+                nextSequence = nextSequence.add(BigInteger.ONE);
+            } catch (RuntimeException failedDeathCargo) {
+                poison(failedDeathCargo);
+                throw failedDeathCargo;
             }
-            MaterialCounts inventory = count(inventoryItems);
-            MaterialCounts drops = count(eventDrops);
-            BigInteger sequence = nextSequence;
-            DeathCargo cargo = new DeathCargo(runId, sequence, matchTick, seat, lastCheckpointSequence,
-                    inventory.oakLogs(), inventory.oakPlanks(), drops.oakLogs(), drops.oakPlanks());
-            emit(deathCargoJson(cargo));
-            nextSequence = nextSequence.add(BigInteger.ONE);
+        }
+
+        void poison(RuntimeException cause) {
+            Objects.requireNonNull(cause, "material census failure");
+            if (failure == null) {
+                failure = cause;
+            }
+        }
+
+        private void requireHealthy() {
+            if (failure != null) {
+                throw failure;
+            }
         }
 
         private void emit(String json) {

@@ -994,6 +994,9 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
     }
 
     private void failCivilizationEvaluatorRun(RuntimeException failure) {
+        if (civilizationMaterialCensus != null) {
+            civilizationMaterialCensus.poison(failure);
+        }
         getLogger().log(Level.SEVERE, "Civilization evaluator evidence failed; stopping the Paper server.", failure);
         Bukkit.shutdown();
     }
