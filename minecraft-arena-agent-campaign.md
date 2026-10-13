@@ -314,6 +314,7 @@ Use exact locked source/API for implementation. Mutable links below are research
 Append one line per execution judgment that a reader would otherwise miss: date, item, decision and reason. Owner decisions and prescribed choices above are already recorded; do not duplicate them here.
 
 - 2026-10-12 — P1: start independent S1, B1, and R1 offline halves after the F0 workspace/schema seam merged, because these paths can progress without the still-pending live stack proof; defer their proof-dependent integrations.
+- 2026-10-12 — P1: admit parse-only `toml_edit`, `serde`, `serde_json`, and `sha2` for source-aware TOML validation, strict JSON evidence, and SHA-256 identity/checksums; all versions were already locked, so the graph adds no package versions; record release-size and startup budgets for P3 because this offline slice forbids release builds.
 
 ## 9. Campaign log
 

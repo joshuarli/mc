@@ -52,16 +52,18 @@ version = "0.1.0"
 name = "arena-runner"
 version = "0.1.0"
 dependencies = [
- "arena-bots",
  "arena-core",
- "arena-spec",
+ "serde",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]
 name = "arena-spec"
 version = "0.1.0"
 dependencies = [
- "arena-core",
+ "sha2",
+ "toml_edit",
 ]
 
 [[package]]
