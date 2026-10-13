@@ -20,6 +20,11 @@ import {
   runOwnedAcceptanceScenario,
   type AcceptanceRunContext,
 } from "./support/owned-run.js";
+import {
+  serializeRampPathDiagnosticArtifact,
+  type RampArrivalReceipt,
+  type RampPathDiagnosticArtifact,
+} from "./support/ramp-path-diagnostics.js";
 import { startSprintCourse } from "./support/sprint-course.js";
 
 const FOOD_DEPLETION_TIMEOUT_MS = 60_000;
@@ -297,16 +302,24 @@ async function navigateOverRamp(
 ): Promise<void> {
   const diagnostics = suppliedDiagnostics ?? createRampPathDiagnostics(active, bot);
   const closeDiagnostics = suppliedDiagnostics === undefined;
+  const target = blockPosition(ramp.position.x, ramp.position.y + 1, ramp.position.z);
   let traversedRamp = false;
   let observerReceivedRampTop = false;
+  let ownArrivalReceipt: RampArrivalReceipt | null = null;
+  let observerArrivalReceipt: RampArrivalReceipt | null = null;
   const observePosition = (): void => {
-    if (isAtRampTop(bot.entity.position, ramp.position)) traversedRamp = true;
+    const position = bot.entity.position;
+    if (!isAtRampTop(position, ramp.position)) return;
+    traversedRamp = true;
+    ownArrivalReceipt ??= rampArrivalReceipt(active, position);
   };
   const observeRemotePosition = (entity: Bot["entity"]): void => {
     if (entity.id === bot.entity.id && isAtRampTop(entity.position, ramp.position)) {
       observerReceivedRampTop = true;
+      observerArrivalReceipt ??= rampArrivalReceipt(active, entity.position);
     }
   };
+  let records: ReturnType<PathDiagnosticRing["snapshot"]>;
   try {
     if (route.approach !== undefined) {
       signal.throwIfAborted();
@@ -324,14 +337,13 @@ async function navigateOverRamp(
     bot.on("move", observePosition);
     bot.on("physicsTick", observePosition);
     observer.on("entityMoved", observeRemotePosition);
-    const rampTop = blockPosition(ramp.position.x, ramp.position.y + 1, ramp.position.z);
     signal.throwIfAborted();
     assert.deepStrictEqual(
-      await client.run({ kind: "navigateToBlock", target: rampTop }),
+      await client.run({ kind: "navigateToBlock", target }),
       { kind: "succeeded" },
       "the pathfinder skill must climb onto the existing ramp",
     );
-    if (isAtRampTop(bot.entity.position, ramp.position)) traversedRamp = true;
+    if (isAtRampTop(bot.entity.position, ramp.position)) observePosition();
     assert.ok(traversedRamp, "the client must observe its own position on top of the ramp");
     const receiptDeadline = Date.now() + RAMP_RECEIPT_TIMEOUT_MS;
     while (!observerReceivedRampTop && Date.now() < receiptDeadline) {
@@ -350,12 +362,12 @@ async function navigateOverRamp(
         "the pathfinder skill must continue along the route beyond the existing ramp",
       );
     }
-    if (closeDiagnostics) diagnostics.snapshot();
+    records = diagnostics.snapshot();
   } catch (error) {
     diagnostics.close();
-    let snapshot: ReturnType<PathDiagnosticRing["snapshot"]>;
+    let failureRecords: ReturnType<PathDiagnosticRing["snapshot"]>;
     try {
-      snapshot = diagnostics.snapshot();
+      failureRecords = diagnostics.snapshot();
     } catch (captureError) {
       throw new AggregateError(
         [error, captureError],
@@ -365,7 +377,12 @@ async function navigateOverRamp(
 
     let artifactPath: string;
     try {
-      artifactPath = await stageRampPathDiagnostics(active, snapshot);
+      artifactPath = await stageRampPathDiagnostics(active, {
+        target,
+        ownArrivalReceipt,
+        observerArrivalReceipt,
+        records: failureRecords,
+      });
     } catch (stageError) {
       throw new AggregateError(
         [error, stageError],
@@ -373,7 +390,7 @@ async function navigateOverRamp(
       );
     }
     const reason = `ramp route failed: ${truncateCodePoints(describeRunFailure(error), 160)}`
-      + `; diagnostics=${summarizeRampDiagnostics(snapshot, ramp.position)}`
+      + `; diagnostics=${summarizeRampDiagnostics(failureRecords, ramp.position)}`
       + `; artifact=${artifactPath}`;
     throw new Error(reason, { cause: error });
   } finally {
@@ -382,6 +399,12 @@ async function navigateOverRamp(
     bot.removeListener("physicsTick", observePosition);
     observer.removeListener("entityMoved", observeRemotePosition);
   }
+  await stageRampPathDiagnostics(active, {
+    target,
+    ownArrivalReceipt,
+    observerArrivalReceipt,
+    records,
+  });
   assert.ok(traversedRamp, "the client must observe its own position above the ramp while navigating over it");
 }
 
@@ -413,6 +436,17 @@ function createRampPathDiagnostics(active: AcceptanceRunContext, bot: Bot): Path
   });
 }
 
+function rampArrivalReceipt(
+  active: AcceptanceRunContext,
+  position: { readonly x: number; readonly y: number; readonly z: number },
+): RampArrivalReceipt {
+  return {
+    clientMs: performance.now(),
+    authorityTick: latestMatchTick(active),
+    position: { x: position.x, y: position.y, z: position.z },
+  };
+}
+
 function latestMatchTick(active: AcceptanceRunContext): number | null {
   const clock = active.events().findLast((event) =>
     event.type === "public_clock" && event.payload.tick?.domain === "match",
@@ -427,7 +461,7 @@ function latestMatchTick(active: AcceptanceRunContext): number | null {
 
 async function stageRampPathDiagnostics(
   active: AcceptanceRunContext,
-  records: ReturnType<PathDiagnosticRing["snapshot"]>,
+  artifact: RampPathDiagnosticArtifact,
 ): Promise<string> {
   const repositoryRoot = process.cwd();
   const helperPath = process.env.ARENA_FS_HELPER ?? resolve(repositoryRoot, ".work/arena-fs/arena-fs");
@@ -435,7 +469,7 @@ async function stageRampPathDiagnostics(
     active.preparedRun.runDirectoryPath,
     Buffer.from("/ramp-path-diagnostics.json", "ascii"),
   ]);
-  const contents = Buffer.from(JSON.stringify(records), "utf8");
+  const contents = serializeRampPathDiagnosticArtifact(artifact);
   if (contents.byteLength > RAMP_DIAGNOSTIC_MAX_BYTES) {
     throw new RangeError(`ramp path diagnostics exceeded ${RAMP_DIAGNOSTIC_MAX_BYTES} bytes`);
   }
