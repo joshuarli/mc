@@ -1,6 +1,11 @@
 import { blockPosition, type BlockPosition } from '@arena/core';
 import type { Bot } from 'mineflayer';
-import { hasLocalVoxelLineOfSight, isInsidePerceptionCone, type ViewDirection } from './visibility.js';
+import {
+  hasLocalVoxelLineOfSight,
+  hasLocalVoxelRayToTarget,
+  isInsidePerceptionCone,
+  type ViewDirection,
+} from './visibility.js';
 
 type MineflayerEntity = Bot['entity'];
 
@@ -16,7 +21,10 @@ export function isVisiblePosition(
 ): boolean {
   const viewer = viewDirection(bot);
   return isInsidePerceptionCone(viewer, { position, height })
-    && hasLocalVoxelLineOfSight(bot, position);
+    && hasLocalVoxelRayToTarget(bot, {
+      blockPosition: position,
+      rayTarget: position.offset(0, height / 2, 0),
+    });
 }
 
 export function isTargetablePlayer(bot: Bot, entity: MineflayerEntity): boolean {
