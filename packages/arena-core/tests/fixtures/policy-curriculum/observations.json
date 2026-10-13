@@ -1,0 +1,252 @@
+{
+  "initialSearch": {
+    "tick": 10,
+    "position": [0, 64, 0],
+    "healthHalfHearts": 40,
+    "hungerPoints": 20,
+    "foodStacks": [],
+    "equipped": {
+      "weapon": null,
+      "helmet": null,
+      "chestplate": null,
+      "leggings": null,
+      "boots": null
+    },
+    "upgrades": [],
+    "border": { "centerX": 0, "centerZ": 0, "radiusBlocks": 100 },
+    "opponents": [],
+    "loot": [],
+    "randomSeed": "0"
+  },
+  "containerContention": {
+    "tick": 20,
+    "position": [0, 64, 0],
+    "healthHalfHearts": 40,
+    "hungerPoints": 20,
+    "foodStacks": [],
+    "equipped": {
+      "weapon": null,
+      "helmet": null,
+      "chestplate": null,
+      "leggings": null,
+      "boots": null
+    },
+    "upgrades": [],
+    "border": { "centerX": 0, "centerZ": 0, "radiusBlocks": 100 },
+    "opponents": [],
+    "loot": [
+      { "kind": "unopenedContainer", "position": [2, 64, 0] }
+    ],
+    "randomSeed": "0"
+  },
+  "equipmentUnderdog": {
+    "tick": 30,
+    "position": [0, 64, 0],
+    "healthHalfHearts": 40,
+    "hungerPoints": 20,
+    "foodStacks": [],
+    "equipped": {
+      "weapon": 1,
+      "helmet": null,
+      "chestplate": null,
+      "leggings": null,
+      "boots": null
+    },
+    "upgrades": [[17, "weapon", 2]],
+    "border": { "centerX": 0, "centerZ": 0, "radiusBlocks": 100 },
+    "opponents": [],
+    "loot": [],
+    "randomSeed": "0"
+  },
+  "equipmentAhead": {
+    "tick": 31,
+    "position": [0, 64, 0],
+    "healthHalfHearts": 40,
+    "hungerPoints": 20,
+    "foodStacks": [],
+    "equipped": {
+      "weapon": 3,
+      "helmet": null,
+      "chestplate": null,
+      "leggings": null,
+      "boots": null
+    },
+    "upgrades": [[17, "weapon", 2]],
+    "border": { "centerX": 0, "centerZ": 0, "radiusBlocks": 100 },
+    "opponents": [],
+    "loot": [],
+    "randomSeed": "0"
+  },
+  "lowHealthThreat": {
+    "tick": 40,
+    "position": [0, 64, 0],
+    "healthHalfHearts": 6,
+    "hungerPoints": 2,
+    "foodStacks": [[9, 1]],
+    "equipped": {
+      "weapon": null,
+      "helmet": null,
+      "chestplate": null,
+      "leggings": null,
+      "boots": null
+    },
+    "upgrades": [],
+    "border": { "centerX": 0, "centerZ": 0, "radiusBlocks": 100 },
+    "opponents": [
+      { "id": 7, "position": [1, 64, 0], "attackingAgent": false },
+      { "id": 8, "position": [2, 64, 0], "attackingAgent": true }
+    ],
+    "loot": [],
+    "randomSeed": "0"
+  },
+  "eatingThreat": {
+    "tick": 50,
+    "position": [0, 64, 0],
+    "healthHalfHearts": 40,
+    "hungerPoints": 4,
+    "foodStacks": [[11, 2]],
+    "equipped": {
+      "weapon": null,
+      "helmet": null,
+      "chestplate": null,
+      "leggings": null,
+      "boots": null
+    },
+    "upgrades": [],
+    "border": { "centerX": 0, "centerZ": 0, "radiusBlocks": 100 },
+    "opponents": [
+      { "id": 19, "position": [3, 64, 0], "attackingAgent": true }
+    ],
+    "loot": [],
+    "randomSeed": "0"
+  },
+  "lostTarget": {
+    "tick": 60,
+    "position": [0, 64, 0],
+    "healthHalfHearts": 40,
+    "hungerPoints": 20,
+    "foodStacks": [],
+    "equipped": {
+      "weapon": null,
+      "helmet": null,
+      "chestplate": null,
+      "leggings": null,
+      "boots": null
+    },
+    "upgrades": [],
+    "border": { "centerX": 0, "centerZ": 0, "radiusBlocks": 100 },
+    "opponents": [
+      { "id": 41, "position": [5, 64, 0], "attackingAgent": false }
+    ],
+    "loot": [],
+    "randomSeed": "0"
+  },
+  "twoVisibleTargets": {
+    "tick": 70,
+    "position": [0, 64, 0],
+    "healthHalfHearts": 40,
+    "hungerPoints": 20,
+    "foodStacks": [],
+    "equipped": {
+      "weapon": null,
+      "helmet": null,
+      "chestplate": null,
+      "leggings": null,
+      "boots": null
+    },
+    "upgrades": [],
+    "border": { "centerX": 0, "centerZ": 0, "radiusBlocks": 100 },
+    "opponents": [
+      { "id": 31, "position": [4, 64, 0], "attackingAgent": false },
+      { "id": 30, "position": [-1, 64, 0], "attackingAgent": false }
+    ],
+    "loot": [],
+    "randomSeed": "0"
+  },
+  "afterKnockback": {
+    "tick": 80,
+    "position": [101, 64, 0],
+    "healthHalfHearts": 6,
+    "hungerPoints": 2,
+    "foodStacks": [[9, 1]],
+    "equipped": {
+      "weapon": null,
+      "helmet": null,
+      "chestplate": null,
+      "leggings": null,
+      "boots": null
+    },
+    "upgrades": [[17, "weapon", 10]],
+    "border": { "centerX": 0, "centerZ": 0, "radiusBlocks": 100 },
+    "opponents": [
+      { "id": 51, "position": [102, 64, 0], "attackingAgent": true }
+    ],
+    "loot": [
+      { "kind": "unopenedContainer", "position": [101, 64, 1] }
+    ],
+    "randomSeed": "0"
+  },
+  "nearHysteresis": {
+    "tick": 90,
+    "position": [0, 64, 0],
+    "healthHalfHearts": 40,
+    "hungerPoints": 20,
+    "foodStacks": [],
+    "equipped": {
+      "weapon": null,
+      "helmet": null,
+      "chestplate": null,
+      "leggings": null,
+      "boots": null
+    },
+    "upgrades": [],
+    "border": { "centerX": 0, "centerZ": 0, "radiusBlocks": 100 },
+    "opponents": [],
+    "loot": [
+      { "kind": "unopenedContainer", "position": [4, 64, 0] },
+      { "kind": "unopenedContainer", "position": [5, 64, 0] }
+    ],
+    "randomSeed": "0"
+  },
+  "farHysteresis": {
+    "tick": 91,
+    "position": [0, 64, 0],
+    "healthHalfHearts": 40,
+    "hungerPoints": 20,
+    "foodStacks": [],
+    "equipped": {
+      "weapon": null,
+      "helmet": null,
+      "chestplate": null,
+      "leggings": null,
+      "boots": null
+    },
+    "upgrades": [],
+    "border": { "centerX": 0, "centerZ": 0, "radiusBlocks": 100 },
+    "opponents": [],
+    "loot": [
+      { "kind": "unopenedContainer", "position": [4, 64, 0] },
+      { "kind": "unopenedContainer", "position": [7, 64, 0] }
+    ],
+    "randomSeed": "0"
+  },
+  "explorationOverflow": {
+    "tick": 100,
+    "position": [9007199254740991, 64, 0],
+    "healthHalfHearts": 40,
+    "hungerPoints": 20,
+    "foodStacks": [],
+    "equipped": {
+      "weapon": null,
+      "helmet": null,
+      "chestplate": null,
+      "leggings": null,
+      "boots": null
+    },
+    "upgrades": [],
+    "border": { "centerX": 9007199254740991, "centerZ": 0, "radiusBlocks": 100 },
+    "opponents": [],
+    "loot": [],
+    "randomSeed": "0"
+  }
+}
