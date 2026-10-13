@@ -4,7 +4,7 @@ import type {
   SkillOutcome,
 } from '@arena/core';
 import type { Bot } from 'mineflayer';
-import { bindEntityActionStringMapperFeature } from './mineflayer-compat.js';
+import { bindEntityActionStringMapperFeature, bindPlayerCollisionDimensions } from './mineflayer-compat.js';
 import { MineflayerObserver } from './observer.js';
 import type { ArenaSkillIntent } from './skill-intent.js';
 import { SkillOwner } from './skills.js';
@@ -28,6 +28,7 @@ export interface MineflayerArenaClient {
 
 /** Connects one Mineflayer client's received state to the arena observation and skill contracts. */
 export function createMineflayerArenaClient(bot: Bot): MineflayerArenaClient {
+  bindPlayerCollisionDimensions(bot);
   bindEntityActionStringMapperFeature(bot);
   const observer = new MineflayerObserver(bot);
   let skills: SkillOwner;
