@@ -5,6 +5,7 @@ import test from 'node:test';
 import {
   decodeControlFrame,
   encodeControlFrame,
+  MAX_CONTROL_FRAME_BYTES,
 } from '../src/control/index.js';
 import { bindControlListener, createControlToken } from '../src/runtime/session.js';
 
@@ -203,7 +204,7 @@ class TestFrameReader {
       this.#buffer = Buffer.concat([this.#buffer, Buffer.from(next.value)]);
       if (bodyLength === undefined && this.#buffer.byteLength >= 4) {
         bodyLength = this.#buffer.readUInt32BE(0);
-        if (bodyLength === 0 || bodyLength > 1_048_576) throw new Error('invalid control frame length');
+        if (bodyLength === 0 || bodyLength > MAX_CONTROL_FRAME_BYTES) throw new Error('invalid control frame length');
       }
     }
     const frame = this.#buffer.subarray(0, bodyLength + 4);
