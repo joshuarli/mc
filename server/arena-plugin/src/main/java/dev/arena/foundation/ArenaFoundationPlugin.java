@@ -11,6 +11,8 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.Base64;
+import java.util.function.Consumer;
+import io.papermc.paper.event.player.PlayerFailMoveEvent;
 import org.bukkit.Bukkit;
 import org.bukkit.Difficulty;
 import org.bukkit.GameMode;
@@ -82,6 +84,7 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
     private static final String CONTROL_PORT_PROPERTY = "arena.control-port";
     private static final String RUN_ID_PROPERTY = "arena.run-id";
     private static final String CONTROL_TOKEN_ENV = "ARENA_CONTROL_TOKEN";
+    private static final String MOVEMENT_DIAGNOSTICS_PROPERTY = "arena.movement-diagnostics";
     private final Set<UUID> reportedMovement = new HashSet<>();
     private final Map<Integer, UUID> playersBySeat = new HashMap<>();
     private final Map<UUID, Integer> seatsByPlayer = new HashMap<>();
@@ -95,6 +98,7 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
     private String controlToken;
     private ControlProtocol.PreparePayload preparedMatch;
     private MatchController matchController;
+    private MovementFailureDiagnostics movementFailureDiagnostics;
     private boolean skipMatchAdvanceThisTick;
     private boolean outcomeEmitted;
     private long lastHeartbeatNanos;
@@ -103,6 +107,8 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
 
     @Override
     public void onLoad() {
+        movementFailureDiagnostics = MovementFailureDiagnostics.fromProperty(
+                System.getProperty(MOVEMENT_DIAGNOSTICS_PROPERTY));
         String planPath = System.getProperty(MapPlanReader.GENERATION_PLAN_PROPERTY);
         String fixtureMode = System.getProperty(TEST_FIXTURE_PROPERTY);
         String controlPort = System.getProperty(CONTROL_PORT_PROPERTY);
@@ -657,6 +663,20 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
         return false;
     }
 
+    static void capturePlayerFailMove(
+            PlayerFailMoveEvent event,
+            Map<UUID, Integer> seatsByPlayer,
+            MatchController.Phase phase,
+            Optional<BigInteger> tick,
+            MovementFailureDiagnostics diagnostics,
+            Consumer<String> log) {
+        if (!diagnostics.isEnabled()) {
+            return;
+        }
+        Integer seat = seatsByPlayer.get(event.getPlayer().getUniqueId());
+        diagnostics.capture(event, seat, phase, tick, log);
+    }
+
     private static boolean isArenaWorld(World world) {
         return ARENA_WORLD.equals(world.getName());
     }
@@ -842,6 +862,18 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
         if (reportedMovement.add(player.getUniqueId())) {
             getLogger().info("ARENA_MOVE|" + player.getName());
         }
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onPlayerFailMove(PlayerFailMoveEvent event) {
+        if (startupMode != StartupMode.PLAN
+                || movementFailureDiagnostics == null
+                || !movementFailureDiagnostics.isEnabled()
+                || matchController == null) {
+            return;
+        }
+        capturePlayerFailMove(event, seatsByPlayer, matchController.phase(), matchController.matchTick(),
+                movementFailureDiagnostics, getLogger()::info);
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
