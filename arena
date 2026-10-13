@@ -444,7 +444,7 @@ usage:
   ./arena build [--package core|spec|bots|control|owned-files|runtime|runner|all]
   ./arena check <compatibility|build-script>
   ./arena test --suite <core|spec|bots|owned-files|runtime|runner|protocol|integration|acceptance|java> --case <name>
-  ./arena <report|inspect|compare|prepare|validate|doctor|run|replay-policy> <arguments...>
+  ./arena <report|inspect|compare|prepare|validate|doctor|run|replay-policy|gc> <arguments...>
 EOF
 }
 
@@ -519,6 +519,7 @@ check_command() {
         build-script)
             run_named_tests tooling "typescript build rejects an unknown target"
             run_named_tests tooling "named test runner dispatches suite files and rejects unknown cases"
+            run_named_tests tooling "arena wrapper dispatches garbage collection to runner validation"
             ;;
         *) fail "unknown check: $1" ;;
     esac
@@ -622,7 +623,7 @@ case "$command" in
     build) build_command "$@" ;;
     check) check_command "$@" ;;
     test) test_command "$@" ;;
-    report|inspect|compare|prepare|validate|doctor|run|replay-policy)
+    report|inspect|compare|prepare|validate|doctor|run|replay-policy|gc)
         launch_runner "$command" "$@"
         ;;
     help|-h|--help)

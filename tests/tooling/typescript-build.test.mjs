@@ -8,6 +8,18 @@ import { join } from "node:path";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 
+test("arena wrapper dispatches garbage collection to runner validation", () => {
+  const result = spawnSync(join(root, "arena"), ["gc", "--dry-run"], {
+    cwd: root,
+    encoding: "utf8"
+  });
+  assert.equal(result.error, undefined);
+  assert.equal(result.status, 2, result.stderr || result.stdout);
+  const failure = JSON.parse(result.stderr);
+  assert.equal(failure.error.category, "invalid_input");
+  assert.equal(failure.error.source.kind, "gc_requires_run_id");
+});
+
 function runNamedTests(runner, suite, name) {
   const env = { ...process.env };
   // Node marks child test processes so a nested --test invocation is skipped.
