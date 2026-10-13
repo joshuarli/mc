@@ -80,12 +80,14 @@ process.stdout.write(result.stdout ?? "");
 process.stderr.write(result.stderr ?? "");
 if (result.status !== 0) process.exit(result.status ?? 1);
 
-const ranExactCase = result.stdout?.split(/\r?\n/).some((line) => line.trimStart() === `# Subtest: ${name}`);
-if (!ranExactCase) fail(`no test ran with exact name ${JSON.stringify(name)}`);
-
-const summary = result.stdout?.match(/\n# tests (\d+)\n(?:# suites \d+\n)?# pass (\d+)\n# fail (\d+)\n# cancelled (\d+)\n/);
-if (!summary) fail("Node did not emit the expected TAP summary");
-const [, , passed, failed, cancelled] = summary;
-if (passed !== "1" || failed !== "0" || cancelled !== "0") {
-  fail(`expected exactly one passing named test; TAP reported ${passed} pass, ${failed} fail, ${cancelled} cancelled`);
+const exactStatus = new RegExp(`^(ok|not ok) \\d+ - ${exactName.slice(1, -1)}(?: # .*)?$`);
+const namedResults = (result.stdout ?? "").split(/\r?\n/)
+  .map((line) => line.trimStart())
+  .filter((line) => exactStatus.test(line));
+if (namedResults.length === 0) fail(`no test ran with exact name ${JSON.stringify(name)}`);
+if (namedResults.length > 1) {
+  fail(`expected one TAP result for exact test ${JSON.stringify(name)}, found ${namedResults.length}`);
+}
+if (!namedResults[0].startsWith("ok ") || / # (?:SKIP|TODO)\b/.test(namedResults[0])) {
+  fail(`exact test did not pass: ${JSON.stringify(name)}`);
 }

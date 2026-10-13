@@ -39,7 +39,7 @@ test("named test runner dispatches suite files and rejects unknown cases", (cont
   const dispatched = runNamedTests(runner, "core", fixtureTitle);
   assert.equal(dispatched.error, undefined);
   assert.equal(dispatched.status, 0, dispatched.stderr || dispatched.stdout);
-  assert.match(dispatched.stdout, /# pass 1\n# fail 0\n# cancelled 0\n/);
+  assert.match(dispatched.stdout, new RegExp(`^ok \\d+ - ${fixtureTitle}$`, "m"));
 
   const missingTitle = `${fixtureTitle} missing`;
   const missing = runNamedTests(runner, "core", missingTitle);
