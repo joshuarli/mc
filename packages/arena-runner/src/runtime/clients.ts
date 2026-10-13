@@ -263,14 +263,15 @@ class OwnedBotConnection implements RuntimeBotConnection {
     if (!this.#spawnedAlready) this.#rejectSpawned(error);
   }
 
+  // A peer-ended client has removed the handler that clears Client.end()'s 30-second timer.
+  // Don't call end() again in that state; destroying the socket still releases it.
   async #close(): Promise<void> {
     this.#closing = true;
     const existingFailure = this.#failure;
     const adapterClose = this.#client?.close();
     const socket = this.bot._client.socket;
-    // Mineflayer starts a close timer in end(); after the socket closes, no later close event clears it.
     if (!socket.destroyed) {
-      this.bot.end('arena runtime cleanup');
+      if (!this.bot._client.ended) this.bot.end('arena runtime cleanup');
       socket.destroy();
     }
     this.receipts.close();
