@@ -13,11 +13,35 @@ pub enum SpecErrorKind {
     ResourceLimit,
 }
 
+/// A one-based TOML source position.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SourceLocation {
+    line: usize,
+    column: usize,
+}
+
+impl SourceLocation {
+    pub(crate) const fn new(line: usize, column: usize) -> Self {
+        Self { line, column }
+    }
+
+    /// Returns the one-based source line.
+    pub const fn line(self) -> usize {
+        self.line
+    }
+
+    /// Returns the one-based character column.
+    pub const fn column(self) -> usize {
+        self.column
+    }
+}
+
 /// A source-aware specification failure suitable for CLI or API presentation.
 #[derive(Debug)]
 pub struct SpecError {
     kind: SpecErrorKind,
     path: String,
+    source_location: Option<SourceLocation>,
     message: String,
     source: Option<Box<dyn Error + Send + Sync>>,
 }
@@ -27,6 +51,7 @@ impl SpecError {
         Self {
             kind,
             path: path.into(),
+            source_location: None,
             message: message.into(),
             source: None,
         }
@@ -40,9 +65,15 @@ impl SpecError {
         Self {
             kind: SpecErrorKind::Syntax,
             path: document.to_owned(),
+            source_location: None,
             message,
             source: Some(Box::new(error)),
         }
+    }
+
+    pub(crate) fn with_source_location(mut self, location: SourceLocation) -> Self {
+        self.source_location = Some(location);
+        self
     }
 
     /// Returns the structured input failure category.
@@ -54,11 +85,19 @@ impl SpecError {
     pub fn path(&self) -> &str {
         &self.path
     }
+
+    /// Returns the source position when the failure maps to an input token.
+    pub const fn source_location(&self) -> Option<SourceLocation> {
+        self.source_location
+    }
 }
 
 impl fmt::Display for SpecError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "{}: {}", self.path, self.message)
+        match self.source_location {
+            Some(location) => write!(formatter, "{}:{}: {}: {}", location.line, location.column, self.path, self.message),
+            None => write!(formatter, "{}: {}", self.path, self.message),
+        }
     }
 }
 

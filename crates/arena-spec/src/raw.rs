@@ -1,8 +1,16 @@
 use std::collections::BTreeMap;
 
-use toml_edit::{Array, ArrayOfTables, DocumentMut, InlineTable, Item, Table, Value};
+use toml_edit::{Array, ArrayOfTables, Document, InlineTable, Item, Table, Value};
 
 use crate::error::{SpecError, SpecErrorKind};
+
+#[derive(Debug)]
+pub(crate) struct RawEntry {
+    value: RawValue,
+    source_location: Option<crate::SourceLocation>,
+}
+
+pub(crate) type RawTable = BTreeMap<String, RawEntry>;
 
 #[derive(Debug)]
 pub(crate) enum RawValue {
@@ -11,64 +19,100 @@ pub(crate) enum RawValue {
     Float(f64),
     Boolean(bool),
     Array(Vec<RawValue>),
-    Table(BTreeMap<String, RawValue>),
+    Table(RawTable),
     Other,
 }
 
 pub(crate) fn parse_document(source: &str, document: &str) -> Result<RawValue, SpecError> {
-    let parsed = source
-        .parse::<DocumentMut>()
+    let parsed = Document::parse(source.to_owned())
         .map_err(|error| SpecError::syntax(document, error))?;
-    table_to_raw(parsed.as_table()).map(RawValue::Table)
+    table_to_raw(parsed.as_table(), source).map(RawValue::Table)
 }
 
-fn table_to_raw(table: &Table) -> Result<BTreeMap<String, RawValue>, SpecError> {
+fn table_to_raw(table: &Table, source: &str) -> Result<RawTable, SpecError> {
     table
         .iter()
-        .map(|(key, value)| Ok((key.to_owned(), item_to_raw(value)?)))
+        .map(|(key, value)| {
+            let source_location = table
+                .key(key)
+                .and_then(|key| key.span())
+                .map(|span| source_location(source, span.start));
+            Ok((
+                key.to_owned(),
+                RawEntry {
+                    value: item_to_raw(value, source)?,
+                    source_location,
+                },
+            ))
+        })
         .collect()
 }
 
-fn inline_table_to_raw(table: &InlineTable) -> Result<BTreeMap<String, RawValue>, SpecError> {
+fn inline_table_to_raw(table: &InlineTable, source: &str) -> Result<RawTable, SpecError> {
     table
         .iter()
-        .map(|(key, value)| Ok((key.to_owned(), value_to_raw(value)?)))
+        .map(|(key, value)| {
+            let source_location = table
+                .key(key)
+                .and_then(|key| key.span())
+                .map(|span| source_location(source, span.start));
+            Ok((
+                key.to_owned(),
+                RawEntry {
+                    value: value_to_raw(value, source)?,
+                    source_location,
+                },
+            ))
+        })
         .collect()
 }
 
-fn array_to_raw(array: &Array) -> Result<Vec<RawValue>, SpecError> {
-    array.iter().map(value_to_raw).collect()
+fn array_to_raw(array: &Array, source: &str) -> Result<Vec<RawValue>, SpecError> {
+    array.iter().map(|value| value_to_raw(value, source)).collect()
 }
 
-fn array_of_tables_to_raw(array: &ArrayOfTables) -> Result<Vec<RawValue>, SpecError> {
+fn array_of_tables_to_raw(array: &ArrayOfTables, source: &str) -> Result<Vec<RawValue>, SpecError> {
     array
         .iter()
-        .map(|table| table_to_raw(table).map(RawValue::Table))
+        .map(|table| table_to_raw(table, source).map(RawValue::Table))
         .collect()
 }
 
-fn item_to_raw(item: &Item) -> Result<RawValue, SpecError> {
+fn item_to_raw(item: &Item, source: &str) -> Result<RawValue, SpecError> {
     match item {
         Item::None => Ok(RawValue::Other),
-        Item::Value(value) => value_to_raw(value),
-        Item::Table(table) => table_to_raw(table).map(RawValue::Table),
-        Item::ArrayOfTables(tables) => array_of_tables_to_raw(tables).map(RawValue::Array),
+        Item::Value(value) => value_to_raw(value, source),
+        Item::Table(table) => table_to_raw(table, source).map(RawValue::Table),
+        Item::ArrayOfTables(tables) => array_of_tables_to_raw(tables, source).map(RawValue::Array),
     }
 }
 
-fn value_to_raw(value: &Value) -> Result<RawValue, SpecError> {
+fn value_to_raw(value: &Value, source: &str) -> Result<RawValue, SpecError> {
     match value {
         Value::String(value) => Ok(RawValue::String(value.value().to_owned())),
         Value::Integer(value) => Ok(RawValue::Integer(*value.value())),
         Value::Float(value) => Ok(RawValue::Float(*value.value())),
         Value::Boolean(value) => Ok(RawValue::Boolean(*value.value())),
         Value::Datetime(_) => Ok(RawValue::Other),
-        Value::Array(array) => array_to_raw(array).map(RawValue::Array),
-        Value::InlineTable(table) => inline_table_to_raw(table).map(RawValue::Table),
+        Value::Array(array) => array_to_raw(array, source).map(RawValue::Array),
+        Value::InlineTable(table) => inline_table_to_raw(table, source).map(RawValue::Table),
     }
 }
 
-pub(crate) fn as_table<'a>(value: &'a RawValue, path: &str) -> Result<&'a BTreeMap<String, RawValue>, SpecError> {
+fn source_location(source: &str, offset: usize) -> crate::SourceLocation {
+    let prefix = &source[..offset];
+    let line = prefix.bytes().filter(|byte| *byte == b'\n').count() + 1;
+    let column = prefix
+        .rsplit('\n')
+        .next()
+        .unwrap_or(prefix)
+        .chars()
+        .count()
+        + 1;
+    crate::SourceLocation::new(line, column)
+}
+
+pub(crate) fn as_table<'a>(value: &'a RawValue, path: &str) -> Result<&'a RawTable, SpecError> {
     match value {
         RawValue::Table(table) => Ok(table),
         _ => Err(type_error(path, "table")),
@@ -83,28 +127,33 @@ pub(crate) fn as_array<'a>(value: &'a RawValue, path: &str) -> Result<&'a [RawVa
 }
 
 pub(crate) fn field<'a>(
-    table: &'a BTreeMap<String, RawValue>,
+    table: &'a RawTable,
     key: &str,
     path: &str,
 ) -> Result<&'a RawValue, SpecError> {
     table
         .get(key)
+        .map(|entry| &entry.value)
         .ok_or_else(|| SpecError::new(SpecErrorKind::MissingField, format!("{path}.{key}"), "required field is missing"))
 }
 
 pub(crate) fn check_fields(
-    table: &BTreeMap<String, RawValue>,
+    table: &RawTable,
     allowed: &[&str],
     required: &[&str],
     path: &str,
 ) -> Result<(), SpecError> {
-    for key in table.keys() {
+    for (key, entry) in table {
         if !allowed.contains(&key.as_str()) {
-            return Err(SpecError::new(
+            let error = SpecError::new(
                 SpecErrorKind::UnknownField,
                 format!("{path}.{key}"),
                 "unknown field",
-            ));
+            );
+            return Err(match entry.source_location {
+                Some(location) => error.with_source_location(location),
+                None => error,
+            });
         }
     }
     for key in required {

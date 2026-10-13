@@ -6,7 +6,7 @@ mod map;
 mod raw;
 mod scenario;
 
-pub use error::{SpecError, SpecErrorKind};
+pub use error::{SourceLocation, SpecError, SpecErrorKind};
 pub use hash::SemanticId;
 pub use map::{BlockPlacement, BlockPosition, ChunkPosition, LootContainer, MapDimensions, MapIr, SpawnPoint, compile_map};
 pub use scenario::{BotSettings, BorderSettings, GameMode, MatchSettings, Perception, RecordSettings, ResourceReference, Roster, ScenarioIr, ServerSettings, compile_scenario};
@@ -88,6 +88,28 @@ mod tests {
         let error = compile_map(UNKNOWN_FIELD).expect_err("unknown field is rejected");
         assert_eq!(error.kind(), SpecErrorKind::UnknownField);
         assert_eq!(error.path(), "map.palette");
+        let location = error.source_location().expect("unknown field has a source location");
+        assert_eq!((location.line(), location.column()), (3, 1));
+        assert_eq!(error.to_string(), "3:1: map.palette: unknown field");
+
+        let unknown_operation_field = r#"
+schema = 1
+name = "unknown-operation-field"
+operations = [
+  { kind = "path", position = { x = 0, y = 1, z = 0 }, block = "stone", typo = true }
+]
+[dimensions]
+width = 8
+depth = 8
+min_y = 0
+max_y = 8
+"#;
+        let error = compile_map(unknown_operation_field).expect_err("unknown operation field is rejected");
+        assert_eq!(error.kind(), SpecErrorKind::UnknownField);
+        assert_eq!(error.path(), "map.operations[0].typo");
+        let location = error.source_location().expect("inline key has a source location");
+        assert_eq!(location.line(), 5);
+        assert!(location.column() > 1);
 
         let error = compile_map(UNKNOWN_OPERATION).expect_err("unknown operation is rejected");
         assert_eq!(error.kind(), SpecErrorKind::InvalidValue);

@@ -1,6 +1,6 @@
 # Scenarios and maps
 
-Scenario and map files use schema version 1. `arena-spec` parses TOML in memory, rejects unknown or missing keys, and produces immutable typed values only after checking field types, ranges, cross-field rules, and map geometry. It does not read files. The runner resolves each declared map and policy reference relative to the scenario file and confirms the canonical targets remain inside the repository roots.
+Scenario and map files use schema version 1. `arena-spec` parses TOML in memory, rejects unknown or missing keys, and produces immutable typed values only after checking field types, ranges, cross-field rules, and map geometry. Unknown-key errors retain the key's one-based TOML line and column alongside its logical field path. The compiler does not read files. The runner resolves each declared map and policy reference relative to the scenario file and confirms the canonical targets remain inside the repository roots.
 
 The two scenario inputs are [hunger-six.toml](../scenarios/hunger-six.toml) and [duel.toml](../scenarios/duel.toml). Their map inputs are [hunger-six.toml](../maps/hunger-six.toml) and [duel.toml](../maps/duel.toml). Hunger six has six stable seats and one human seat in play mode. Duel uses two bot seats for a compact combat world. Both use the schema-v1 Hunger Games rules.
 
