@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use azalea::{BlockPos, Event, WalkDirection, prelude::*};
+use azalea::{BlockPos, Event, WalkDirection, pathfinder::goals::RadiusGoal, prelude::*};
 use eyre::{Context, ContextCompat, bail, ensure};
 use tokio::time::timeout;
 
@@ -34,12 +34,18 @@ async fn run_clients() -> eyre::Result<()> {
     movement?;
 
     let chest_position = BlockPos::new(2, -59, 0);
-    first.client.look_at(chest_position.center());
-    first.wait_for_ticks(1).await?;
-    first.client.walk(WalkDirection::Forward);
-    let approach = first.wait_until_near(chest_position.center()).await;
-    first.client.walk(WalkDirection::None);
-    approach?;
+    timeout(
+        EVENT_TIMEOUT,
+        first.client.goto(RadiusGoal::new(chest_position.center(), 3.0)),
+    )
+    .await
+    .context("timed out pathfinding to the fixture chest")?;
+    let chest_distance = first
+        .client
+        .entity()
+        .position()?
+        .distance_to(chest_position.center());
+    ensure!(chest_distance <= 4.0, "Azalea stopped outside chest reach: {chest_distance:.2}");
     first.client.look_at(chest_position.center());
     first.wait_for_ticks(1).await?;
     let chest = timeout(
@@ -60,13 +66,16 @@ async fn run_clients() -> eyre::Result<()> {
     first.wait_for_ticks(5).await?;
 
     let target_id = first.wait_for_player(&second.client).await?;
-    first.client.entity_ref_for(target_id).look_at()?;
-    first.wait_for_ticks(1).await?;
-    first.client.walk(WalkDirection::Forward);
-    let approach = first.wait_for_player_in_attack_range(target_id).await;
-    first.client.walk(WalkDirection::None);
-    approach?;
+    let target_position = first.client.entity_ref_for(target_id).position()?;
+    timeout(
+        EVENT_TIMEOUT,
+        first.client.goto(RadiusGoal::new(target_position, 2.5)),
+    )
+    .await
+    .context("timed out pathfinding into melee range")?;
     let target = first.client.entity_ref_for(target_id);
+    let distance = target.distance_to_client()?;
+    ensure!(distance <= 3.0, "Azalea stopped outside legal attack range: {distance:.2}");
     target.look_at()?;
     first.wait_for_ticks(1).await?;
     first.wait_until_attack_ready().await?;
@@ -146,68 +155,6 @@ impl SmokeClient {
         })
         .await
         .context("timed out waiting for real client movement")?
-    }
-
-    async fn wait_until_near(&mut self, target: azalea::Vec3) -> eyre::Result<()> {
-        let result = timeout(EVENT_TIMEOUT, async {
-            loop {
-                let position = self.client.entity().position()?;
-                let dx = position.x - target.x;
-                let dy = position.y - target.y;
-                let dz = position.z - target.z;
-                if dx * dx + dy * dy + dz * dz <= 16.0 {
-                    return Ok(());
-                }
-                match self.events.recv().await {
-                    Some(Event::Disconnect(reason)) => {
-                        bail!("client disconnected while approaching the fixture chest: {reason:?}");
-                    }
-                    Some(Event::ConnectionFailed(error)) => {
-                        bail!("client connection failed while approaching the fixture chest: {error}");
-                    }
-                    Some(_) => {}
-                    None => {
-                        bail!("client event stream ended while approaching the fixture chest");
-                    }
-                }
-            }
-        })
-        .await;
-        match result {
-            Ok(result) => result,
-            Err(error) => {
-                let position = self.client.entity().position()?;
-                bail!("timed out approaching the fixture chest from {position:?} to {target:?}: {error}");
-            }
-        }
-    }
-
-    async fn wait_for_player_in_attack_range(
-        &mut self,
-        target: azalea::ecs::entity::Entity,
-    ) -> eyre::Result<()> {
-        timeout(EVENT_TIMEOUT, async {
-            loop {
-                let distance = self.client.entity_ref_for(target).distance_to_client()?;
-                if distance <= 2.5 {
-                    return Ok(());
-                }
-                match self.events.recv().await {
-                    Some(Event::Disconnect(reason)) => {
-                        bail!("client disconnected while approaching its target: {reason:?}");
-                    }
-                    Some(Event::ConnectionFailed(error)) => {
-                        bail!("client connection failed while approaching its target: {error}");
-                    }
-                    Some(_) => {}
-                    None => {
-                        bail!("client event stream ended while approaching its target");
-                    }
-                }
-            }
-        })
-        .await
-        .context("timed out approaching legal melee range")?
     }
 
     async fn wait_for_player(
