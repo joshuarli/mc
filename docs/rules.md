@@ -95,5 +95,7 @@ diameter at `shrink_end_tick`.
 The runner may abort with `runtime_timeout` when the operational deadline expires.
 
 The control protocol's versioned payload schema and cross-language fixtures are
-the wire contract. Join and combat log markers remain diagnostic; only typed
-seat events and `outcome` determine match results.
+the wire contract. `ARENA_DAMAGE_ATTEMPT` includes cancelled attacks, while
+`ARENA_DAMAGE` reports only uncancelled attacks with positive final damage.
+Join and combat log markers remain diagnostic; only typed seat events and
+`outcome` determine match results.

@@ -905,7 +905,7 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
         }
     }
 
-    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    @EventHandler(priority = EventPriority.MONITOR)
     public void onPlayerDamage(EntityDamageByEntityEvent event) {
         if (event.getDamager() instanceof Player attacker
                 && event.getEntity() instanceof Player victim) {
