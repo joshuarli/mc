@@ -141,3 +141,33 @@ the wire contract. `ARENA_DAMAGE_ATTEMPT` includes cancelled attacks, while
 `ARENA_DAMAGE` reports only uncancelled attacks with positive final damage.
 Join and combat log markers remain diagnostic; only typed seat events and
 `outcome` determine match results.
+
+For private six-seat acceptance runs, `-Darena.civilization-evaluator=true`
+enables `ARENA_CIV_MATERIAL_V1` log markers. The initial checkpoint is sampled
+at match tick zero after the starting kit is applied. Later checkpoints are
+emitted at match-tick end only when the sampled material state changes. They
+count oak logs and planks in each bound player's inventory (including the
+cursor), dropped item entities, and each declared loot-container inventory;
+they also list the surviving coordinates of the map's original oak logs and
+actual placed oak-plank coordinates. A death-cargo marker records the dying
+player's inventory and the death event's actual drops, so it does not depend on
+dropped items remaining in the world long enough to be sampled. These markers
+are log-only and are not sent to control clients or policy observers.
+
+Each match tick reads six player inventories, the currently loaded item
+entities, the map's declared original-log positions and loot containers, and
+only oak-plank block positions touched by place or break events, reconciled
+against the resulting world state. It does not scan the map. The recorder
+allows at most 256 markers of 16 KiB each; exceeding either limit fails the
+evaluator run without truncating evidence.
+
+For the current 192×192 acceptance map, the bounded source and storage scope is
+the 16 planned natural-log positions and two declared loot chests. The
+evaluator requires every chunk intersecting the map bounds to already be
+loaded; it fails on a missing chunk and does not load or generate chunks. Its
+material accounting covers the six seats, those declared chests, actual Item
+entities in loaded world chunks, the original log positions, and placed oak
+planks. It supports the scenario's oak-log-to-four-oak-planks conversion. It
+does not claim conservation for unloaded chunks, undeclared storage, or other
+conversions; those must fail the acceptance conservation check rather than
+receive fabricated material credit.

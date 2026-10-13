@@ -3,6 +3,7 @@ package dev.arena.foundation;
 import java.io.IOException;
 import java.math.BigInteger;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -11,8 +12,8 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
-import java.util.Base64;
 import java.util.function.Consumer;
+import java.util.logging.Level;
 import io.papermc.paper.event.player.PlayerFailMoveEvent;
 import org.bukkit.Bukkit;
 import org.bukkit.Difficulty;
@@ -29,6 +30,7 @@ import org.bukkit.block.Chest;
 import org.bukkit.entity.Player;
 import org.bukkit.entity.Projectile;
 import org.bukkit.entity.Entity;
+import org.bukkit.entity.Item;
 import org.bukkit.event.block.BlockBreakEvent;
 import org.bukkit.event.block.BlockPlaceEvent;
 import org.bukkit.event.EventHandler;
@@ -97,6 +99,8 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
     private static final String CONTROL_TOKEN_ENV = "ARENA_CONTROL_TOKEN";
     private static final String MOVEMENT_DIAGNOSTICS_PROPERTY = "arena.movement-diagnostics";
     private final Set<UUID> reportedMovement = new HashSet<>();
+    private final Set<MapPlan.Position> dirtyOakPlankPositions = new HashSet<>();
+    private final Set<MapPlan.Position> placedOakPlankPositions = new HashSet<>();
     private final Map<Integer, UUID> playersBySeat = new HashMap<>();
     private final Map<UUID, Integer> seatsByPlayer = new HashMap<>();
     private final List<MatchController.Elimination> pendingEliminations = new ArrayList<>();
@@ -112,15 +116,21 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
     private ControlProtocol.PreparePayload preparedMatch;
     private MatchController matchController;
     private CivilizationMatchController civilizationMatchController;
+    private CivilizationMaterialCensus.Recorder civilizationMaterialCensus;
+    private List<MapPlan.ChunkPosition> civilizationMaterialCensusMapChunks = List.of();
+    private List<MapPlan.Position> initialNaturalOakLogPositions = List.of();
     private MovementFailureDiagnostics movementFailureDiagnostics;
     private boolean skipMatchAdvanceThisTick;
     private boolean outcomeEmitted;
     private long lastHeartbeatNanos;
     private boolean generatorRequested;
     private boolean worldInitialized;
+    private boolean civilizationEvaluatorEnabled;
 
     @Override
     public void onLoad() {
+        civilizationEvaluatorEnabled = CivilizationMaterialCensus.enabledFromProperty(
+                System.getProperty(CivilizationMaterialCensus.PROPERTY));
         movementFailureDiagnostics = MovementFailureDiagnostics.fromProperty(
                 System.getProperty(MOVEMENT_DIAGNOSTICS_PROPERTY));
         String planPath = System.getProperty(MapPlanReader.GENERATION_PLAN_PROPERTY);
@@ -222,18 +232,25 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
             return;
         }
 
-        skipMatchAdvanceThisTick = false;
-        ControlProtocol.Envelope command;
-        while ((command = controlSession.poll()) != null) {
-            handleControlCommand(command);
-        }
-        advanceMatchAtTickEnd();
-        if (!outcomeEmitted) {
-            long now = System.nanoTime();
-            if (controlSession.isReady() && now - lastHeartbeatNanos >= 1_000_000_000L) {
-                controlSession.sendEvent(ControlProtocol.Type.HEARTBEAT, new ControlProtocol.EmptyPayload());
-                lastHeartbeatNanos = now;
+        try {
+            skipMatchAdvanceThisTick = false;
+            ControlProtocol.Envelope command;
+            while ((command = controlSession.poll()) != null) {
+                handleControlCommand(command);
             }
+            advanceMatchAtTickEnd();
+            if (!outcomeEmitted) {
+                long now = System.nanoTime();
+                if (controlSession.isReady() && now - lastHeartbeatNanos >= 1_000_000_000L) {
+                    controlSession.sendEvent(ControlProtocol.Type.HEARTBEAT, new ControlProtocol.EmptyPayload());
+                    lastHeartbeatNanos = now;
+                }
+            }
+        } catch (RuntimeException failure) {
+            if (civilizationMaterialCensus == null) {
+                throw failure;
+            }
+            failCivilizationEvaluatorRun(failure);
         }
     }
 
@@ -242,6 +259,12 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
         if (startupMode == StartupMode.PLAN && isArenaWorld(event.getBlock().getWorld())
                 && !isMatchRuleEnabled(BlockAction.BREAK)) {
             event.setCancelled(true);
+            return;
+        }
+        if (civilizationMaterialCensus != null && isArenaWorld(event.getBlock().getWorld())
+                && event.getBlock().getType() == Material.OAK_PLANKS) {
+            dirtyOakPlankPositions.add(materialPosition(event.getBlock().getX(), event.getBlock().getY(),
+                    event.getBlock().getZ()));
         }
     }
 
@@ -250,6 +273,12 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
         if (startupMode == StartupMode.PLAN && isArenaWorld(event.getBlock().getWorld())
                 && !isMatchRuleEnabled(BlockAction.PLACE)) {
             event.setCancelled(true);
+            return;
+        }
+        if (civilizationMaterialCensus != null && isArenaWorld(event.getBlock().getWorld())
+                && event.getBlockPlaced().getType() == Material.OAK_PLANKS) {
+            dirtyOakPlankPositions.add(materialPosition(event.getBlockPlaced().getX(), event.getBlockPlaced().getY(),
+                    event.getBlockPlaced().getZ()));
         }
     }
 
@@ -285,6 +314,26 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
         if (seat != null) {
             pendingEliminations.add(new MatchController.Elimination(seat, MatchController.EliminationCause.DEATH));
             event.getEntity().setGameMode(GameMode.SPECTATOR);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void recordCivilizationDeathCargo(PlayerDeathEvent event) {
+        if (civilizationMaterialCensus == null || startupMode != StartupMode.PLAN || preparedMatch == null
+                || matchController == null || preparedMatch.match().respawn() || !isRunningMatch()) {
+            return;
+        }
+        Integer seat = seatsByPlayer.get(event.getEntity().getUniqueId());
+        if (seat == null) {
+            return;
+        }
+        try {
+            BigInteger matchTick = matchController.matchTick().orElseThrow(() ->
+                    new IllegalStateException("material census death occurred before match tick zero"));
+            civilizationMaterialCensus.deathCargo(matchTick, seat,
+                    playerMaterialStacks(event.getEntity()), itemMaterialStacks(event.getDrops()));
+        } catch (RuntimeException failure) {
+            failCivilizationEvaluatorRun(failure);
         }
     }
 
@@ -334,6 +383,11 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
             throw new CommandFailure(ControlProtocol.ErrorCode.INVALID_STATE,
                     "prepare requires a ready, unused staged arena world");
         }
+        if (civilizationEvaluatorEnabled
+                && !(prepare.settings() instanceof ControlProtocol.CivilizationPrepareSettings)) {
+            throw new CommandFailure(ControlProtocol.ErrorCode.INVALID_STATE,
+                    "civilization material census requires a civilization match");
+        }
         if (!generationPlan.mapSemanticId().equals(prepare.mapSemanticId())) {
             throw new CommandFailure(ControlProtocol.ErrorCode.INVALID_WORLD,
                     "prepare does not identify the staged arena map");
@@ -347,6 +401,8 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
         MatchController.BorderPolicy borderPolicy;
         MatchController.OutcomeAuthority outcomeAuthority;
         CivilizationMatchController nextCivilizationController = null;
+        List<MapPlan.Position> nextNaturalOakLogPositions = List.of();
+        List<MapPlan.ChunkPosition> nextCivilizationMaterialCensusMapChunks = List.of();
         if (prepare.settings() instanceof ControlProtocol.HungerGamesPrepareSettings hungerGames) {
             ControlProtocol.BorderSettings border = hungerGames.border();
             borderPolicy = new MatchController.BorderSchedule(
@@ -362,6 +418,16 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
             } catch (IllegalArgumentException invalidObjectives) {
                 throw new CommandFailure(ControlProtocol.ErrorCode.INVALID_WORLD,
                         "civilization objectives do not fit the staged map", invalidObjectives);
+            }
+            if (civilizationEvaluatorEnabled) {
+                nextNaturalOakLogPositions = generationPlan.blocks().stream()
+                        .filter(block -> block.material().equals(Material.OAK_LOG.getKey().toString()))
+                        .map(MapPlan.BlockPlacement::position)
+                        .toList();
+                if (nextNaturalOakLogPositions.isEmpty()) {
+                    throw new IllegalStateException("civilization material census requires planned natural oak logs");
+                }
+                nextCivilizationMaterialCensusMapChunks = generationPlan.chunksWithViewHalo(0);
             }
             borderPolicy = new MatchController.FixedBorder(civilization.border().diameterBlocks());
             outcomeAuthority = MatchController.OutcomeAuthority.EXTERNAL;
@@ -390,6 +456,13 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
         preparedMatch = prepare;
         matchController = controller;
         civilizationMatchController = nextCivilizationController;
+        civilizationMaterialCensus = civilizationEvaluatorEnabled
+                ? new CivilizationMaterialCensus.Recorder(runId, marker -> getLogger().info(marker))
+                : null;
+        civilizationMaterialCensusMapChunks = nextCivilizationMaterialCensusMapChunks;
+        initialNaturalOakLogPositions = nextNaturalOakLogPositions;
+        dirtyOakPlankPositions.clear();
+        placedOakPlankPositions.clear();
         outpostCompletion.clear();
         if (nextCivilizationController != null) {
             outpostCompletion.put(ControlProtocol.FactionId.EMBER, false);
@@ -418,6 +491,7 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
                     "every configured bot must join before start");
         }
         matchController.startCountdown();
+        recordInitialCivilizationMaterialCheckpointIfReleased();
         skipMatchAdvanceThisTick = true;
     }
 
@@ -552,6 +626,9 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
         BigInteger civilizationTick = countdownWasRunning ? null : matchController.matchTick().orElse(null);
         List<MatchController.ResolvedElimination> resolved = matchController.endServerTick(pendingEliminations);
         pendingEliminations.clear();
+        if (countdownWasRunning) {
+            recordInitialCivilizationMaterialCheckpointIfReleased();
+        }
         if (civilizationMatchController != null && countdownWasRunning) {
             civilizationCountdownEliminations.addAll(resolved);
         }
@@ -578,6 +655,7 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
             Optional<CivilizationMatchController.Outcome> civilizationOutcome = civilizationMatchController.endServerTick(
                     at, civilizationZoneOccupants(world, settings.captureZone()), civilizationEliminations);
             updateCivilizationOutposts(world, settings, at);
+            recordCivilizationMaterialCheckpoint(world, at.value());
             publishCivilizationState(at);
             if (civilizationOutcome.isPresent()) {
                 matchController.finishExternally(at);
@@ -767,7 +845,127 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
         }
     }
 
+    private void recordInitialCivilizationMaterialCheckpointIfReleased() {
+        if (civilizationMaterialCensus == null || civilizationMaterialCensus.hasInitialCheckpoint()
+                || matchController == null
+                || matchController.matchTick().filter(BigInteger.ZERO::equals).isEmpty()) {
+            return;
+        }
+        World world = Bukkit.getWorld(ARENA_WORLD);
+        if (world == null) {
+            throw new IllegalStateException("material census cannot read the arena world");
+        }
+        recordCivilizationMaterialCheckpoint(world, BigInteger.ZERO);
+    }
+
+    private void recordCivilizationMaterialCheckpoint(World world, BigInteger matchTick) {
+        if (civilizationMaterialCensus == null) {
+            return;
+        }
+        CivilizationMaterialCensus.requireLoadedChunks(
+                civilizationMaterialCensusMapChunks, world::isChunkLoaded);
+        List<CivilizationMaterialCensus.InventorySnapshot> inventories = new ArrayList<>(6);
+        for (int seat = 0; seat < 6; seat++) {
+            UUID playerId = playersBySeat.get(seat);
+            Player player = playerId == null ? null : Bukkit.getPlayer(playerId);
+            if (player == null || !player.isOnline()) {
+                throw new IllegalStateException("material census requires all six bound players to remain online");
+            }
+            inventories.add(new CivilizationMaterialCensus.InventorySnapshot(
+                    seat, playerMaterialStacks(player)));
+        }
+
+        List<CivilizationMaterialCensus.ItemEntitySnapshot> itemEntities = new ArrayList<>();
+        for (Item item : world.getEntitiesByClass(Item.class)) {
+            itemEntities.add(new CivilizationMaterialCensus.ItemEntitySnapshot(
+                    item.getUniqueId().toString(), itemMaterialStacks(List.of(item.getItemStack()))));
+        }
+
+        List<CivilizationMaterialCensus.ContainerSnapshot> containers = new ArrayList<>();
+        for (MapPlan.LootContainer container : generationPlan.lootContainers()) {
+            MapPlan.Position position = container.position();
+            requireCivilizationMaterialPositionChunkLoaded(world, position);
+            Block block = world.getBlockAt(position.x(), position.y(), position.z());
+            List<CivilizationMaterialCensus.StackCount> items = block.getState() instanceof Chest chest
+                    ? inventoryMaterialStacks(chest.getBlockInventory())
+                    : List.of();
+            containers.add(new CivilizationMaterialCensus.ContainerSnapshot(
+                    censusPosition(position), items));
+        }
+
+        List<CivilizationMaterialCensus.Position> remainingNaturalLogs = new ArrayList<>(
+                initialNaturalOakLogPositions.size());
+        for (MapPlan.Position position : initialNaturalOakLogPositions) {
+            requireCivilizationMaterialPositionChunkLoaded(world, position);
+            if (world.getBlockAt(position.x(), position.y(), position.z()).getType() == Material.OAK_LOG) {
+                remainingNaturalLogs.add(censusPosition(position));
+            }
+        }
+        for (MapPlan.Position position : dirtyOakPlankPositions) {
+            requireCivilizationMaterialPositionChunkLoaded(world, position);
+            if (world.getBlockAt(position.x(), position.y(), position.z()).getType() == Material.OAK_PLANKS) {
+                placedOakPlankPositions.add(position);
+            } else {
+                placedOakPlankPositions.remove(position);
+            }
+        }
+        dirtyOakPlankPositions.clear();
+        List<CivilizationMaterialCensus.Position> placedPlanks = placedOakPlankPositions.stream()
+                .map(ArenaFoundationPlugin::censusPosition)
+                .toList();
+        CivilizationMaterialCensus.MaterialState state = CivilizationMaterialCensus.MaterialState.sample(
+                remainingNaturalLogs,
+                inventories,
+                itemEntities,
+                containers,
+                placedPlanks);
+        civilizationMaterialCensus.checkpoint(matchTick, state);
+    }
+
+    private static void requireCivilizationMaterialPositionChunkLoaded(World world, MapPlan.Position position) {
+        CivilizationMaterialCensus.requirePositionChunkLoaded(position.x(), position.z(), world::isChunkLoaded);
+    }
+
+    private static List<CivilizationMaterialCensus.StackCount> playerMaterialStacks(Player player) {
+        List<CivilizationMaterialCensus.StackCount> items = new ArrayList<>(
+                inventoryMaterialStacks(player.getInventory()));
+        appendMaterialStack(items, player.getItemOnCursor());
+        return List.copyOf(items);
+    }
+
+    private static List<CivilizationMaterialCensus.StackCount> inventoryMaterialStacks(Inventory inventory) {
+        List<CivilizationMaterialCensus.StackCount> items = new ArrayList<>();
+        for (ItemStack item : inventory.getContents()) {
+            appendMaterialStack(items, item);
+        }
+        return List.copyOf(items);
+    }
+
+    private static List<CivilizationMaterialCensus.StackCount> itemMaterialStacks(Iterable<ItemStack> contents) {
+        List<CivilizationMaterialCensus.StackCount> items = new ArrayList<>();
+        for (ItemStack item : contents) {
+            appendMaterialStack(items, item);
+        }
+        return List.copyOf(items);
+    }
+
+    private static void appendMaterialStack(List<CivilizationMaterialCensus.StackCount> items, ItemStack item) {
+        if (item == null || (item.getType() != Material.OAK_LOG && item.getType() != Material.OAK_PLANKS)) {
+            return;
+        }
+        items.add(new CivilizationMaterialCensus.StackCount(item.getType().getKey().toString(), item.getAmount()));
+    }
+
+    private static MapPlan.Position materialPosition(int x, int y, int z) {
+        return new MapPlan.Position(x, y, z);
+    }
+
+    private static CivilizationMaterialCensus.Position censusPosition(MapPlan.Position position) {
+        return new CivilizationMaterialCensus.Position(position.x(), position.y(), position.z());
+    }
+
     private void emitCivilizationOutcome(CivilizationMatchController.Outcome outcome) {
+        requireInitialCivilizationMaterialCheckpoint();
         ControlProtocol.Outcome controlOutcome;
         if (outcome instanceof CivilizationMatchController.FactionWinner winner) {
             CivilizationMatchController.FactionScores scores = winner.scores();
@@ -787,6 +985,17 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
         }
         controlSession.sendEvent(ControlProtocol.Type.OUTCOME, controlOutcome);
         outcomeEmitted = true;
+    }
+
+    private void requireInitialCivilizationMaterialCheckpoint() {
+        if (civilizationMaterialCensus != null && !civilizationMaterialCensus.hasInitialCheckpoint()) {
+            throw new IllegalStateException("civilization material census has no match tick zero checkpoint");
+        }
+    }
+
+    private void failCivilizationEvaluatorRun(RuntimeException failure) {
+        getLogger().log(Level.SEVERE, "Civilization evaluator evidence failed; stopping the Paper server.", failure);
+        Bukkit.shutdown();
     }
 
     private static ControlProtocol.Tick controlTick(MatchController.ResolutionTick tick) {
