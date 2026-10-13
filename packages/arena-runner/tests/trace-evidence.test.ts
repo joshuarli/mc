@@ -145,3 +145,15 @@ test('reconstructs authoritative evidence with v2 policy decisions while rejecti
     error instanceof TraceError && error.source.kind === 'unsupported_policy_schema');
   assert.throws(() => replayPolicyJson(withPolicy({ ...policy, unexpected: true })), TraceError);
 });
+
+
+test('reconstructs an archived active clock in flight while abort awaits acknowledgment', async () => {
+  const segment = await readSegment(join(repositoryRoot, 'tests/fixtures/pending-abort/trace-v2-000001.json'), 1);
+  assert.equal(segment.records.length, 13);
+  const result = reconstructRunEvidence(reconstruct([segment]));
+  assert.deepEqual(result.report.outcome, {
+    kind: 'abort', reason: 'protocol_error', survivors: [0, 1],
+    at: { domain: 'match', value: '1379' },
+  });
+  assert.equal(result.report.statistics.elimination_count, 0);
+});
