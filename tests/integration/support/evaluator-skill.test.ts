@@ -64,7 +64,7 @@ test("evaluator skill cancellation preserves the initiating resource failure", a
       seat, username: identity(seat).username, offline_uuid: identity(seat).offlineUuid,
     })) } },
     competitors: [
-      { identity: identity(0), client: {
+      { identity: identity(0), gameplay: { mode: "hunger_games", client: { observe: () => observation } }, client: {
         observe: () => observation,
         run: () => { started.resolve(); return skill.promise; },
       } },

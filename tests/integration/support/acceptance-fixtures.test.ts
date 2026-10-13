@@ -46,6 +46,8 @@ test("fairness fixtures keep both stationary competitors inside the final border
     const scenario = compileScenario(source, readFileSync(resolve(dirname(scenarioPath), scenarioMapReference(source)), "utf8"));
     const centerX = scenario.map.dimensions.width / 2;
     const centerZ = scenario.map.dimensions.depth / 2;
+    assert.equal(scenario.mode, "hunger_games");
+    if (scenario.mode !== "hunger_games") throw new Error("fairness fixtures require Hunger Games");
     const radius = scenario.border.finalDiameterBlocks / 2;
     for (const spawn of scenario.map.spawns) {
       assert.ok(Math.abs(spawn.position.x + 0.5 - centerX) + 0.3 < radius, `${name}: seat ${spawn.seat} must remain within the border in x`);

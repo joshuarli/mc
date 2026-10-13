@@ -2,9 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   blockPosition,
+  entityId,
   civilizationOutpostCells,
-  type CivilizationActionLayout,
-  type CivilizationFactionActionLayout,
   type CivilizationGoal,
   type Goal,
   type Intent,
@@ -17,6 +16,8 @@ import {
   assertCivilizationRoleContributions,
   assertCrossFactionCombat,
   type CivilizationActionEvidence,
+  type CivilizationActionLayout,
+  type CivilizationFactionActionLayout,
 } from "./civilization-action-evidence.js";
 
 test("civilization usefulness requires both factions to settle the legal material chain", () => {
@@ -80,12 +81,12 @@ function factionChain(
     }));
   }
   actions.push(action(firstSeat, at++, { kind: "gatherMaterial", item: "oak_log", target: layout.naturalOakLogSources[0]! }, {
-    kind: "dropCollect", entityId: 80 + firstSeat,
+    kind: "dropCollect", entityId: entityId(80 + firstSeat),
   }));
   actions.push(action(firstSeat, at++, { kind: "craftMaterial", item: "oak_planks", resultCount: 16 }, {
     kind: "craft", output: "oak_planks", resultCount: 16, table: null,
   }));
-  actions.push(action(firstSeat + 1, at++, {
+  actions.push(action(firstSeat, at++, {
     kind: "transferMaterial", item: "oak_planks", count: 16, direction: "deposit", container: layout.chest,
   }, {
     kind: "containerTransfer", position: layout.chest, direction: "deposit", item: "oak_planks", count: 16,

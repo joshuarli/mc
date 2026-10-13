@@ -120,7 +120,7 @@ async function captureFairnessRun(active: AcceptanceRunContext, signal: AbortSig
   assert.equal(seatOneChest.slots.length, 27, "seat one's real chest window must expose every slot");
   assert.ok(seatOneChest.slots.some((item) => item !== null), "seat one's chest must contain configured items");
 
-  const seatZeroObservation = await waitForCompleteObservation(seatZero.client, signal);
+  const seatZeroObservation = await waitForCompleteObservation(seatZero, signal);
   const seatOneEntityId = seatOne.bot.entity.id;
   if (seatZeroObservation.opponents.kind !== "current") {
     throw new Error("seat zero's complete observation must include current opponents");
@@ -191,13 +191,15 @@ function competitorUsernamesBySeat(active: AcceptanceRunContext): ReadonlyMap<nu
 }
 
 async function waitForCompleteObservation(
-  client: AcceptanceRunContext["competitors"][number]["client"],
+  competitor: AcceptanceRunContext["competitors"][number],
   signal: AbortSignal,
 ): Promise<AgentObservation> {
+  const gameplay = competitor.gameplay;
+  if (gameplay.mode !== "hunger_games") throw new Error("player observation evaluator requires Hunger Games");
   const deadline = Date.now() + 20_000;
   while (Date.now() < deadline) {
     signal.throwIfAborted();
-    const observation = client.observe(0);
+    const observation = gameplay.client.observe(0);
     if (observation.agent.kind === "current"
         && observation.border.kind === "current"
         && observation.opponents.kind === "current"

@@ -72,7 +72,7 @@ test("legal-player", { timeout: 300_000 }, async (t) => {
         assert.ok(jumpEvidence.takeoffs >= 8, "food loss must follow repeated client-observed sprint-jumps");
         assert.ok(jumpEvidence.highestY > jumpEvidence.startingY + 0.4, "sprint-jumps must include a real upward movement");
         assert.ok(jumpEvidence.remainingFood < initialFood, "ordinary movement must lower the server-observed food level");
-        const hungry = await waitForCurrentAgent(seatZero.client, signal);
+        const hungry = await waitForCurrentAgent(seatZero, signal);
         assert.equal(hungry.agent.kind, "current");
         if (hungry.agent.kind !== "current") throw new Error("hungry player observation did not become current");
         assert.ok(hungry.agent.value.hungerPoints < initialFood, "the permitted player observation must report the food loss");
@@ -117,7 +117,7 @@ test("legal-player", { timeout: 300_000 }, async (t) => {
         { kind: "succeeded" },
         "the ordinary eating skill must consume the looted bread after sprint-jump food loss",
       );
-      const fed = await waitForCurrentAgent(seatZero.client, signal);
+      const fed = await waitForCurrentAgent(seatZero, signal);
       assert.equal(fed.agent.kind, "current");
       if (fed.agent.kind !== "current") throw new Error("fed player observation did not become current");
       assert.ok(fed.agent.value.hungerPoints > foodBeforeEating, "the player observation must report food restored by eating");
@@ -127,7 +127,7 @@ test("legal-player", { timeout: 300_000 }, async (t) => {
         "the client inventory must show the consumed bread was removed",
       );
 
-      const observation = await waitForCurrentAgent(seatZero.client, signal);
+      const observation = await waitForCurrentAgent(seatZero, signal);
       assert.equal(observation.agent.kind, "current");
       const weapon = observation.agent.value.upgrades.find((upgrade) => upgrade.equipmentSlot === "weapon");
       assert.ok(weapon, "the complete client observation must recognize the received sword as an upgrade");
@@ -141,7 +141,7 @@ test("legal-player", { timeout: 300_000 }, async (t) => {
         { kind: "succeeded" },
         "the ordinary equip skill must place the received sword in the weapon slot",
       );
-      const equipped = await waitForCurrentAgent(seatZero.client, signal);
+      const equipped = await waitForCurrentAgent(seatZero, signal);
       assert.equal(equipped.agent.kind, "current");
       assert.equal(equipped.agent.value.equipped.weapon, weapon.rating);
 
@@ -222,13 +222,15 @@ test("legal-player-ramp", { timeout: 300_000 }, async (t) => {
 });
 
 async function waitForCurrentAgent(
-  client: AcceptanceRunContext["competitors"][number]["client"],
+  competitor: AcceptanceRunContext["competitors"][number],
   signal: AbortSignal,
 ) {
+  const gameplay = competitor.gameplay;
+  if (gameplay.mode !== "hunger_games") throw new Error("player observation evaluator requires Hunger Games");
   const deadline = Date.now() + 20_000;
   while (Date.now() < deadline) {
     signal.throwIfAborted();
-    const observation = client.observe(0);
+    const observation = gameplay.client.observe(0);
     if (observation.agent.kind === "current") return observation;
     await delay(50, undefined, { signal });
   }

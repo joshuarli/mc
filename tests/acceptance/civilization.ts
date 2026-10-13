@@ -10,7 +10,7 @@ import type {
   Intent,
   SkillOutcome,
 } from "@arena/core";
-import { civilizationOutpostCells } from "@arena/core";
+import { civilizationOutpostCells, entityId } from "@arena/core";
 import type { CivilizationScenarioIr } from "@arena/spec";
 import type { MineflayerCivilizationClient } from "@arena/bots";
 import type { PathDiagnosticRecord } from "@arena/bots";
@@ -179,7 +179,7 @@ export function civilizationActionLayout(scenario: CivilizationScenarioIr): Civi
 export function civilizationMaterialBaseline(scenario: CivilizationScenarioIr): CivilizationMaterialBaseline {
   const count = (item: "minecraft:oak_log" | "minecraft:oak_planks"): number => {
     const kitCount = scenario.civilization.startingKit.reduce(
-      (total, stack) => total + (stack.item === item ? stack.count : 0),
+      (total, stack) => total + (String(stack.item) === item ? stack.count : 0),
       0,
     ) * scenario.roster.competitors;
     const chestCount = scenario.map.lootContainers.reduce(
@@ -299,7 +299,7 @@ export async function prepareCivilizationFactionMaterials(
     assertSucceeded(mined, `seat ${gathererSeat} must mine natural oak log ${positionText(position)}`);
 
     const drop = await waitForCivilizationDrop(active, gatherer, position, signal);
-    const collectIntent = { kind: "dropCollect" as const, entityId: drop.entityId };
+    const collectIntent = { kind: "dropCollect" as const, entityId: entityId(drop.entityId) };
     const collected = await recordCivilizationAction(actions, gathererSeat,
       { kind: "gatherMaterial", item: "oak_log", target: position }, collectIntent,
       () => runArenaSkill(gatherer, collectIntent, signal));
@@ -618,7 +618,7 @@ function materialCount(observation: CivilizationObservation, item: "oak_log" | "
     throw new Error(`civilization ${item} inventory is not current`);
   }
   return observation.ownMaterials.value.reduce(
-    (total, stack) => total + (stack.item === item ? stack.count : 0),
+    (total, stack) => total + (String(stack.item) === item ? stack.count : 0),
     0,
   );
 }

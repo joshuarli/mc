@@ -56,7 +56,7 @@ test("civilization-six", { timeout: RUN_TIMEOUT_MS }, async (t) => {
         .map(({ position }) => position);
       captureSettings = {
         graceTicks: scenario.matchSettings.graceTicks,
-        uncontestedCaptureTicks: scenario.civilization.captureZone.uncontestedTicks,
+        uncontestedCaptureTicks: BigInt(scenario.civilization.captureZone.uncontestedTicks),
       };
 
       await active.start();

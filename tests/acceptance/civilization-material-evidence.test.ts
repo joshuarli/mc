@@ -41,7 +41,7 @@ test("civilization material log rejects malformed, truncated, wrong-run, and ext
     /tick-zero checkpoint/,
   );
   assert.throws(
-    () => parseCivilizationMaterialLog(logFor([checkpointMarker(1, 0), checkpointMarker(2, 1)]), "run-1"),
+    () => parseCivilizationMaterialLog(logFor([checkpointMarker(1, 0), { ...checkpointMarker(1, 0), sequence: "2", match_tick: "1" }]), "run-1"),
     /checkpoint is unchanged/,
   );
   assert.throws(

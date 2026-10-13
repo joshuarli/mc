@@ -12,13 +12,13 @@ import {
   assertCivilizationMaterialConservation,
   assertCivilizationCargoDeaths,
   assertCivilizationPlacedPositionsPresent,
-  civilizationMaterialBaseline,
   parseCivilizationMaterialLog,
 } from "./civilization-material-evidence.js";
 import { createHungerRunMeasurements, type HungerResourcePhaseEvidence } from "./hunger-measurements.js";
 import {
   assertCivilizationRoster,
   civilizationActionLayout,
+  civilizationMaterialBaseline,
   runOwnedCivilizationAcceptanceScenario,
 } from "./civilization.js";
 import type { AcceptanceRunContext } from "../integration/support/owned-run.js";

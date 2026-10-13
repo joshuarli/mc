@@ -192,6 +192,8 @@ function prepareSixBotRoster(active: AcceptanceRunContext): void {
 
 function assertCanonicalHungerScenario(active: AcceptanceRunContext, seed: bigint): void {
   const scenario = active.preparedRun.scenario;
+  assert.equal(scenario.mode, "hunger_games");
+  if (scenario.mode !== "hunger_games") throw new Error("Hunger acceptance requires Hunger Games");
   assert.equal(scenario.seed, seed, "each match must use its declared distinct seed");
   assert.equal(scenario.roster.competitors, 6);
   assert.equal(scenario.roster.spectatorCapacity, 4n);

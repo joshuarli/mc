@@ -98,7 +98,7 @@ test('core residual craft decision spends two oak logs for the remaining eight p
   const planks = item('oak_planks', 11, 8, 10);
   harness.inventory.slots[9] = logs;
   harness.inventory.slots[10] = planks;
-  Object.assign(harness.bot, { food: 20 });
+  Object.assign(harness.bot, { food: 20, getEquipmentDestSlot: () => 5 });
   harness.bot.emit('spawn');
   harness.bot.emit('health');
   harness.bot._client.emit('window_items', { windowId: 0 });

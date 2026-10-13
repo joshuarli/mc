@@ -539,6 +539,7 @@ for (const task of ['craft', 'gatherApproach', 'reportedGatherApproach'] as cons
     run: async (intent) => {
       assert.notEqual(task, 'craft');
       assert.equal(intent.kind, 'navigate');
+      if (task === 'reportedGatherApproach' && intent.target.x !== 10) return { kind: 'succeeded' };
       return result();
     },
     runCivilization: async (intent) => {
@@ -577,7 +578,7 @@ for (const task of ['craft', 'gatherApproach', 'reportedGatherApproach'] as cons
   loop.onTick(20);
   await settle();
   assert.equal(launches, 2);
-  assert.equal(effects[1]!.skill.kind, task === 'craft' ? 'progress' : 'succeeded');
+  assert.equal(effects.find((effect) => effect.decision_sequence === records[2]!.sequence)!.skill.kind, task === 'craft' ? 'progress' : 'succeeded');
   loop.onTick(21);
   await settle();
   assert.equal(records[3]!.input.feedback.actions[0]!.outcome.kind, task === 'craft' ? 'progress' : 'succeeded');
