@@ -376,6 +376,77 @@ test('path worker preserves AStar frontiers and rotates registered owners fairly
   }
 });
 
+test('path worker keeps an exact goal node intact across pinned pathfinder postprocessing', async () => {
+  const harness = makeHarness(() => undefined, () => undefined, true);
+  const clockDescriptor = Object.getOwnPropertyDescriptor(performance, 'now');
+  let nowMs = 0;
+
+  try {
+    Object.defineProperty(performance, 'now', { configurable: true, value: () => nowMs });
+    const goal = new goals.GoalBlock(31, 66, 21);
+    const goalMove = new PathMove(31, 66, 21, 0, 2.414213562373095);
+    const supportBlock = {
+      name: 'cobblestone',
+      type: 1,
+      stateId: 42,
+      shapes: [[0, 0, 0, 1, 1, 1]],
+      position: new PathMove(31, 65, 21, 0, 1),
+    } as unknown as NonNullable<ReturnType<Bot['blockAt']>>;
+    Object.assign(harness.bot.entity, { position: new PathMove(29, 65, 23, 0, 0) });
+    Object.assign(harness.bot, {
+      blockAt: (position: { readonly x: number; readonly y: number; readonly z: number }) => (
+        position.x === 31 && position.y === 65 && position.z === 21 ? supportBlock : null
+      ),
+    });
+
+    const movements = harness.pathfinder.movements as InstanceType<typeof Movements>;
+    movements.getNeighbors = () => {
+      nowMs += 4;
+      return [goalMove];
+    };
+    const pathfinder = harness.pathfinder as unknown as {
+      getPathTo(
+        movements: InstanceType<typeof Movements>,
+        goal: InstanceType<typeof goals.GoalBlock>,
+        timeout: number,
+      ): unknown;
+    };
+    const initial = pathfinder.getPathTo(movements, goal, 1_000) as {
+      readonly status: string;
+      readonly path: Array<Parameters<typeof goal.isEnd>[0] & {
+        readonly toBreak: unknown[];
+        readonly toPlace: unknown[];
+      }>;
+      readonly context: {
+        readonly bestNode: { readonly data: Parameters<typeof goal.isEnd>[0] };
+        readonly openDataMap: Map<string, { readonly data: Parameters<typeof goal.isEnd>[0] }>;
+        compute(): { readonly status: string };
+      };
+    };
+
+    assert.equal(initial.status, 'partial');
+    assert.deepEqual(initial.path.map(({ x, y, z }) => ({ x, y, z })), [{ x: 31.5, y: 66, z: 21.5 }]);
+    const followedGoal = initial.path[0];
+    assert.ok(followedGoal);
+    assert.notEqual(followedGoal, goalMove);
+    assert.equal(Object.getPrototypeOf(followedGoal), Object.getPrototypeOf(goalMove));
+    assert.notEqual(followedGoal.toBreak, goalMove.toBreak);
+    assert.notEqual(followedGoal.toPlace, goalMove.toPlace);
+    const frontierGoal = initial.context.bestNode.data;
+    assert.equal(initial.context.openDataMap.get('31,66,21')?.data, frontierGoal);
+    assert.deepEqual({ x: frontierGoal.x, y: frontierGoal.y, z: frontierGoal.z }, { x: 31, y: 66, z: 21 });
+    assert.equal(goal.isEnd(frontierGoal), true);
+
+    nowMs = 10;
+    assert.equal(initial.context.compute().status, 'success');
+  } finally {
+    await harness.owner.close();
+    harness.observer.close();
+    if (clockDescriptor === undefined) Reflect.deleteProperty(performance, 'now');
+    else Object.defineProperty(performance, 'now', clockDescriptor);
+  }
+});
+
 test('opt-in path diagnostics capture bounded local movement evidence and detach cleanly', async () => {
   const harness = makeHarness();
   const block = {

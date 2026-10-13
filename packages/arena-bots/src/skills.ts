@@ -112,6 +112,22 @@ interface PathSearchRegistration {
   close(): void;
 }
 
+// The pathfinder mutates and consumes returned Move objects while AStar still owns partial-route nodes.
+function snapshotPathResult(result: PartiallyComputedPath): PartiallyComputedPath {
+  const path = result.path.map((node) => Object.assign(
+    Object.create(Object.getPrototypeOf(node)) as typeof node,
+    node,
+    {
+      x: node.x,
+      y: node.y,
+      z: node.z,
+      toBreak: [...node.toBreak],
+      toPlace: [...node.toPlace],
+    },
+  ));
+  return { ...result, path };
+}
+
 class SkillFault extends Error {
   readonly failure: SkillFailure;
 
@@ -313,11 +329,11 @@ class PathSearchWorker {
     this.#rollWindow(now);
     if (owner.signal?.aborted) {
       this.#removeQueuedOwner(owner, 'cancelled');
-      return context.makeResult('partial', context.bestNode);
+      return snapshotPathResult(context.makeResult('partial', context.bestNode));
     }
     if (owner.deadline !== null && now >= owner.deadline) {
       this.#removeQueuedOwner(owner, 'timedOut');
-      return context.makeResult('partial', context.bestNode);
+      return snapshotPathResult(context.makeResult('partial', context.bestNode));
     }
 
     const workerRemainingMs = MAX_WORKER_PATH_SLICE_MS - this.#workerSpentMs;
@@ -331,7 +347,7 @@ class PathSearchWorker {
     );
     if ((queueHead !== undefined && queueHead !== owner) || sliceMs <= 0) {
       this.#queueOwner(owner);
-      return context.makeResult('partial', context.bestNode);
+      return snapshotPathResult(context.makeResult('partial', context.bestNode));
     }
 
     const computeStartedAt = now;
@@ -387,7 +403,7 @@ class PathSearchWorker {
     } else {
       this.#removeQueuedOwner(owner, 'released');
     }
-    return result;
+    return snapshotPathResult(result);
   }
 
   #rollWindow(now: number): void {
