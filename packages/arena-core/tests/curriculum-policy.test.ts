@@ -62,17 +62,42 @@ interface CurriculumScenario {
   readonly randomSeed: string;
 }
 
+const scenarioNames = [
+  'initialSearch',
+  'containerContention',
+  'equipmentUnderdog',
+  'equipmentAhead',
+  'lowHealthThreat',
+  'eatingThreat',
+  'lostTarget',
+  'twoVisibleTargets',
+  'afterKnockback',
+  'nearHysteresis',
+  'farHysteresis',
+  'explorationOverflow',
+] as const;
+
+type ScenarioName = typeof scenarioNames[number];
+
 const scenarios = JSON.parse(readFileSync(
   resolve(process.cwd(), 'fixtures/policy-curriculum/observations.json'),
   'utf8',
-)) as Record<string, CurriculumScenario>;
+)) as Partial<Record<ScenarioName, CurriculumScenario>>;
+
+function scenario(name: ScenarioName): CurriculumScenario {
+  const value = scenarios[name];
+  if (value === undefined) {
+    throw new RangeError(`missing curriculum scenario: ${name}`);
+  }
+  return value;
+}
 
 function position(value: PositionTuple) {
   return blockPosition(value[0], value[1], value[2]);
 }
 
 function observation(
-  name: string,
+  name: ScenarioName,
   options: {
     readonly at?: number;
     readonly agent?: Knowledge<AgentState>;
@@ -80,31 +105,28 @@ function observation(
     readonly loot?: Knowledge<readonly LootOpportunity[]>;
   } = {},
 ) {
-  const scenario = scenarios[name];
-  if (scenario === undefined) {
-    throw new RangeError(`unknown curriculum scenario: ${name}`);
-  }
-  const observationTick = options.at ?? scenario.tick;
+  const fixture = scenario(name);
+  const observationTick = options.at ?? fixture.tick;
   return agentObservation({
     tick: tick(observationTick),
     sequence: observationSequence(observationTick + 1),
     agent: options.agent ?? currentKnowledge(agentState({
-      position: position(scenario.position),
-      healthHalfHearts: scenario.healthHalfHearts,
-      hungerPoints: scenario.hungerPoints,
-      foodStacks: scenario.foodStacks.map(([slot, count]) => foodStack(slot, count)),
-      equipped: scenario.equipped,
-      upgrades: scenario.upgrades.map(([slot, equipmentSlot, rating]) =>
+      position: position(fixture.position),
+      healthHalfHearts: fixture.healthHalfHearts,
+      hungerPoints: fixture.hungerPoints,
+      foodStacks: fixture.foodStacks.map(([slot, count]) => foodStack(slot, count)),
+      equipped: fixture.equipped,
+      upgrades: fixture.upgrades.map(([slot, equipmentSlot, rating]) =>
         equipmentUpgrade(slot, equipmentSlot, rating)),
     })),
     border: currentKnowledge(worldBorder(
-      scenario.border.centerX,
-      scenario.border.centerZ,
-      scenario.border.radiusBlocks,
+      fixture.border.centerX,
+      fixture.border.centerZ,
+      fixture.border.radiusBlocks,
     )),
-    opponents: options.opponents ?? currentKnowledge(scenario.opponents.map((opponent) =>
+    opponents: options.opponents ?? currentKnowledge(fixture.opponents.map((opponent) =>
       visibleOpponent(entityId(opponent.id), position(opponent.position), opponent.attackingAgent))),
-    loot: options.loot ?? currentKnowledge(scenario.loot.map((opportunity) =>
+    loot: options.loot ?? currentKnowledge(fixture.loot.map((opportunity) =>
       unopenedContainer(position(opportunity.position)))),
   });
 }
@@ -113,7 +135,7 @@ const params = PolicyParams.baseline();
 
 test('initial search navigates to a bounded replayable target', () => {
   const input = observation('initialSearch');
-  const seed = BigInt(scenarios.initialSearch.randomSeed);
+  const seed = BigInt(scenario('initialSearch').randomSeed);
   const first = decide(input, emptyPolicyMemory(), params, new DeterministicRandom(seed));
   const replay = decide(input, emptyPolicyMemory(), params, new DeterministicRandom(seed));
 
@@ -121,7 +143,7 @@ test('initial search navigates to a bounded replayable target', () => {
   deepStrictEqual(first.intent, { kind: 'navigate', target: blockPosition(4, 64, -8) });
   deepStrictEqual([replay.goal, replay.intent], [first.goal, first.intent]);
   ok(first.intent.kind === 'navigate');
-  ok(manhattanDistance(position(scenarios.initialSearch.position), first.intent.target) <= 8n);
+  ok(manhattanDistance(position(scenario('initialSearch').position), first.intent.target) <= 8n);
 });
 
 test('identical local views choose the same unopened container without shared reservations', () => {
@@ -205,7 +227,7 @@ test('a lost or stale target guides bounded search but never starts combat', () 
     new DeterministicRandom(0n),
   );
   const noLongerVisible = decide(
-    observation('lostTarget', { at: scenarios.lostTarget.tick + 1, opponents: currentKnowledge([]) }),
+    observation('lostTarget', { at: scenario('lostTarget').tick + 1, opponents: currentKnowledge([]) }),
     first.memory,
     params,
     new DeterministicRandom(0n),
@@ -213,8 +235,8 @@ test('a lost or stale target guides bounded search but never starts combat', () 
   const staleSighting = decide(
     observation('lostTarget', {
       opponents: staleKnowledge(
-        [visibleOpponent(entityId(41), blockPosition(5, 64, 0))],
-        tick(scenarios.lostTarget.tick - 1),
+        [visibleOpponent(entityId(41), blockPosition(5, 64, 0), false)],
+        tick(scenario('lostTarget').tick - 1),
       ),
     }),
     emptyPolicyMemory(),
@@ -230,7 +252,7 @@ test('a lost or stale target guides bounded search but never starts combat', () 
 });
 
 test('two visible targets select the nearest target regardless of input order', () => {
-  const scenario = scenarios.twoVisibleTargets;
+  const fixture = scenario('twoVisibleTargets');
   const forward = decide(
     observation('twoVisibleTargets'),
     emptyPolicyMemory(),
@@ -239,7 +261,7 @@ test('two visible targets select the nearest target regardless of input order', 
   );
   const reversed = decide(
     observation('twoVisibleTargets', {
-      opponents: currentKnowledge([...scenario.opponents].reverse().map((opponent) =>
+      opponents: currentKnowledge([...fixture.opponents].reverse().map((opponent) =>
         visibleOpponent(entityId(opponent.id), position(opponent.position), opponent.attackingAgent))),
     }),
     emptyPolicyMemory(),
@@ -317,17 +339,17 @@ test('seat 255 has a replayable search stream and seat 256 is rejected', () => {
   deepStrictEqual([replay.goal, replay.intent], [first.goal, first.intent]);
   equal(first.goal.kind, 'explore');
   ok(first.intent.kind === 'navigate');
-  ok(manhattanDistance(position(scenarios.initialSearch.position), first.intent.target) <= 8n);
+  ok(manhattanDistance(position(scenario('initialSearch').position), first.intent.target) <= 8n);
   throws(() => seatId(256), RangeError);
 });
 
 test('coordinate overflow returns an explicit hold at a safe border-center position', () => {
-  const scenario = scenarios.explorationOverflow;
+  const fixture = scenario('explorationOverflow');
   const decision = decide(
     observation('explorationOverflow'),
     emptyPolicyMemory(),
     params,
-    new DeterministicRandom(BigInt(scenario.randomSeed)),
+    new DeterministicRandom(BigInt(fixture.randomSeed)),
   );
 
   deepStrictEqual(decision.goal, { kind: 'wait', reason: 'unrepresentableTarget' });
