@@ -249,7 +249,9 @@ build_plugin() {
     api_artifact=$(locked_section_value paper api_artifact)
     api_version=$(locked_section_value paper api_version)
     plugin_api_version=$(locked_section_value paper plugin_api_version)
-    (cd "$root/server/arena-plugin" && "$GRADLE_BIN" --no-daemon \
+    project_cache="$root/.work/arena/gradle-project"
+    ensure_work_directory "$project_cache"
+    (cd "$root/server/arena-plugin" && "$GRADLE_BIN" --project-cache-dir "$project_cache" --no-daemon \
         -PpaperApiGroup="$api_group" \
         -PpaperApiArtifact="$api_artifact" \
         -PpaperApiVersion="$api_version" \
