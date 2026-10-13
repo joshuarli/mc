@@ -29,6 +29,7 @@ ensure_work_directory "$root/.work"
 ensure_work_directory "$root/.work/tmp"
 ensure_work_directory "$root/.work/arena"
 export TMPDIR="$root/.work/tmp"
+export ARENA_JAVA_TMPDIR="$TMPDIR"
 download_tmp=
 jdk_stage=
 node_stage=
@@ -559,6 +560,7 @@ test_command() {
             prepare_node
             ensure_workspace_dependencies
             build_typescript "$suite"
+            if [ "$suite" = runner ]; then build_fs_helper; fi
             run_named_tests "$suite" "$case_name"
             ;;
         protocol:*)
@@ -578,6 +580,7 @@ test_command() {
             prepare_node
             ensure_workspace_dependencies
             build_typescript runtime
+            build_fs_helper
             run_named_tests runtime "$case_name"
             ;;
         integration:stack|integration:maps-reset|integration:match-rules|integration:legal-player|integration:fairness)
@@ -585,6 +588,7 @@ test_command() {
             prepare_node
             ensure_workspace_dependencies
             build_typescript stack
+            build_fs_helper
             prepare_jdk
             build_plugin
             ensure_paper_artifact
@@ -595,6 +599,7 @@ test_command() {
             prepare_node
             ensure_workspace_dependencies
             build_typescript stack
+            build_fs_helper
             prepare_jdk
             build_plugin
             ensure_paper_artifact
