@@ -5,6 +5,7 @@ import { runOwnedAcceptanceScenario } from "./owned-run.js";
 import type { AcceptanceRunContext } from "./owned-run.js";
 
 const ACTIVE_PHASE_TIMEOUT_MS = 20_000;
+const AGENT_OBSERVATION_TIMEOUT_MS = 5_000;
 const OPPONENT_VISIBILITY_TIMEOUT_MS = 20_000;
 const ELIMINATION_TIMEOUT_MS = 3_000;
 const MAX_ATTACKS = 20;
@@ -75,7 +76,7 @@ export async function waitForActivePhase(active: AcceptanceRunContext, signal: A
   throw new Error(`duel did not reach the active phase within ${ACTIVE_PHASE_TIMEOUT_MS} ms`);
 }
 
-/** Eliminates a stationary competitor using only the attacker's visible opponent and Mineflayer skills. */
+/** Eliminates a stationary competitor using visible upgrades, opponents, and Mineflayer skills. */
 export async function eliminateOpponentWithSkillAttacks(
   active: AcceptanceRunContext,
   attackerSeat: number,
@@ -86,22 +87,35 @@ export async function eliminateOpponentWithSkillAttacks(
   const target = competitorForSeat(active, targetSeat);
   assert.notEqual(attacker.identity.username, target.identity.username);
 
-  const initialTarget = targetEntityFor(attacker.bot, target.identity.username);
-  await attacker.bot.lookAt(initialTarget.position.offset(0, initialTarget.height * 0.6, 0), true);
-  const observation = await waitForOpponentObservation(active, attackerSeat, targetSeat, signal);
-  assert.equal(observation.opponents.kind, "current");
-  const visibleTarget = observation.opponents.value.find(({ id }) => id === initialTarget.id);
-  assert.ok(visibleTarget, "the attacker's complete current perception must identify its opponent");
-
-  assert.deepStrictEqual(
-    await attacker.client.run({ kind: "approach", target: visibleTarget.id }),
-    { kind: "succeeded" },
-    "the Mineflayer skill client must approach the visible opponent",
-  );
+  const agent = await waitForCurrentAgent(attacker.client, signal);
+  const weaponUpgrade = agent.value.upgrades.find(({ equipmentSlot }) => equipmentSlot === "weapon");
+  if (weaponUpgrade) {
+    assert.deepStrictEqual(
+      await attacker.client.run({
+        kind: "equip",
+        inventorySlot: weaponUpgrade.inventorySlot,
+        equipmentSlot: weaponUpgrade.equipmentSlot,
+        rating: weaponUpgrade.rating,
+      }),
+      { kind: "succeeded" },
+      "the Mineflayer skill client must equip its currently observed weapon upgrade",
+    );
+  }
 
   for (let attack = 0; attack < MAX_ATTACKS; attack += 1) {
     signal.throwIfAborted();
     if (hasDeathElimination(active, targetSeat)) return;
+    const observation = await waitForOpponentObservation(active, attackerSeat, targetSeat, signal);
+    assert.equal(observation.opponents.kind, "current");
+    const currentTargetEntity = targetEntityFor(attacker.bot, target.identity.username);
+    const visibleTarget = observation.opponents.value.find(({ id }) => id === currentTargetEntity.id);
+    assert.ok(visibleTarget, "the attacker's complete current perception must identify its opponent before each attack");
+    await attacker.bot.lookAt(currentTargetEntity.position.offset(0, currentTargetEntity.height * 0.6, 0), true);
+    assert.deepStrictEqual(
+      await attacker.client.run({ kind: "approach", target: visibleTarget.id }),
+      { kind: "succeeded" },
+      `the Mineflayer skill client must approach the currently visible opponent before attack ${attack + 1}`,
+    );
     const currentTarget = targetEntityFor(attacker.bot, target.identity.username);
     await attacker.bot.lookAt(currentTarget.position.offset(0, currentTarget.height * 0.6, 0), true);
     assert.deepStrictEqual(
@@ -113,6 +127,20 @@ export async function eliminateOpponentWithSkillAttacks(
     await delay(ATTACK_COOLDOWN_MS, undefined, { signal });
   }
   throw new Error(`seat ${targetSeat} survived ${MAX_ATTACKS} ordinary Mineflayer attacks`);
+}
+
+async function waitForCurrentAgent(
+  client: AcceptanceRunContext["competitors"][number]["client"],
+  signal: AbortSignal,
+) {
+  const deadline = Date.now() + AGENT_OBSERVATION_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    signal.throwIfAborted();
+    const observation = client.observe(0);
+    if (observation.agent.kind === "current") return observation.agent;
+    await delay(50, undefined, { signal });
+  }
+  throw new Error(`attacker agent observation did not become current within ${AGENT_OBSERVATION_TIMEOUT_MS} ms`);
 }
 
 function targetEntityFor(bot: AcceptanceRunContext["competitors"][number]["bot"], username: string) {
