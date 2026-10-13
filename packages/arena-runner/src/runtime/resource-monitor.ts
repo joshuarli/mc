@@ -12,7 +12,6 @@ const MAX_COMMAND_OUTPUT_BYTES = 4_096;
 const RESOURCE_FIELDS = Object.freeze({
   ownedRssBytes: 'owned_rss_bytes',
   availableMemoryBytes: 'available_memory_bytes',
-  swapIns: 'swap_ins',
   swapOuts: 'swap_outs',
 } as const);
 
@@ -206,11 +205,10 @@ function resourceLimit(
       field: RESOURCE_FIELDS.availableMemoryBytes,
     });
   }
-  if (previous !== undefined
-      && (current.swapIns > previous.swapIns || current.swapOuts > previous.swapOuts)) {
+  if (previous !== undefined && current.swapOuts > previous.swapOuts) {
     return new RunnerError('runtime_failure', 'system memory', {
       kind: 'system_swapping_detected',
-      field: current.swapIns > previous.swapIns ? RESOURCE_FIELDS.swapIns : RESOURCE_FIELDS.swapOuts,
+      field: RESOURCE_FIELDS.swapOuts,
     });
   }
   return undefined;

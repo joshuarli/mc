@@ -56,6 +56,44 @@ test('resource monitor aborts when swap counters advance', async () => {
   await monitor.stop();
 });
 
+test('resource monitor reports swap-ins without aborting when swap-outs stay flat', async () => {
+  const effects = createEffects([
+    sample({ swapIns: 10n, swapOuts: 4n }),
+    sample({ swapIns: 11n, swapOuts: 4n }),
+  ]);
+  const samples: RuntimeResourceSample[] = [];
+  let resolveSecondSample!: () => void;
+  const secondSample = new Promise<void>((resolve) => { resolveSecondSample = resolve; });
+  const monitor = await startOwnedResourceMonitor({
+    javaPid: 1,
+    effects,
+    onSample: (event) => {
+      if (event.status !== 'sampled') return;
+      samples.push(event.observation.sample);
+      if (samples.length === 2) resolveSecondSample();
+    },
+  });
+  let failure: RunnerError | undefined;
+  const failureObserved = monitor.failure.then((error) => {
+    failure = error;
+    return 'failed' as const;
+  });
+
+  effects.tick();
+  const result = await Promise.race([
+    secondSample.then(() => 'sampled' as const),
+    failureObserved,
+  ]);
+  assert.equal(result, 'sampled');
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  await monitor.stop();
+
+  assert.equal(failure, undefined);
+  assert.equal(samples.length, 2);
+  assert.equal(samples[1]?.swapIns, 11n);
+  assert.equal(samples[1]?.swapOuts, 4n);
+});
+
 test('resource monitor stops its pending poll without starting another sample', async () => {
   const effects = createEffects([sample()]);
   const monitor = await startOwnedResourceMonitor({ javaPid: 1, effects });
