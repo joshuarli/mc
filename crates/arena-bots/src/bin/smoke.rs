@@ -8,6 +8,11 @@ const EVENT_TIMEOUT: Duration = Duration::from_secs(20);
 
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
+    // Azalea's direct client API starts local ECS tasks that must stay on this task set.
+    tokio::task::LocalSet::new().run_until(run_clients()).await
+}
+
+async fn run_clients() -> eyre::Result<()> {
     let mut args = std::env::args().skip(1);
     let host = args.next().context("missing loopback host")?;
     let port = args.next().context("missing server port")?;
