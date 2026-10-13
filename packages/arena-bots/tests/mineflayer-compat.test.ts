@@ -38,7 +38,7 @@ test('Mineflayer 4.39 encodes sprint actions with the protocol 775 mapper', () =
   assert.deepEqual(uncorrectedAction, { actionName: 'start_riding_jump', actionId: 3 });
 
   const corrected = makeBot();
-  const nativeSupportFeature = (feature: string) => supports(corrected.bot, feature);
+  const nativeSupportFeature = (corrected.bot.supportFeature as (feature: string) => boolean).bind(corrected.bot);
   const preservedFeatures = ['newPlayerInputPacket', 'stateIdUsed', 'unsupportedFeature'];
   const before = preservedFeatures.map((feature) => nativeSupportFeature(feature));
 
@@ -48,6 +48,9 @@ test('Mineflayer 4.39 encodes sprint actions with the protocol 775 mapper', () =
     preservedFeatures.map((feature) => supports(corrected.bot, feature)),
     before,
   );
+  const correctedSupportFeature = corrected.bot.supportFeature;
+  bindEntityActionStringMapperFeature(corrected.bot);
+  assert.equal(corrected.bot.supportFeature, correctedSupportFeature);
 
   injectPhysics(corrected.bot, { physicsEnabled: false });
   corrected.bot.setControlState('sprint', true);
@@ -59,12 +62,26 @@ test('Mineflayer 4.39 encodes sprint actions with the protocol 775 mapper', () =
 test('the entity action string mapper correction is limited to protocol 775', () => {
   const bot = makeBot();
   bot.bot.protocolVersion = '776';
-  const nativeSupportFeature = (feature: string) => supports(bot.bot, feature);
+  const nativeSupportFeature = bot.bot.supportFeature;
 
   bindEntityActionStringMapperFeature(bot.bot);
 
   assert.equal(supports(bot.bot, 'entityActionUsesStringMapper'), nativeSupportFeature('entityActionUsesStringMapper'));
   assert.equal(supports(bot.bot, 'newPlayerInputPacket'), nativeSupportFeature('newPlayerInputPacket'));
+  assert.equal(bot.bot.supportFeature, nativeSupportFeature);
+});
+
+test('rejects protocol 775 when the Mineflayer registry disagrees', () => {
+  const bot = makeBot();
+  const registry = bot.bot.registry;
+  bot.bot.registry = Object.create(registry, {
+    version: { value: { ...registry.version, version: 776 } },
+  }) as Bot['registry'];
+
+  assert.throws(
+    () => bindEntityActionStringMapperFeature(bot.bot),
+    /Mineflayer protocol version does not match its registry/,
+  );
 });
 
 function makeBot(): { readonly bot: Bot; readonly actions: { readonly entityId: number; readonly actionId: string | number; readonly jumpBoost: number }[] } {
