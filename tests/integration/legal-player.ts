@@ -12,10 +12,16 @@ import {
 } from "./support/duel.js";
 import { observePlayerInventory } from "./support/mineflayer-world.js";
 import { runOwnedAcceptanceScenario, type AcceptanceRunContext } from "./support/owned-run.js";
+import { startSprintCourse } from "./support/sprint-course.js";
 
 const FOOD_DEPLETION_TIMEOUT_MS = 45_000;
 const SPRINT_LEG_MS = 750;
 const SPRINT_HEADINGS = [Math.PI, -Math.PI / 2, 0, Math.PI / 2] as const;
+const COURSE_MIN_COORDINATE = 8;
+const COURSE_MAX_COORDINATE = 54;
+const COURSE_CENTER_COORDINATE = 31.5;
+const COURSE_EDGE_MARGIN = 2;
+const REQUIRED_SPRINT_TAKEOFFS = 8;
 
 test("legal-player", { timeout: 300_000 }, async (t) => {
   const run = await runOwnedAcceptanceScenario(
@@ -165,6 +171,7 @@ async function depleteFoodBySprintJump(bot: Bot, signal: AbortSignal): Promise<{
     highestY = Math.max(highestY, position.y);
   };
   bot.on("physicsTick", onPhysicsTick);
+  const course = startSprintCourse(bot);
 
   const deadline = Date.now() + FOOD_DEPLETION_TIMEOUT_MS;
   try {
@@ -172,26 +179,13 @@ async function depleteFoodBySprintJump(bot: Bot, signal: AbortSignal): Promise<{
       for (const preferredYaw of SPRINT_HEADINGS) {
         signal.throwIfAborted();
         if (bot.food < startingFood || Date.now() >= deadline) break;
-        const { x, z } = bot.entity.position;
-        let yaw = preferredYaw;
-        if (x <= 8) yaw = -Math.PI / 2;
-        else if (x >= 22) yaw = Math.PI / 2;
-        else if (z <= 26) yaw = Math.PI;
-        else if (z >= 40) yaw = 0;
-        await bot.look(yaw, 0);
-        bot.setControlState("forward", true);
-        bot.setControlState("sprint", true);
-        bot.setControlState("jump", true);
-        try {
-          const remainingMs = Math.max(1, Math.min(SPRINT_LEG_MS, deadline - Date.now()));
-          await delay(remainingMs, undefined, { signal });
-        } finally {
-          bot.clearControlStates();
-        }
+        await course.turn(sprintCourseHeading(bot, preferredYaw), takeoffs < REQUIRED_SPRINT_TAKEOFFS);
+        const remainingMs = Math.max(1, Math.min(SPRINT_LEG_MS, deadline - Date.now()));
+        await delay(remainingMs, undefined, { signal });
       }
     }
   } finally {
-    bot.clearControlStates();
+    course.stop();
     bot.removeListener("physicsTick", onPhysicsTick);
   }
 
@@ -199,6 +193,22 @@ async function depleteFoodBySprintJump(bot: Bot, signal: AbortSignal): Promise<{
     throw new Error(`sprint-jumps did not lower food within ${FOOD_DEPLETION_TIMEOUT_MS} ms`);
   }
   return { startingY, highestY, takeoffs, remainingFood: bot.food };
+}
+
+function sprintCourseHeading(bot: Bot, preferredYaw: number): number {
+  const { x, z } = bot.entity.position;
+  const nearWestEdge = x <= COURSE_MIN_COORDINATE + COURSE_EDGE_MARGIN;
+  const nearEastEdge = x >= COURSE_MAX_COORDINATE - COURSE_EDGE_MARGIN;
+  const nearNorthEdge = z <= COURSE_MIN_COORDINATE + COURSE_EDGE_MARGIN;
+  const nearSouthEdge = z >= COURSE_MAX_COORDINATE - COURSE_EDGE_MARGIN;
+  if (!nearWestEdge && !nearEastEdge && !nearNorthEdge && !nearSouthEdge) return preferredYaw;
+
+  const towardCenterX = COURSE_CENTER_COORDINATE - x;
+  const towardCenterZ = COURSE_CENTER_COORDINATE - z;
+  if (Math.abs(towardCenterX) >= Math.abs(towardCenterZ)) {
+    return towardCenterX > 0 ? -Math.PI / 2 : Math.PI / 2;
+  }
+  return towardCenterZ > 0 ? Math.PI : 0;
 }
 
 async function navigateOverRamp(
