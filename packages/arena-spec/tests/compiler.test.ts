@@ -4,12 +4,13 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import test from "node:test";
 
-import { blockPosition } from "@arena/core";
+import { blockPosition, PolicyParams } from "@arena/core";
 import {
   GameMode,
   SpecError,
   SpecErrorKind,
   MAX_SOURCE_BYTES,
+  compilePolicy,
   compileMap,
   compileScenario,
   scenarioMapReference,
@@ -21,6 +22,69 @@ const DUEL = readRepoFile("scenarios/duel.toml");
 const DUEL_MAP = readRepoFile("maps/duel.toml");
 const UNKNOWN_OPERATION = readRepoFile("fixtures/spec/unknown-operation.toml");
 const UNKNOWN_FIELD = readRepoFile("fixtures/spec/unknown-field.toml");
+const BASELINE_POLICY = readRepoFile("policies/baseline.toml");
+
+test("policy_v1_compiles_the_checked_in_baseline_parameters", () => {
+  const policy = compilePolicy(BASELINE_POLICY);
+  assert.equal(policy.version, 1);
+  assert.ok(policy.params instanceof PolicyParams);
+  assert.deepEqual(policy.params.values, {
+    version: 1,
+    eatAtHungerOrBelow: 8,
+    retreatAtHealthHalfHeartsOrBelow: 8,
+    borderMarginBlocks: 2,
+    fightRangeBlocks: 4,
+    opponentMemoryTicks: 100,
+    lootHysteresisBlocks: 2,
+    searchRadiusBlocks: 8,
+  });
+  assert.match(policy.semanticId, /^[0-9a-f]{64}$/);
+  assert.ok(Object.isFrozen(policy));
+});
+
+test("policy_compiler_rejects_unknown_duplicate_missing_and_invalid_values", () => {
+  const unknown = specError(() => compilePolicy(`${BASELINE_POLICY}unknown_policy_value = 1\n`));
+  assert.equal(unknown.kind, SpecErrorKind.UnknownField);
+  assert.equal(unknown.path, "policy.unknown_policy_value");
+  assert.deepEqual(unknown.sourceLocation, { line: 9, column: 1 });
+
+  const duplicate = specError(() => compilePolicy(BASELINE_POLICY.replace("version = 1\n", "version = 1\nversion = 1\n")));
+  assert.equal(duplicate.kind, SpecErrorKind.Syntax);
+  assert.equal(duplicate.sourceLocation?.line, 2);
+
+  const missing = specError(() => compilePolicy(BASELINE_POLICY.replace("search_radius_blocks = 8\n", "")));
+  assert.equal(missing.kind, SpecErrorKind.MissingField);
+  assert.equal(missing.path, "policy.search_radius_blocks");
+
+  const unsupportedVersion = specError(() => compilePolicy(BASELINE_POLICY.replace("version = 1", "version = 2")));
+  assert.equal(unsupportedVersion.kind, SpecErrorKind.InvalidValue);
+  assert.equal(unsupportedVersion.path, "policy.version");
+  assert.deepEqual(unsupportedVersion.sourceLocation, { line: 1, column: 1 });
+
+  const nonInteger = specError(() => compilePolicy(BASELINE_POLICY.replace("fight_range_blocks = 4", "fight_range_blocks = 4.5")));
+  assert.equal(nonInteger.kind, SpecErrorKind.InvalidValue);
+  assert.equal(nonInteger.path, "policy.fight_range_blocks");
+  assert.deepEqual(nonInteger.sourceLocation, { line: 5, column: 1 });
+
+  const outOfRange = specError(() => compilePolicy(BASELINE_POLICY.replace("fight_range_blocks = 4", "fight_range_blocks = 9")));
+  assert.equal(outOfRange.kind, SpecErrorKind.Range);
+  assert.equal(outOfRange.path, "policy.fight_range_blocks");
+  assert.deepEqual(outOfRange.sourceLocation, { line: 5, column: 1 });
+
+  const inexact = specError(() => compilePolicy(BASELINE_POLICY.replace("search_radius_blocks = 8", "search_radius_blocks = 9007199254740993")));
+  assert.equal(inexact.kind, SpecErrorKind.Range);
+  assert.equal(inexact.path, "policy.search_radius_blocks");
+  assert.deepEqual(inexact.sourceLocation, { line: 8, column: 1 });
+});
+
+test("policy_semantic_id_ignores_layout_but_covers_parameter_values", () => {
+  const baseline = compilePolicy(BASELINE_POLICY);
+  const reordered = compilePolicy(BASELINE_POLICY.trimEnd().split("\n").reverse().join("\n"));
+  assert.equal(baseline.semanticId, reordered.semanticId);
+
+  const changed = compilePolicy(BASELINE_POLICY.replace("loot_hysteresis_blocks = 2", "loot_hysteresis_blocks = 3"));
+  assert.notEqual(baseline.semanticId, changed.semanticId);
+});
 
 test("scenario_v1_compiles_hunger_six_and_duel", () => {
   const hunger = compileScenario(HUNGER, HUNGER_MAP);
@@ -274,6 +338,10 @@ test("compilers_reject_sources_above_the_utf8_byte_limit", () => {
   const scenarioError = specError(() => compileScenario(oversized, HUNGER_MAP));
   assert.equal(scenarioError.kind, SpecErrorKind.ResourceLimit);
   assert.equal(scenarioError.path, "scenario.source");
+
+  const policyError = specError(() => compilePolicy(oversized));
+  assert.equal(policyError.kind, SpecErrorKind.ResourceLimit);
+  assert.equal(policyError.path, "policy.source");
 
   const mapReferenceError = specError(() => compileScenario(HUNGER, oversized));
   assert.equal(mapReferenceError.kind, SpecErrorKind.ResourceLimit);
