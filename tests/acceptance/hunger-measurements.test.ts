@@ -17,6 +17,21 @@ test("hunger measurements mark unsampled phases and attack internals unavailable
   assert.equal(evidence.resources.startup.commands.status, "unavailable");
   assert.equal(evidence.policyBySeat.get(0)?.attackMissCount.status, "unavailable");
   assert.equal(evidence.policyBySeat.get(0)?.attackReceiptWaitMilliseconds.status, "unavailable");
+  assert.deepEqual(evidence.timingMetrics, {
+    maximumEventLoopDelayMilliseconds: {
+      status: "unavailable",
+      reason: "the acceptance runner does not measure general event-loop delay",
+    },
+    serverTickTimeMilliseconds: {
+      status: "unavailable",
+      reason: "the runner does not expose authoritative server tick duration",
+    },
+    diagnosticOverheadMilliseconds: {
+      status: "unavailable",
+      reason: "the acceptance runner does not measure diagnostic instrumentation overhead",
+    },
+  });
+  assert.equal(evidence.resourcePhaseScope, "active_samples_include_post_outcome_action_settlement_and_final_resource_sample");
 });
 
 test("hunger measurements split resource samples at the observed active boundary", () => {
@@ -39,7 +54,7 @@ test("hunger measurements split resource samples at the observed active boundary
   assert.deepEqual(active.nodeSystemCpuTime, { deltaSampleCount: 1, totalMilliseconds: { status: "available", value: 0.004 } });
   assert.deepEqual(active.javaCpuTime, { deltaSampleCount: 1, totalMilliseconds: { status: "available", value: 0.015 } });
   assert.deepEqual(active.swapInDelta, { status: "available", value: "4" });
-  assert.deepEqual(active.maximumPollTimerDelay, { status: "available", value: 0.000006 });
+  assert.deepEqual(active.maximumResourcePollIntervalOvershoot, { status: "available", value: 0.000006 });
   assert.equal(active.commands.status, "available");
   if (active.commands.status !== "available") throw new Error("sampled command observations must be available");
   assert.equal(active.commands.value.ps?.count, 3);
@@ -47,6 +62,34 @@ test("hunger measurements split resource samples at the observed active boundary
   assert.equal(active.commands.value.ps?.timedOutCount, 1);
   assert.equal(active.commands.value.ps?.reapTimedOutCount, 1);
   assert.deepEqual(active.commands.value.ps?.maximumDurationMilliseconds, { status: "available", value: 0.00004 });
+});
+
+test("hunger measurements include action and resource callbacks received during run cleanup", () => {
+  const measurements = createHungerRunMeasurements([3]);
+  measurements.markActiveBoundary(100n);
+  measurements.onResourceSample(resourceSample(100n, 10, 5, 20n, 1n));
+
+  // Runtime cleanup can settle an owned action and emit a final resource sample after outcome observation.
+  measurements.onPolicyActivity({
+    kind: "action",
+    seat: 3,
+    actionSequence: "1",
+    intent: { kind: "attack", target: 7 } as never,
+    startedAtNs: 200n,
+    settledAtNs: 1_000_200n,
+    outcome: { kind: "cancelled", reason: "shutdown" },
+    cleanupIncluded: true,
+  } as unknown as PolicyActivityEvent);
+  measurements.onResourceSample(resourceSample(200n, 15, 9, 30n, 3n));
+
+  const evidence = measurements.snapshot();
+  const policy = evidence.policyBySeat.get(3);
+  assert.ok(policy);
+  assert.equal(policy.actionCount, 1);
+  assert.deepEqual(policy.actionOutcomeCounts, { "cancelled:shutdown": 1 });
+  assert.deepEqual(policy.actionDuration.maximumMilliseconds, { status: "available", value: 1 });
+  assert.equal(evidence.resources.active.sampleCount, 2);
+  assert.equal(evidence.resources.active.nodeUserCpuTime.deltaSampleCount, 1);
 });
 
 test("hunger measurements keep failed resource samples distinct from zero-valued samples", () => {

@@ -68,7 +68,6 @@ test("hunger-six", { timeout: 2_700_000 }, async (t) => {
 
           await active.waitForOutcome();
           gameplayEvidence = recorder.snapshot();
-          measurementEvidence = measurements.snapshot();
         } finally {
           recorder.close();
         }
@@ -82,6 +81,8 @@ test("hunger-six", { timeout: 2_700_000 }, async (t) => {
         onResourceSample: measurements.onResourceSample,
       },
     );
+    // Runtime shutdown settles owned actions and emits the final resource sample before returning.
+    measurementEvidence = measurements.snapshot();
 
     assert.equal(run.inspection.run_id, run.runId);
     assert.ok(run.outcome.kind === "winner" || run.outcome.kind === "draw", "seeded run must reach an ordinary outcome");
@@ -400,6 +401,8 @@ async function createHungerAcceptanceReport(input: Readonly<{
     measurements: Object.freeze({
       active_boundary: input.measurements.activeBoundary,
       resource_phase_assignment: "sample_start_time_relative_to_first_observed_active_clock",
+      resource_phase_scope: input.measurements.resourcePhaseScope,
+      timing_metrics: input.measurements.timingMetrics,
       policy_by_seat: Object.freeze(Object.fromEntries(input.measurements.policyBySeat)),
       resources: input.measurements.resources,
     }),
@@ -650,6 +653,7 @@ function hungerTapSummary(report: HungerAcceptanceReport): Readonly<Record<strin
   const resources = object(measurements.resources, "resource evidence must be an object");
   const startup = object(resources.startup, "startup resource evidence must be an object");
   const active = object(resources.active, "active resource evidence must be an object");
+  const timingMetrics = object(measurements.timing_metrics, "timing metrics must be an object");
   return Object.freeze({
     schema: "hunger-acceptance-v1",
     run_id: report.run_id,
@@ -663,6 +667,10 @@ function hungerTapSummary(report: HungerAcceptanceReport): Readonly<Record<strin
     active_resource_samples: active.sampleCount,
     startup_peak_summed_rss_bytes: startup.peakSummedRssBytes,
     active_peak_summed_rss_bytes: active.peakSummedRssBytes,
+    startup_resource_poll_interval_overshoot: startup.maximumResourcePollIntervalOvershoot,
+    active_resource_poll_interval_overshoot: active.maximumResourcePollIntervalOvershoot,
+    resource_phase_scope: measurements.resource_phase_scope,
+    timing_metrics: timingMetrics,
   });
 }
 

@@ -54,7 +54,7 @@ export interface HungerResourcePhaseEvidence {
   readonly nodeSystemCpuTime: HungerCpuEvidence;
   readonly javaCpuTime: HungerCpuEvidence;
   readonly maximumSampleDuration: MeasuredValue<number>;
-  readonly maximumPollTimerDelay: MeasuredValue<number>;
+  readonly maximumResourcePollIntervalOvershoot: MeasuredValue<number>;
   readonly commands: MeasuredValue<Readonly<Record<string, Readonly<{
     readonly count: number;
     readonly closedCount: number;
@@ -68,6 +68,12 @@ export interface HungerResourcePhaseEvidence {
 
 export interface HungerRunMeasurementEvidence {
   readonly activeBoundary: MeasuredValue<Readonly<{ source: "observed_active_clock" }>>;
+  readonly resourcePhaseScope: "active_samples_include_post_outcome_action_settlement_and_final_resource_sample";
+  readonly timingMetrics: Readonly<{
+    readonly maximumEventLoopDelayMilliseconds: MeasuredValue<number>;
+    readonly serverTickTimeMilliseconds: MeasuredValue<number>;
+    readonly diagnosticOverheadMilliseconds: MeasuredValue<number>;
+  }>;
   readonly policyBySeat: ReadonlyMap<number, HungerPolicySeatEvidence>;
   readonly resources: Readonly<{
     readonly startup: HungerResourcePhaseEvidence;
@@ -105,6 +111,12 @@ export function createHungerRunMeasurements(seats: readonly number[]): {
       activeBoundary: activeBoundaryNs === undefined
         ? unavailable("active phase was not observed")
         : available(Object.freeze({ source: "observed_active_clock" as const })),
+      resourcePhaseScope: "active_samples_include_post_outcome_action_settlement_and_final_resource_sample",
+      timingMetrics: Object.freeze({
+        maximumEventLoopDelayMilliseconds: unavailable("the acceptance runner does not measure general event-loop delay"),
+        serverTickTimeMilliseconds: unavailable("the runner does not expose authoritative server tick duration"),
+        diagnosticOverheadMilliseconds: unavailable("the acceptance runner does not measure diagnostic instrumentation overhead"),
+      }),
       policyBySeat: new Map([...policy].map(([seat, evidence]) => [seat, snapshotPolicySeat(evidence)])),
       resources: Object.freeze({
         startup: snapshotResourcePhase(startup),
@@ -284,7 +296,7 @@ interface ResourcePhaseAccumulator {
   readonly nodeSystemCpuTime: CpuAccumulator;
   readonly javaCpuTime: JavaCpuAccumulator;
   maximumSampleDurationNs: bigint | null;
-  maximumPollTimerDelayNs: bigint | null;
+  maximumResourcePollIntervalOvershootNs: bigint | null;
   readonly commands: Map<string, CommandAccumulator>;
 }
 
@@ -322,7 +334,7 @@ function makeResourcePhaseAccumulator(): ResourcePhaseAccumulator {
     nodeSystemCpuTime: makeCpuAccumulator(),
     javaCpuTime: { previous: undefined, totalMicroseconds: 0n, deltaCount: 0, unavailableReason: undefined, resetObserved: false },
     maximumSampleDurationNs: null,
-    maximumPollTimerDelayNs: null,
+    maximumResourcePollIntervalOvershootNs: null,
     commands: new Map(),
   };
 }
@@ -335,7 +347,7 @@ function recordResourceSample(phase: ResourcePhaseAccumulator, event: ResourceMo
   phase.sampleCount += 1;
   const timing = event.status === "sampled" ? event.observation.timing : event.timing;
   recordMaximumNs(phase, "sample", timing.sampleCompletedAtNs - timing.sampleStartedAtNs);
-  if (timing.pollTimerDelayNs !== null) recordMaximumNs(phase, "poll", timing.pollTimerDelayNs);
+  if (timing.pollTimerDelayNs !== null) recordMaximumNs(phase, "resourcePoll", timing.pollTimerDelayNs);
   for (const command of timing.commands) recordCommand(phase.commands, command);
   if (event.status === "failed") {
     phase.failedSampleCount += 1;
@@ -363,12 +375,12 @@ function recordResourceSample(phase: ResourcePhaseAccumulator, event: ResourceMo
   }
 }
 
-function recordMaximumNs(phase: ResourcePhaseAccumulator, metric: "sample" | "poll", durationNs: bigint): void {
+function recordMaximumNs(phase: ResourcePhaseAccumulator, metric: "sample" | "resourcePoll", durationNs: bigint): void {
   if (durationNs < 0n) throw new RangeError("resource sample clock moved backwards");
   if (metric === "sample") {
     phase.maximumSampleDurationNs = maximumBigInt(phase.maximumSampleDurationNs, durationNs);
   } else {
-    phase.maximumPollTimerDelayNs = maximumBigInt(phase.maximumPollTimerDelayNs, durationNs);
+    phase.maximumResourcePollIntervalOvershootNs = maximumBigInt(phase.maximumResourcePollIntervalOvershootNs, durationNs);
   }
 }
 
@@ -473,9 +485,9 @@ function snapshotResourcePhase(phase: ResourcePhaseAccumulator): HungerResourceP
     maximumSampleDuration: phase.maximumSampleDurationNs === null
       ? unavailable(noSamples)
       : available(Number(phase.maximumSampleDurationNs) / 1_000_000),
-    maximumPollTimerDelay: phase.maximumPollTimerDelayNs === null
-      ? unavailable("the host timer delay was not observed")
-      : available(Number(phase.maximumPollTimerDelayNs) / 1_000_000),
+    maximumResourcePollIntervalOvershoot: phase.maximumResourcePollIntervalOvershootNs === null
+      ? unavailable("resource monitor poll interval overshoot was not observed")
+      : available(Number(phase.maximumResourcePollIntervalOvershootNs) / 1_000_000),
     commands: phase.commands.size === 0
       ? unavailable("no sample command observations were recorded in this phase")
       : available(Object.freeze(Object.fromEntries([...phase.commands].map(([command, evidence]) => [command, Object.freeze({
