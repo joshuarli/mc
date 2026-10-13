@@ -2,6 +2,14 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { createRequire } from 'node:module';
 import test from 'node:test';
+import {
+  decide,
+  DeterministicRandom,
+  emptyPolicyMemory,
+  PolicyParams,
+  RandomStream,
+  seatId,
+} from '@arena/core';
 import type { Bot } from 'mineflayer';
 import { MineflayerObserver } from '../src/observer.js';
 
@@ -12,6 +20,7 @@ const Chunk = pinned('prismarine-chunk')(registry) as new (options: { minY: numb
 const World = pinned('prismarine-world')(registry) as new (generator: null) => { sync: Bot['world'] };
 const Vec3 = pinned('vec3').Vec3 as new (x: number, y: number, z: number) => Bot['entity']['position'];
 const injectBlocks = pinned('mineflayer/lib/plugins/blocks') as (bot: Bot, options: { version: string; hideErrors: boolean }) => void;
+const injectHealth = pinned('mineflayer/lib/plugins/health') as (bot: Bot, options: { respawn: boolean }) => void;
 
 function clientWorld(position = new Vec3(8, 1, 8), height = 16, minY = 0): {
   readonly bot: Bot;
@@ -46,6 +55,115 @@ function clientWorld(position = new Vec3(8, 1, 8), height = 16, minY = 0): {
   bot._client.emit('window_items', { windowId: 0 });
   return { bot, observer, reads: () => reads, resetReads: () => { reads = 0; } };
 }
+
+test('observer converts native fractional health to half-hearts without going stale', () => {
+  const client = clientWorld();
+  try {
+    client.bot._client.write = () => undefined;
+    injectHealth(client.bot, { respawn: false });
+    client.bot._client.emit('update_health', { health: 0.98, food: 20, foodSaturation: 5 });
+    const damaged = client.observer.observe(1).agent;
+    if (damaged.kind !== 'current') throw new Error('fractional native health should remain current');
+    assert.equal(damaged.value.healthHalfHearts, 1);
+
+    client.bot._client.emit('update_health', { health: 20, food: 20, foodSaturation: 5 });
+    const full = client.observer.observe(2).agent;
+    if (full.kind !== 'current') throw new Error('native full health should remain current');
+    assert.equal(full.value.healthHalfHearts, 20);
+  } finally {
+    client.observer.close();
+  }
+});
+
+test('observer keeps zero health at zero and rounds positive fractional health upward', () => {
+  const client = clientWorld();
+  try {
+    client.bot._client.write = () => undefined;
+    injectHealth(client.bot, { respawn: false });
+    for (const [tick, health, expected] of [[0, 0, 0], [1, 0.01, 1], [2, 0.98, 1], [3, 1.25, 2]] as const) {
+      client.bot._client.emit('update_health', { health, food: 20, foodSaturation: 5 });
+      const agent = client.observer.observe(tick).agent;
+      if (agent.kind !== 'current') throw new Error(`native health ${health} should remain current`);
+      assert.equal(agent.value.healthHalfHearts, expected);
+    }
+  } finally {
+    client.observer.close();
+  }
+});
+
+test('observer quantization preserves every integer policy health threshold', () => {
+  const client = clientWorld();
+  try {
+    client.bot._client.write = () => undefined;
+    client.bot.entity.yaw = Math.PI;
+    injectHealth(client.bot, { respawn: false });
+    client.bot._client.emit('initialize_world_border', {
+      x: 8, z: 8, oldDiameter: 100, newDiameter: 100, speed: 0,
+    });
+    const opponent = Object.assign(new EventEmitter(), {
+      id: 2,
+      type: 'player',
+      position: new Vec3(8, 1, 10),
+      height: 1.8,
+    }) as unknown as Bot['entity'];
+    Object.assign(client.bot.entities, { 2: opponent });
+    Object.assign(client.bot.players, { Rival: { entity: opponent, gamemode: 0 } });
+
+    let tick = 0;
+    for (let threshold = 1; threshold < 40; threshold += 1) {
+      const params = PolicyParams.create({
+        ...PolicyParams.baseline().values,
+        retreatAtHealthHalfHeartsOrBelow: threshold,
+      });
+      for (const { health, shouldRetreat } of [
+        { health: threshold - 0.25, shouldRetreat: true },
+        { health: threshold, shouldRetreat: true },
+        { health: threshold + 0.25, shouldRetreat: false },
+      ]) {
+        client.bot._client.emit('update_health', { health, food: 20, foodSaturation: 5 });
+        const observation = client.observer.observe(tick);
+        tick += 1;
+        if (observation.agent.kind !== 'current') throw new Error(`health ${health} should remain current`);
+        assert.equal(observation.agent.value.healthHalfHearts, Math.ceil(health));
+        if (observation.opponents.kind !== 'current' || observation.opponents.value.length !== 1) {
+          throw new Error('the policy fixture requires one currently visible opponent');
+        }
+        const decision = decide(
+          observation,
+          emptyPolicyMemory(),
+          params,
+          DeterministicRandom.forStream(1n, RandomStream.search(seatId(0))),
+        );
+        assert.equal(
+          decision.goal.kind,
+          shouldRetreat ? 'retreatFromOpponent' : 'engageVisibleOpponent',
+          `threshold ${threshold}, health ${health}`,
+        );
+      }
+    }
+  } finally {
+    client.observer.close();
+  }
+});
+
+test('observer rejects negative health before quantizing and keeps the core upper bound', () => {
+  const client = clientWorld();
+  try {
+    client.bot._client.write = () => undefined;
+    injectHealth(client.bot, { respawn: false });
+    client.bot._client.emit('update_health', { health: 20, food: 20, foodSaturation: 5 });
+    const full = client.observer.observe(0).agent;
+    if (full.kind !== 'current') throw new Error('native full health should remain current');
+
+    client.bot._client.emit('update_health', { health: -0.1, food: 20, foodSaturation: 5 });
+    assert.throws(() => client.observer.observe(1), RangeError);
+
+    client.bot._client.emit('update_health', { health: 40.1, food: 20, foodSaturation: 5 });
+    assert.throws(() => client.observer.observe(2), /health must be between 0 and 40 half-hearts/);
+  } finally {
+    client.observer.close();
+  }
+});
 
 test('observer skips uniform air sections without changing current empty loot knowledge', () => {
   const client = clientWorld();
