@@ -6,21 +6,18 @@ import { join, resolve } from "node:path";
 import { runCli } from "../../../packages/arena-runner/src/cli.js";
 import { prepareRun } from "../../../packages/arena-runner/src/prepare.js";
 import { runPreparedRun } from "../../../packages/arena-runner/src/runtime/run.js";
+import type { RunPreparedRunOptions } from "../../../packages/arena-runner/src/runtime/run.js";
 import type { StoppedPlayerStats } from "../../../packages/arena-runner/src/runtime/observations.js";
 
 export type AcceptanceEvaluator = NonNullable<Parameters<typeof runPreparedRun>[0]["evaluate"]>;
 export type AcceptanceRunContext = Parameters<AcceptanceEvaluator>[0];
 
-/** Prepares one fresh run and delegates its world clone, server, and bot cleanup to the runtime. */
-export async function runOwnedAcceptanceScenario(
+/** Prepares an owned run and resolves the pinned runtime artifacts used by acceptance cases. */
+export async function prepareOwnedAcceptanceRun(
   scenarioPath: string,
   runId: string,
-  evaluate: AcceptanceEvaluator,
   signal: AbortSignal,
-  options: Readonly<{
-    competitorDriver?: NonNullable<Parameters<typeof runPreparedRun>[0]["competitorDriver"]>;
-  }> = {},
-) {
+): Promise<RunPreparedRunOptions> {
   const repositoryRoot = process.cwd();
   const helperPath = process.env.ARENA_FS_HELPER ?? resolve(repositoryRoot, ".work/arena-fs/arena-fs");
   const javaHome = process.env.JAVA_HOME;
@@ -42,7 +39,7 @@ export async function runOwnedAcceptanceScenario(
     ownedRunId,
     signal,
   );
-  const completed = await runPreparedRun({
+  return {
     preparedRun,
     helperPath,
     ownedRoot,
@@ -50,10 +47,26 @@ export async function runOwnedAcceptanceScenario(
     paperJarPath,
     pluginJarPath,
     signal,
+  };
+}
+
+/** Prepares one fresh run and delegates its world clone, server, and bot cleanup to the runtime. */
+export async function runOwnedAcceptanceScenario(
+  scenarioPath: string,
+  runId: string,
+  evaluate: AcceptanceEvaluator,
+  signal: AbortSignal,
+  options: Readonly<{
+    competitorDriver?: NonNullable<Parameters<typeof runPreparedRun>[0]["competitorDriver"]>;
+  }> = {},
+) {
+  const prepared = await prepareOwnedAcceptanceRun(scenarioPath, runId, signal);
+  const completed = await runPreparedRun({
+    ...prepared,
     evaluate,
     competitorDriver: options.competitorDriver ?? "baselinePolicy",
   });
-  const inspection = await inspectCompletedRun(helperPath, completed.runId);
+  const inspection = await inspectCompletedRun(prepared.helperPath, completed.runId);
   return { ...completed, inspection };
 }
 

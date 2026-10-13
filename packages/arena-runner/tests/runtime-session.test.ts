@@ -186,6 +186,107 @@ test('control listener rejects a plugin with the wrong token and closes its sock
   await clientClosed;
 });
 
+test('control listener rejects an unsupported protocol version and closes its socket', async (t) => {
+  const listener = await bindControlListener({
+    runId: RUN_ID,
+    token: TOKEN,
+    capabilities: CAPABILITIES,
+  });
+  const client = connectTo(listener.address.port);
+  const socketClosed = new Promise<void>((resolve) => client.once('close', () => resolve()));
+  let socketError: NodeJS.ErrnoException | undefined;
+  client.on('error', (error: NodeJS.ErrnoException) => { socketError = error; });
+  t.after(async () => {
+    client.destroy();
+    await listener.close();
+  });
+
+  const accepting = listener.accept();
+  await once(client, 'connect');
+  client.write(rawFrame(JSON.stringify({
+    protocol: 2,
+    run_id: RUN_ID,
+    sequence: '1',
+    type: 'hello',
+    payload: { token: TOKEN, capabilities: CAPABILITIES },
+  })));
+
+  await assert.rejects(accepting, (error: unknown) =>
+    isRuntimeSessionError(error) && error.code === 'control_protocol');
+  await socketClosed;
+  assert.ok(socketError === undefined || socketError.code === 'ECONNRESET');
+});
+
+test('control listener rejects a malformed frame and closes its socket', async (t) => {
+  const listener = await bindControlListener({
+    runId: RUN_ID,
+    token: TOKEN,
+    capabilities: CAPABILITIES,
+  });
+  const client = connectTo(listener.address.port);
+  const socketClosed = new Promise<void>((resolve) => client.once('close', () => resolve()));
+  let socketError: NodeJS.ErrnoException | undefined;
+  client.on('error', (error: NodeJS.ErrnoException) => { socketError = error; });
+  t.after(async () => {
+    client.destroy();
+    await listener.close();
+  });
+
+  const accepting = listener.accept();
+  await once(client, 'connect');
+  client.write(rawFrame('{'));
+
+  await assert.rejects(accepting, (error: unknown) =>
+    isRuntimeSessionError(error) && error.code === 'control_protocol');
+  await socketClosed;
+  assert.ok(socketError === undefined || socketError.code === 'ECONNRESET');
+});
+
+test('control session reports an unexpected plugin disconnect', async (t) => {
+  const listener = await bindControlListener({
+    runId: RUN_ID,
+    token: TOKEN,
+    capabilities: CAPABILITIES,
+  });
+  const client = connectTo(listener.address.port);
+  const reader = new TestFrameReader(client);
+  t.after(async () => {
+    client.destroy();
+    await listener.close();
+  });
+
+  const accepting = listener.accept();
+  await once(client, 'connect');
+  client.write(encodeControlFrame({
+    protocol: 1,
+    run_id: RUN_ID,
+    sequence: 1n,
+    type: 'hello',
+    payload: { token: TOKEN, capabilities: CAPABILITIES },
+  }));
+  const helloAck = decodeControlFrame(await reader.readFrame());
+  if (helloAck.type !== 'ack') throw new Error('expected hello acknowledgment');
+  client.write(encodeControlFrame({
+    protocol: 1,
+    run_id: RUN_ID,
+    sequence: 2n,
+    correlation: helloAck.sequence,
+    type: 'ready',
+    payload: {
+      server: { name: 'Paper', version: 'test', minecraft_version: 'test', protocol_version: 1 },
+      plugin: { name: 'Arena', version: 'test' },
+      capabilities: CAPABILITIES,
+    },
+  }));
+  const session = await accepting;
+  const messages = session.messages();
+
+  client.destroy();
+  await assert.rejects(messages.next(), (error: unknown) =>
+    isRuntimeSessionError(error) && error.code === 'control_disconnected');
+  await session.close();
+});
+
 test('control session closes the connection on an uncorrelated acknowledgment', async (t) => {
   const listener = await bindControlListener({
     runId: RUN_ID,
@@ -308,6 +409,14 @@ test('canceling before accept destroys a plugin connection already waiting', { t
 
 function connectTo(port: number): Socket {
   return createConnection({ host: '127.0.0.1', port });
+}
+
+function rawFrame(body: string): Buffer {
+  const payload = Buffer.from(body, 'utf8');
+  const frame = Buffer.allocUnsafe(4 + payload.byteLength);
+  frame.writeUInt32BE(payload.byteLength, 0);
+  payload.copy(frame, 4);
+  return frame;
 }
 
 class TestFrameReader {
