@@ -32,6 +32,7 @@ import {
 } from './failures.js';
 import { clonePristineWorld } from './world.js';
 import { decideRuntimePolicy, isStrategyDecisionTick } from './policy-decision.js';
+import { PolicyCompetitorGate } from './policy-gate.js';
 import { joinEvaluatorAfterOutcome } from './evaluator.js';
 import { armRuntimeDeadline, COLD_START_TIMEOUT_MS, type RuntimeDeadline } from './deadline.js';
 import {
@@ -609,6 +610,13 @@ class LivePolicyLoop {
   readonly #memories = new Map<number, PolicyMemory>();
   readonly #randoms = new Map<number, DeterministicRandom>();
   readonly #tasks = new Map<number, Promise<void>>();
+  readonly #activeClients = new Map<number, RuntimeCompetitorClient['client']>();
+  readonly #cancellations = new Map<number, Promise<void>>();
+  readonly #watchedBots = new Map<number, Readonly<{
+    bot: RuntimeCompetitorClient['bot'];
+    gate: PolicyCompetitorGate;
+  }>>();
+  readonly #disabledSeats = new Set<number>();
   readonly #completedMilestones = new Set<number>();
   #sequence = 0n;
   #observationCount = 0;
@@ -644,9 +652,14 @@ class LivePolicyLoop {
     this.#lastTick = tick;
     if (!isStrategyDecisionTick(BigInt(tick), this.#strategyIntervalTicks)) return;
     for (const competitor of this.#competitors()) {
-      if (this.#tasks.has(competitor.seat)) continue;
-      const task = this.#runDecision(competitor, tick);
+      if (this.#tasks.has(competitor.seat) || !this.#canIssuePolicy(competitor)) continue;
+      const launched = deferred<void>();
+      const task = launched.promise;
       this.#tasks.set(competitor.seat, task);
+      void this.#runDecision(competitor, tick).then(
+        () => launched.resolve(undefined),
+        (error: unknown) => launched.reject(error),
+      );
       void task.then(
         () => this.#removeTask(competitor.seat, task),
         (error: unknown) => {
@@ -664,20 +677,31 @@ class LivePolicyLoop {
   async stopAndJoin(): Promise<void> {
     this.#stopped = true;
     const active = [...this.#tasks.entries()];
-    if (active.length === 0) return;
-    const cancellations = active.map(([seat]) => {
-      const competitor = this.#competitors().find((candidate) => candidate.seat === seat);
-      return competitor === undefined ? Promise.resolve() : competitor.client.cancel('shutdown');
-    });
-    const results = await Promise.allSettled([...cancellations, ...active.map(([, task]) => task)]);
-    const failed = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
-    if (failed !== undefined) throw mapRuntimeFailure(failed.reason);
-    await this.#checkpointTail;
+    try {
+      const pending = new Set(this.#cancellations.values());
+      for (const [seat] of active) {
+        if (this.#cancellations.has(seat)) continue;
+        const client = this.#activeClients.get(seat);
+        if (client !== undefined) pending.add(Promise.resolve().then(() => client.cancel('shutdown')));
+      }
+      if (active.length !== 0 || pending.size !== 0) {
+        const results = await Promise.allSettled([...pending, ...active.map(([, task]) => task)]);
+        const failed = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+        if (failed !== undefined) throw mapRuntimeFailure(failed.reason);
+      }
+      await this.#checkpointTail;
+    } finally {
+      for (const { gate } of this.#watchedBots.values()) gate.close();
+      this.#watchedBots.clear();
+    }
   }
 
   async #runDecision(competitor: RuntimeCompetitorClient, tick: number): Promise<void> {
+    if (!this.#canIssuePolicy(competitor)) return;
     const seat = competitor.seat;
-    const observation = competitor.client.observe(tick);
+    const client = competitor.client;
+    const bot = competitor.bot;
+    const observation = client.observe(tick);
     const memory = this.#memories.get(seat) ?? emptyPolicyMemory();
     const random = this.#randoms.get(seat)
       ?? DeterministicRandom.forStream(this.#seed, RandomStream.policy(seatId(seat)));
@@ -703,8 +727,9 @@ class LivePolicyLoop {
       return;
     }
 
-    const capture = this.#recordPolicy ? capturePathUpdates(competitor.bot) : undefined;
-    const skillPromise = competitor.client.run(decision.intent);
+    const capture = this.#recordPolicy ? capturePathUpdates(bot) : undefined;
+    this.#activeClients.set(seat, client);
+    const skillPromise = client.run(decision.intent);
     try {
       if (decisionRecorded !== undefined) await decisionRecorded;
       const skill = await skillPromise;
@@ -713,12 +738,52 @@ class LivePolicyLoop {
         await this.#markCheckpoint(this.#observationCount);
       }
     } catch (error) {
-      void competitor.client.cancel('shutdown').catch(() => {});
+      void client.cancel('shutdown').catch(() => {});
       await skillPromise.catch(() => {});
       throw error;
     } finally {
       capture?.close();
+      if (this.#activeClients.get(seat) === client) this.#activeClients.delete(seat);
     }
+  }
+
+  #canIssuePolicy(competitor: RuntimeCompetitorClient): boolean {
+    if (this.#stopped || this.#disabledSeats.has(competitor.seat)) return false;
+    const bot = competitor.bot;
+    const watched = this.#watchedBots.get(competitor.seat);
+    if (watched?.bot !== bot) {
+      watched?.gate.close();
+      const gate = new PolicyCompetitorGate(bot, () => this.#disableSeat(competitor.seat));
+      this.#watchedBots.set(competitor.seat, Object.freeze({ bot, gate }));
+    }
+    return this.#watchedBots.get(competitor.seat)?.gate.active === true
+      && !this.#disabledSeats.has(competitor.seat);
+  }
+
+  #disableSeat(seat: number): void {
+    if (this.#disabledSeats.has(seat)) return;
+    this.#disabledSeats.add(seat);
+    const client = this.#activeClients.get(seat);
+    if (client === undefined) return;
+    const task = this.#tasks.get(seat);
+    const cancel = (async () => { await client.cancel('agentEliminated'); })();
+    const join = task ?? Promise.resolve();
+    const cancellation = Promise.allSettled([cancel, join]).then((results) => {
+      const failed = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+      if (failed !== undefined) throw failed.reason;
+    });
+    this.#cancellations.set(seat, cancellation);
+    void cancellation.then(
+      () => this.#clearCancellation(seat, cancellation),
+      (error: unknown) => {
+        this.#clearCancellation(seat, cancellation);
+        this.#fail(error);
+      },
+    );
+  }
+
+  #clearCancellation(seat: number, cancellation: Promise<void>): void {
+    if (this.#cancellations.get(seat) === cancellation) this.#cancellations.delete(seat);
   }
 
   #markCheckpoint(observationCount: number): Promise<void> {
