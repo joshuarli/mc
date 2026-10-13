@@ -155,6 +155,10 @@ final class ArenaChunkGenerator extends ChunkGenerator {
         return material;
     }
 
+    static Material requireItemMaterial(String resourceId) {
+        return requireItemMaterial(resourceId, PAPER_MATERIALS);
+    }
+
     private static Material requireMinecraftMaterial(String resourceId) {
         if (!resourceId.startsWith("minecraft:")) {
             throw new IllegalArgumentException("unsupported non-Minecraft material id: " + resourceId);

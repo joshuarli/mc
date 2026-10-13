@@ -1,6 +1,8 @@
 package dev.arena.foundation;
 
+import java.io.IOException;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 import org.bukkit.Bukkit;
@@ -22,6 +24,8 @@ import org.bukkit.event.player.PlayerAnimationType;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerMoveEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
+import org.bukkit.event.world.WorldLoadEvent;
+import org.bukkit.generator.ChunkGenerator;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.plugin.java.JavaPlugin;
@@ -31,21 +35,122 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
     private static final int FLOOR_Y = -60;
     private static final int CHEST_X = 2;
     private static final int CHEST_Z = 0;
+    private static final String ARENA_WORLD = "world";
+    private static final String PLAN_GENERATOR_ID = "plan";
     private final Set<UUID> reportedMovement = new HashSet<>();
+    private MapPlan generationPlan;
+    private ArenaChunkGenerator chunkGenerator;
+    private boolean generatorRequested;
+    private boolean worldInitialized;
+
+    @Override
+    public void onLoad() {
+        if (System.getProperty(MapPlanReader.GENERATION_PLAN_PROPERTY) == null) {
+            return;
+        }
+
+        try {
+            generationPlan = MapPlanReader.readConfiguredPlan();
+        } catch (IOException invalidPlan) {
+            throw new IllegalStateException("could not load the staged world plan", invalidPlan);
+        }
+    }
+
+    @Override
+    public ChunkGenerator getDefaultWorldGenerator(String worldName, String id) {
+        if (!ARENA_WORLD.equals(worldName)) {
+            return null;
+        }
+        if (generationPlan == null) {
+            throw new IllegalStateException("the arena world generator requires a staged world plan");
+        }
+        if (!PLAN_GENERATOR_ID.equals(id)) {
+            throw new IllegalArgumentException("the arena world generator id must be 'plan'");
+        }
+        if (chunkGenerator == null) {
+            chunkGenerator = new ArenaChunkGenerator(generationPlan);
+        }
+        generatorRequested = true;
+        return chunkGenerator;
+    }
 
     @Override
     public void onEnable() {
-        World world = Bukkit.getWorld("world");
-        if (world == null) {
-            throw new IllegalStateException("Paper did not create the default world");
+        Bukkit.getPluginManager().registerEvents(this, this);
+        World world = Bukkit.getWorld(ARENA_WORLD);
+        if (world != null) {
+            initializeWorld(world);
+        }
+    }
+
+    @EventHandler
+    public void onWorldLoad(WorldLoadEvent event) {
+        if (ARENA_WORLD.equals(event.getWorld().getName())) {
+            initializeWorld(event.getWorld());
+        }
+    }
+
+    private void initializeWorld(World world) {
+        if (worldInitialized) {
+            return;
+        }
+        if (!Bukkit.isPrimaryThread()) {
+            throw new IllegalStateException("arena world setup must run on Paper's server thread");
         }
 
-        createFixture(world);
-        Bukkit.getPluginManager().registerEvents(this, this);
+        int preparedChunks = 0;
+        if (generationPlan == null) {
+            // The local stack smoke run omits a staged plan and exercises the protocol fixture.
+            createStackSmokeFixture(world);
+        } else {
+            if (!generatorRequested) {
+                throw new IllegalStateException(
+                        "the staged world plan is loaded, but Paper did not request the arena generator; "
+                                + "configure world as ArenaFoundation:plan");
+            }
+            preparedChunks = prepareMapWorld(world);
+        }
+
+        worldInitialized = true;
+        if (generationPlan != null) {
+            getLogger().info("ARENA_MAP_READY|run_id=" + generationPlan.runId()
+                    + "|map_semantic_id=" + generationPlan.mapSemanticId()
+                    + "|prepared_chunks=" + preparedChunks);
+        }
         getLogger().info("ARENA_READY|protocol=776|port=" + Bukkit.getServer().getPort());
     }
 
-    private void createFixture(World world) {
+    private int prepareMapWorld(World world) {
+        MapPlan.Dimensions dimensions = generationPlan.dimensions();
+        if (dimensions.minY() < world.getMinHeight() || dimensions.maxY() >= world.getMaxHeight()) {
+            throw new IllegalStateException("world-plan vertical bounds do not fit the arena world's build height");
+        }
+
+        List<MapPlan.ChunkPosition> chunks = generationPlan.chunksWithViewHalo(world.getViewDistance());
+        for (MapPlan.ChunkPosition chunk : chunks) {
+            world.getChunkAt(chunk.x(), chunk.z());
+        }
+
+        for (MapPlan.LootContainer container : generationPlan.lootContainers()) {
+            MapPlan.Position position = container.position();
+            Block block = world.getBlockAt(position.x(), position.y(), position.z());
+            if (!(block.getState() instanceof Chest chest)) {
+                throw new IllegalStateException("world-plan loot position did not generate a chest");
+            }
+            Inventory inventory = chest.getBlockInventory();
+            inventory.clear();
+            for (int slot = 0; slot < container.inventory().size(); slot++) {
+                Material item = ArenaChunkGenerator.requireItemMaterial(container.inventory().get(slot));
+                inventory.setItem(slot, new ItemStack(item));
+            }
+        }
+
+        MapPlan.Position firstSpawn = generationPlan.spawns().getFirst().position();
+        world.setSpawnLocation(firstSpawn.x(), firstSpawn.y(), firstSpawn.z());
+        return chunks.size();
+    }
+
+    private void createStackSmokeFixture(World world) {
         world.setDifficulty(Difficulty.EASY);
         world.setTime(1000);
         world.setStorm(false);
@@ -87,7 +192,7 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
 
     @EventHandler(priority = EventPriority.MONITOR)
     public void onInventoryOpen(InventoryOpenEvent event) {
-        if (event.getPlayer() instanceof Player player && isFixtureChest(event.getInventory())) {
+        if (event.getPlayer() instanceof Player player && isArenaChest(event.getInventory())) {
             getLogger().info("ARENA_CHEST_OPEN|" + player.getName());
         }
     }
@@ -96,7 +201,7 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
     public void onInventoryClick(InventoryClickEvent event) {
         Inventory top = event.getView().getTopInventory();
         if (!(event.getWhoClicked() instanceof Player player)
-                || !isFixtureChest(top)
+                || !isArenaChest(top)
                 || event.getClickedInventory() != top) {
             return;
         }
@@ -135,15 +240,27 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
         getLogger().info("ARENA_QUIT|" + event.getPlayer().getName());
     }
 
-    private static boolean isFixtureChest(Inventory inventory) {
+    private boolean isArenaChest(Inventory inventory) {
         Location location = inventory.getLocation();
-        return location != null
-                && location.getWorld() != null
-                && "world".equals(location.getWorld().getName())
-                && location.getBlockX() == CHEST_X
-                && location.getBlockY() == FLOOR_Y + 1
-                && location.getBlockZ() == CHEST_Z
-                && location.getBlock().getType() == Material.CHEST;
+        if (location == null || location.getWorld() == null
+                || !ARENA_WORLD.equals(location.getWorld().getName())
+                || location.getBlock().getType() != Material.CHEST) {
+            return false;
+        }
+        if (generationPlan == null) {
+            return location.getBlockX() == CHEST_X
+                    && location.getBlockY() == FLOOR_Y + 1
+                    && location.getBlockZ() == CHEST_Z;
+        }
+        for (MapPlan.LootContainer container : generationPlan.lootContainers()) {
+            MapPlan.Position position = container.position();
+            if (position.x() == location.getBlockX()
+                    && position.y() == location.getBlockY()
+                    && position.z() == location.getBlockZ()) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static int count(Inventory inventory, Material material) {

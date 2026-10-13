@@ -18,6 +18,14 @@ spawns, and ordered inventories. Duplicate block coordinates, unsupported
 materials, invalid spawn headroom, and unsupported chest placement fail before
 world generation or setup.
 
+In plan mode, Paper must load `ArenaFoundation` at startup and configure the
+default `world` generator as `ArenaFoundation:plan`. The plugin reads the plan
+before world generation and returns the same immutable generator instance for
+that world. A configured plan without the matching generator request fails
+before the server reports ready. The runner must create a fresh world for each
+plan because Paper only calls the generator for chunks that have not already
+been generated.
+
 The resolved plan allows at most 1,000,000 blocks, six spawns, 100,000 loot
 containers, and 27 one-item inventory entries per chest. Chunk preparation
 includes the configured view-distance halo, limited to 32 chunks in each
@@ -26,8 +34,12 @@ direction and 8,192 total prepared chunks.
 The chunk generator reads only the immutable plan and writes to the
 `ChunkData` supplied to its callback. It does not query or mutate another
 chunk. Vanilla terrain phases and populators are disabled so chunks outside the
-declared map are empty. World blocks and chest inventories are applied during
-server-thread setup before the match is allowed to become ready.
+declared map are empty. On the server thread, the plugin prepares every map
+chunk and the configured view-distance halo, fills the declared chests, and
+sets the world spawn to seat zero. Only then it emits
+`ARENA_MAP_READY|run_id=...|map_semantic_id=...|prepared_chunks=...`, followed
+by the general `ARENA_READY` marker. The no-plan local stack smoke path keeps
+its protocol fixture and does not report map readiness.
 
 ## Match timeline
 
@@ -47,3 +59,8 @@ An abort while waiting has no phase tick. An abort during countdown carries the
 zero-based countdown tick; after release it carries the current match tick.
 World-border interpolation uses match ticks and reaches its configured final
 diameter at `shrink_end_tick`.
+
+The plugin currently has no runtime prepare/start/abort payload contract or
+participant-to-seat identity mapping. `MatchController` remains a pure match
+timeline model until those inputs exist; join and combat log markers are not
+authoritative seat or outcome events.
