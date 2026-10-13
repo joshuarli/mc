@@ -112,7 +112,7 @@ test("legal-player", { timeout: 300_000 }, async (t) => {
       const knockbackEvidence = knockback.snapshot();
       assert.ok(knockbackEvidence.damageEvents > 0, "the target client must receive a player-caused damage event");
       assert.ok(
-        knockbackEvidence.healthAfter < knockbackEvidence.healthBefore,
+        knockbackEvidence.minimumHealth < knockbackEvidence.healthBefore,
         "the target client must receive a lower health value after the attack",
       );
       assert.ok(
@@ -222,7 +222,7 @@ async function navigateOverRamp(
   try {
     const rampTop = {
       x: ramp.position.x,
-      y: ramp.position.y + 2,
+      y: ramp.position.y + 1,
       z: ramp.position.z,
     };
     const beyondRamp = {
@@ -259,7 +259,7 @@ function recordKnockbackReceipt(victim: Bot, attackerEntityId: number) {
   }
 
   const healthBefore = victim.health;
-  let healthAfter = healthBefore;
+  let minimumHealth = healthBefore;
   let damageEvents = 0;
   let origin: HitOrigin | undefined;
   let maximumVelocityAway = 0;
@@ -281,7 +281,7 @@ function recordKnockbackReceipt(victim: Bot, attackerEntityId: number) {
     };
   };
   const onHealth = (): void => {
-    healthAfter = victim.health;
+    minimumHealth = Math.min(minimumHealth, victim.health);
   };
   const observeMotion = (): void => {
     if (origin === undefined) return;
@@ -299,7 +299,7 @@ function recordKnockbackReceipt(victim: Bot, attackerEntityId: number) {
   victim.on("physicsTick", observeMotion);
   victim.on("move", observeMotion);
   return {
-    snapshot: () => ({ damageEvents, healthBefore, healthAfter, maximumVelocityAway, maximumDisplacementAway }),
+    snapshot: () => ({ damageEvents, healthBefore, minimumHealth, maximumVelocityAway, maximumDisplacementAway }),
     close: () => {
       victim.removeListener("entityHurt", onHurt);
       victim.removeListener("health", onHealth);

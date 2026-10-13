@@ -129,7 +129,7 @@ async function waitForActivePhase(active: AcceptanceRunContext, signal: AbortSig
 }
 
 async function leavePlatformAndDie(bot: Bot, signal: AbortSignal): Promise<void> {
-  await bot.look(0, 0);
+  await bot.look(Math.PI, 0);
   const movementController = new AbortController();
   const movementSignal = AbortSignal.any([signal, movementController.signal]);
   const death = waitForDeath(bot, movementSignal);
