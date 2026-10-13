@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { test } from "node:test";
 
 import { isNearOrOutsideBorder, rehydratePolicyReplayInput } from "@arena/core";
+import { canonicalJson } from "../../packages/arena-runner/src/canonical.js";
 import { stageOwnedFile } from "../../packages/arena-runner/src/owned-files/index.js";
 import { replayPolicyJson } from "../../packages/arena-runner/src/policy-replay.js";
 import { readRunEvidence } from "../../packages/arena-runner/src/runtime/inspect.js";
@@ -67,9 +68,9 @@ test("policy-border-preemption", { timeout: 300_000 }, async (t) => {
     const decision = record.decision;
     assert.ok(decision !== null && typeof decision === "object" && !Array.isArray(decision));
     assert.ok("goal" in decision && "intent" in decision);
-    assert.deepStrictEqual(receipt.goal, decision.goal);
-    assert.deepStrictEqual(receipt.intent, decision.intent);
-    assert.deepStrictEqual(receipt.disposition, record.disposition);
+    assertSameJson(receipt.goal, decision.goal);
+    assertSameJson(receipt.intent, decision.intent);
+    assertSameJson(receipt.disposition, record.disposition);
     return [{ receipt, position: agent.value.position, border: border.value,
       unsafe: isNearOrOutsideBorder(border.value, agent.value.position, input.params.values.borderMarginBlocks) }];
   });
@@ -132,4 +133,9 @@ test("policy-border-preemption", { timeout: 300_000 }, async (t) => {
 function actionReceipt(events: readonly PolicyActivityEvent[], sequence: string | undefined): ActionReceipt | undefined {
   return events.find((event): event is ActionReceipt =>
     event.kind === "action" && event.seat === 0 && event.actionSequence === sequence);
+}
+
+// Strict JSON objects have null prototypes; compare every serialized field to the typed callback value.
+function assertSameJson(actual: unknown, expected: unknown): void {
+  assert.deepStrictEqual(canonicalJson(actual), canonicalJson(expected));
 }
