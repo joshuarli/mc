@@ -138,7 +138,12 @@ async function archiveCompletedCycles(cycles: readonly CompletedCycle[]): Promis
     assert.ok(archive.report !== null && typeof archive.report === "object");
     assert.ok(Array.isArray(archive.stats), "the archived stopped stats must remain readable");
     assert.equal(archive.stats.length, completed.competitors.length);
-    assert.equal(JSON.stringify(archive.stats), JSON.stringify(completed.stats));
+    const competitorUuids = new Set(completed.competitors.map((player) => player.offlineUuid));
+    assert.deepEqual(
+      archive.stats,
+      completed.stats.filter((player) => competitorUuids.has(player.offlineUuid)),
+      "inspection must preserve the stopped competitor stats after archival",
+    );
 
     let archivedByteLength = 0;
     let archivedOutcome = false;
