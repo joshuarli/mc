@@ -25,6 +25,42 @@ import org.junit.jupiter.api.Test;
 
 final class MatchControllerTest {
     @Test
+    void competitiveActionsStartOnlyAtReleaseAndPlayersStayFrozenBeforeIt() {
+        MatchController match = new MatchController(settings(2, 1, 4), 2);
+
+        assertPhasePolicy(match, Phase.WAITING, true, false);
+        match.startCountdown();
+        assertPhasePolicy(match, Phase.COUNTDOWN, true, false);
+
+        match.endServerTick(List.of());
+        assertPhasePolicy(match, Phase.COUNTDOWN, true, false);
+        match.endServerTick(List.of());
+        assertPhasePolicy(match, Phase.GRACE, false, true);
+        match.endServerTick(List.of());
+        assertPhasePolicy(match, Phase.ACTIVE, false, true);
+
+        match.endServerTick(List.of());
+        match.endServerTick(List.of());
+        match.endServerTick(List.of());
+        match.endServerTick(List.of());
+        assertPhasePolicy(match, Phase.FINISHED, false, false);
+
+        MatchController aborted = new MatchController(settings(2, 1, 4), 2);
+        aborted.abort(AbortReason.OPERATOR);
+        assertPhasePolicy(aborted, Phase.ABORTED, false, false);
+    }
+
+    private static void assertPhasePolicy(
+            MatchController match,
+            Phase expectedPhase,
+            boolean expectedPreRelease,
+            boolean expectedCompetitiveActions) {
+        assertEquals(expectedPhase, match.phase());
+        assertEquals(expectedPreRelease, match.phase().isPreRelease());
+        assertEquals(expectedCompetitiveActions, match.phase().allowsCompetitiveActions());
+    }
+
+    @Test
     void countdownReleaseStartsMatchTickZeroAndGraceEndsBeforeTickTwo() {
         MatchController match = new MatchController(settings(2, 2, 6), 2);
 

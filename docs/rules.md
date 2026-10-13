@@ -64,6 +64,15 @@ eliminates the seat and any respawned player remains a spectator. Disconnects
 eliminate bound competitors during countdown or play. Events from a server tick
 are resolved together in seat order, and `outcome` is the sole terminal event.
 
+Each seat bind in `WAITING` clears the bot's inventory and ender chest, health,
+hunger, effects, experience, and other transient player state. Bound bots remain
+at their assigned position while waiting and during countdown; they may change
+yaw and pitch. Inventory opens and changes, item drops and pickups, item use,
+block interactions, and damage are blocked until release. Block breaking and
+placing are enabled only in `GRACE` or `ACTIVE` when the resolved match settings
+allow them. The explicit test-fixture mode does not apply these plan-mode player
+guards.
+
 ## Match timeline
 
 The match starts in `WAITING` without a match tick. Countdown ticks are

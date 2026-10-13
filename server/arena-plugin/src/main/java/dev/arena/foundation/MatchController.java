@@ -18,7 +18,15 @@ final class MatchController {
         GRACE,
         ACTIVE,
         FINISHED,
-        ABORTED
+        ABORTED;
+
+        boolean isPreRelease() {
+            return this == WAITING || this == COUNTDOWN;
+        }
+
+        boolean allowsCompetitiveActions() {
+            return this == GRACE || this == ACTIVE;
+        }
     }
 
     enum EliminationCause {

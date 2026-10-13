@@ -24,25 +24,36 @@ import org.bukkit.block.BlockSupport;
 import org.bukkit.block.BlockFace;
 import org.bukkit.block.Chest;
 import org.bukkit.entity.Player;
+import org.bukkit.entity.Projectile;
+import org.bukkit.entity.Entity;
 import org.bukkit.event.block.BlockBreakEvent;
 import org.bukkit.event.block.BlockPlaceEvent;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
+import org.bukkit.event.entity.EntityDamageEvent;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
+import org.bukkit.event.entity.EntityPickupItemEvent;
 import org.bukkit.event.entity.PlayerDeathEvent;
 import org.bukkit.event.inventory.InventoryClickEvent;
+import org.bukkit.event.inventory.InventoryDragEvent;
 import org.bukkit.event.inventory.InventoryOpenEvent;
 import org.bukkit.event.player.PlayerAnimationEvent;
 import org.bukkit.event.player.PlayerAnimationType;
+import org.bukkit.event.player.PlayerDropItemEvent;
+import org.bukkit.event.player.PlayerInteractEvent;
+import org.bukkit.event.player.PlayerInteractEntityEvent;
+import org.bukkit.event.player.PlayerItemConsumeEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerMoveEvent;
 import org.bukkit.event.player.PlayerRespawnEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
+import org.bukkit.event.player.PlayerSwapHandItemsEvent;
 import org.bukkit.event.world.WorldLoadEvent;
 import org.bukkit.generator.ChunkGenerator;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.util.Vector;
 import org.bukkit.plugin.java.JavaPlugin;
 import com.destroystokyo.paper.event.server.ServerTickEndEvent;
 
@@ -222,6 +233,18 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
         }
     }
 
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onPreReleaseDamage(EntityDamageEvent event) {
+        if (event.getEntity() instanceof Player victim && isPreReleaseCompetitor(victim)) {
+            event.setCancelled(true);
+            return;
+        }
+        if (event instanceof EntityDamageByEntityEvent byEntity
+                && isPreReleaseDamageSource(byEntity.getDamager())) {
+            event.setCancelled(true);
+        }
+    }
+
     @EventHandler(priority = EventPriority.HIGH)
     public void onPlayerDeath(PlayerDeathEvent event) {
         if (startupMode != StartupMode.PLAN || preparedMatch == null || matchController == null
@@ -378,17 +401,55 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
     }
 
     private void bindSeat(Player player, int seat) {
-        UUID previous = playersBySeat.putIfAbsent(seat, player.getUniqueId());
+        UUID previous = playersBySeat.get(seat);
         if (previous != null && !previous.equals(player.getUniqueId())) {
             throw new IllegalStateException("a competitive seat cannot be reassigned while its owner is online");
         }
-        Integer previousSeat = seatsByPlayer.putIfAbsent(player.getUniqueId(), seat);
+        Integer previousSeat = seatsByPlayer.get(player.getUniqueId());
         if (previousSeat != null && previousSeat != seat) {
             throw new IllegalStateException("a player cannot be bound to more than one competitive seat");
         }
+
+        resetInitialSeatState(player);
         MapPlan.Position spawn = generationPlan.spawns().get(seat).position();
+        if (!player.teleport(new Location(Bukkit.getWorld(ARENA_WORLD), spawn.x() + 0.5, spawn.y(), spawn.z() + 0.5))) {
+            throw new IllegalStateException("could not place a competitive bot at its assigned spawn");
+        }
         player.setGameMode(GameMode.SURVIVAL);
-        player.teleport(new Location(Bukkit.getWorld(ARENA_WORLD), spawn.x() + 0.5, spawn.y(), spawn.z() + 0.5));
+        playersBySeat.put(seat, player.getUniqueId());
+        seatsByPlayer.put(player.getUniqueId(), seat);
+    }
+
+    private static void resetInitialSeatState(Player player) {
+        player.setItemOnCursor(new ItemStack(Material.AIR));
+        player.closeInventory();
+        player.setGameMode(GameMode.SURVIVAL);
+        player.getInventory().clear();
+        player.getInventory().setArmorContents(null);
+        player.getInventory().setItemInOffHand(new ItemStack(Material.AIR));
+        player.getEnderChest().clear();
+        player.clearActivePotionEffects();
+        player.resetMaxHealth();
+        player.setHealth(player.getMaxHealth());
+        player.setAbsorptionAmount(0.0);
+        player.setFoodLevel(20);
+        player.setSaturation(5.0f);
+        player.setExhaustion(0.0f);
+        player.setFireTicks(0);
+        player.setVisualFire(false);
+        player.setFreezeTicks(0);
+        player.setFallDistance(0.0f);
+        player.setRemainingAir(player.getMaximumAir());
+        player.setNoDamageTicks(0);
+        player.setVelocity(new Vector(0, 0, 0));
+        player.setTotalExperience(0);
+        player.setLevel(0);
+        player.setExp(0.0f);
+        player.setSprinting(false);
+        player.setGliding(false);
+        player.setSwimming(false);
+        player.setInvulnerable(false);
+        player.setCanPickupItems(true);
     }
 
     private boolean allConfiguredBotsAreOnline() {
@@ -547,14 +608,37 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
     }
 
     private boolean isMatchRuleEnabled(boolean breaking) {
-        if (startupMode != StartupMode.PLAN || preparedMatch == null || !isRunningMatch()) {
+        if (startupMode != StartupMode.PLAN || preparedMatch == null || matchController == null
+                || !matchController.phase().allowsCompetitiveActions()) {
             return false;
         }
         return breaking ? preparedMatch.match().blockBreaking() : preparedMatch.match().blockPlacing();
     }
 
+    private boolean isPreReleaseCompetitor(Player player) {
+        return startupMode == StartupMode.PLAN && matchController != null
+                && matchController.phase().isPreRelease()
+                && seatsByPlayer.containsKey(player.getUniqueId());
+    }
+
+    private boolean isPreReleaseDamageSource(Entity entity) {
+        if (entity instanceof Player player) {
+            return isPreReleaseCompetitor(player);
+        }
+        return entity instanceof Projectile projectile
+                && projectile.getShooter() instanceof Player player
+                && isPreReleaseCompetitor(player);
+    }
+
     private static boolean isArenaWorld(World world) {
         return ARENA_WORLD.equals(world.getName());
+    }
+
+    private static boolean samePosition(Location first, Location second) {
+        return first.getWorld() == second.getWorld()
+                && Double.compare(first.getX(), second.getX()) == 0
+                && Double.compare(first.getY(), second.getY()) == 0
+                && Double.compare(first.getZ(), second.getZ()) == 0;
     }
 
     private static int parseControlPort(String portValue) {
@@ -712,20 +796,45 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
         }
     }
 
-    @EventHandler(priority = EventPriority.MONITOR)
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onMove(PlayerMoveEvent event) {
-        if (event.getTo() == null || event.getFrom().distanceSquared(event.getTo()) < 0.01) {
+        Location destination = event.getTo();
+        if (destination == null) {
             return;
         }
-        if (reportedMovement.add(event.getPlayer().getUniqueId())) {
-            getLogger().info("ARENA_MOVE|" + event.getPlayer().getName());
+        Location source = event.getFrom();
+        Player player = event.getPlayer();
+        if (isPreReleaseCompetitor(player) && !samePosition(source, destination)) {
+            event.setTo(new Location(source.getWorld(), source.getX(), source.getY(), source.getZ(),
+                    destination.getYaw(), destination.getPitch()));
+            destination = event.getTo();
+        }
+        if (samePosition(source, destination)) {
+            return;
+        }
+        if (reportedMovement.add(player.getUniqueId())) {
+            getLogger().info("ARENA_MOVE|" + player.getName());
         }
     }
 
-    @EventHandler(priority = EventPriority.MONITOR)
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onPreReleaseInventoryOpen(InventoryOpenEvent event) {
+        if (event.getPlayer() instanceof Player player && isPreReleaseCompetitor(player)) {
+            event.setCancelled(true);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onInventoryOpen(InventoryOpenEvent event) {
         if (event.getPlayer() instanceof Player player && isArenaChest(event.getInventory())) {
             getLogger().info("ARENA_CHEST_OPEN|" + player.getName());
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onPreReleaseInventoryClick(InventoryClickEvent event) {
+        if (event.getWhoClicked() instanceof Player player && isPreReleaseCompetitor(player)) {
+            event.setCancelled(true);
         }
     }
 
@@ -745,6 +854,55 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
                 getLogger().info("ARENA_TRANSFER|" + player.getName() + "|diamonds=" + diamonds);
             }
         }, 2L);
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onPreReleaseInventoryDrag(InventoryDragEvent event) {
+        if (event.getWhoClicked() instanceof Player player && isPreReleaseCompetitor(player)) {
+            event.setCancelled(true);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onPreReleaseItemDrop(PlayerDropItemEvent event) {
+        if (isPreReleaseCompetitor(event.getPlayer())) {
+            event.setCancelled(true);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onPreReleaseItemPickup(EntityPickupItemEvent event) {
+        if (event.getEntity() instanceof Player player && isPreReleaseCompetitor(player)) {
+            event.setCancelled(true);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onPreReleaseItemConsume(PlayerItemConsumeEvent event) {
+        if (isPreReleaseCompetitor(event.getPlayer())) {
+            event.setCancelled(true);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onPreReleaseHandSwap(PlayerSwapHandItemsEvent event) {
+        if (isPreReleaseCompetitor(event.getPlayer())) {
+            event.setCancelled(true);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onPreReleaseInteract(PlayerInteractEvent event) {
+        if (isPreReleaseCompetitor(event.getPlayer())) {
+            event.setCancelled(true);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onPreReleaseEntityInteract(PlayerInteractEntityEvent event) {
+        if (isPreReleaseCompetitor(event.getPlayer())) {
+            event.setCancelled(true);
+        }
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
