@@ -7,7 +7,6 @@ policy = "../policies/baseline.toml"
 
 [roster]
 competitors = 2
-human_seats_in_play_mode = 0
 spectator_capacity = 2
 
 [server]

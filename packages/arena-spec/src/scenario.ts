@@ -12,7 +12,6 @@ export type GameMode = (typeof GameMode)[keyof typeof GameMode];
 
 export interface Roster {
   readonly competitors: number;
-  readonly humanSeatsInPlayMode: number;
   readonly spectatorCapacity: bigint;
 }
 
@@ -176,14 +175,10 @@ function parseMode(value: raw.RawValue): GameMode {
 function parseRoster(value: raw.RawValue): Roster {
   const path = "scenario.roster";
   const table = raw.asTable(value, path);
-  raw.checkFields(table, ["competitors", "human_seats_in_play_mode", "spectator_capacity"], ["competitors", "human_seats_in_play_mode", "spectator_capacity"], path);
+  raw.checkFields(table, ["competitors", "spectator_capacity"], ["competitors", "spectator_capacity"], path);
   const competitors = boundedNumber(raw.field(table, "competitors", path), "scenario.roster.competitors", 1n, 6n);
-  const humanSeatsInPlayMode = boundedNumber(raw.field(table, "human_seats_in_play_mode", path), "scenario.roster.human_seats_in_play_mode", 0n, 1n);
   const spectatorCapacity = nonnegativeU64(raw.field(table, "spectator_capacity", path), "scenario.roster.spectator_capacity");
-  if (humanSeatsInPlayMode > competitors) {
-    throw new SpecError(SpecErrorKind.Range, "scenario.roster.human_seats_in_play_mode", "cannot exceed the competitor count");
-  }
-  return Object.freeze({ competitors, humanSeatsInPlayMode, spectatorCapacity });
+  return Object.freeze({ competitors, spectatorCapacity });
 }
 
 function parseServer(value: raw.RawValue): ServerSettings {
@@ -386,7 +381,6 @@ function hashScenario(
   hash.u64(seed);
   hash.string(policy);
   hash.u16(roster.competitors);
-  hash.u16(roster.humanSeatsInPlayMode);
   hash.u64(roster.spectatorCapacity);
   hash.string(server.minecraft);
   hash.u8(server.viewDistanceChunks);

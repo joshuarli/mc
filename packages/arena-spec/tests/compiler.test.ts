@@ -82,6 +82,15 @@ test("scenario_compiler_rejects_unknown_fields_enums_and_invalid_ranges", () => 
   assert.equal(overflow.kind, SpecErrorKind.Syntax);
 });
 
+test("scenario_rejects_removed_human_seat_field_without_fallback", () => {
+  const source = HUNGER
+    .replace("human_seats_in_play_mode = 1\n", "")
+    .replace("spectator_capacity = 4", "human_seats_in_play_mode = 1\nspectator_capacity = 4");
+  const error = specError(() => compileScenario(source, HUNGER_MAP));
+  assert.equal(error.kind, SpecErrorKind.UnknownField);
+  assert.equal(error.path, "scenario.roster.human_seats_in_play_mode");
+});
+
 test("map_compiler_rejects_unknown_schema_fields_operations_and_coordinate_overflow", () => {
   const unknownField = specError(() => compileMap(UNKNOWN_FIELD));
   assert.equal(unknownField.kind, SpecErrorKind.UnknownField);
