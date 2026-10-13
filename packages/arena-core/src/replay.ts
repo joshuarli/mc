@@ -41,12 +41,17 @@ export type PolicyReplayInputErrorCode =
   | 'invalid-params';
 
 export class PolicyReplayInputError extends TypeError {
-  constructor(readonly code: PolicyReplayInputErrorCode, readonly field: string, cause?: unknown) {
+  readonly code: PolicyReplayInputErrorCode;
+  readonly field: string;
+
+  constructor(code: PolicyReplayInputErrorCode, field: string, cause?: unknown) {
     if (cause === undefined) {
       super(`${field} is invalid: ${code}`);
     } else {
       super(`${field} is invalid: ${code}`, { cause });
     }
+    this.code = code;
+    this.field = field;
     this.name = 'PolicyReplayInputError';
   }
 }
@@ -208,7 +213,7 @@ function assertWellFormedUnicode(value: string, field: string): void {
     const codeUnit = value.charCodeAt(index);
     if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
       const next = value.charCodeAt(index + 1);
-      if (next < 0xdc00 || next > 0xdfff) {
+      if (!(next >= 0xdc00 && next <= 0xdfff)) {
         throw new PolicyReplayInputError('invalid-unicode', field);
       }
       index += 1;
