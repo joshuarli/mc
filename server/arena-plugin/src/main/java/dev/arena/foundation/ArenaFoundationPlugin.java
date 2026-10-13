@@ -31,13 +31,20 @@ import org.bukkit.inventory.ItemStack;
 import org.bukkit.plugin.java.JavaPlugin;
 
 public final class ArenaFoundationPlugin extends JavaPlugin implements Listener {
+    private enum StartupMode {
+        PLAN,
+        TEST_FIXTURE
+    }
+
     // Paper 26.2's default flat world surface is at Y -60.
     private static final int FLOOR_Y = -60;
     private static final int CHEST_X = 2;
     private static final int CHEST_Z = 0;
     private static final String ARENA_WORLD = "world";
     private static final String PLAN_GENERATOR_ID = "plan";
+    private static final String TEST_FIXTURE_PROPERTY = "arena.test-fixture";
     private final Set<UUID> reportedMovement = new HashSet<>();
+    private StartupMode startupMode;
     private MapPlan generationPlan;
     private ArenaChunkGenerator chunkGenerator;
     private boolean generatorRequested;
@@ -45,15 +52,29 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
 
     @Override
     public void onLoad() {
-        if (System.getProperty(MapPlanReader.GENERATION_PLAN_PROPERTY) == null) {
+        String planPath = System.getProperty(MapPlanReader.GENERATION_PLAN_PROPERTY);
+        String fixtureMode = System.getProperty(TEST_FIXTURE_PROPERTY);
+        if (planPath != null && fixtureMode != null) {
+            throw new IllegalStateException("configure either a staged world plan or test fixture mode, not both");
+        }
+        if (planPath != null) {
+            startupMode = StartupMode.PLAN;
+            try {
+                generationPlan = MapPlanReader.readConfiguredPlan();
+            } catch (IOException invalidPlan) {
+                throw new IllegalStateException("could not load the staged world plan", invalidPlan);
+            }
             return;
         }
-
-        try {
-            generationPlan = MapPlanReader.readConfiguredPlan();
-        } catch (IOException invalidPlan) {
-            throw new IllegalStateException("could not load the staged world plan", invalidPlan);
+        if ("true".equals(fixtureMode)) {
+            startupMode = StartupMode.TEST_FIXTURE;
+            return;
         }
+        if (fixtureMode != null) {
+            throw new IllegalStateException("-D" + TEST_FIXTURE_PROPERTY + " must be exactly 'true'");
+        }
+        throw new IllegalStateException("configure -D" + MapPlanReader.GENERATION_PLAN_PROPERTY
+                + " or the explicit smoke-only -D" + TEST_FIXTURE_PROPERTY + "=true");
     }
 
     @Override
@@ -61,7 +82,7 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
         if (!ARENA_WORLD.equals(worldName)) {
             return null;
         }
-        if (generationPlan == null) {
+        if (startupMode != StartupMode.PLAN) {
             throw new IllegalStateException("the arena world generator requires a staged world plan");
         }
         if (!PLAN_GENERATOR_ID.equals(id)) {
@@ -99,8 +120,8 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
         }
 
         int preparedChunks = 0;
-        if (generationPlan == null) {
-            // The local stack smoke run omits a staged plan and exercises the protocol fixture.
+        if (startupMode == StartupMode.TEST_FIXTURE) {
+            // The fixture is available only when the runner explicitly selects smoke-test mode.
             createStackSmokeFixture(world);
         } else {
             if (!generatorRequested) {
@@ -112,7 +133,7 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
         }
 
         worldInitialized = true;
-        if (generationPlan != null) {
+        if (startupMode == StartupMode.PLAN) {
             getLogger().info("ARENA_MAP_READY|run_id=" + generationPlan.runId()
                     + "|map_semantic_id=" + generationPlan.mapSemanticId()
                     + "|prepared_chunks=" + preparedChunks);
@@ -247,7 +268,7 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
                 || location.getBlock().getType() != Material.CHEST) {
             return false;
         }
-        if (generationPlan == null) {
+        if (startupMode == StartupMode.TEST_FIXTURE) {
             return location.getBlockX() == CHEST_X
                     && location.getBlockY() == FLOOR_Y + 1
                     && location.getBlockZ() == CHEST_Z;

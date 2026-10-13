@@ -39,7 +39,9 @@ chunk and the configured view-distance halo, fills the declared chests, and
 sets the world spawn to seat zero. Only then it emits
 `ARENA_MAP_READY|run_id=...|map_semantic_id=...|prepared_chunks=...`, followed
 by the general `ARENA_READY` marker. The no-plan local stack smoke path keeps
-its protocol fixture and does not report map readiness.
+its protocol fixture only when the runner passes `-Darena.test-fixture=true`;
+it does not report map readiness. Startup fails if neither mode is selected or
+if both are configured.
 
 ## Match timeline
 
