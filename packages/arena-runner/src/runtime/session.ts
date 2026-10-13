@@ -62,7 +62,13 @@ export function createControlToken(): string {
 }
 
 /** Owns one ephemeral loopback listener and transfers one accepted connection to its session. */
-export class ControlListenerLease {
+export interface ControlListenerLease {
+  readonly address: ControlListenerAddress;
+  accept(signal?: AbortSignal): Promise<ControlSession>;
+  close(): Promise<void>;
+}
+
+class TcpControlListenerLease implements ControlListenerLease {
   readonly address: ControlListenerAddress;
   readonly #server: Server;
   readonly #options: ControlListenerOptions;
@@ -197,7 +203,7 @@ export class ControlListenerLease {
       const ready = receiver.acceptFrame(await reader.readFrame());
       if (signal?.aborted) throw new ControlSessionError('cancelled', signal.reason);
       if (ready.type !== 'ready') throw new ControlSessionError('invalid_handshake');
-      return new ControlSession(socket, reader, receiver, this.#options.runId, ready.payload, acknowledgmentSequence);
+      return new AuthenticatedControlSession(socket, reader, receiver, this.#options.runId, ready.payload, acknowledgmentSequence);
     } catch (error) {
       socket.destroy();
       if (signal?.aborted) throw new ControlSessionError('cancelled', signal.reason);
@@ -239,7 +245,7 @@ export async function bindControlListener(options: ControlListenerOptions): Prom
     if (address === null || typeof address === 'string' || address.address !== CONTROL_HOST) {
       throw new ControlSessionError('listener_failed');
     }
-    return new ControlListenerLease(server, address, options);
+    return new TcpControlListenerLease(server, address, options);
   } catch (error) {
     server.close();
     throw new ControlSessionError('listener_failed', error);
@@ -247,7 +253,14 @@ export async function bindControlListener(options: ControlListenerOptions): Prom
 }
 
 /** Owns the authenticated plugin socket and its independent runner sequence. */
-export class ControlSession {
+export interface ControlSession {
+  readonly ready: ReadyPayload;
+  send(command: RunnerCommand): Promise<bigint>;
+  messages(): AsyncGenerator<ControlMessage>;
+  close(): Promise<void>;
+}
+
+class AuthenticatedControlSession implements ControlSession {
   readonly ready: ReadyPayload;
   readonly #socket: Socket;
   readonly #reader: ControlFrameReader;
