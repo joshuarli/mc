@@ -7,7 +7,7 @@ import {
 
 import { RunnerError } from "../../../packages/arena-runner/src/errors.js";
 import { failureCleanup } from "../../../packages/arena-runner/src/runtime/failures.js";
-import { eliminateOpponentWithSkillAttacks, runEvaluatorSkill } from "./duel.js";
+import { eliminateOpponentWithSkillAttacks, runEvaluatorSkill, stageOpponentForCombat } from "./duel.js";
 import type { AcceptanceRunContext } from "./owned-run.js";
 
 function deferred<T>() {
@@ -15,6 +15,33 @@ function deferred<T>() {
   const promise = new Promise<T>((accept) => { resolve = accept; });
   return { promise, resolve };
 }
+
+test("combat staging uses block navigation and verifies the exact arrival tile", async () => {
+  const destination = blockPosition(40, 65, 32);
+  const target = { position: { x: 52.5, y: 65, z: 32.5 } };
+  let requestedIntent: unknown;
+  const identity = { username: "bot_1", offlineUuid: "uuid-1" };
+  const active = {
+    prepare: { type: "prepare", payload: { roster: [{
+      seat: 1, username: identity.username, offline_uuid: identity.offlineUuid,
+    }] } },
+    competitors: [{
+      identity,
+      client: {
+        run: async (intent: unknown) => {
+          requestedIntent = intent;
+          target.position = { x: 40.5, y: 65, z: 32.5 };
+          return { kind: "succeeded" } as const;
+        },
+      },
+      bot: { entity: target },
+    }],
+  } as unknown as AcceptanceRunContext;
+
+  await stageOpponentForCombat(active, 1, destination, new AbortController().signal);
+
+  assert.deepStrictEqual(requestedIntent, { kind: "navigateToBlock", target: destination });
+});
 
 test("evaluator skill cancellation preserves the initiating resource failure", async () => {
   const controller = new AbortController();
