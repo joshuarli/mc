@@ -76,10 +76,25 @@ locked_section_value() {
     printf '%s\n' "$value"
 }
 
+locked_section_number() {
+    section=$1
+    key=$2
+    value=$(awk -F ' = ' -v section="[$section]" -v name="$key" '
+        $0 == section { active = 1; next }
+        active && /^\[/ { active = 0 }
+        active && $1 == name { if (NF != 2) malformed = 1; print $2; matches++ }
+        END { if (matches != 1 || malformed) exit 1 }
+    ' "$root/versions.lock.toml") || fail "versions.lock.toml must contain one numeric $section.$key"
+    case "$value" in
+        ''|0*|*[!0-9]*) fail "versions.lock.toml $section.$key must be a positive decimal integer" ;;
+    esac
+    printf '%s\n' "$value"
+}
+
 prepare_jdk() {
     jdk_version=$(locked_section_value java version)
     runtime_build=$(locked_section_value java runtime_build)
-    download_limit=$(locked_section_value limits max_download_bytes)
+    download_limit=$(locked_section_number limits max_download_bytes)
     case "$(uname -s):$(uname -m)" in
         Darwin:arm64) platform=macos_arm64 ;;
         Linux:x86_64) platform=linux_x86_64 ;;
@@ -89,12 +104,7 @@ prepare_jdk() {
     archive_file=$(locked_section_value "java.$platform" archive_file)
     archive_root=$(locked_section_value "java.$platform" archive_root)
     archive_url=$(locked_section_value "java.$platform" archive_url)
-    archive_size=$(awk -F ' = ' -v section="[java.$platform]" '
-        $0 == section { active = 1; next }
-        active && /^\[/ { active = 0 }
-        active && $1 == "archive_size_bytes" { print $2; matches++ }
-        END { if (matches != 1) exit 1 }
-    ' "$root/versions.lock.toml") || fail "versions.lock.toml must contain one java.$platform.archive_size_bytes"
+    archive_size=$(locked_section_number "java.$platform" archive_size_bytes)
     archive_sha=$(locked_section_value "java.$platform" archive_sha256)
     case "$archive_file" in
         /*|*/*|*".."*) fail "unsafe JDK archive filename in versions.lock.toml" ;;
@@ -177,7 +187,7 @@ prepare_gradle() {
     gradle_version=$(locked_section_value gradle version)
     distribution_url=$(locked_section_value gradle distribution)
     distribution_sha=$(locked_section_value gradle distribution_sha256)
-    download_limit=$(locked_section_value limits max_download_bytes)
+    download_limit=$(locked_section_number limits max_download_bytes)
     distribution_file=${distribution_url##*/}
     distribution_root="gradle-$gradle_version"
     [ "$distribution_file" = "$distribution_root-bin.zip" ] || fail "Gradle distribution filename does not match its locked version"
@@ -263,7 +273,7 @@ ensure_paper_artifact() {
     paper_url=$(locked_value server_url)
     expected_sha=$(locked_value server_sha256)
     expected_size=$(awk -F ' = ' '$1 == "server_size_bytes" { print $2; matches++ } END { if (matches != 1) exit 1 }' "$root/versions.lock.toml") || fail "versions.lock.toml must contain one server_size_bytes"
-    download_limit=$(locked_section_value limits max_download_bytes)
+    download_limit=$(locked_section_number limits max_download_bytes)
     case "$paper_file" in
         /*|*".."*) fail "unsafe Paper filename in versions.lock.toml" ;;
     esac
