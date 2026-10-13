@@ -13,7 +13,7 @@ Successful commands print one JSON object to stdout. `inspect` and `report` acce
 
 `doctor` describes the code paths available in this binary. It reports policy replay, authoritative outcome reporting, and live lifecycle supervision as parked until their recorded-input, event, and live-stack contracts exist. The generic report preserves each record in sequence order and leaves `outcome` null. It does not reconstruct game statistics or claim D2/D3.
 
-Trace readers follow a user-selected symlink and accept only regular-file targets. Reads are bounded to 8 MiB per segment. The reader does not write to the selected path. Trace-v1 files with unsupported schema values, unknown envelope fields, duplicate JSON object names, invalid ranges, malformed completion trailers, or checksum failures are rejected. The checksum covers only the `records` array as compact UTF-8 JSON serialized by serde_json; see [determinism](determinism.md).
+Trace readers follow a user-selected symlink and accept only regular-file targets. Reads are bounded to 8 MiB per segment and JSON nesting is limited to 32 containers. The reader does not write to the selected path. Trace-v1 files with unsupported schema values, unknown envelope fields, duplicate JSON object names, excessive nesting, invalid ranges, malformed completion trailers, or checksum failures are rejected. The checksum covers only the `records` array as compact UTF-8 JSON serialized by serde_json; see [determinism](determinism.md).
 
 The supported native targets are macOS arm64 and Linux x86_64. Other target pairs fail compilation; Linux arm64 remains unverified.
 

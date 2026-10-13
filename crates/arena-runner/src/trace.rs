@@ -1,10 +1,11 @@
+use std::cell::Cell;
 use std::fs::OpenOptions;
 use std::io::{self, Read};
 use std::path::Path;
 
 use arena_core::control::Sequence;
-use serde::de::{self, MapAccess, SeqAccess, Visitor};
-use serde::{Deserialize, Deserializer};
+use serde::de::{self, DeserializeSeed, MapAccess, SeqAccess, Visitor};
+use serde::Deserializer;
 use serde_json::{Map, Number, Value};
 use sha2::{Digest, Sha256};
 
@@ -18,6 +19,7 @@ compile_error!("arena-runner supports macOS arm64 and Linux x86_64");
 
 const TRACE_SCHEMA_VERSION: u64 = 1;
 const MAX_TRACE_BYTES: u64 = 8 * 1024 * 1024;
+const MAX_JSON_DEPTH: usize = 32;
 const TRACE_FIELDS: [&str; 7] = [
     "schema",
     "run_id",
@@ -46,6 +48,7 @@ pub(crate) struct TraceSegment {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum TraceError {
     InvalidJson { line: usize, column: usize },
+    NestingTooDeep,
     RootNotObject,
     MissingField(&'static str),
     UnknownField,
@@ -71,6 +74,7 @@ impl TraceError {
                 column: Some(*column),
                 os_code: None,
             },
+            Self::NestingTooDeep => ErrorSource::kind("nesting_limit_exceeded"),
             Self::RootNotObject => ErrorSource::kind("trace_root_not_object"),
             Self::MissingField(field) => ErrorSource::kind(match *field {
                 "schema" => "missing_schema",
@@ -107,7 +111,18 @@ impl TraceError {
 
 impl TraceSegment {
     pub(crate) fn parse(bytes: &[u8]) -> Result<Self, TraceError> {
-        let StrictValue(value) = serde_json::from_slice(bytes).map_err(|error| TraceError::InvalidJson {
+        let nesting_exceeded = Cell::new(false);
+        let mut deserializer = serde_json::Deserializer::from_slice(bytes);
+        let value = match (StrictValueSeed { depth: 1, nesting_exceeded: &nesting_exceeded })
+            .deserialize(&mut deserializer)
+        {
+            Ok(StrictValue(value)) => value,
+            Err(_) if nesting_exceeded.get() => return Err(TraceError::NestingTooDeep),
+            Err(error) => {
+                return Err(TraceError::InvalidJson { line: error.line(), column: error.column() });
+            }
+        };
+        deserializer.end().map_err(|error| TraceError::InvalidJson {
             line: error.line(),
             column: error.column(),
         })?;
@@ -179,18 +194,31 @@ impl TraceSegment {
 // serde_json::Value overwrites duplicate object names, so validate uniqueness while decoding.
 struct StrictValue(Value);
 
-impl<'de> Deserialize<'de> for StrictValue {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+struct StrictValueSeed<'a> {
+    depth: usize,
+    nesting_exceeded: &'a Cell<bool>,
+}
+
+impl<'de> DeserializeSeed<'de> for StrictValueSeed<'_> {
+    type Value = StrictValue;
+
+    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
     where
         D: Deserializer<'de>,
     {
-        deserializer.deserialize_any(StrictValueVisitor)
+        deserializer.deserialize_any(StrictValueVisitor {
+            depth: self.depth,
+            nesting_exceeded: self.nesting_exceeded,
+        })
     }
 }
 
-struct StrictValueVisitor;
+struct StrictValueVisitor<'a> {
+    depth: usize,
+    nesting_exceeded: &'a Cell<bool>,
+}
 
-impl<'de> Visitor<'de> for StrictValueVisitor {
+impl<'de> Visitor<'de> for StrictValueVisitor<'_> {
     type Value = StrictValue;
 
     fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -242,8 +270,15 @@ impl<'de> Visitor<'de> for StrictValueVisitor {
     where
         A: SeqAccess<'de>,
     {
+        if self.depth > MAX_JSON_DEPTH {
+            self.nesting_exceeded.set(true);
+            return Err(de::Error::custom("JSON nesting limit exceeded"));
+        }
         let mut values = Vec::new();
-        while let Some(StrictValue(value)) = sequence.next_element()? {
+        while let Some(StrictValue(value)) = sequence.next_element_seed(StrictValueSeed {
+            depth: self.depth + 1,
+            nesting_exceeded: self.nesting_exceeded,
+        })? {
             values.push(value);
         }
         Ok(StrictValue(Value::Array(values)))
@@ -253,12 +288,19 @@ impl<'de> Visitor<'de> for StrictValueVisitor {
     where
         A: MapAccess<'de>,
     {
+        if self.depth > MAX_JSON_DEPTH {
+            self.nesting_exceeded.set(true);
+            return Err(de::Error::custom("JSON nesting limit exceeded"));
+        }
         let mut values = Map::new();
         while let Some(key) = object.next_key::<String>()? {
             if values.contains_key(&key) {
                 return Err(de::Error::custom("duplicate object key"));
             }
-            let StrictValue(value) = object.next_value()?;
+            let StrictValue(value) = object.next_value_seed(StrictValueSeed {
+                depth: self.depth + 1,
+                nesting_exceeded: self.nesting_exceeded,
+            })?;
             values.insert(key, value);
         }
         Ok(StrictValue(Value::Object(values)))
@@ -357,7 +399,8 @@ fn map_io_error(resource: &str, argument: usize, error: io::Error) -> CliError {
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_TRACE_BYTES, TRACE_FIELDS, TRACE_SCHEMA_VERSION, TraceError, TraceSegment};
+    use super::{MAX_JSON_DEPTH, MAX_TRACE_BYTES, TRACE_FIELDS, TRACE_SCHEMA_VERSION, TraceError, TraceSegment, sha256_records};
+    use serde_json::{Map, Value};
 
     const VALID: &str = r#"{"schema":1,"run_id":"fixture","first_sequence":1,"last_sequence":1,"records":[{"a":1}],"sha256":"b713f6d2a989e907c58516a7c8bb487792c8785ddbf367b80dc774bf33b85a85","trailer":{"complete":true}}"#;
 
@@ -429,8 +472,39 @@ mod tests {
     }
 
     #[test]
+    fn rejects_depth_33_and_accepts_depth_32_json() {
+        let segment_at_limit = nested_segment(MAX_JSON_DEPTH);
+        assert!(TraceSegment::parse(&segment_at_limit).is_ok());
+
+        let segment_over_limit = nested_segment(MAX_JSON_DEPTH + 1);
+        assert_eq!(TraceSegment::parse(&segment_over_limit), Err(TraceError::NestingTooDeep));
+    }
+
+    #[test]
     fn rejects_checksum_mismatch() {
         let invalid = VALID.replace("b713f6d2", "c713f6d2");
         assert_eq!(TraceSegment::parse(invalid.as_bytes()), Err(TraceError::ChecksumMismatch));
+    }
+
+    fn nested_segment(container_depth: usize) -> Vec<u8> {
+        let mut nested = Value::Null;
+        // The envelope, records array, and record object occupy the first three levels.
+        for _ in 0..container_depth - 3 {
+            nested = Value::Array(vec![nested]);
+        }
+        let mut record = Map::new();
+        record.insert("nested".into(), nested);
+        let records = vec![record];
+        let sha256 = sha256_records(&records).unwrap();
+        serde_json::to_vec(&serde_json::json!({
+            "schema": 1,
+            "run_id": "nested",
+            "first_sequence": 1,
+            "last_sequence": 1,
+            "records": records,
+            "sha256": sha256,
+            "trailer": {"complete": true},
+        }))
+        .unwrap()
     }
 }

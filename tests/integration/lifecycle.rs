@@ -26,11 +26,18 @@ struct TempDirectory(PathBuf);
 
 impl TempDirectory {
     fn new() -> Self {
-        let root = std::env::temp_dir();
-        let suffix = NEXT_TEMP.fetch_add(1, Ordering::Relaxed);
-        let path = root.join(format!("arena-runner-lifecycle-{}-{suffix}", std::process::id()));
-        fs::create_dir(&path).unwrap();
-        Self(path)
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.work/tmp");
+        fs::create_dir_all(&root).unwrap();
+        for _ in 0..128 {
+            let suffix = NEXT_TEMP.fetch_add(1, Ordering::Relaxed);
+            let path = root.join(format!("arena-runner-lifecycle-{}-{suffix}", std::process::id()));
+            match fs::create_dir(&path) {
+                Ok(()) => return Self(path),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => panic!("failed to create lifecycle test directory: {error}"),
+            }
+        }
+        panic!("failed to allocate unique lifecycle test directory under .work/tmp");
     }
 
     fn path(&self) -> &Path {
