@@ -12,6 +12,10 @@ The `sha256` field is the lowercase SHA-256 digest of the compact serialization 
 
 The TypeScript encoder writes world-plan schema version 1 in the field shape consumed by Java `MapPlanReader`: `schema`, `run_id`, `map_semantic_id`, `dimensions`, `blocks`, `spawns`, and `loot_containers`. Blocks and loot containers retain the spec compiler's canonical position order; spawn seats are contiguous from zero and capped at six; loot inventory order is preserved. The compact UTF-8 plan is capped at 128 MiB. Its golden fixture is shared with the Java reader. `prepare` writes the plan to `.work/arena/runs/<run-id>/world-plan.json` using the native handle-relative filesystem helper. It creates the run directory exclusively and publishes the plan without overwriting an existing file.
 
+## Core policy replay input
+
+`@arena/core` normalizes `policy-input-v2` with one validated observation, its policy memory, an ordered feedback batch of at most two completed skill outcomes, parameters, and the pre-decision RNG state. Historical `policy-input-v1` keeps its original memory shape and is replayed through its no-feedback decision path. Rehydration rejects unknown fields and invalid feedback instead of dropping them.
+
 ## Replay and reports
 
 `inspect` exposes generic ordered records. `replay-policy` rehydrates each `policy-replay-v1` input through `@arena/core`, runs the policy again, and checks both the recorded decision and post-decision RNG state. A separate `policy-effect-v1` record may correlate a returned skill outcome and the last actual path update to a decision sequence. Pathfinder waypoints may contain fractional block coordinates; the writer and reader preserve finite fractional values, while integer-valued coordinates still follow the trace safe-integer rule above. Those effects are validated and counted; replay does not reproduce client or server actions.

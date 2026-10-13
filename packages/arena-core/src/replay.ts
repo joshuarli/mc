@@ -6,9 +6,14 @@ import {
 } from './observation.js';
 import {
   PolicyParams,
+  policyFeedbackBatch,
   policyMemory,
+  policyMemoryV1,
   type PolicyMemory,
   type PolicyMemoryInput,
+  type PolicyMemoryInputV1,
+  type PolicyFeedback,
+  type PolicyFeedbackBatch,
   type PolicyParamValues,
 } from './policy.js';
 import { DeterministicRandom } from './random.js';
@@ -18,17 +23,38 @@ const U64_MAX = 0xffff_ffff_ffff_ffffn;
 export interface PolicyReplayInputV1 {
   readonly schema: 'policy-input-v1';
   readonly observation: AgentObservationInput;
-  readonly memory: PolicyMemoryInput;
+  readonly memory: PolicyMemoryInputV1;
   readonly params: PolicyParamValues;
   readonly rng_state: string;
 }
 
-export interface RehydratedPolicyReplayInput {
+export interface PolicyReplayInputV2 {
+  readonly schema: 'policy-input-v2';
+  readonly observation: AgentObservationInput;
+  readonly memory: PolicyMemoryInput;
+  readonly feedback: readonly PolicyFeedback[];
+  readonly params: PolicyParamValues;
+  readonly rng_state: string;
+}
+
+export interface RehydratedPolicyReplayInputV1 {
+  readonly schema: 'policy-input-v1';
   readonly observation: AgentObservation;
-  readonly memory: PolicyMemory;
+  readonly memory: PolicyMemoryInputV1;
   readonly params: PolicyParams;
   readonly random: DeterministicRandom;
 }
+
+export interface RehydratedPolicyReplayInputV2 {
+  readonly schema: 'policy-input-v2';
+  readonly observation: AgentObservation;
+  readonly memory: PolicyMemory;
+  readonly feedback: readonly PolicyFeedback[];
+  readonly params: PolicyParams;
+  readonly random: DeterministicRandom;
+}
+
+export type RehydratedPolicyReplayInput = RehydratedPolicyReplayInputV1 | RehydratedPolicyReplayInputV2;
 
 export type PolicyReplayInputErrorCode =
   | 'invalid-shape'
@@ -38,6 +64,7 @@ export type PolicyReplayInputErrorCode =
   | 'invalid-rng-state'
   | 'invalid-observation'
   | 'invalid-memory'
+  | 'invalid-feedback'
   | 'invalid-params';
 
 export class PolicyReplayInputError extends TypeError {
@@ -59,12 +86,13 @@ export class PolicyReplayInputError extends TypeError {
 export interface PolicyReplayInputSource {
   readonly observation: AgentObservation;
   readonly memory: PolicyMemory;
+  readonly feedback: readonly PolicyFeedback[];
   readonly params: PolicyParams;
   readonly random: DeterministicRandom;
 }
 
-/** Captures the validated decision inputs with the RNG state from before the decision. */
-export function normalizePolicyReplayInput(source: PolicyReplayInputSource): PolicyReplayInputV1 {
+/** Captures v2 decision inputs with the RNG state from before the decision. */
+export function normalizePolicyReplayInput(source: PolicyReplayInputSource): PolicyReplayInputV2 {
   assertValidatedAgentObservation(source.observation);
   const observation: AgentObservationInput = Object.freeze({
     tick: source.observation.tick,
@@ -78,9 +106,10 @@ export function normalizePolicyReplayInput(source: PolicyReplayInputSource): Pol
   const params = PolicyParams.create(source.params.values).values;
 
   return Object.freeze({
-    schema: 'policy-input-v1',
+    schema: 'policy-input-v2',
     observation,
     memory,
+    feedback: policyFeedbackBatch(source.feedback),
     params,
     rng_state: source.random.snapshotState().toString(10),
   });
@@ -90,24 +119,33 @@ export function normalizePolicyReplayInput(source: PolicyReplayInputSource): Pol
 export function rehydratePolicyReplayInput(value: unknown): RehydratedPolicyReplayInput {
   assertJsonTree(value, 'input', new Set());
   const input = readRecord(value, 'input');
-  assertExactFields(input, ['schema', 'observation', 'memory', 'params', 'rng_state'], 'input');
-
-  if (input.schema !== 'policy-input-v1') {
+  const schema = input.schema;
+  if (schema === 'policy-input-v1') {
+    assertExactFields(input, ['schema', 'observation', 'memory', 'params', 'rng_state'], 'input');
+  } else if (schema === 'policy-input-v2') {
+    assertExactFields(input, ['schema', 'observation', 'memory', 'feedback', 'params', 'rng_state'], 'input');
+  } else {
     throw new PolicyReplayInputError('unsupported-schema', 'input.schema');
   }
 
   const observation = parseSection('invalid-observation', 'observation', () => (
     agentObservation(input.observation as AgentObservationInput)
   ));
-  const memory = parseSection('invalid-memory', 'memory', () => (
-    policyMemory(input.memory as PolicyMemoryInput)
-  ));
+  const memory = schema === 'policy-input-v1'
+    ? parseSection('invalid-memory', 'memory', () => policyMemoryV1(input.memory as PolicyMemoryInputV1))
+    : parseSection('invalid-memory', 'memory', () => policyMemory(input.memory as PolicyMemoryInput));
   const params = parseSection('invalid-params', 'params', () => (
     PolicyParams.create(input.params as PolicyParamValues)
   ));
   const randomState = parseU64Decimal(input.rng_state, 'rng_state');
-
-  return Object.freeze({ observation, memory, params, random: DeterministicRandom.fromState(randomState) });
+  const random = DeterministicRandom.fromState(randomState);
+  if (schema === 'policy-input-v1') {
+    return Object.freeze({ schema, observation, memory: memory as PolicyMemoryInputV1, params, random });
+  }
+  const feedback = parseSection('invalid-feedback', 'feedback', () => (
+    policyFeedbackBatch(input.feedback as PolicyFeedbackBatch)
+  ));
+  return Object.freeze({ schema, observation, memory: memory as PolicyMemory, feedback, params, random });
 }
 
 function parseU64Decimal(value: unknown, field: string): bigint {
@@ -122,7 +160,7 @@ function parseU64Decimal(value: unknown, field: string): bigint {
 }
 
 function parseSection<T>(
-  code: 'invalid-observation' | 'invalid-memory' | 'invalid-params',
+  code: 'invalid-observation' | 'invalid-memory' | 'invalid-feedback' | 'invalid-params',
   field: string,
   parse: () => T,
 ): T {

@@ -1,4 +1,4 @@
-import { deepStrictEqual, equal, notDeepStrictEqual, throws } from 'node:assert/strict';
+import { deepStrictEqual, equal, notDeepStrictEqual, ok, throws } from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
@@ -6,15 +6,19 @@ import {
   agentState,
   blockPosition,
   currentKnowledge,
+  createPolicyFeedback,
   decide,
+  decidePolicyReplayV1,
   emptyEquipment,
   emptyPolicyMemory,
   entityId,
   foodStack,
   inventorySlot,
   InvalidPolicyParamsError,
+  lootTarget,
   PolicyParams,
   policyMemory,
+  policyFeedbackBatch,
   RandomStream,
   DeterministicRandom,
   observationSequence,
@@ -257,7 +261,241 @@ test('stale opponents guide bounded search but never start combat', () => {
   deepStrictEqual(decision.intent, { kind: 'navigate', target: blockPosition(12, 64, 0) });
 });
 
-test('unrepresentable retreat and exploration positions return an explicit hold', () => {
+test('failed loot is skipped until that exact candidate changes', () => {
+  const drop = visibleDrop(entityId(33), blockPosition(5, 64, 0), { kind: 'food' });
+  const chest = unopenedContainer(blockPosition(8, 64, 0));
+  const initiatingObservation = makeObservation({ loot: currentKnowledge([drop, chest]) });
+  const first = decide(initiatingObservation, emptyPolicyMemory(), params(), policyRandom());
+  deepStrictEqual(first.goal, { kind: 'loot', target: { kind: 'drop', entityId: entityId(33) } });
+
+  const feedback = createPolicyFeedback({
+    initiatingObservation,
+    goal: first.goal,
+    intent: first.intent,
+    outcome: { kind: 'failed', cause: 'noProgress' },
+  });
+  ok(feedback !== null);
+  const unchanged = makeObservation({ at: 11, loot: currentKnowledge([drop, chest]) });
+  const skipped = decide(
+    unchanged,
+    first.memory,
+    params(),
+    policyRandom(),
+    policyFeedbackBatch([feedback]),
+  );
+  deepStrictEqual(skipped.goal, { kind: 'loot', target: { kind: 'container', position: chest.position } });
+  equal(skipped.memory.failedTargets.length, 1);
+
+  const succeededFeedback = createPolicyFeedback({
+    initiatingObservation,
+    goal: first.goal,
+    intent: first.intent,
+    outcome: { kind: 'succeeded' },
+  });
+  ok(succeededFeedback !== null);
+  const resumed = decide(
+    unchanged,
+    skipped.memory,
+    params(),
+    policyRandom(),
+    policyFeedbackBatch([succeededFeedback]),
+  );
+  deepStrictEqual(resumed.goal, first.goal);
+  equal(resumed.memory.failedTargets.length, 0);
+
+  equal(createPolicyFeedback({
+    initiatingObservation,
+    goal: first.goal,
+    intent: first.intent,
+    outcome: { kind: 'cancelled', reason: 'replaced' },
+  }), null);
+
+  const changedDrop = visibleDrop(entityId(33), drop.position, { kind: 'weapon', rating: 1 });
+  const changed = decide(
+    makeObservation({ at: 12, loot: currentKnowledge([changedDrop, chest]) }),
+    skipped.memory,
+    params(),
+    policyRandom(),
+  );
+  deepStrictEqual(changed.goal, { kind: 'loot', target: { kind: 'drop', entityId: entityId(33) } });
+  equal(changed.memory.failedTargets.length, 0);
+});
+
+test('failed-target memory stays isolated between policy seats', () => {
+  const drop = visibleDrop(entityId(36), blockPosition(5, 64, 0), { kind: 'food' });
+  const chest = unopenedContainer(blockPosition(8, 64, 0));
+  const observation = makeObservation({ loot: currentKnowledge([drop, chest]) });
+  const seatA = decide(observation, emptyPolicyMemory(), params(), policyRandom());
+  const failed = createPolicyFeedback({
+    initiatingObservation: observation,
+    goal: seatA.goal,
+    intent: seatA.intent,
+    outcome: { kind: 'failed', cause: 'noProgress' },
+  });
+  ok(failed !== null);
+
+  const seatAAfterFailure = decide(
+    observation,
+    seatA.memory,
+    params(),
+    policyRandom(),
+    policyFeedbackBatch([failed]),
+  );
+  const seatB = decide(observation, emptyPolicyMemory(), params(), policyRandom());
+
+  deepStrictEqual(seatAAfterFailure.goal, { kind: 'loot', target: { kind: 'container', position: chest.position } });
+  deepStrictEqual(seatB.goal, seatA.goal);
+  equal(seatB.memory.failedTargets.length, 0);
+});
+
+test('failed exploration retries after sufficient movement, not unrelated evidence changes', () => {
+  const initiatingObservation = makeObservation();
+  const first = decide(initiatingObservation, emptyPolicyMemory(), params(), new DeterministicRandom(0n));
+  ok(first.goal.kind === 'explore');
+  ok(first.intent.kind === 'navigate');
+  const feedback = createPolicyFeedback({
+    initiatingObservation,
+    goal: first.goal,
+    intent: first.intent,
+    outcome: { kind: 'failed', cause: 'timedOut' },
+  });
+  ok(feedback !== null);
+
+  const lostVisibility = decide(
+    makeObservation({ at: 11, loot: unknownKnowledge(), opponents: unknownKnowledge() }),
+    first.memory,
+    params(),
+    new DeterministicRandom(0n),
+    policyFeedbackBatch([feedback]),
+  );
+  equal(lostVisibility.memory.failedTargets.length, 1);
+
+  const moved = decide(
+    makeObservation({
+      at: 11,
+      agent: currentKnowledge(makeAgent({ position: blockPosition(8, 64, 0) })),
+    }),
+    first.memory,
+    params(),
+    new DeterministicRandom(0n),
+    policyFeedbackBatch([feedback]),
+  );
+  equal(moved.memory.failedTargets.length, 0);
+
+  const evidenceChanged = decide(
+    makeObservation({
+      at: 12,
+      loot: currentKnowledge([visibleDrop(entityId(34), blockPosition(40, 64, 0), { kind: 'food' })]),
+      opponents: currentKnowledge([visibleOpponent(entityId(37), blockPosition(45, 64, 0), false)]),
+    }),
+    first.memory,
+    params(),
+    new DeterministicRandom(0n),
+    policyFeedbackBatch([feedback]),
+  );
+  equal(evidenceChanged.memory.failedTargets.length, 1);
+});
+
+test('failed exploration targets exhaust to a stable hold and remembered searches reopen on movement', () => {
+  const explorationObservation = makeObservation();
+  const random = new DeterministicRandom(0n);
+  let explorationDecision = decide(explorationObservation, emptyPolicyMemory(), params(), random);
+  for (let index = 0; index < 8; index += 1) {
+    const feedback = createPolicyFeedback({
+      initiatingObservation: explorationObservation,
+      goal: explorationDecision.goal,
+      intent: explorationDecision.intent,
+      outcome: { kind: 'failed', cause: 'noProgress' },
+    });
+    ok(feedback !== null);
+    explorationDecision = decide(
+      explorationObservation,
+      explorationDecision.memory,
+      params(),
+      random,
+      policyFeedbackBatch([feedback]),
+    );
+  }
+  deepStrictEqual(explorationDecision.goal, { kind: 'wait', reason: 'failedTargetsExhausted' });
+  equal(explorationDecision.memory.failedTargets.length, 8);
+
+  const target = entityId(35);
+  const searchObservation = makeObservation({
+    at: 20,
+    opponents: currentKnowledge([visibleOpponent(target, blockPosition(12, 64, 0), false)]),
+  });
+  const search = decide(searchObservation, emptyPolicyMemory(), params(), policyRandom());
+  deepStrictEqual(search.goal, { kind: 'searchLastKnown', target });
+  const feedback = createPolicyFeedback({
+    initiatingObservation: searchObservation,
+    goal: search.goal,
+    intent: search.intent,
+    outcome: { kind: 'failed', cause: 'serverRejected' },
+  });
+  ok(feedback !== null);
+  const unchanged = decide(
+    makeObservation({
+      at: 21,
+      opponents: currentKnowledge([visibleOpponent(target, blockPosition(12, 64, 0), false)]),
+    }),
+    search.memory,
+    params(),
+    policyRandom(),
+    policyFeedbackBatch([feedback]),
+  );
+  equal(unchanged.memory.failedTargets.length, 1);
+  const unknown = decide(
+    makeObservation({ at: 22, opponents: unknownKnowledge() }),
+    unchanged.memory,
+    params(),
+    policyRandom(),
+  );
+  equal(unknown.memory.failedTargets.length, 1);
+  const moved = decide(
+    makeObservation({
+      at: 23,
+      opponents: currentKnowledge([visibleOpponent(target, blockPosition(13, 64, 0), false)]),
+    }),
+    unchanged.memory,
+    params(),
+    policyRandom(),
+  );
+  deepStrictEqual(moved.goal, { kind: 'searchLastKnown', target });
+  equal(moved.memory.failedTargets.length, 0);
+});
+
+test('failed-target memory evicts the oldest failure after its fixed capacity', () => {
+  const opportunities = Array.from({ length: 17 }, (_, index) => visibleDrop(
+    entityId(40 + index),
+    blockPosition(20 + index, 64, 0),
+    { kind: 'food' },
+  ));
+  const observation = makeObservation({ loot: currentKnowledge(opportunities) });
+  let memory = emptyPolicyMemory();
+  const random = policyRandom();
+
+  for (let index = 0; index < opportunities.length; index += 2) {
+    const feedback = opportunities.slice(index, index + 2).map((opportunity) => {
+      const target = lootTarget(opportunity);
+      const event = createPolicyFeedback({
+        initiatingObservation: observation,
+        goal: { kind: 'loot', target },
+        intent: { kind: 'navigate', target: opportunity.position },
+        outcome: { kind: 'failed', cause: 'noProgress' },
+      });
+      ok(event !== null);
+      return event;
+    });
+    memory = decide(observation, memory, params(), random, policyFeedbackBatch(feedback)).memory;
+  }
+
+  equal(memory.failedTargets.length, 16);
+  const oldestRetained = memory.failedTargets[0];
+  ok(oldestRetained?.kind === 'loot' && oldestRetained.target.kind === 'drop');
+  equal(oldestRetained.target.entityId, entityId(41));
+});
+
+test('v2 chooses a representable exploration direction while v1 holds on its sampled overflow', () => {
   const retreat = makeObservation({
     agent: currentKnowledge(makeAgent({
       position: blockPosition(Number.MIN_SAFE_INTEGER, 64, 0),
@@ -277,7 +515,26 @@ test('unrepresentable retreat and exploration positions return an explicit hold'
   });
   const random = new DeterministicRandom(0n);
   const decision = decide(exploration, emptyPolicyMemory(), params(), random);
-  deepStrictEqual(decision.intent, { kind: 'hold', reason: 'unrepresentableTarget' });
+  deepStrictEqual(decision.goal, { kind: 'explore' });
+  deepStrictEqual(decision.intent, {
+    kind: 'navigate',
+    target: blockPosition(Number.MAX_SAFE_INTEGER, 64, 8),
+  });
+
+  const legacyRandom = new DeterministicRandom(0n);
+  const expectedLegacyRandom = new DeterministicRandom(0n);
+  equal(expectedLegacyRandom.nextEightWay(), 7);
+  deepStrictEqual(decidePolicyReplayV1(
+    exploration,
+    { lastGoal: null, lastOpponent: null },
+    params(),
+    legacyRandom,
+  ), {
+    goal: { kind: 'wait', reason: 'unrepresentableTarget' },
+    intent: { kind: 'hold', reason: 'unrepresentableTarget' },
+    memory: { lastGoal: null, lastOpponent: null },
+  });
+  equal(legacyRandom.snapshotState(), expectedLegacyRandom.snapshotState());
 });
 
 test('policy parameter values reject numbers outside the versioned bounds', () => {
@@ -297,6 +554,7 @@ test('policy parameter values reject numbers outside the versioned bounds', () =
 test('future remembered positions are not treated as last-seen information', () => {
   const observation = makeObservation({ at: 10, opponents: currentKnowledge([]) });
   const memory = policyMemory({
+    ...emptyPolicyMemory(),
     lastGoal: null,
     lastOpponent: {
       id: entityId(16),

@@ -289,10 +289,12 @@ test('an observed post-knockback border position escapes before combat or loot',
 
 test('loot hysteresis keeps a near-equal container and switches outside its margin', () => {
   const previousNear = policyMemory({
+    ...emptyPolicyMemory(),
     lastGoal: { kind: 'loot', target: { kind: 'container', position: blockPosition(5, 64, 0) } },
     lastOpponent: null,
   });
   const previousFar = policyMemory({
+    ...emptyPolicyMemory(),
     lastGoal: { kind: 'loot', target: { kind: 'container', position: blockPosition(7, 64, 0) } },
     lastOpponent: null,
   });

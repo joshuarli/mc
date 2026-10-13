@@ -63,20 +63,31 @@ export type {
 export {
   InvalidPolicyParamsError,
   PolicyParams,
+  createPolicyFeedback,
   decide,
+  decidePolicyReplayV1,
   emptyPolicyMemory,
+  policyFeedbackBatch,
   policyMemory,
+  policyMemoryV1,
 } from './policy.js';
 export type {
   Decision,
+  DecisionV1,
+  FailedTargetEvidence,
   Goal,
   Intent,
   InvalidPolicyParamsCode,
   PolicyMemory,
   PolicyMemoryInput,
+  PolicyMemoryInputV1,
+  PolicyFeedback,
+  PolicyFeedbackBatch,
+  PolicyFeedbackSource,
   PolicyParameterVersion,
   PolicyParamValues,
   RememberedOpponent,
+  SearchOpponentEvidence,
   WaitReason,
 } from './policy.js';
 
@@ -91,7 +102,10 @@ export type {
   PolicyReplayInputErrorCode,
   PolicyReplayInputSource,
   PolicyReplayInputV1,
+  PolicyReplayInputV2,
   RehydratedPolicyReplayInput,
+  RehydratedPolicyReplayInputV1,
+  RehydratedPolicyReplayInputV2,
 } from './replay.js';
 
 export { skillProgress } from './outcome.js';

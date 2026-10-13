@@ -7,6 +7,7 @@ import {
   blockPosition,
   currentKnowledge,
   decide,
+  decidePolicyReplayV1,
   DeterministicRandom,
   emptyEquipment,
   emptyPolicyMemory,
@@ -45,6 +46,7 @@ function serializedInput(): Record<string, unknown> {
   const input = normalizePolicyReplayInput({
     observation,
     memory: emptyPolicyMemory(),
+    feedback: [],
     params: PolicyParams.baseline(),
     random: DeterministicRandom.fromState(MAX_U64),
   });
@@ -56,17 +58,84 @@ test('policy replay input rehydrates validated state and preserves the full u64 
   const memory = emptyPolicyMemory();
   const params = PolicyParams.baseline();
   const random = DeterministicRandom.fromState(MAX_U64);
-  const wire = normalizePolicyReplayInput({ observation, memory, params, random });
+  const wire = normalizePolicyReplayInput({ observation, memory, feedback: [], params, random });
 
-  equal(wire.schema, 'policy-input-v1');
+  equal(wire.schema, 'policy-input-v2');
   equal(wire.rng_state, MAX_U64.toString());
 
   const restored = rehydratePolicyReplayInput(JSON.parse(JSON.stringify(wire)) as unknown);
-  const expected = decide(observation, memory, params, random);
-  const actual = decide(restored.observation, restored.memory, restored.params, restored.random);
+  if (restored.schema !== 'policy-input-v2') throw new Error('normalization must create policy-input-v2');
+  const expected = decide(observation, memory, params, random, []);
+  const actual = decide(restored.observation, restored.memory, restored.params, restored.random, restored.feedback);
 
   deepStrictEqual(actual, expected);
   equal(restored.random.snapshotState(), random.snapshotState());
+});
+
+test('policy-input-v1 preserves historical memory and decision semantics', () => {
+  const legacy = serializedInput();
+  legacy.schema = 'policy-input-v1';
+  delete legacy.feedback;
+  legacy.memory = { lastGoal: null, lastOpponent: null };
+  const restored = rehydratePolicyReplayInput(legacy);
+  if (restored.schema !== 'policy-input-v1') throw new Error('legacy input must remain policy-input-v1');
+
+  const actual = decidePolicyReplayV1(
+    restored.observation,
+    restored.memory,
+    restored.params,
+    restored.random,
+  );
+  equal(actual.goal.kind, 'explore');
+  deepStrictEqual(actual.memory, { lastGoal: actual.goal, lastOpponent: null });
+});
+
+test('policy-input-v1 keeps the sampled overflow hold at the integer edge', () => {
+  const observation = agentObservation({
+    tick: tick(10),
+    sequence: observationSequence(1),
+    agent: currentKnowledge(agentState({
+      position: blockPosition(Number.MAX_SAFE_INTEGER, 64, 0),
+      healthHalfHearts: 40,
+      hungerPoints: 20,
+      foodStacks: [],
+      equipped: emptyEquipment(),
+      upgrades: [],
+    })),
+    border: currentKnowledge(worldBorder(Number.MAX_SAFE_INTEGER, 0, 100)),
+    opponents: unknownKnowledge(),
+    loot: unknownKnowledge(),
+  });
+  const v2 = normalizePolicyReplayInput({
+    observation,
+    memory: emptyPolicyMemory(),
+    feedback: [],
+    params: PolicyParams.baseline(),
+    random: new DeterministicRandom(0n),
+  });
+  const restored = rehydratePolicyReplayInput({
+    schema: 'policy-input-v1',
+    observation: v2.observation,
+    memory: { lastGoal: null, lastOpponent: null },
+    params: v2.params,
+    rng_state: v2.rng_state,
+  });
+  if (restored.schema !== 'policy-input-v1') throw new Error('legacy input must remain policy-input-v1');
+
+  const expectedRandom = new DeterministicRandom(0n);
+  equal(expectedRandom.nextEightWay(), 7);
+  const actual = decidePolicyReplayV1(
+    restored.observation,
+    restored.memory,
+    restored.params,
+    restored.random,
+  );
+  deepStrictEqual(actual, {
+    goal: { kind: 'wait', reason: 'unrepresentableTarget' },
+    intent: { kind: 'hold', reason: 'unrepresentableTarget' },
+    memory: { lastGoal: null, lastOpponent: null },
+  });
+  equal(restored.random.snapshotState(), expectedRandom.snapshotState());
 });
 
 test('policy replay input rejects unknown fields and invalid RNG state encodings', () => {
@@ -85,6 +154,15 @@ test('policy replay input rejects unknown fields and invalid RNG state encodings
       (error) => error instanceof PolicyReplayInputError && error.code === 'invalid-rng-state',
     );
   }
+
+  const invalidFeedback = serializedInput();
+  invalidFeedback.feedback = [{ kind: 'failed', target: {} }];
+  throws(
+    () => rehydratePolicyReplayInput(invalidFeedback),
+    (error) => error instanceof PolicyReplayInputError
+      && error.code === 'invalid-feedback'
+      && error.field === 'feedback',
+  );
 });
 
 test('policy replay input reconstructs the observation brand and rejects stale samples at the current tick', () => {

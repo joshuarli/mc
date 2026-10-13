@@ -12,6 +12,9 @@ import {
   assertValidatedAgentObservation,
   entityId,
   inventorySlot,
+  knownArmor,
+  knownFood,
+  knownWeapon,
   lootTarget,
   tick,
   type AgentObservation,
@@ -20,12 +23,16 @@ import {
   type EquipmentSlot,
   type EquipmentUpgrade,
   type InventorySlot,
+  type KnownItem,
   type Knowledge,
   type LootOpportunity,
   type LootTarget,
   type Tick,
   type VisibleOpponent,
+  unopenedContainer,
+  visibleDrop,
 } from './observation.js';
+import type { SkillFailure, SkillOutcome } from './outcome.js';
 import { DeterministicRandom } from './random.js';
 
 const MAX_HEALTH_HALF_HEARTS = 40;
@@ -37,6 +44,9 @@ const MAX_LOOT_HYSTERESIS_BLOCKS = 16;
 const MAX_SEARCH_RADIUS_BLOCKS = 16;
 const MELEE_REACH_BLOCKS = 3;
 const LOOT_INTERACTION_DISTANCE_BLOCKS = 3n;
+const MAX_REMEMBERED_FAILED_TARGETS = 16;
+const MAX_POLICY_FEEDBACKS = 2;
+const FAILED_EXPLORATION_APPROACH_BLOCKS = 8n;
 
 export type PolicyParameterVersion = 1;
 
@@ -133,7 +143,8 @@ export type WaitReason =
   | 'agentEliminated'
   | 'borderUnknown'
   | 'borderStale'
-  | 'unrepresentableTarget';
+  | 'unrepresentableTarget'
+  | 'failedTargetsExhausted';
 
 export type Goal =
   | { readonly kind: 'escapeBorder' }
@@ -172,22 +183,76 @@ export interface RememberedOpponent {
   readonly observedAt: Tick;
 }
 
+export type FailedTargetEvidence =
+  | {
+    readonly kind: 'loot';
+    readonly target: LootTarget;
+    readonly opportunity: LootOpportunity;
+  }
+  | {
+    readonly kind: 'searchLastKnown';
+    readonly target: EntityId;
+    readonly position: BlockPosition;
+    readonly opponent: SearchOpponentEvidence;
+  }
+  | {
+    readonly kind: 'explore';
+    readonly target: BlockPosition;
+    readonly origin: BlockPosition;
+  };
+
+export type PolicyFeedback =
+  | { readonly kind: 'succeeded'; readonly target: FailedTargetEvidence }
+  | { readonly kind: 'failed'; readonly target: FailedTargetEvidence; readonly cause: SkillFailure };
+
+export type PolicyFeedbackBatch = readonly PolicyFeedback[];
+
+export interface PolicyFeedbackSource {
+  readonly initiatingObservation: AgentObservation;
+  readonly goal: Goal;
+  readonly intent: Intent;
+  readonly outcome: SkillOutcome;
+}
+
+export type SearchOpponentEvidence =
+  | { readonly kind: 'unknown' }
+  | { readonly kind: 'absent' }
+  | {
+    readonly kind: 'observed';
+    readonly position: BlockPosition;
+  };
+
 export interface PolicyMemory {
   readonly lastGoal: Goal | null;
   readonly lastOpponent: RememberedOpponent | null;
+  readonly failedTargets: readonly FailedTargetEvidence[];
 }
 
 export interface PolicyMemoryInput {
   readonly lastGoal: Goal | null;
   readonly lastOpponent: RememberedOpponent | null;
+  readonly failedTargets: readonly FailedTargetEvidence[];
 }
 
+export interface PolicyMemoryInputV1 {
+  readonly lastGoal: Goal | null;
+  readonly lastOpponent: RememberedOpponent | null;
+}
+
+export interface DecisionV1 {
+  readonly goal: Goal;
+  readonly intent: Intent;
+  readonly memory: PolicyMemoryInputV1;
+}
+
+type DecisionSemantics = 'policy-input-v1' | 'policy-input-v2';
+
 export function emptyPolicyMemory(): PolicyMemory {
-  return Object.freeze({ lastGoal: null, lastOpponent: null });
+  return Object.freeze({ lastGoal: null, lastOpponent: null, failedTargets: Object.freeze([]) });
 }
 
 export function policyMemory(input: PolicyMemoryInput): PolicyMemory {
-  assertExactKeys(input, ['lastGoal', 'lastOpponent']);
+  assertExactKeys(input, ['lastGoal', 'lastOpponent', 'failedTargets']);
   const lastGoal = input.lastGoal === null ? null : cloneGoal(input.lastGoal);
   let lastOpponent: RememberedOpponent | null = null;
   if (input.lastOpponent !== null) {
@@ -198,7 +263,71 @@ export function policyMemory(input: PolicyMemoryInput): PolicyMemory {
       observedAt: tick(input.lastOpponent.observedAt),
     });
   }
-  return Object.freeze({ lastGoal, lastOpponent });
+  if (!Array.isArray(input.failedTargets) || input.failedTargets.length > MAX_REMEMBERED_FAILED_TARGETS) {
+    throw new RangeError(`policy memory can hold at most ${MAX_REMEMBERED_FAILED_TARGETS} failed targets`);
+  }
+  assertDenseArray(input.failedTargets, 'policy memory failedTargets');
+  const failedTargets = input.failedTargets.map(cloneFailedTargetEvidence);
+  for (let index = 0; index < failedTargets.length; index += 1) {
+    const candidate = failedTargets[index]!;
+    if (failedTargets.slice(0, index).some((existing) => sameFailedTarget(existing, candidate))) {
+      throw new TypeError('policy memory cannot contain duplicate failed targets');
+    }
+  }
+  return Object.freeze({ lastGoal, lastOpponent, failedTargets: Object.freeze(failedTargets) });
+}
+
+/** Rehydrates the old memory shape only for historical policy-input-v1 replay. */
+export function policyMemoryV1(input: PolicyMemoryInputV1): PolicyMemoryInputV1 {
+  assertExactKeys(input, ['lastGoal', 'lastOpponent']);
+  const memory = policyMemory({ ...input, failedTargets: [] });
+  if (memory.lastGoal?.kind === 'wait' && memory.lastGoal.reason === 'failedTargetsExhausted') {
+    throw new TypeError('policy-input-v1 does not support failedTargetsExhausted');
+  }
+  return Object.freeze({ lastGoal: memory.lastGoal, lastOpponent: memory.lastOpponent });
+}
+
+/**
+ * Copies a settlement-ordered batch of completed skill feedback. The runtime may
+ * include at most two completions between strategy decisions; overflow is invalid.
+ */
+export function policyFeedbackBatch(input: readonly PolicyFeedback[]): PolicyFeedbackBatch {
+  if (!Array.isArray(input) || input.length > MAX_POLICY_FEEDBACKS) {
+    throw new RangeError(`policy feedback can contain at most ${MAX_POLICY_FEEDBACKS} outcomes`);
+  }
+  assertDenseArray(input, 'policy feedback');
+  return Object.freeze(input.map(clonePolicyFeedback));
+}
+
+/**
+ * Converts one completed local skill result into target feedback using only the
+ * observation that initiated it and the originating policy goal and intent.
+ * Cancellation and goals without a suppressible navigation target have no effect.
+ */
+export function createPolicyFeedback(source: PolicyFeedbackSource): PolicyFeedback | null {
+  assertExactKeys(source, ['initiatingObservation', 'goal', 'intent', 'outcome']);
+  assertValidatedAgentObservation(source.initiatingObservation);
+  const goal = cloneGoal(source.goal);
+  const intent = cloneIntent(source.intent);
+  if (source.outcome.kind === 'cancelled') {
+    assertExactKeys(source.outcome, ['kind', 'reason']);
+    validateSkillCancellation(source.outcome.reason);
+    return null;
+  }
+  if (source.outcome.kind !== 'failed' && source.outcome.kind !== 'succeeded') {
+    throw new TypeError('policy feedback requires a completed skill outcome');
+  }
+  if (source.outcome.kind === 'succeeded') {
+    assertExactKeys(source.outcome, ['kind']);
+  } else {
+    assertExactKeys(source.outcome, ['kind', 'cause']);
+  }
+
+  const target = feedbackTarget(source.initiatingObservation, goal, intent);
+  if (target === null) return null;
+  return source.outcome.kind === 'succeeded'
+    ? Object.freeze({ kind: 'succeeded', target })
+    : Object.freeze({ kind: 'failed', target, cause: validateSkillFailure(source.outcome.cause) });
 }
 
 export interface Decision {
@@ -219,9 +348,22 @@ export function decide(
   memory: PolicyMemory,
   params: PolicyParams,
   random: DeterministicRandom,
+  feedback: PolicyFeedbackBatch = [],
+): Decision {
+  return decideWithSemantics(observation, memory, params, random, feedback, 'policy-input-v2');
+}
+
+function decideWithSemantics(
+  observation: AgentObservation,
+  memory: PolicyMemory,
+  params: PolicyParams,
+  random: DeterministicRandom,
+  feedback: PolicyFeedbackBatch,
+  semantics: DecisionSemantics,
 ): Decision {
   assertValidatedAgentObservation(observation);
-  const nextMemory = policyMemory(memory);
+  let nextMemory = applyPolicyFeedback(policyMemory(memory), policyFeedbackBatch(feedback));
+  nextMemory = pruneChangedFailedTargets(observation, nextMemory);
   const agent = currentValue(observation.agent);
   if (agent === null) {
     const reason = observation.agent.kind === 'unknown' ? 'agentStateUnknown' : 'agentStateStale';
@@ -309,7 +451,7 @@ export function decide(
     return finish(goal, intent, { ...currentMemory, lastGoal: goal });
   }
 
-  const loot = selectLoot(observation, memory, agent, params.values);
+  const loot = selectLoot(observation, currentMemory, agent, params.values);
   if (loot !== null) {
     const goal: Goal = Object.freeze({ kind: 'loot', target: loot.target });
     let intent: Intent;
@@ -324,7 +466,7 @@ export function decide(
   }
 
   const remembered = rememberedOpponent(observation, currentMemory, params.values.opponentMemoryTicks);
-  if (remembered !== null) {
+  if (remembered !== null && !isFailedSearchTarget(currentMemory, remembered)) {
     const goal: Goal = Object.freeze({ kind: 'searchLastKnown', target: remembered.id });
     return finish(goal, { kind: 'navigate', target: remembered.position }, {
       ...currentMemory,
@@ -332,14 +474,42 @@ export function decide(
     });
   }
 
-  const exploration = explorationTarget(agent.position, params.values.searchRadiusBlocks, random);
+  const exploration = explorationTarget(
+    agent.position,
+    params.values.searchRadiusBlocks,
+    currentMemory,
+    random,
+    semantics,
+  );
   if (exploration.ok === false) {
-    return waitDecision('unrepresentableTarget', currentMemory);
+    return waitDecision(exploration.reason, currentMemory);
   }
   const goal: Goal = Object.freeze({ kind: 'explore' });
   return finish(goal, { kind: 'navigate', target: exploration.value }, {
     ...currentMemory,
     lastGoal: goal,
+  });
+}
+
+/** Replays the former decision contract without feeding skill results into policy. */
+export function decidePolicyReplayV1(
+  observation: AgentObservation,
+  memory: PolicyMemoryInputV1,
+  params: PolicyParams,
+  random: DeterministicRandom,
+): DecisionV1 {
+  const decision = decideWithSemantics(
+    observation,
+    policyMemory({ ...policyMemoryV1(memory), failedTargets: [] }),
+    params,
+    random,
+    [],
+    'policy-input-v1',
+  );
+  return Object.freeze({
+    goal: decision.goal,
+    intent: decision.intent,
+    memory: Object.freeze({ lastGoal: decision.memory.lastGoal, lastOpponent: decision.memory.lastOpponent }),
   });
 }
 
@@ -351,6 +521,274 @@ function waitDecision(reason: WaitReason, memory: PolicyMemory): Decision {
   const goal: Goal = Object.freeze({ kind: 'wait', reason });
   return finish(goal, { kind: 'hold', reason }, memory);
 }
+
+function feedbackTarget(
+  observation: AgentObservation,
+  goal: Goal,
+  intent: Intent,
+): FailedTargetEvidence | null {
+  if (goal.kind === 'loot') {
+    if (intent.kind !== 'navigate' && intent.kind !== 'dropCollect' && intent.kind !== 'containerOpen') {
+      throw new TypeError('loot feedback requires a loot intent');
+    }
+    const opportunities = currentValue(observation.loot);
+    const opportunity = opportunities?.find((candidate) => sameLootTarget(lootTarget(candidate), goal.target));
+    if (opportunity === undefined) {
+      throw new TypeError('loot feedback target is absent from its initiating observation');
+    }
+    if (!lootIntentMatches(opportunity, intent)) {
+      throw new TypeError('loot feedback intent does not match its target');
+    }
+    return cloneFailedTargetEvidence({
+      kind: 'loot',
+      target: goal.target,
+      opportunity,
+    });
+  }
+  if (goal.kind === 'searchLastKnown') {
+    if (intent.kind !== 'navigate') {
+      throw new TypeError('last-known target feedback requires navigation');
+    }
+    return cloneFailedTargetEvidence({
+      kind: 'searchLastKnown',
+      target: goal.target,
+      position: intent.target,
+      opponent: searchOpponentEvidence(observation, goal.target),
+    });
+  }
+  if (goal.kind === 'explore') {
+    if (intent.kind !== 'navigate') {
+      throw new TypeError('exploration feedback requires navigation');
+    }
+    const agent = currentValue(observation.agent);
+    if (agent === null) {
+      throw new TypeError('exploration feedback requires current self position');
+    }
+    return cloneFailedTargetEvidence({
+      kind: 'explore',
+      target: intent.target,
+      origin: agent.position,
+    });
+  }
+  return null;
+}
+
+function lootIntentMatches(opportunity: LootOpportunity, intent: Intent): boolean {
+  if (opportunity.kind === 'visibleDrop') {
+    return intent.kind === 'navigate'
+      ? samePosition(intent.target, opportunity.position)
+      : intent.kind === 'dropCollect' && intent.entityId === opportunity.entityId;
+  }
+  return intent.kind === 'navigate'
+    ? samePosition(intent.target, opportunity.position)
+    : intent.kind === 'containerOpen' && samePosition(intent.position, opportunity.position);
+}
+
+function clonePolicyFeedback(feedback: PolicyFeedback): PolicyFeedback {
+  if (feedback.kind === 'succeeded') {
+    assertExactKeys(feedback, ['kind', 'target']);
+    return Object.freeze({ kind: 'succeeded', target: cloneFailedTargetEvidence(feedback.target) });
+  }
+  if (feedback.kind === 'failed') {
+    assertExactKeys(feedback, ['kind', 'target', 'cause']);
+    return Object.freeze({
+      kind: 'failed',
+      target: cloneFailedTargetEvidence(feedback.target),
+      cause: validateSkillFailure(feedback.cause),
+    });
+  }
+  throw new TypeError(`unknown policy feedback kind: ${String((feedback as { kind?: unknown }).kind)}`);
+}
+
+function cloneFailedTargetEvidence(evidence: FailedTargetEvidence): FailedTargetEvidence {
+  switch (evidence.kind) {
+    case 'loot': {
+      assertExactKeys(evidence, ['kind', 'target', 'opportunity']);
+      const target = cloneLootTarget(evidence.target);
+      const opportunity = cloneLootOpportunity(evidence.opportunity);
+      if (!sameLootTarget(target, lootTarget(opportunity))) {
+        throw new TypeError('loot evidence does not match its target');
+      }
+      return Object.freeze({ kind: 'loot', target, opportunity });
+    }
+    case 'searchLastKnown':
+      assertExactKeys(evidence, ['kind', 'target', 'position', 'opponent']);
+      return Object.freeze({
+        kind: 'searchLastKnown',
+        target: entityId(evidence.target),
+        position: freezePosition(evidence.position),
+        opponent: cloneSearchOpponentEvidence(evidence.opponent),
+      });
+    case 'explore':
+      assertExactKeys(evidence, ['kind', 'target', 'origin']);
+      return Object.freeze({
+        kind: 'explore',
+        target: freezePosition(evidence.target),
+        origin: freezePosition(evidence.origin),
+      });
+  }
+  throw new TypeError(`unknown failed target evidence kind: ${String((evidence as { kind?: unknown }).kind)}`);
+}
+
+function cloneLootOpportunity(opportunity: LootOpportunity): LootOpportunity {
+  if (opportunity.kind === 'visibleDrop') {
+    assertExactKeys(opportunity, ['kind', 'entityId', 'position', 'item']);
+    return visibleDrop(
+      entityId(opportunity.entityId),
+      freezePosition(opportunity.position),
+      cloneKnownItem(opportunity.item),
+    );
+  }
+  if (opportunity.kind === 'unopenedContainer') {
+    assertExactKeys(opportunity, ['kind', 'position']);
+    return unopenedContainer(freezePosition(opportunity.position));
+  }
+  throw new TypeError(`unknown loot opportunity kind: ${String((opportunity as { kind?: unknown }).kind)}`);
+}
+
+function cloneKnownItem(item: KnownItem): KnownItem {
+  if (item.kind === 'food') {
+    assertExactKeys(item, ['kind']);
+    return knownFood();
+  }
+  if (item.kind === 'weapon') {
+    assertExactKeys(item, ['kind', 'rating']);
+    return knownWeapon(item.rating);
+  }
+  if (item.kind === 'armor') {
+    assertExactKeys(item, ['kind', 'equipmentSlot', 'rating']);
+    return knownArmor(item.equipmentSlot, item.rating);
+  }
+  throw new TypeError(`unknown item kind: ${String((item as { kind?: unknown }).kind)}`);
+}
+
+function cloneSearchOpponentEvidence(evidence: SearchOpponentEvidence): SearchOpponentEvidence {
+  if (evidence.kind === 'unknown' || evidence.kind === 'absent') {
+    assertExactKeys(evidence, ['kind']);
+    return Object.freeze({ kind: evidence.kind });
+  }
+  if (evidence.kind === 'observed') {
+    assertExactKeys(evidence, ['kind', 'position']);
+    return Object.freeze({
+      kind: 'observed',
+      position: freezePosition(evidence.position),
+    });
+  }
+  throw new TypeError(`unknown opponent evidence kind: ${String((evidence as { kind?: unknown }).kind)}`);
+}
+
+function applyPolicyFeedback(memory: PolicyMemory, feedback: PolicyFeedbackBatch): PolicyMemory {
+  let failedTargets = [...memory.failedTargets];
+  for (const event of feedback) {
+    const target = cloneFailedTargetEvidence(event.target);
+    failedTargets = failedTargets.filter((existing) => !sameFailedTarget(existing, target));
+    if (event.kind === 'failed') {
+      failedTargets.push(target);
+      if (failedTargets.length > MAX_REMEMBERED_FAILED_TARGETS) failedTargets.shift();
+    }
+  }
+  return policyMemory({ ...memory, failedTargets });
+}
+
+function pruneChangedFailedTargets(observation: AgentObservation, memory: PolicyMemory): PolicyMemory {
+  const failedTargets = memory.failedTargets.filter((entry) => !failedTargetEvidenceChanged(observation, entry));
+  return failedTargets.length === memory.failedTargets.length
+    ? memory
+    : policyMemory({ ...memory, failedTargets });
+}
+
+function failedTargetEvidenceChanged(observation: AgentObservation, failed: FailedTargetEvidence): boolean {
+  switch (failed.kind) {
+    case 'loot': {
+      if (observation.loot.kind === 'unknown') return false;
+      const currentOpportunity = observation.loot.value.find((opportunity) => (
+        sameLootTarget(lootTarget(opportunity), failed.target)
+      ));
+      if (currentOpportunity === undefined) return observation.loot.kind === 'current';
+      return !sameLootOpportunity(failed.opportunity, currentOpportunity);
+    }
+    case 'searchLastKnown':
+      return !sameSearchOpponentEvidence(failed.opponent, searchOpponentEvidence(observation, failed.target));
+    case 'explore': {
+      const agent = currentValue(observation.agent);
+      return agent !== null
+        && manhattanDistance(agent.position, failed.origin) >= FAILED_EXPLORATION_APPROACH_BLOCKS;
+    }
+  }
+}
+
+function searchOpponentEvidence(observation: AgentObservation, target: EntityId): SearchOpponentEvidence {
+  if (observation.opponents.kind === 'unknown') return Object.freeze({ kind: 'unknown' });
+  const opponent = observation.opponents.value.find((candidate) => candidate.id === target);
+  if (opponent === undefined) return Object.freeze({ kind: 'absent' });
+  return Object.freeze({
+    kind: 'observed',
+    position: opponent.position,
+  });
+}
+
+function sameFailedTarget(first: FailedTargetEvidence, second: FailedTargetEvidence): boolean {
+  if (first.kind !== second.kind) return false;
+  switch (first.kind) {
+    case 'loot':
+      return second.kind === 'loot' && sameLootTarget(first.target, second.target);
+    case 'searchLastKnown':
+      return second.kind === 'searchLastKnown' && first.target === second.target;
+    case 'explore':
+      return second.kind === 'explore' && samePosition(first.target, second.target);
+  }
+}
+
+function isFailedSearchTarget(memory: PolicyMemory, remembered: RememberedOpponent): boolean {
+  return memory.failedTargets.some((failed) => (
+    failed.kind === 'searchLastKnown' && failed.target === remembered.id
+  ));
+}
+
+function sameSearchOpponentEvidence(first: SearchOpponentEvidence, second: SearchOpponentEvidence): boolean {
+  if (second.kind === 'unknown') return true;
+  if (first.kind === 'unknown' || first.kind !== second.kind) return false;
+  return first.kind !== 'observed'
+    || (second.kind === 'observed' && samePosition(first.position, second.position));
+}
+
+function sameLootOpportunity(first: LootOpportunity, second: LootOpportunity): boolean {
+  if (first.kind !== second.kind || !samePosition(first.position, second.position)) return false;
+  if (first.kind === 'unopenedContainer' && second.kind === 'unopenedContainer') return true;
+  if (first.kind !== 'visibleDrop' || second.kind !== 'visibleDrop' || first.entityId !== second.entityId) return false;
+  return sameKnownItem(first.item, second.item);
+}
+
+function sameKnownItem(first: KnownItem, second: KnownItem): boolean {
+  if (first.kind !== second.kind) return false;
+  if (first.kind === 'food') return true;
+  if (first.kind === 'weapon' && second.kind === 'weapon') return first.rating === second.rating;
+  return first.kind === 'armor'
+    && second.kind === 'armor'
+    && first.equipmentSlot === second.equipmentSlot
+    && first.rating === second.rating;
+}
+
+function samePosition(first: BlockPosition, second: BlockPosition): boolean {
+  return first.x === second.x && first.y === second.y && first.z === second.z;
+}
+
+function validateSkillFailure(value: SkillFailure): SkillFailure {
+  if (value !== 'preconditionsNotMet'
+      && value !== 'noProgress'
+      && value !== 'serverRejected'
+      && value !== 'timedOut') {
+    throw new TypeError(`unknown skill failure cause: ${String(value)}`);
+  }
+  return value;
+}
+
+function validateSkillCancellation(value: string): void {
+  if (value !== 'replaced' && value !== 'agentEliminated' && value !== 'shutdown') {
+    throw new TypeError(`unknown skill cancellation reason: ${value}`);
+  }
+}
+
 
 function currentValue<T>(knowledge: Knowledge<T>): T | null {
   return knowledge.kind === 'current' ? knowledge.value : null;
@@ -461,12 +899,18 @@ function selectLoot(
   }
   const candidates = opportunities
     .map((opportunity): LootChoice | null => {
+      const target = lootTarget(opportunity);
+      if (memory.failedTargets.some((failed) => (
+        failed.kind === 'loot' && sameLootTarget(failed.target, target)
+      ))) {
+        return null;
+      }
       const utility = lootUtility(opportunity, agent);
       return utility === 0
         ? null
         : {
           opportunity,
-          target: lootTarget(opportunity),
+          target,
           utility,
           distance: manhattanDistance(agent.position, opportunity.position),
         };
@@ -584,28 +1028,50 @@ function retreatTarget(position: BlockPosition, threat: BlockPosition, tieBit: b
   return offsetBlockPosition(position, Math.sign(dx) * 4, 0, Math.sign(dz) * 4);
 }
 
-function explorationTarget(position: BlockPosition, radius: number, random: DeterministicRandom) {
+function explorationTarget(
+  position: BlockPosition,
+  radius: number,
+  memory: PolicyMemory,
+  random: DeterministicRandom,
+  semantics: DecisionSemantics,
+): { readonly ok: true; readonly value: BlockPosition }
+  | { readonly ok: false; readonly reason: 'unrepresentableTarget' | 'failedTargetsExhausted' } {
   const half = Math.max(1, Math.floor(radius / 2));
-  switch (random.nextEightWay()) {
-    case 0:
-      return offsetBlockPosition(position, radius, 0, 0);
-    case 1:
-      return offsetBlockPosition(position, radius, 0, half);
-    case 2:
-      return offsetBlockPosition(position, 0, 0, radius);
-    case 3:
-      return offsetBlockPosition(position, -half, 0, radius);
-    case 4:
-      return offsetBlockPosition(position, -radius, 0, 0);
-    case 5:
-      return offsetBlockPosition(position, -radius, 0, -half);
-    case 6:
-      return offsetBlockPosition(position, 0, 0, -radius);
-    case 7:
-      return offsetBlockPosition(position, half, 0, -radius);
-    default:
-      throw new RangeError('random exploration direction is outside 0..7');
+  const offsets = [
+    [radius, 0],
+    [radius, half],
+    [0, radius],
+    [-half, radius],
+    [-radius, 0],
+    [-radius, -half],
+    [0, -radius],
+    [half, -radius],
+  ] as const;
+  const start = random.nextEightWay();
+  if (semantics === 'policy-input-v1') {
+    const [dx, dz] = offsets[start]!;
+    const target = offsetBlockPosition(position, dx, 0, dz);
+    return target.ok ? target : { ok: false, reason: 'unrepresentableTarget' };
   }
+
+  let representableTargets = 0;
+  for (let offset = 0; offset < offsets.length; offset += 1) {
+    const [dx, dz] = offsets[(start + offset) % offsets.length]!;
+    const candidate = offsetBlockPosition(position, dx, 0, dz);
+    if (!candidate.ok) {
+      continue;
+    }
+    representableTargets += 1;
+    if (!memory.failedTargets.some((failed) => (
+      failed.kind === 'explore' && samePosition(failed.target, candidate.value)
+    ))) {
+      return candidate;
+    }
+  }
+  return {
+    ok: false,
+    reason: representableTargets === 0 ? 'unrepresentableTarget' : 'failedTargetsExhausted',
+  };
 }
 
 function equipmentSlotOrder(slot: EquipmentSlot): number {
@@ -627,12 +1093,36 @@ function isIntegerInRange(value: number, minimum: number, maximum: number): bool
 }
 
 function assertExactKeys(value: object, expected: readonly string[]): void {
-  if (value === null || typeof value !== 'object') {
+  if (value === null
+      || typeof value !== 'object'
+      || Array.isArray(value)
+      || (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null)) {
     throw new TypeError('expected an object');
   }
-  const actual = Object.keys(value);
-  if (actual.length !== expected.length || actual.some((key) => !expected.includes(key))) {
+  const actual = Reflect.ownKeys(value);
+  if (actual.length !== expected.length || actual.some((key) => typeof key !== 'string' || !expected.includes(key))) {
     throw new TypeError(`object keys must be exactly: ${expected.join(', ')}`);
+  }
+  for (const key of expected) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (descriptor === undefined || descriptor.enumerable !== true || !Object.hasOwn(descriptor, 'value')) {
+      throw new TypeError(`object field ${key} must be an own data property`);
+    }
+  }
+}
+
+function assertDenseArray(value: unknown, field: string): asserts value is readonly unknown[] {
+  if (!Array.isArray(value)
+      || Object.getPrototypeOf(value) !== Array.prototype
+      || Reflect.ownKeys(value).length !== value.length + 1
+      || !Reflect.ownKeys(value).includes('length')) {
+    throw new TypeError(`${field} must be a plain dense array`);
+  }
+  for (let index = 0; index < value.length; index += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+    if (descriptor === undefined || descriptor.enumerable !== true || !Object.hasOwn(descriptor, 'value')) {
+      throw new TypeError(`${field}[${index}] must be an own data element`);
+    }
   }
 }
 
@@ -737,7 +1227,8 @@ function validateWaitReason(value: WaitReason): WaitReason {
       && value !== 'agentEliminated'
       && value !== 'borderUnknown'
       && value !== 'borderStale'
-      && value !== 'unrepresentableTarget') {
+      && value !== 'unrepresentableTarget'
+      && value !== 'failedTargetsExhausted') {
     throw new TypeError(`unknown wait reason: ${String(value)}`);
   }
   return value;

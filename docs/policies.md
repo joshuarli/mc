@@ -1,11 +1,19 @@
 # Client policy and observation boundary
 
-`@arena/core` contains deterministic TypeScript policy and integer geometry. Its source has no Node runtime, network, filesystem, Mineflayer, plugin, or evaluator dependency. A caller creates one immutable `AgentObservation` from one client's received state and passes that snapshot with the seat's prior `PolicyMemory`, validated `PolicyParams`, and deterministic search stream to `decide`. The result contains a goal, an adapter-facing intent, and the next memory. It never contains a client handle, world query, skill task, or evaluator state.
+`@arena/core` contains deterministic TypeScript policy and integer geometry. Its source has no Node runtime, network, filesystem, Mineflayer, plugin, or evaluator dependency. A caller creates one immutable `AgentObservation` from one client's received state and passes that snapshot with the seat's prior `PolicyMemory`, validated `PolicyParams`, deterministic search stream, and completed local skill feedback to `decide`. The result contains a goal, an adapter-facing intent, and the next memory. It never contains a client handle, world query, skill task, or evaluator state.
 
 ```ts
-const decision = decide(observation, memory, params, searchRandom);
+const feedback = createPolicyFeedback({
+  initiatingObservation,
+  goal: originatingDecision.goal,
+  intent: originatingDecision.intent,
+  outcome: completedSkillOutcome,
+});
+const decision = decide(observation, memory, params, searchRandom, feedback === null ? [] : [feedback]);
 memory = decision.memory;
 ```
+
+The adapter creates feedback only when a local skill reports success or failure. `createPolicyFeedback()` derives a target and its comparison evidence from the initiating client observation and the originating goal and intent; it accepts no adapter or world state. Cancellation has no policy effect. Feedback is ordered by completion and a batch may contain at most two outcomes between decisions. Each seat owns its own memory, which retains at most 16 failed targets in FIFO order.
 
 ## Observation rules
 
@@ -37,6 +45,8 @@ The baseline applies these priorities:
 6. Collect a useful visible drop or open a visible container.
 7. Search a bounded last-seen position, then choose a short exploration point.
 
+A failed loot target is skipped while that same candidate remains unchanged. A failed last-known search is skipped while the opponent remains at the same position. A failed exploration point stays suppressed until the agent moves at least eight Manhattan blocks from its failure origin; changes to the tick, loot, opponents, or border do not retry it. Relevant loot or search evidence changes and explicit success clear the corresponding failed target. When every representable exploration direction is remembered as failed, the policy returns `wait { reason: 'failedTargetsExhausted' }`. Border escape and low-health retreat always retain their priority over failed-target memory.
+
 Visible opponents are ordered by exact squared integer distance and then entity ID. A nearest threat currently attacking the agent wins before a non-attacking threat; remaining ties use distance and entity ID. Loot is ordered by utility, Manhattan distance, then tagged target: drop entity ID or container block position. A previous loot target remains selected when it is still equally useful and within the configured distance hysteresis band. Input vector order does not affect decisions.
 
 Eating requires food in a confirmed slot and emits `eat { inventorySlot }`. Equipping emits `equip { inventorySlot, equipmentSlot, rating }`, so an adapter never has to guess which matching item was selected. A drop collection intent addresses an entity ID; opening a container addresses a block position. These intents describe the requested action. The adapter reports success only after observing the corresponding client state change.
@@ -55,15 +65,15 @@ Callers provide named `PolicyParamValues` and receive `PolicyParams` only after 
 | Loot hysteresis | 2 blocks | 0–16 blocks |
 | Search radius | 8 blocks | 1–16 blocks |
 
-The fallback exploration target selects one of eight horizontal directions and caps each horizontal coordinate offset at `searchRadiusBlocks`; a diagonal target may therefore have a Manhattan distance greater than that value.
+In `policy-input-v2`, fallback exploration starts from one of eight horizontal directions and checks each direction at most once in cyclic order. It skips unrepresentable positions and remembered failures, then holds when every representable direction has failed. Each horizontal coordinate offset is capped at `searchRadiusBlocks`; a diagonal target may therefore have a Manhattan distance greater than that value.
 
 `PolicyParams.baseline()` is the sole typed baseline default. Arbitrary code or unvalidated parameter values are not accepted by `decide`.
 
 ## Determinism and outcomes
 
-`DeterministicRandom` pins SplitMix64 with 64-bit `bigint` state and reference vectors. `RandomStream` derives separate policy and search streams by stable seat ID, plus a setup stream. The fallback exploration choice uses the supplied search stream; candidate order and hysteresis never depend on randomness. JSON boundaries encode 64-bit seeds and control sequences as canonical decimal strings. `normalizePolicyReplayInput()` captures the validated observation, prior memory, parameters, and pre-decision RNG state in the `policy-input-v1` shape. Its RNG state is a canonical unsigned 64-bit decimal string; `rehydratePolicyReplayInput()` rejects unknown fields, unsafe numbers, malformed Unicode, and invalid RNG encodings, then rebuilds the branded observation through `agentObservation()`. Runtime skill outcomes and path results can be recorded beside a decision, but they do not feed `decide()`. Replaying the same normalized inputs proves identical core decision outputs; it does not prove live client path determinism or cross-architecture replay.
+`DeterministicRandom` pins SplitMix64 with 64-bit `bigint` state and reference vectors. `RandomStream` derives separate policy and search streams by stable seat ID, plus a setup stream. Exploration uses the supplied search stream; candidate ordering and hysteresis never depend on randomness. JSON boundaries encode 64-bit seeds and control sequences as canonical decimal strings. `normalizePolicyReplayInput()` captures the validated observation, prior memory, ordered feedback batch, parameters, and pre-decision RNG state in the strict `policy-input-v2` shape. Its RNG state is a canonical unsigned 64-bit decimal string; `rehydratePolicyReplayInput()` rejects unknown fields, unsafe numbers, malformed Unicode, and invalid RNG encodings, then rebuilds the branded observation through `agentObservation()`. Historical `policy-input-v1` remains a separate memory shape and is replayed through `decidePolicyReplayV1()` without skill feedback; it retains the original single sampled exploration direction and unrepresentable-target hold. Path results do not feed policy decisions. Replaying the same normalized inputs proves identical core decision outputs; it does not prove live client path determinism or cross-architecture replay.
 
-Geometry uses safe-integer block coordinates. Distances and border checks use exact `bigint` arithmetic. `offsetBlockPosition` returns a tagged coordinate-overflow result when an offset would leave the safe-integer range. The policy returns `wait { reason: 'unrepresentableTarget' }` with `hold` when retreat or exploration cannot be represented. Skill outcomes are closed variants; progress is strictly between pending and succeeded, timeout is a failure cause, and cancellation has its own outcome.
+Geometry uses safe-integer block coordinates. Distances and border checks use exact `bigint` arithmetic. `offsetBlockPosition` returns a tagged coordinate-overflow result when an offset would leave the safe-integer range. A retreat returns `wait { reason: 'unrepresentableTarget' }` with `hold` when it cannot be represented. Version 2 skips overflowing exploration directions; policy-input-v1 preserves its sampled direction and may return that hold. Skill outcomes are closed variants; progress is strictly between pending and succeeded, timeout is a failure cause, and cancellation has its own outcome.
 
 ## Adapter and fairness proof seam
 
