@@ -3,8 +3,10 @@ import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import test from 'node:test';
-import { canonicalJson } from '../src/canonical.js';
-import { inspectJson, reconstruct, reportJson } from '../src/evidence.js';
+import { agentObservation, decide, DeterministicRandom, emptyPolicyMemory, normalizePolicyReplayInput, observationSequence, PolicyParams, tick, unknownKnowledge } from '@arena/core';
+import { makePolicyReplayRecord, replayPolicyJson } from '../src/policy-replay.js';
+import { canonicalJson, sha256Json } from '../src/canonical.js';
+import { inspectJson, reconstruct, reconstructRunEvidence, reportJson } from '../src/evidence.js';
 import { parseSegment, readSegment, TraceError } from '../src/trace.js';
 
 const repositoryRoot = process.cwd();
@@ -114,4 +116,32 @@ test('rejects gaps, overlaps, and run changes when reconstructing segments', asy
     assert.equal(error.source.kind, 'run_id_mismatch');
     return true;
   });
+});
+
+test('reconstructs authoritative evidence with v2 policy decisions while rejecting unknown policy schemas', async () => {
+  const complete = await readSegment(join(repositoryRoot, 'tests/fixtures/operator-abort/trace-v2-000001.json'), 1);
+  const original = reconstruct([complete]);
+  const observation = agentObservation({ tick: tick(0), sequence: observationSequence(1),
+    agent: unknownKnowledge(), border: unknownKnowledge(), opponents: unknownKnowledge(), loot: unknownKnowledge() });
+  const memory = emptyPolicyMemory();
+  const params = PolicyParams.baseline();
+  const random = DeterministicRandom.fromState(1n);
+  const input = normalizePolicyReplayInput({ observation, memory, params, random, feedback: [] });
+  const decision = decide(observation, memory, params, random);
+  const policy = makePolicyReplayRecord({ sequence: 1n, seat: 0, input, decision,
+    rngStateAfter: random.snapshotState(), disposition: { kind: 'hold' } });
+  const withPolicy = (record: object) => {
+    const records = [...complete.records.slice(0, 8), record, ...complete.records.slice(8)];
+    return reconstruct([parseSegment(canonicalJson({ schema: 2, run_id: complete.runId,
+      first_sequence: '1', last_sequence: String(records.length), records, sha256: sha256Json(records), trailer: { complete: true } }))]);
+  };
+  const current = withPolicy(policy);
+  assert.deepEqual(reconstructRunEvidence(current), reconstructRunEvidence(original));
+  assert.equal(replayPolicyJson(current).decision_count, 1);
+  const unsupported = withPolicy({ ...policy, schema: 'policy-replay-v3' });
+  assert.throws(() => reconstructRunEvidence(unsupported), (error: unknown) =>
+    error instanceof TraceError && error.source.kind === 'invalid_event_direction');
+  assert.throws(() => replayPolicyJson(unsupported), (error: unknown) =>
+    error instanceof TraceError && error.source.kind === 'unsupported_policy_schema');
+  assert.throws(() => replayPolicyJson(withPolicy({ ...policy, unexpected: true })), TraceError);
 });
