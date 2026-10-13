@@ -159,6 +159,19 @@ max_y = 8
         assert_eq!(BlockPosition::new(16, 0, 16).chunk().z(), 1);
     }
 
+    #[test]
+    fn map_positions_use_shared_core_geometry() {
+        let map = compile_map(HUNGER_MAP).expect("map compiles");
+        let position: arena_core::BlockPosition = map.spawns()[0].position();
+        assert_eq!(position, arena_core::BlockPosition::new(64, 65, 40));
+        let chunk: arena_core::ChunkPosition = position.chunk();
+        assert_eq!((chunk.x(), chunk.z()), (4, 2));
+        assert!(map
+            .blocks()
+            .windows(2)
+            .all(|pair| pair[0].position() <= pair[1].position()));
+    }
+
     fn disconnected_final_zone_map() -> &'static str {
         r#"
 schema = 1

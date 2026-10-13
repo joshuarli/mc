@@ -78,7 +78,7 @@ Primary sources checked:
 - Official Paper docs require Java 25 and an identifying User-Agent with a contact URL/email. Official Minecraft release notes document experimental Vulkan and MoltenVK on macOS; visual support was not run here.
 - Python's default HTTPS reader failed certificate validation; native `curl` succeeded for the source reads. Use the functioning system trust path; never disable TLS validation or classify a certificate failure as missing upstream support.
 
-**Foundation A, exact-stack interoperability: unproven.** Metadata and protocol constants are source/service evidence only. P0 must run the actual locked server and two actual clients through login/configuration, chunk receipt, movement, chest transfer, server-observed combat damage, and disconnect. The draft-only directory has no app/client/plugin to exercise, and no JDK is installed. Contact and legal acceptance are now supplied, but preflight edits only this draft and does not create the implementation. Installing a JDK alone cannot establish the live proof.
+**Foundation A, exact-stack interoperability: passed on macOS arm64.** `./arena test --suite integration --case stack` exercised the locked Paper 26.2 build 133, Paper API 26.2.build.133-stable, Azalea revision `0bd22cbcdd30b611b112fc1c0a3d78535fd493a1`, and protocol 776. Two clients completed login, chunk receipt, movement, a two-diamond chest transfer, server-observed swing and damage events, and disconnect; the wrong-protocol control was rejected. The prepared test took 17.34 seconds. Linux x86_64 remains unverified.
 
 **Foundation B, shared-world knowledge isolation: unproven.** P0 must identify receipt ownership in the selected Azalea revision; B1/H1 must test two clients with disjoint chunk/entity visibility and hidden-state perturbations against the real adapter. If internals cannot support a filtered view, implement a focused receipt-tracking adapter/patch within the chosen stack, then prove it. Never label the result fair based only on core mocks.
 
@@ -317,6 +317,7 @@ Append one line per execution judgment that a reader would otherwise miss: date,
 - 2026-10-12 — P1: admit parse-only `toml_edit`, `serde`, `serde_json`, and `sha2` for source-aware TOML validation, strict JSON evidence, and SHA-256 identity/checksums; all versions were already locked, so the graph adds no package versions; record release-size and startup budgets for P3 because this offline slice forbids release builds.
 - 2026-10-12 — F0: check in the generated Gradle 9.6.1 wrapper, pin its JAR hash in `versions.lock.toml`, and verify its URL and distribution checksum against that authority before use; require strict dependency verification with the committed lock and metadata.
 - 2026-10-12 — P0: reserve the live stack smoke for one lane after the wrapper build and all offline P1 slices finish; keep other builds idle while the server is running.
+- 2026-10-13 — P0: use Azalea's dedicated tick broadcaster after buffered client ticks let the smoke exit before its attack reached Paper; the rerun passed every stack marker and wrong-protocol control.
 
 ## 9. Campaign log
 

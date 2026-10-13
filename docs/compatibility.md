@@ -20,6 +20,6 @@ cargo +nightly-2026-10-07 check --locked --offline -p azalea --example echo
 
 The same check failed on nightly 2026-09-24 because the revision uses `min_generic_const_args` features that that nightly did not recognize. Nightly 2026-10-07 is the first tested toolchain pin. On this macOS arm64 host the successful cold check took 118.72 seconds wall time and 165.95 seconds CPU time, with 1,416,085,504 bytes peak RSS and no swapping. A warmed check and the live protocol smoke remain unmeasured.
 
-The direct `Client::join` smoke runs inside a Tokio `LocalSet`: Azalea's client ECS runner starts local tasks and panics if initialized outside one.
+The direct `Client::join` smoke runs inside a Tokio `LocalSet`: Azalea's client ECS runner starts local tasks and panics if initialized outside one. Tick waits use Azalea's dedicated tick broadcaster because pathfinding can leave stale tick events buffered on the general client event stream.
 
-Foundation stack proof is pending until `./arena test --suite integration --case stack` exercises two clients against the locked Paper build. The runner materializes the locked Temurin archive for macOS arm64 or Linux x86_64; only macOS arm64 has been available for validation in this lane, so Linux x86_64 remains unverified.
+The prepared `./arena test --suite integration --case stack` passed on macOS arm64 in 17.34 seconds of test time. It verified the locked Paper server and plugin build, two Azalea clients through login, chunk receipt and movement, a chest transfer of two diamonds, a server-observed swing and damage event, clean disconnects, and rejection of the wrong protocol. The runner materializes the locked Temurin archive for macOS arm64 or Linux x86_64; Linux x86_64 remains unverified.

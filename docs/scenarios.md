@@ -28,7 +28,7 @@ The map semantic ID is SHA-256 over a versioned canonical encoding of dimensions
 
 The scenario semantic ID covers the resolved scenario settings, seed, normalized policy reference, and map semantic ID. It excludes display names and the map reference path, so moving an identical map source does not change world identity. Absolute machine paths are never included. The registered policy's code and parameter identity must be joined by the runner when it builds a run manifest; this crate only sees the policy reference string.
 
-`MapIr` exposes local validated `BlockPosition` values. The world adapter can convert those coordinates into the shared core geometry type when that seam is introduced; this crate does not depend on or duplicate core geometry types.
+`MapIr` exposes validated `arena_core::BlockPosition` and `arena_core::ChunkPosition` values, re-exported here for scenario callers. Coordinate ordering is lexicographic by x, y, then z, which defines stable block placement order in the compiled map.
 
 Named offline checks:
 

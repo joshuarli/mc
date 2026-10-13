@@ -7,7 +7,7 @@ pub mod outcome;
 pub mod policy;
 pub mod random;
 
-pub use geometry::{BlockPosition, Tick, WorldBorder};
+pub use geometry::{BlockPosition, ChunkPosition, Tick, WorldBorder};
 pub use observation::{
     AgentObservation, AgentObservationInput, AgentState, EntityId, EquipmentSlot,
     EquipmentUpgrade, Knowledge, KnownItem, LootOpportunity, ObservationError,

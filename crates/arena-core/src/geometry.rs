@@ -16,7 +16,8 @@ impl Tick {
 
 /// A block-aligned world position. Keeping policy geometry integral avoids
 /// architecture-sensitive floating-point comparisons and tie breaks.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+/// Derived ordering is lexicographic by x, y, then z for stable coordinate sorting.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct BlockPosition {
     x: i32,
     y: i32,
@@ -38,6 +39,14 @@ impl BlockPosition {
 
     pub const fn z(self) -> i32 {
         self.z
+    }
+
+    /// Returns the chunk containing this coordinate using Euclidean division.
+    pub const fn chunk(self) -> ChunkPosition {
+        ChunkPosition {
+            x: self.x.div_euclid(16),
+            z: self.z.div_euclid(16),
+        }
     }
 
     /// Returns Manhattan distance in blocks, suitable for stable local target
@@ -84,6 +93,23 @@ impl BlockPosition {
         }
 
         self.checked_offset(dx * 4, 0, dz * 4)
+    }
+}
+
+/// A Minecraft chunk coordinate using Euclidean block-to-chunk division.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ChunkPosition {
+    x: i32,
+    z: i32,
+}
+
+impl ChunkPosition {
+    pub const fn x(self) -> i32 {
+        self.x
+    }
+
+    pub const fn z(self) -> i32 {
+        self.z
     }
 }
 

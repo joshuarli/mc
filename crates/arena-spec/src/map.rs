@@ -1,48 +1,10 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
+pub use arena_core::geometry::{BlockPosition, ChunkPosition};
 use crate::{error::{SpecError, SpecErrorKind}, hash::{CanonicalHasher, SemanticId}, raw};
 
 const MAX_BLOCK_WRITES: u64 = 1_000_000;
 const MAX_OPERATIONS: usize = 100_000;
-
-/// A block coordinate. Map compilation ensures every stored coordinate is within its map.
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub struct BlockPosition {
-    x: i32,
-    y: i32,
-    z: i32,
-}
-
-impl BlockPosition {
-    /// Creates a coordinate value; map bounds are checked when it is compiled into a map.
-    pub const fn new(x: i32, y: i32, z: i32) -> Self {
-        Self { x, y, z }
-    }
-
-    pub const fn x(self) -> i32 { self.x }
-    pub const fn y(self) -> i32 { self.y }
-    pub const fn z(self) -> i32 { self.z }
-
-    /// Returns the chunk containing this coordinate using Euclidean division.
-    pub const fn chunk(self) -> ChunkPosition {
-        ChunkPosition {
-            x: self.x.div_euclid(16),
-            z: self.z.div_euclid(16),
-        }
-    }
-}
-
-/// A Minecraft chunk coordinate.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ChunkPosition {
-    x: i32,
-    z: i32,
-}
-
-impl ChunkPosition {
-    pub const fn x(self) -> i32 { self.x }
-    pub const fn z(self) -> i32 { self.z }
-}
 
 /// Inclusive vertical and horizontal bounds for a compiled map.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -156,14 +118,14 @@ impl MapIr {
         let final_radius_squared = (final_diameter / 2.0).powi(2);
 
         for spawn in &self.spawns {
-            if !inside_circle(spawn.position.x, spawn.position.z, center_x, center_z, initial_radius_squared) {
+            if !inside_circle(spawn.position.x(), spawn.position.z(), center_x, center_z, initial_radius_squared) {
                 return Err(SpecError::new(
                     SpecErrorKind::Geometry,
                     path,
                     format!("spawn seat {} lies outside the initial border", spawn.seat),
                 ));
             }
-            let column = (spawn.position.x, spawn.position.z);
+            let column = (spawn.position.x(), spawn.position.z());
             let component = self.components[&column];
             let reaches_final_zone = self.surface_y.iter().any(|(&(x, z), _)| {
                 self.components.get(&(x, z)) == Some(&component)
@@ -180,8 +142,8 @@ impl MapIr {
 
         for container in &self.loot_containers {
             if !inside_circle(
-                container.position.x,
-                container.position.z,
+                container.position.x(),
+                container.position.z(),
                 center_x,
                 center_z,
                 initial_radius_squared,
@@ -232,13 +194,13 @@ pub fn compile_map(source: &str) -> Result<MapIr, SpecError> {
                 raw::check_fields(operation, &["kind", "from", "to", "block"], &["kind", "from", "to", "block"], &path)?;
                 let from = parse_position(raw::field(operation, "from", &path)?, &format!("{path}.from"), dimensions)?;
                 let to = parse_position(raw::field(operation, "to", &path)?, &format!("{path}.to"), dimensions)?;
-                if from.x > to.x || from.y > to.y || from.z > to.z {
+                if from.x() > to.x() || from.y() > to.y() || from.z() > to.z() {
                     return Err(SpecError::new(SpecErrorKind::Range, &path, "cuboid `from` coordinates must not exceed `to` coordinates"));
                 }
                 let block = parse_resource_id(raw::field(operation, "block", &path)?, &format!("{path}.block"))?;
-                let x_count = (i64::from(to.x) - i64::from(from.x) + 1) as u64;
-                let y_count = (i64::from(to.y) - i64::from(from.y) + 1) as u64;
-                let z_count = (i64::from(to.z) - i64::from(from.z) + 1) as u64;
+                let x_count = (i64::from(to.x()) - i64::from(from.x()) + 1) as u64;
+                let y_count = (i64::from(to.y()) - i64::from(from.y()) + 1) as u64;
+                let z_count = (i64::from(to.z()) - i64::from(from.z()) + 1) as u64;
                 let volume = x_count.checked_mul(y_count).and_then(|n| n.checked_mul(z_count)).ok_or_else(|| {
                     SpecError::new(SpecErrorKind::Range, &path, "cuboid volume overflows")
                 })?;
@@ -246,9 +208,9 @@ pub fn compile_map(source: &str) -> Result<MapIr, SpecError> {
                 if loot.keys().any(|position| inside_cuboid(*position, from, to)) {
                     return Err(SpecError::new(SpecErrorKind::Conflict, &path, "block operation would overwrite an earlier loot container"));
                 }
-                for x in from.x..=to.x {
-                    for y in from.y..=to.y {
-                        for z in from.z..=to.z {
+                for x in from.x()..=to.x() {
+                    for y in from.y()..=to.y() {
+                        for z in from.z()..=to.z() {
                             assign_block(&mut blocks, BlockPosition::new(x, y, z), &block);
                         }
                     }
@@ -359,13 +321,13 @@ fn parse_position(value: &raw::RawValue, path: &str, dimensions: MapDimensions) 
 }
 
 fn check_position(position: BlockPosition, dimensions: MapDimensions, path: &str) -> Result<(), SpecError> {
-    if position.x < 0 || position.x as u32 >= dimensions.width {
+    if position.x() < 0 || position.x() as u32 >= dimensions.width {
         return Err(SpecError::new(SpecErrorKind::Range, format!("{path}.x"), "must be within the map width"));
     }
-    if position.z < 0 || position.z as u32 >= dimensions.depth {
+    if position.z() < 0 || position.z() as u32 >= dimensions.depth {
         return Err(SpecError::new(SpecErrorKind::Range, format!("{path}.z"), "must be within the map depth"));
     }
-    if position.y < dimensions.min_y || position.y > dimensions.max_y {
+    if position.y() < dimensions.min_y || position.y() > dimensions.max_y {
         return Err(SpecError::new(SpecErrorKind::Range, format!("{path}.y"), "must be within the map vertical bounds"));
     }
     Ok(())
@@ -435,9 +397,9 @@ fn add_block_writes(current: u64, additional: u64, path: &str) -> Result<u64, Sp
 }
 
 fn inside_cuboid(position: BlockPosition, from: BlockPosition, to: BlockPosition) -> bool {
-    position.x >= from.x && position.x <= to.x
-        && position.y >= from.y && position.y <= to.y
-        && position.z >= from.z && position.z <= to.z
+    position.x() >= from.x() && position.x() <= to.x()
+        && position.y() >= from.y() && position.y() <= to.y()
+        && position.z() >= from.z() && position.z() <= to.z()
 }
 
 fn assign_block(blocks: &mut BTreeMap<BlockPosition, String>, position: BlockPosition, block: &str) {
@@ -459,9 +421,9 @@ fn build_walkable_surface(
     let mut highest_block = BTreeMap::<(i32, i32), i32>::new();
     for position in blocks.keys() {
         highest_block
-            .entry((position.x, position.z))
-            .and_modify(|highest| *highest = (*highest).max(position.y))
-            .or_insert(position.y);
+            .entry((position.x(), position.z()))
+            .and_modify(|highest| *highest = (*highest).max(position.y()))
+            .or_insert(position.y());
     }
 
     let mut surface = BTreeMap::new();
@@ -525,7 +487,7 @@ fn validate_spawns(
     components: &BTreeMap<(i32, i32), u32>,
 ) -> Result<(), SpecError> {
     for (index, spawn) in spawns.iter().enumerate() {
-        if surface.get(&(spawn.position.x, spawn.position.z)) != Some(&spawn.position.y) {
+        if surface.get(&(spawn.position.x(), spawn.position.z())) != Some(&spawn.position.y()) {
             return Err(SpecError::new(
                 SpecErrorKind::Geometry,
                 format!("map.spawn[{}]", spawn.seat),
@@ -533,8 +495,8 @@ fn validate_spawns(
             ));
         }
         for other in spawns.iter().take(index) {
-            let dx = i64::from(spawn.position.x) - i64::from(other.position.x);
-            let dz = i64::from(spawn.position.z) - i64::from(other.position.z);
+            let dx = i64::from(spawn.position.x()) - i64::from(other.position.x());
+            let dz = i64::from(spawn.position.z()) - i64::from(other.position.z());
             if dx * dx + dz * dz < 4 {
                 return Err(SpecError::new(
                     SpecErrorKind::Geometry,
@@ -546,7 +508,7 @@ fn validate_spawns(
     }
     let spawn_components: BTreeSet<_> = spawns
         .iter()
-        .filter_map(|spawn| components.get(&(spawn.position.x, spawn.position.z)).copied())
+        .filter_map(|spawn| components.get(&(spawn.position.x(), spawn.position.z())).copied())
         .collect();
     if spawn_components.len() != 1 {
         return Err(SpecError::new(SpecErrorKind::Geometry, "map.spawn", "all spawn seats must share one traversable surface"));
@@ -561,7 +523,7 @@ fn validate_loot(
     components: &BTreeMap<(i32, i32), u32>,
     spawn: SpawnPoint,
 ) -> Result<(), SpecError> {
-    let spawn_component = components.get(&(spawn.position.x, spawn.position.z)).copied().ok_or_else(|| {
+    let spawn_component = components.get(&(spawn.position.x(), spawn.position.z())).copied().ok_or_else(|| {
         SpecError::new(SpecErrorKind::Geometry, "map.spawn", "map has no traversable spawn surface")
     })?;
     for (index, container) in loot.iter().enumerate() {
@@ -569,16 +531,16 @@ fn validate_loot(
         if !blocks.contains_key(&position) {
             return Err(SpecError::new(SpecErrorKind::Geometry, format!("map.loot[{index}]"), "loot container block is missing"));
         }
-        let below_y = position.y.checked_sub(1).ok_or_else(|| {
+        let below_y = position.y().checked_sub(1).ok_or_else(|| {
             SpecError::new(SpecErrorKind::Geometry, format!("map.loot[{index}]"), "loot container has no support block below it")
         })?;
-        if !blocks.contains_key(&BlockPosition::new(position.x, below_y, position.z)) {
+        if !blocks.contains_key(&BlockPosition::new(position.x(), below_y, position.z())) {
             return Err(SpecError::new(SpecErrorKind::Geometry, format!("map.loot[{index}]"), "loot container needs a support block below it"));
         }
-        let accessible_component = cardinal_neighbors(position.x, position.z)
+        let accessible_component = cardinal_neighbors(position.x(), position.z())
             .iter()
             .find_map(|column| {
-                (surface.get(column) == Some(&position.y))
+                (surface.get(column) == Some(&position.y()))
                     .then(|| components.get(column).copied())
                     .flatten()
             });
@@ -610,23 +572,23 @@ fn hash_map(
     hash.i32(dimensions.max_y);
     hash.u64(blocks.len() as u64);
     for placement in blocks {
-        hash.i32(placement.position.x);
-        hash.i32(placement.position.y);
-        hash.i32(placement.position.z);
+        hash.i32(placement.position.x());
+        hash.i32(placement.position.y());
+        hash.i32(placement.position.z());
         hash.string(&placement.block);
     }
     hash.u64(spawns.len() as u64);
     for spawn in spawns {
         hash.u16(spawn.seat);
-        hash.i32(spawn.position.x);
-        hash.i32(spawn.position.y);
-        hash.i32(spawn.position.z);
+        hash.i32(spawn.position.x());
+        hash.i32(spawn.position.y());
+        hash.i32(spawn.position.z());
     }
     hash.u64(loot.len() as u64);
     for container in loot {
-        hash.i32(container.position.x);
-        hash.i32(container.position.y);
-        hash.i32(container.position.z);
+        hash.i32(container.position.x());
+        hash.i32(container.position.y());
+        hash.i32(container.position.z());
         hash.u64(container.inventory.len() as u64);
         for item in &container.inventory {
             hash.string(item);
