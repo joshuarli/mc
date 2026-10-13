@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { setTimeout as delay } from "node:timers/promises";
-import { inventorySlot } from "@arena/core";
+import { blockPosition, inventorySlot } from "@arena/core";
 import type { Bot } from "mineflayer";
 import { test } from "node:test";
 
@@ -22,6 +22,7 @@ const COURSE_MAX_COORDINATE = 54;
 const COURSE_CENTER_COORDINATE = 31.5;
 const COURSE_EDGE_MARGIN = 2;
 const REQUIRED_SPRINT_TAKEOFFS = 8;
+const RAMP_RECEIPT_TIMEOUT_MS = 5_000;
 
 test("legal-player", { timeout: 300_000 }, async (t) => {
   const run = await runOwnedAcceptanceScenario(
@@ -52,7 +53,7 @@ test("legal-player", { timeout: 300_000 }, async (t) => {
       if (hungry.agent.kind !== "current") throw new Error("hungry player observation did not become current");
       assert.ok(hungry.agent.value.hungerPoints < initialFood, "the permitted player observation must report the food loss");
 
-      await navigateOverRamp(seatZero.bot, seatZero.client, ramp, signal);
+      await navigateOverRamp(seatZero.bot, seatZero.client, seatOne.bot, ramp, signal);
       assert.deepStrictEqual(
         await seatZero.client.run({ kind: "navigate", target: chest.position }),
         { kind: "succeeded" },
@@ -214,28 +215,25 @@ function sprintCourseHeading(bot: Bot, preferredYaw: number): number {
 async function navigateOverRamp(
   bot: Bot,
   client: AcceptanceRunContext["competitors"][number]["client"],
+  observer: Bot,
   ramp: { readonly position: { readonly x: number; readonly y: number; readonly z: number } },
   signal: AbortSignal,
 ): Promise<void> {
   let traversedRamp = false;
+  let observerReceivedRampTop = false;
   const observePosition = (): void => {
-    const { x, y, z } = bot.entity.position;
-    if (
-      Math.floor(x) === ramp.position.x
-      && Math.floor(z) === ramp.position.z
-      && y >= ramp.position.y + 1
-    ) {
-      traversedRamp = true;
+    if (isAtRampTop(bot.entity.position, ramp.position)) traversedRamp = true;
+  };
+  const observeRemotePosition = (entity: Bot["entity"]): void => {
+    if (entity.id === bot.entity.id && isAtRampTop(entity.position, ramp.position)) {
+      observerReceivedRampTop = true;
     }
   };
   bot.on("move", observePosition);
   bot.on("physicsTick", observePosition);
+  observer.on("entityMoved", observeRemotePosition);
   try {
-    const rampTop = {
-      x: ramp.position.x,
-      y: ramp.position.y + 1,
-      z: ramp.position.z,
-    };
+    const rampTop = blockPosition(ramp.position.x, ramp.position.y + 1, ramp.position.z);
     const beyondRamp = {
       x: ramp.position.x + 9,
       y: ramp.position.y,
@@ -243,11 +241,20 @@ async function navigateOverRamp(
     };
     signal.throwIfAborted();
     assert.deepStrictEqual(
-      await client.run({ kind: "navigate", target: rampTop }),
+      await client.run({ kind: "navigateToBlock", target: rampTop }),
       { kind: "succeeded" },
       "the pathfinder skill must climb onto the existing ramp",
     );
     assert.ok(traversedRamp, "the client must observe its own position on top of the ramp");
+    const receiptDeadline = Date.now() + RAMP_RECEIPT_TIMEOUT_MS;
+    while (!observerReceivedRampTop && Date.now() < receiptDeadline) {
+      signal.throwIfAborted();
+      await delay(50, undefined, { signal });
+    }
+    assert.ok(
+      observerReceivedRampTop,
+      "the opponent client must receive seat zero at the ramp top from the server",
+    );
     signal.throwIfAborted();
     assert.deepStrictEqual(
       await client.run({ kind: "navigate", target: beyondRamp }),
@@ -257,8 +264,18 @@ async function navigateOverRamp(
   } finally {
     bot.removeListener("move", observePosition);
     bot.removeListener("physicsTick", observePosition);
+    observer.removeListener("entityMoved", observeRemotePosition);
   }
   assert.ok(traversedRamp, "the client must observe its own position above the ramp while navigating over it");
+}
+
+function isAtRampTop(
+  position: { readonly x: number; readonly y: number; readonly z: number },
+  ramp: { readonly x: number; readonly y: number; readonly z: number },
+): boolean {
+  return Math.floor(position.x) === ramp.x
+    && Math.floor(position.z) === ramp.z
+    && position.y >= ramp.y + 1;
 }
 
 function recordKnockbackReceipt(victim: Bot, attackerEntityId: number) {
