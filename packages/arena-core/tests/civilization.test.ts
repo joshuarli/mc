@@ -553,6 +553,162 @@ test('failed material approach, drop collection, and chest opening are not repla
   deepStrictEqual(failedOpen.intent, { kind: 'hold', reason: 'materialTargetCoolingDown' });
 });
 
+test('an empty report window preserves a failed remote log approach until its retry tick', () => {
+  const context = makeContext();
+  const target = blockPosition(6, 64, 0);
+  const report = (sourceTick: number) => civilizationTeamMessage({
+    sender: seatId(1),
+    sourceTick: tick(sourceTick),
+    declaredStale: false,
+    kind: 'resourceSighting',
+    resource: 'oakLogBlock',
+    position: target,
+  });
+  const initial = decideCivilization(
+    context,
+    makeObservation(context, { at: 4, observedResources: currentKnowledge([]), teamMessages: [report(4)] }),
+    emptyCivilizationPolicyMemory(),
+    params,
+    random(),
+  );
+  if (initial.goal.kind !== 'gatherMaterial' || initial.intent.kind !== 'navigate') {
+    throw new TypeError('a remote log sighting should produce an approach action');
+  }
+
+  const missedRelay = decideCivilization(
+    context,
+    makeObservation(context, { at: 20, observedResources: currentKnowledge([]), teamMessages: [] }),
+    initial.memory,
+    params,
+    random(),
+    makeCivilizationFeedback(
+      initial.goal,
+      initial.intent,
+      { kind: 'failed', cause: 'noProgress' },
+      4,
+      19,
+    ),
+  );
+  const repeatedAt24 = decideCivilization(
+    context,
+    makeObservation(context, { at: 24, observedResources: currentKnowledge([]), teamMessages: [report(20)] }),
+    missedRelay.memory,
+    params,
+    random(),
+  );
+  deepStrictEqual({
+    failedMaterialTargets: missedRelay.memory.failedMaterialTargets,
+    repeatedIntent: repeatedAt24.intent,
+  }, {
+    failedMaterialTargets: [{
+      target: { kind: 'gather', item: 'oak_log', target },
+      retryAt: tick(39),
+    }],
+    repeatedIntent: { kind: 'hold', reason: 'materialTargetCoolingDown' },
+  });
+
+  const repeatedAt38 = decideCivilization(
+    context,
+    makeObservation(context, { at: 38, observedResources: currentKnowledge([]), teamMessages: [report(20)] }),
+    repeatedAt24.memory,
+    params,
+    random(),
+  );
+  deepStrictEqual(repeatedAt38.intent, { kind: 'hold', reason: 'materialTargetCoolingDown' });
+
+  const retry = decideCivilization(
+    context,
+    makeObservation(context, { at: 39, observedResources: currentKnowledge([]), teamMessages: [report(20)] }),
+    repeatedAt38.memory,
+    params,
+    random(),
+  );
+  deepStrictEqual(retry.goal, initial.goal);
+  deepStrictEqual(retry.intent, initial.intent);
+});
+
+test('an empty report window preserves a failed remote chest approach until its retry tick', () => {
+  const context = makeContext(1);
+  const anchor = context.objective.outpost.anchor;
+  const chest = blockPosition(31, 64, 30);
+  const report = (sourceTick: number) => civilizationTeamMessage({
+    sender: seatId(0),
+    sourceTick: tick(sourceTick),
+    declaredStale: false,
+    kind: 'resourceSighting',
+    resource: 'container',
+    position: chest,
+  });
+  const observation = (at: number, teamMessages: readonly CivilizationTeamMessage[]) => makeObservation(context, {
+    at,
+    position: anchor,
+    ownMaterials: currentKnowledge([]),
+    observedResources: currentKnowledge([outpostCell(anchor, 'air', 'solid')]),
+    teamMessages,
+  });
+  const initial = decideCivilization(
+    context,
+    observation(4, [report(4)]),
+    emptyCivilizationPolicyMemory(),
+    params,
+    random(),
+  );
+  if (initial.goal.kind !== 'transferMaterial' || initial.intent.kind !== 'navigate') {
+    throw new TypeError('a remote chest sighting should produce an approach action');
+  }
+
+  const missedRelay = decideCivilization(
+    context,
+    observation(20, []),
+    initial.memory,
+    params,
+    random(),
+    makeCivilizationFeedback(
+      initial.goal,
+      initial.intent,
+      { kind: 'failed', cause: 'noProgress' },
+      4,
+      19,
+    ),
+  );
+  const repeatedAt24 = decideCivilization(
+    context,
+    observation(24, [report(20)]),
+    missedRelay.memory,
+    params,
+    random(),
+  );
+  deepStrictEqual({
+    failedMaterialTargets: missedRelay.memory.failedMaterialTargets,
+    repeatedIntent: repeatedAt24.intent,
+  }, {
+    failedMaterialTargets: [{
+      target: { kind: 'transfer', item: 'oak_planks', direction: 'withdraw', container: chest },
+      retryAt: tick(39),
+    }],
+    repeatedIntent: { kind: 'hold', reason: 'materialTargetCoolingDown' },
+  });
+
+  const repeatedAt38 = decideCivilization(
+    context,
+    observation(38, [report(20)]),
+    repeatedAt24.memory,
+    params,
+    random(),
+  );
+  deepStrictEqual(repeatedAt38.intent, { kind: 'hold', reason: 'materialTargetCoolingDown' });
+
+  const retry = decideCivilization(
+    context,
+    observation(39, [report(20)]),
+    repeatedAt38.memory,
+    params,
+    random(),
+  );
+  deepStrictEqual(retry.goal, initial.goal);
+  deepStrictEqual(retry.intent, initial.intent);
+});
+
 test('a failed placement waits, and reported progress makes the same cell eligible again', () => {
   const context = makeContext(1);
   const cells = civilizationOutpostCells(context.objective.outpost.anchor, 0);

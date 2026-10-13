@@ -909,6 +909,8 @@ function civilizationMaterialTargetFromAction(
   }
 }
 
+// Local resource lists omit distant or occluded targets, and team reports are consumed after each observation.
+// Only affirmative inventory or blueprint evidence can invalidate a failed remote material target.
 function civilizationMaterialTargetChanged(
   observation: CivilizationObservation,
   target: CivilizationMaterialTarget,
@@ -924,20 +926,7 @@ function civilizationMaterialTargetChanged(
           if (planks >= OUTPOST_PLANKS_REQUIRED || logs >= requiredLogs) return true;
         }
       }
-      if (observation.observedResources.kind !== 'current') return false;
-      const locallyVisible = observation.observedResources.value.some((resource) => (
-        compareBlockPositions(resource.position, target.target) === 0
-        && ((target.item === 'oak_log' && resource.kind === 'logBlock')
-          || (resource.kind === 'materialDrop' && resource.item === target.item))
-      ));
-      const reported = observation.teamMessages.some((message) => (
-        message.kind === 'resourceSighting'
-        && compareBlockPositions(message.position, target.target) === 0
-        && (target.item === 'oak_log'
-          ? message.resource === 'oakLogBlock' || message.resource === 'oakLogDrop'
-          : message.resource === 'oakPlankDrop')
-      ));
-      return !locallyVisible && !reported;
+      return false;
     }
     case 'transfer': {
       if (observation.ownMaterials.kind === 'current') {
@@ -945,16 +934,7 @@ function civilizationMaterialTargetChanged(
         if (target.direction === 'deposit' && ownCount === 0) return true;
         if (target.direction === 'withdraw' && ownCount > 0) return true;
       }
-      if (observation.observedResources.kind !== 'current') return false;
-      const locallyVisible = observation.observedResources.value.some((resource) => (
-        resource.kind === 'container' && compareBlockPositions(resource.position, target.container) === 0
-      ));
-      const reported = observation.teamMessages.some((message) => (
-        message.kind === 'resourceSighting'
-        && message.resource === 'container'
-        && compareBlockPositions(message.position, target.container) === 0
-      ));
-      return !locallyVisible && !reported;
+      return false;
     }
     case 'build': {
       if (observation.observedResources.kind !== 'current') return false;
