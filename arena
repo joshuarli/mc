@@ -485,7 +485,10 @@ check_command() {
     prepare_node
     case "$1" in
         compatibility) "$NODE_HOME/bin/node" "$root/scripts/check-compatibility-doc.mjs" ;;
-        build-script) run_named_tests tooling "typescript build rejects an unknown target" ;;
+        build-script)
+            run_named_tests tooling "typescript build rejects an unknown target"
+            run_named_tests tooling "named test runner dispatches suite files and rejects unknown cases"
+            ;;
         *) fail "unknown check: $1" ;;
     esac
 }
