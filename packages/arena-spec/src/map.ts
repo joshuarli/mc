@@ -53,6 +53,12 @@ interface GeometryMetadata {
   readonly components: ReadonlyMap<string, number>;
 }
 
+type ParsedMapOperation =
+  | { readonly kind: "cuboid"; readonly from: BlockPosition; readonly to: BlockPosition; readonly block: string }
+  | { readonly kind: "path" | "ramp"; readonly position: BlockPosition; readonly block: string }
+  | { readonly kind: "spawn"; readonly position: BlockPosition; readonly seat: number }
+  | { readonly kind: "loot_container"; readonly position: BlockPosition; readonly inventory: readonly string[] };
+
 const geometryByMap = new WeakMap<MapIr, GeometryMetadata>();
 
 /** Compiles a schema-v1 TOML map into immutable, validated world data. */
@@ -70,33 +76,18 @@ export function compileMap(source: string): MapIr {
     throw new SpecError(SpecErrorKind.ResourceLimit, "map.operations", `at most ${MAX_OPERATIONS} operations are supported`);
   }
 
+  const parsedOperations = parseOperations(operations, dimensions);
   const blocks = new Map<string, { readonly position: BlockPosition; block: string }>();
   const spawns = new Map<number, BlockPosition>();
   const loot = new Map<string, { readonly position: BlockPosition; readonly inventory: readonly string[] }>();
-  let attemptedWrites = 0n;
 
-  for (const [index, operationValue] of operations.entries()) {
-    const path = `map.operations[${index}]`;
-    const operation = raw.asTable(operationValue, path);
-    const kind = raw.string(raw.field(operation, "kind", path), `${path}.kind`);
-    switch (kind) {
+  for (const operation of parsedOperations) {
+    switch (operation.kind) {
       case "cuboid": {
-        raw.checkFields(operation, ["kind", "from", "to", "block"], ["kind", "from", "to", "block"], path);
-        const from = parsePosition(raw.field(operation, "from", path), `${path}.from`, dimensions);
-        const to = parsePosition(raw.field(operation, "to", path), `${path}.to`, dimensions);
-        if (from.x > to.x || from.y > to.y || from.z > to.z) {
-          throw new SpecError(SpecErrorKind.Range, path, "cuboid `from` coordinates must not exceed `to` coordinates");
-        }
-        const block = parseResourceId(raw.field(operation, "block", path), `${path}.block`);
-        const volume = BigInt(to.x - from.x + 1) * BigInt(to.y - from.y + 1) * BigInt(to.z - from.z + 1);
-        attemptedWrites = addBlockWrites(attemptedWrites, volume, path);
-        if ([...loot.keys()].some((key) => insideCuboid(loot.get(key)!.position, from, to))) {
-          throw new SpecError(SpecErrorKind.Conflict, path, "block operation would overwrite an earlier loot container");
-        }
-        for (let x = from.x; x <= to.x; x += 1) {
-          for (let y = from.y; y <= to.y; y += 1) {
-            for (let z = from.z; z <= to.z; z += 1) {
-              assignBlock(blocks, makePosition(x, y, z), block);
+        for (let x = operation.from.x; x <= operation.to.x; x += 1) {
+          for (let y = operation.from.y; y <= operation.to.y; y += 1) {
+            for (let z = operation.from.z; z <= operation.to.z; z += 1) {
+              assignBlock(blocks, makePosition(x, y, z), operation.block);
             }
           }
         }
@@ -104,51 +95,19 @@ export function compileMap(source: string): MapIr {
       }
       case "path":
       case "ramp": {
-        raw.checkFields(operation, ["kind", "position", "block"], ["kind", "position", "block"], path);
-        const position = parsePosition(raw.field(operation, "position", path), `${path}.position`, dimensions);
-        const block = parseResourceId(raw.field(operation, "block", path), `${path}.block`);
-        attemptedWrites = addBlockWrites(attemptedWrites, 1n, path);
-        if (loot.has(positionKey(position))) {
-          throw new SpecError(SpecErrorKind.Conflict, path, "block operation would overwrite an earlier loot container");
-        }
-        assignBlock(blocks, position, block);
+        assignBlock(blocks, operation.position, operation.block);
         break;
       }
       case "spawn": {
-        raw.checkFields(operation, ["kind", "position", "seat"], ["kind", "position", "seat"], path);
-        const position = parsePosition(raw.field(operation, "position", path), `${path}.position`, dimensions);
-        const seat = nonnegativeU16(raw.field(operation, "seat", path), `${path}.seat`);
-        if (spawns.has(seat)) {
-          throw new SpecError(SpecErrorKind.Conflict, `${path}.seat`, "spawn seat is declared more than once");
-        }
-        spawns.set(seat, position);
+        spawns.set(operation.seat, operation.position);
         break;
       }
       case "loot_container": {
-        raw.checkFields(operation, ["kind", "position", "inventory"], ["kind", "position", "inventory"], path);
-        const position = parsePosition(raw.field(operation, "position", path), `${path}.position`, dimensions);
-        const inventoryValues = raw.asArray(raw.field(operation, "inventory", path), `${path}.inventory`);
-        if (inventoryValues.length > MAX_LOOT_INVENTORY_ITEMS) {
-          throw new SpecError(
-            SpecErrorKind.ResourceLimit,
-            `${path}.inventory`,
-            `a chest inventory can contain at most ${MAX_LOOT_INVENTORY_ITEMS} items`,
-          );
-        }
-        const inventory = inventoryValues.map((value, itemIndex) => parseResourceId(value, `${path}.inventory[${itemIndex}]`));
-        if (inventory.length === 0) {
-          throw new SpecError(SpecErrorKind.InvalidValue, `${path}.inventory`, "loot inventory must contain at least one item");
-        }
-        const key = positionKey(position);
-        if (loot.has(key)) {
-          throw new SpecError(SpecErrorKind.Conflict, `${path}.position`, "loot container position is declared more than once");
-        }
-        loot.set(key, { position, inventory: Object.freeze(inventory) });
-        assignBlock(blocks, position, "minecraft:chest");
+        const key = positionKey(operation.position);
+        loot.set(key, { position: operation.position, inventory: operation.inventory });
+        assignBlock(blocks, operation.position, "minecraft:chest");
         break;
       }
-      default:
-        throw new SpecError(SpecErrorKind.InvalidValue, `${path}.kind`, `unknown map operation \`${kind}\``);
     }
   }
 
@@ -186,6 +145,93 @@ export function compileMap(source: string): MapIr {
   });
   geometryByMap.set(map, Object.freeze({ surfaceY, components }));
   return map;
+}
+
+function parseOperations(
+  operations: readonly raw.RawValue[],
+  dimensions: MapDimensions,
+): ParsedMapOperation[] {
+  const parsed: ParsedMapOperation[] = [];
+  const seats = new Set<number>();
+  const lootPositions = new Set<string>();
+  const earlierLootPositions: BlockPosition[] = [];
+  let attemptedWrites = 0n;
+
+  for (const [index, operationValue] of operations.entries()) {
+    const path = `map.operations[${index}]`;
+    const operation = raw.asTable(operationValue, path);
+    const kind = raw.string(raw.field(operation, "kind", path), `${path}.kind`);
+    switch (kind) {
+      case "cuboid": {
+        raw.checkFields(operation, ["kind", "from", "to", "block"], ["kind", "from", "to", "block"], path);
+        const from = parsePosition(raw.field(operation, "from", path), `${path}.from`, dimensions);
+        const to = parsePosition(raw.field(operation, "to", path), `${path}.to`, dimensions);
+        if (from.x > to.x || from.y > to.y || from.z > to.z) {
+          throw new SpecError(SpecErrorKind.Range, path, "cuboid `from` coordinates must not exceed `to` coordinates");
+        }
+        const block = parseResourceId(raw.field(operation, "block", path), `${path}.block`);
+        const volume = BigInt(to.x - from.x + 1) * BigInt(to.y - from.y + 1) * BigInt(to.z - from.z + 1);
+        attemptedWrites = addBlockWrites(attemptedWrites, volume, path);
+        if (earlierLootPositions.some((position) => insideCuboid(position, from, to))) {
+          throw new SpecError(SpecErrorKind.Conflict, path, "block operation would overwrite an earlier loot container");
+        }
+        parsed.push({ kind, from, to, block });
+        break;
+      }
+      case "path":
+      case "ramp": {
+        raw.checkFields(operation, ["kind", "position", "block"], ["kind", "position", "block"], path);
+        const position = parsePosition(raw.field(operation, "position", path), `${path}.position`, dimensions);
+        const block = parseResourceId(raw.field(operation, "block", path), `${path}.block`);
+        attemptedWrites = addBlockWrites(attemptedWrites, 1n, path);
+        if (lootPositions.has(positionKey(position))) {
+          throw new SpecError(SpecErrorKind.Conflict, path, "block operation would overwrite an earlier loot container");
+        }
+        parsed.push({ kind, position, block });
+        break;
+      }
+      case "spawn": {
+        raw.checkFields(operation, ["kind", "position", "seat"], ["kind", "position", "seat"], path);
+        const position = parsePosition(raw.field(operation, "position", path), `${path}.position`, dimensions);
+        const seat = nonnegativeU16(raw.field(operation, "seat", path), `${path}.seat`);
+        if (seats.has(seat)) {
+          throw new SpecError(SpecErrorKind.Conflict, `${path}.seat`, "spawn seat is declared more than once");
+        }
+        seats.add(seat);
+        parsed.push({ kind, position, seat });
+        break;
+      }
+      case "loot_container": {
+        raw.checkFields(operation, ["kind", "position", "inventory"], ["kind", "position", "inventory"], path);
+        const position = parsePosition(raw.field(operation, "position", path), `${path}.position`, dimensions);
+        const inventoryValues = raw.asArray(raw.field(operation, "inventory", path), `${path}.inventory`);
+        if (inventoryValues.length > MAX_LOOT_INVENTORY_ITEMS) {
+          throw new SpecError(
+            SpecErrorKind.ResourceLimit,
+            `${path}.inventory`,
+            `a chest inventory can contain at most ${MAX_LOOT_INVENTORY_ITEMS} items`,
+          );
+        }
+        const inventory = inventoryValues.map((value, itemIndex) => parseResourceId(value, `${path}.inventory[${itemIndex}]`));
+        if (inventory.length === 0) {
+          throw new SpecError(SpecErrorKind.InvalidValue, `${path}.inventory`, "loot inventory must contain at least one item");
+        }
+        const key = positionKey(position);
+        if (lootPositions.has(key)) {
+          throw new SpecError(SpecErrorKind.Conflict, `${path}.position`, "loot container position is declared more than once");
+        }
+        attemptedWrites = addBlockWrites(attemptedWrites, 1n, path);
+        lootPositions.add(key);
+        earlierLootPositions.push(position);
+        parsed.push({ kind, position, inventory: Object.freeze(inventory) });
+        break;
+      }
+      default:
+        throw new SpecError(SpecErrorKind.InvalidValue, `${path}.kind`, `unknown map operation \`${kind}\``);
+    }
+  }
+
+  return parsed;
 }
 
 export function validateSpawnSeats(map: MapIr, count: number, path: string): void {

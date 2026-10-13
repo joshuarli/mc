@@ -67,7 +67,7 @@ function addTable(
   source: string,
   document: string,
 ): void {
-  const path = keyParts(node.key);
+  const path = node.resolvedKey;
   const location = sourceLocation(source, node.key.range[0]);
   if (node.kind === "array") {
     appendArrayTable(root, path, tableBody(node.body, source, document), location, document);
@@ -146,23 +146,30 @@ function convertValue(
 
 function appendArrayTable(
   root: Map<string, RawEntry>,
-  path: readonly string[],
+  path: readonly (string | number)[],
   table: RawTable,
   location: { readonly line: number; readonly column: number },
   document: string,
 ): void {
-  const parent = tableAtPath(root, path.slice(0, -1), location, document);
-  const key = path[path.length - 1];
-  if (key === undefined) {
+  const arrayIndex = path[path.length - 1];
+  const key = path[path.length - 2];
+  if (typeof arrayIndex !== "number" || typeof key !== "string") {
     throw new SpecError(SpecErrorKind.Syntax, document, "array table has an empty key", location);
   }
+  const parent = tableAtPath(root, path.slice(0, -2), location, document);
   const current = parent.get(key);
   if (current === undefined) {
+    if (arrayIndex !== 0) {
+      throw new SpecError(SpecErrorKind.Syntax, document, `array table ${key} has a missing entry`, location);
+    }
     parent.set(key, { value: { kind: "array", value: [{ kind: "table", value: table }] }, sourceLocation: location });
     return;
   }
   if (current.value.kind !== "array" || current.value.value.some((value) => value.kind !== "table")) {
     throw new SpecError(SpecErrorKind.Syntax, document, `array table conflicts with key ${key}`, location);
+  }
+  if (arrayIndex !== current.value.value.length) {
+    throw new SpecError(SpecErrorKind.Syntax, document, `array table ${key} has a conflicting entry index`, location);
   }
   parent.set(key, {
     value: { kind: "array", value: [...current.value.value, { kind: "table", value: table }] },
@@ -172,25 +179,40 @@ function appendArrayTable(
 
 function tableAtPath(
   root: Map<string, RawEntry>,
-  path: readonly string[],
+  path: readonly (string | number)[],
   location: { readonly line: number; readonly column: number },
   document: string,
 ): Map<string, RawEntry> {
-  let current = root;
-  for (const key of path) {
-    const entry = current.get(key);
-    if (entry === undefined) {
-      const nested = new Map<string, RawEntry>();
-      current.set(key, { value: { kind: "table", value: nested }, sourceLocation: location });
-      current = nested;
+  let current: RawValue = { kind: "table", value: root };
+  for (const segment of path) {
+    if (typeof segment === "number") {
+      if (current.kind !== "array") {
+        throw new SpecError(SpecErrorKind.Syntax, document, "array table index conflicts with a non-array value", location);
+      }
+      const entry = current.value[segment];
+      if (entry === undefined || entry.kind !== "table") {
+        throw new SpecError(SpecErrorKind.Syntax, document, "array table index does not identify a table", location);
+      }
+      current = entry;
       continue;
     }
-    if (entry.value.kind !== "table") {
-      throw new SpecError(SpecErrorKind.Syntax, document, `table conflicts with key ${key}`, location);
+    if (current.kind !== "table") {
+      throw new SpecError(SpecErrorKind.Syntax, document, `table conflicts with key ${segment}`, location);
     }
-    current = entry.value.value as Map<string, RawEntry>;
+    const currentTable = current.value as Map<string, RawEntry>;
+    const entry = currentTable.get(segment);
+    if (entry === undefined) {
+      const nested = new Map<string, RawEntry>();
+      currentTable.set(segment, { value: { kind: "table", value: nested }, sourceLocation: location });
+      current = { kind: "table", value: nested };
+      continue;
+    }
+    current = entry.value;
   }
-  return current;
+  if (current.kind !== "table") {
+    throw new SpecError(SpecErrorKind.Syntax, document, "table path does not identify a table", location);
+  }
+  return current.value as Map<string, RawEntry>;
 }
 
 function insertPath(
