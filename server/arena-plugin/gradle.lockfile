@@ -4,8 +4,8 @@
 # To regenerate this file, run: ./gradlew :dependencies --write-locks
 biz.aQute.bnd:biz.aQute.bnd.annotation:7.1.0=compileClasspath
 com.google.auto.service:auto-service-annotations:1.1.1=compileClasspath
-com.google.code.gson:gson:2.14.0=compileClasspath
-com.google.errorprone:error_prone_annotations:2.48.0=compileClasspath
+com.google.code.gson:gson:2.14.0=compileClasspath,testRuntimeClasspath
+com.google.errorprone:error_prone_annotations:2.48.0=compileClasspath,testRuntimeClasspath
 com.google.guava:failureaccess:1.0.3=compileClasspath
 com.google.guava:guava:33.6.0-jre=compileClasspath
 com.google.guava:listenablefuture:9999.0-empty-to-avoid-conflict-with-guava=compileClasspath

@@ -16,7 +16,9 @@ val pluginApiVersion = providers.gradleProperty("pluginApiVersion").get()
 
 dependencies {
     compileOnly("$paperApiGroup:$paperApiArtifact:$paperApiVersion")
+    compileOnly("com.google.code.gson:gson:2.14.0")
     testImplementation("org.junit.jupiter:junit-jupiter:6.1.3")
+    testRuntimeOnly("com.google.code.gson:gson:2.14.0")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher:6.1.3")
 }
 
