@@ -380,6 +380,10 @@ test('path worker keeps an exact goal node intact across pinned pathfinder postp
   const harness = makeHarness(() => undefined, () => undefined, true);
   const clockDescriptor = Object.getOwnPropertyDescriptor(performance, 'now');
   let nowMs = 0;
+  const ring = new PathDiagnosticRing(harness.bot, {
+    clientLabel: 'partial-path-snapshot',
+    clock: () => ({ clientMs: nowMs, authorityTick: 0 }),
+  });
 
   try {
     Object.defineProperty(performance, 'now', { configurable: true, value: () => nowMs });
@@ -400,48 +404,101 @@ test('path worker keeps an exact goal node intact across pinned pathfinder postp
     });
 
     const movements = harness.pathfinder.movements as InstanceType<typeof Movements>;
+    let neighborCalls = 0;
     movements.getNeighbors = () => {
+      neighborCalls += 1;
       nowMs += 4;
       return [goalMove];
     };
     const pathfinder = harness.pathfinder as unknown as {
-      getPathTo(
+      getPathFromTo(
         movements: InstanceType<typeof Movements>,
+        startPos: Bot['entity']['position'],
         goal: InstanceType<typeof goals.GoalBlock>,
-        timeout: number,
-      ): unknown;
+        options: { readonly timeout: number; readonly tickTimeout: number },
+      ): Generator<{
+        readonly result: {
+          readonly status: string;
+          readonly path: Array<Parameters<typeof goal.isEnd>[0] & {
+            readonly toBreak: unknown[];
+            readonly toPlace: unknown[];
+          }>;
+          readonly visitedNodes: number;
+          readonly generatedNodes: number;
+        };
+        readonly astarContext: {
+          readonly bestNode: { readonly data: Parameters<typeof goal.isEnd>[0] };
+          readonly openDataMap: Map<string, { readonly data: Parameters<typeof goal.isEnd>[0] }>;
+          readonly tickTimeout: number;
+          compute(): { readonly status: string };
+        };
+      }, void, unknown>;
     };
-    const initial = pathfinder.getPathTo(movements, goal, 1_000) as {
-      readonly status: string;
-      readonly path: Array<Parameters<typeof goal.isEnd>[0] & {
-        readonly toBreak: unknown[];
-        readonly toPlace: unknown[];
-      }>;
-      readonly context: {
-        readonly bestNode: { readonly data: Parameters<typeof goal.isEnd>[0] };
-        readonly openDataMap: Map<string, { readonly data: Parameters<typeof goal.isEnd>[0] }>;
-        compute(): { readonly status: string };
-      };
+    const search = pathfinder.getPathFromTo(movements, harness.bot.entity.position, goal, {
+      timeout: 1_000,
+      tickTimeout: 3,
+    });
+    const nextYield = () => {
+      const yielded = search.next();
+      if (yielded.done) throw new Error('pathfinder search ended before yielding a result');
+      return yielded.value;
     };
+    const searchTransitions = () => ring.snapshot()
+      .filter((record) => record.kind === 'pathSearch')
+      .map((record) => record.transition);
+    const firstYield = nextYield();
 
-    assert.equal(initial.status, 'partial');
-    assert.deepEqual(initial.path.map(({ x, y, z }) => ({ x, y, z })), [{ x: 31.5, y: 66, z: 21.5 }]);
-    const followedGoal = initial.path[0];
-    assert.ok(followedGoal);
-    assert.notEqual(followedGoal, goalMove);
-    assert.equal(Object.getPrototypeOf(followedGoal), Object.getPrototypeOf(goalMove));
-    assert.notEqual(followedGoal.toBreak, goalMove.toBreak);
-    assert.notEqual(followedGoal.toPlace, goalMove.toPlace);
-    const frontierGoal = initial.context.bestNode.data;
-    assert.equal(initial.context.openDataMap.get('31,66,21')?.data, frontierGoal);
+    const first = firstYield.result;
+    const context = firstYield.astarContext;
+    assert.equal(first.status, 'partial');
+    assert.deepEqual(first.path.map(({ x, y, z }) => ({ x, y, z })), [{ x: 31.5, y: 66, z: 21.5 }]);
+    const firstFollowedGoal = first.path[0];
+    assert.ok(firstFollowedGoal);
+    assert.notEqual(firstFollowedGoal, goalMove);
+    assert.equal(Object.getPrototypeOf(firstFollowedGoal), Object.getPrototypeOf(goalMove));
+    assert.notEqual(firstFollowedGoal.toBreak, goalMove.toBreak);
+    assert.notEqual(firstFollowedGoal.toPlace, goalMove.toPlace);
+    assert.equal(context.tickTimeout, 3);
+    const frontierGoal = context.bestNode.data;
+    assert.equal(context.openDataMap.get('31,66,21')?.data, frontierGoal);
     assert.deepEqual({ x: frontierGoal.x, y: frontierGoal.y, z: frontierGoal.z }, { x: 31, y: 66, z: 21 });
     assert.equal(goal.isEnd(frontierGoal), true);
+    assert.equal(neighborCalls, 1);
+    assert.deepEqual(searchTransitions(), ['acquired', 'released', 'queued']);
+
+    const deniedYield = nextYield();
+    const denied = deniedYield.result;
+    const deniedGoal = denied.path[0];
+    assert.equal(nowMs, 4);
+    assert.equal(denied.status, 'partial');
+    assert.deepEqual(denied.path.map(({ x, y, z }) => ({ x, y, z })), [{ x: 31.5, y: 66, z: 21.5 }]);
+    assert.ok(deniedGoal);
+    assert.notEqual(deniedGoal, goalMove);
+    assert.notEqual(deniedGoal, firstFollowedGoal);
+    assert.equal(Object.getPrototypeOf(deniedGoal), Object.getPrototypeOf(goalMove));
+    assert.notEqual(deniedGoal.toBreak, goalMove.toBreak);
+    assert.notEqual(deniedGoal.toPlace, goalMove.toPlace);
+    assert.notEqual(deniedGoal.toBreak, firstFollowedGoal.toBreak);
+    assert.notEqual(deniedGoal.toPlace, firstFollowedGoal.toPlace);
+    assert.equal(denied.visitedNodes, first.visitedNodes);
+    assert.equal(denied.generatedNodes, first.generatedNodes);
+    assert.equal(neighborCalls, 1);
+    assert.equal(context.bestNode.data, frontierGoal);
+    assert.deepEqual({ x: frontierGoal.x, y: frontierGoal.y, z: frontierGoal.z }, { x: 31, y: 66, z: 21 });
+    assert.equal(goal.isEnd(frontierGoal), true);
+    assert.equal(context.tickTimeout, 3);
+    assert.deepEqual(searchTransitions(), ['acquired', 'released', 'queued']);
 
     nowMs = 10;
-    assert.equal(initial.context.compute().status, 'success');
+    const successYield = nextYield();
+    assert.equal(successYield.result.status, 'success');
+    assert.deepEqual(successYield.result.path.map(({ x, y, z }) => ({ x, y, z })), [{ x: 31.5, y: 66, z: 21.5 }]);
+    assert.equal(context.bestNode.data, frontierGoal);
+    assert.equal(goal.isEnd(frontierGoal), true);
   } finally {
     await harness.owner.close();
     harness.observer.close();
+    ring.close();
     if (clockDescriptor === undefined) Reflect.deleteProperty(performance, 'now');
     else Object.defineProperty(performance, 'now', clockDescriptor);
   }
