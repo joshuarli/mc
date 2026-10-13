@@ -61,6 +61,79 @@ test('cancellation stops the owned path and clears client controls before settli
   }
 });
 
+test('eat waits for the consumed slot update after an early food update', async () => {
+  const eating = prepareEating();
+
+  try {
+    await waitUntil(eating.consumeStarted);
+    eating.harness.bot.food = 15;
+    eating.harness.bot.emit('physicsTick');
+    eating.finishConsume();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(eating.isSettled(), false);
+
+    eating.harness.bot.inventory.slots[36] = null;
+    eating.harness.bot.emit('physicsTick');
+    assert.deepEqual(await eating.running, { kind: 'succeeded' });
+  } finally {
+    await eating.harness.owner.close();
+    eating.harness.observer.close();
+  }
+});
+
+test('eat waits for the food update after an early consumed slot update', async () => {
+  const eating = prepareEating();
+
+  try {
+    await waitUntil(eating.consumeStarted);
+    eating.harness.bot.inventory.slots[36] = null;
+    eating.harness.bot.emit('physicsTick');
+    eating.finishConsume();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(eating.isSettled(), false);
+
+    eating.harness.bot.food = 15;
+    eating.harness.bot.emit('physicsTick');
+    assert.deepEqual(await eating.running, { kind: 'succeeded' });
+  } finally {
+    await eating.harness.owner.close();
+    eating.harness.observer.close();
+  }
+});
+
+test('eat accepts a consumed golden apple slot receipt at full hunger', async () => {
+  const eating = prepareEating('golden_apple', 20);
+
+  try {
+    await waitUntil(eating.consumeStarted);
+    eating.harness.bot.inventory.slots[36] = null;
+    eating.finishConsume();
+    assert.deepEqual(await eating.running, { kind: 'succeeded' });
+  } finally {
+    await eating.harness.owner.close();
+    eating.harness.observer.close();
+  }
+});
+
+test('eat cancellation stops waiting for a consumed slot update', async () => {
+  const eating = prepareEating();
+
+  try {
+    await waitUntil(eating.consumeStarted);
+    eating.harness.bot.food = 15;
+    eating.finishConsume();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(eating.isSettled(), false);
+
+    const cancellation = eating.harness.owner.cancel('shutdown');
+    assert.deepEqual(await eating.running, { kind: 'cancelled', reason: 'shutdown' });
+    await cancellation;
+  } finally {
+    await eating.harness.owner.close();
+    eating.harness.observer.close();
+  }
+});
+
 test('navigateToBlock requires the ramp top and the owned skill checks the observed tile', async () => {
   const target = blockPosition(31, 66, 21);
   const goal = new goals.GoalBlock(target.x, target.y, target.z);
@@ -1218,6 +1291,41 @@ function prepareContainerTransfer(
     },
   });
   return { window, clicks: () => clicks, syncs: () => syncs, snapshots: () => snapshots };
+}
+
+function prepareEating(name = 'bread', food = 10) {
+  const harness = makeHarness();
+  type Item = NonNullable<Bot['inventory']['slots'][number]>;
+  const foodItem = { name, type: 3, metadata: 0, count: 1, slot: 9 } as Item;
+  Object.assign(harness.bot.registry.foodsByName, { [name]: {} });
+  Object.assign(harness.bot, { food });
+  harness.bot.inventory.slots[9] = foodItem;
+  let consumeStarted = false;
+  let finishConsume!: () => void;
+  Object.assign(harness.bot, {
+    equip: async (item: Item, destination: string) => {
+      assert.equal(item, foodItem);
+      assert.equal(destination, 'hand');
+      harness.bot.inventory.slots[9] = null;
+      const heldFood = { ...foodItem, slot: 36 } as Item;
+      harness.bot.inventory.slots[36] = heldFood;
+      Object.assign(harness.bot, { quickBarSlot: 0, heldItem: heldFood });
+    },
+    consume: () => {
+      consumeStarted = true;
+      return new Promise<void>((resolve) => { finishConsume = resolve; });
+    },
+  });
+  const running = harness.owner.run({ kind: 'eat', inventorySlot: inventorySlot(9) });
+  let settled = false;
+  void running.then(() => { settled = true; }, () => { settled = true; });
+  return {
+    harness,
+    running,
+    consumeStarted: () => consumeStarted,
+    finishConsume: () => finishConsume(),
+    isSettled: () => settled,
+  };
 }
 
 function makeHarness(

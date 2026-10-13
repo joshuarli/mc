@@ -1366,9 +1366,12 @@ export class SkillOwner {
       active.resources.eating = false;
     }
     throwIfInterrupted(active.controller.signal);
+    // Mineflayer allows golden apples at full hunger, when eating cannot raise the food level.
+    const hungerReceiptExpected = beforeFood < 20;
     await waitForCondition(
       this.#bot,
-      () => this.#bot.food > beforeFood || slotCount(this.#bot, heldSlot, item) < beforeCount,
+      () => slotCount(this.#bot, heldSlot, item) < beforeCount
+        && (!hungerReceiptExpected || this.#bot.food > beforeFood),
       active.controller.signal,
       ACTION_TIMEOUT_MS,
     );
