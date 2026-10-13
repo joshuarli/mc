@@ -35,6 +35,7 @@ async fn run_clients() -> eyre::Result<()> {
 
     let chest_position = BlockPos::new(2, -59, 0);
     first.client.look_at(chest_position.center());
+    first.wait_for_ticks(1).await?;
     first.client.walk(WalkDirection::Forward);
     let approach = first.wait_until_near(chest_position.center()).await;
     first.client.walk(WalkDirection::None);
@@ -60,6 +61,7 @@ async fn run_clients() -> eyre::Result<()> {
 
     let target_id = first.wait_for_player(&second.client).await?;
     first.client.entity_ref_for(target_id).look_at()?;
+    first.wait_for_ticks(1).await?;
     first.client.walk(WalkDirection::Forward);
     let approach = first.wait_for_player_in_attack_range(target_id).await;
     first.client.walk(WalkDirection::None);
@@ -147,7 +149,7 @@ impl SmokeClient {
     }
 
     async fn wait_until_near(&mut self, target: azalea::Vec3) -> eyre::Result<()> {
-        timeout(EVENT_TIMEOUT, async {
+        let result = timeout(EVENT_TIMEOUT, async {
             loop {
                 let position = self.client.entity().position()?;
                 let dx = position.x - target.x;
@@ -170,8 +172,14 @@ impl SmokeClient {
                 }
             }
         })
-        .await
-        .context("timed out approaching the fixture chest")?
+        .await;
+        match result {
+            Ok(result) => result,
+            Err(error) => {
+                let position = self.client.entity().position()?;
+                bail!("timed out approaching the fixture chest from {position:?} to {target:?}: {error}");
+            }
+        }
     }
 
     async fn wait_for_player_in_attack_range(
