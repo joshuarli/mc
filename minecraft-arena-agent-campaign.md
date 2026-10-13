@@ -1,6 +1,6 @@
 # Arena: unattended Minecraft implementation campaign
 
-**Status: architecture revised on 2026-10-13; restart at P0.** The owner selected Mineflayer with TypeScript policies, scenario compiler, and supervisor, while retaining Paper and its Java authority plugin. Earlier Rust/Azalea code and the Azalea stack smoke are historical checkpoints only; they do not satisfy any current deliverable. No Azalea or Rust implementation, build, or live proof is authorized under this revision. The exact native Mineflayer/Paper protocol pairing requires new end-to-end proofs. Execution and acceptance are fully headless and unattended.
+**Status: architecture revised on 2026-10-13; P1 M1 is blocked at `c8c3e4e` by the unexplained `legal-player` ramp timeout.** The owner selected Mineflayer with TypeScript policies, scenario compiler, and supervisor, while retaining Paper and its Java authority plugin. Earlier Rust/Azalea code and the Azalea stack smoke are historical checkpoints only; they do not satisfy any current deliverable. No Azalea or Rust implementation, build, or live proof is authorized under this revision. The exact native Mineflayer/Paper protocol pairing was verified for the configured stack smoke, map reset, duel, and listed authority cases. Execution and acceptance are fully headless and unattended. M1 resumes only with new actual client collision/movement evidence or a changed pathfinder prerequisite; see the acceptance report for the reproduction.
 
 **Goal:** one command starts a real local six-competitor Minecraft world with independently controlled headless bots, plus a small resource-producing two-faction scenario. Scripted policies need no LLM, API key, GPU, graphical bot process, or paid bot accounts. Hundreds of active players and expert-human skill remain measured future objectives.
 
@@ -345,4 +345,4 @@ Append one line per phase end: date, merged checkpoint, checks passed, parked it
 - Read README for exact bootstrap/run commands and acceptance report for tested versus parked claims.
 - Read contract changes, policy comparison, performance results, platform limitations, and roadmap.
 - Inspect/cherry-pick coherent commits from `campaign/arena`; parked lane branches are named in the report. Nothing awaits owner approval to finish local execution.
-- Launch prompt: **Execute `minecraft-arena-agent-campaign.md` unattended, starting at F0; honor its owner decisions, complete independent work, park blocked proofs, and never push.**
+- Launch prompt: **Continue `minecraft-arena-agent-campaign.md` unattended from the documented M1 block; honor owner decisions, continue independent proofs, resume M1 only when its stated evidence prerequisite changes, and never push.**
