@@ -13,7 +13,6 @@ import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.SocketException;
-import java.net.SocketTimeoutException;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
@@ -95,7 +94,7 @@ final class ControlSessionTest {
         try {
             assertEquals(-1, input.read(), "the plugin must close the saturated control connection");
         } catch (SocketException reset) {
-            assertFalse(reset instanceof SocketTimeoutException, "the peer did not close before the timeout");
+            // A reset is another observable way the failed session closes its peer socket.
         }
     }
 
