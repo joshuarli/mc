@@ -1,7 +1,29 @@
+import {
+  blockPosition,
+  CIVILIZATION_FACTION_IDS,
+  CIVILIZATION_ROLES,
+  OUTPOST_BLUEPRINT_ID,
+  civilizationOutpostCells,
+  civilizationProfileForSeat,
+  OUTPOST_BLOCK_COUNT,
+  type BlockPosition,
+  type CivilizationFactionId,
+  type CivilizationRole,
+  type OutpostBlueprintId,
+} from "@arena/core";
+
 import { CanonicalHasher, type SemanticId } from "./hash.js";
 import { SpecError, SpecErrorKind } from "./errors.js";
-import { compileMap, validateBorder, validateSpawnSeats, type MapIr } from "./map.js";
+import {
+  compileMap,
+  parseBlockPosition,
+  validateBorder,
+  validateReachableSurfacePosition,
+  validateSpawnSeats,
+  type MapIr,
+} from "./map.js";
 import * as raw from "./raw.js";
+import { parseResourceId } from "./resource-id.js";
 
 export const GameMode = {
   HungerGames: "hunger_games",
@@ -9,6 +31,16 @@ export const GameMode = {
 } as const;
 
 export type GameMode = (typeof GameMode)[keyof typeof GameMode];
+
+const CIVILIZATION_MAP_DIAMETER_BLOCKS = 192 as const;
+const CIVILIZATION_CAPTURE_UNCONTESTED_TICKS = 200 as const;
+const CIVILIZATION_SCORE_POINTS_PER_TICK = 1 as const;
+const CIVILIZATION_STARTING_KIT = Object.freeze([
+  Object.freeze({ item: "minecraft:bread", count: 4 } as const),
+  Object.freeze({ item: "minecraft:wooden_axe", count: 1 } as const),
+  Object.freeze({ item: "minecraft:wooden_pickaxe", count: 1 } as const),
+  Object.freeze({ item: "minecraft:wooden_sword", count: 1 } as const),
+] as const);
 
 export interface Roster {
   readonly competitors: number;
@@ -35,12 +67,58 @@ export interface MatchSettings {
   readonly naturalRandomTicks: boolean;
 }
 
-/** Tick-driven world border settings. */
-export interface BorderSettings {
+/** Tick-driven Hunger Games world border settings. */
+export interface ShrinkingBorderSettings {
   readonly initialDiameterBlocks: number;
   readonly shrinkStartTick: bigint;
   readonly shrinkEndTick: bigint;
   readonly finalDiameterBlocks: number;
+}
+
+/** Fixed civilization world border settings. */
+export interface FixedBorderSettings {
+  readonly kind: "fixed";
+  readonly diameterBlocks: typeof CIVILIZATION_MAP_DIAMETER_BLOCKS;
+}
+
+export type BorderSettings = ShrinkingBorderSettings | FixedBorderSettings;
+
+export interface CivilizationFactionMemberIr {
+  readonly seat: number;
+  readonly role: CivilizationRole;
+}
+
+export interface CivilizationFactionIr {
+  readonly id: CivilizationFactionId;
+  readonly members: readonly [CivilizationFactionMemberIr, CivilizationFactionMemberIr, CivilizationFactionMemberIr];
+}
+
+export type ItemStackIr = (typeof CIVILIZATION_STARTING_KIT)[number];
+
+export type CivilizationStartingKitIr = typeof CIVILIZATION_STARTING_KIT;
+
+export interface CaptureZoneIr {
+  readonly min: BlockPosition;
+  readonly max: BlockPosition;
+  readonly uncontestedTicks: typeof CIVILIZATION_CAPTURE_UNCONTESTED_TICKS;
+  readonly pointsPerOwnedTick: typeof CIVILIZATION_SCORE_POINTS_PER_TICK;
+}
+
+export interface BlueprintAnchorIr {
+  readonly position: BlockPosition;
+  readonly rotationDegrees: 0 | 180;
+}
+
+export interface OutpostBlueprintIr {
+  readonly id: OutpostBlueprintId;
+  readonly anchors: Readonly<Record<CivilizationFactionId, BlueprintAnchorIr>>;
+}
+
+export interface CivilizationRulesIr {
+  readonly factions: readonly [CivilizationFactionIr, CivilizationFactionIr];
+  readonly startingKit: CivilizationStartingKitIr;
+  readonly captureZone: CaptureZoneIr;
+  readonly blueprint: OutpostBlueprintIr;
 }
 
 /** Bounded pathfinding and policy cadence settings. */
@@ -62,22 +140,36 @@ declare const resourceReferenceBrand: unique symbol;
 /** A normalized reference relative to the declaring scenario file. */
 export type ResourceReference = string & { readonly [resourceReferenceBrand]: true };
 
-/** Immutable, fully validated scenario settings and compiled map IR. */
-export interface ScenarioIr {
+/** Shared validated scenario settings that do not depend on game mode. */
+interface ScenarioBaseIr {
   readonly name: string;
-  readonly mode: GameMode;
   readonly seed: bigint;
   readonly mapReference: ResourceReference;
   readonly policyReference: ResourceReference;
   readonly roster: Roster;
   readonly server: ServerSettings;
   readonly matchSettings: MatchSettings;
-  readonly border: BorderSettings;
   readonly bots: BotSettings;
   readonly record: RecordSettings;
   readonly map: MapIr;
   readonly semanticId: SemanticId;
 }
+
+/** Fully validated Hunger Games settings and compiled map IR. */
+export interface HungerGamesScenarioIr extends ScenarioBaseIr {
+  readonly mode: typeof GameMode.HungerGames;
+  readonly border: ShrinkingBorderSettings;
+}
+
+/** Fully validated civilization rules and compiled map IR. */
+export interface CivilizationScenarioIr extends ScenarioBaseIr {
+  readonly mode: typeof GameMode.Civilization;
+  readonly border: FixedBorderSettings;
+  readonly civilization: CivilizationRulesIr;
+}
+
+/** Immutable scenario result narrowed by its game mode. */
+export type ScenarioIr = HungerGamesScenarioIr | CivilizationScenarioIr;
 
 const SCENARIO_FIELDS = [
   "schema",
@@ -93,6 +185,8 @@ const SCENARIO_FIELDS = [
   "bots",
   "record",
 ] as const;
+
+const OPTIONAL_SCENARIO_FIELDS = ["civilization"] as const;
 
 /**
  * Validates the scenario root and returns its normalized map reference before
@@ -112,44 +206,81 @@ export function compileScenario(scenarioSource: string, mapSource: string): Scen
 
   const name = raw.string(raw.field(root, "name", "scenario"), "scenario.name");
   const mode = parseMode(raw.field(root, "mode", "scenario"));
+  if (mode === GameMode.HungerGames && root.has("civilization")) {
+    throw new SpecError(SpecErrorKind.InvalidValue, "scenario.civilization", "is only valid for civilization mode");
+  }
   const seed = nonnegativeU64(raw.field(root, "seed", "scenario"), "scenario.seed");
   const mapReference = parseReference(raw.field(root, "map", "scenario"), "scenario.map");
   const policyReference = parseReference(raw.field(root, "policy", "scenario"), "scenario.policy");
   const roster = parseRoster(raw.field(root, "roster", "scenario"));
   const server = parseServer(raw.field(root, "server", "scenario"));
   const matchSettings = parseMatch(raw.field(root, "match", "scenario"));
-  const border = parseBorder(raw.field(root, "border", "scenario"), matchSettings);
+  const border = parseModeBorder(mode, raw.field(root, "border", "scenario"), matchSettings);
   const bots = parseBots(raw.field(root, "bots", "scenario"));
   const record = parseRecord(raw.field(root, "record", "scenario"));
+  const civilization = mode === GameMode.Civilization
+    ? parseCivilization(raw.field(root, "civilization", "scenario"))
+    : undefined;
 
   validateMode(mode, roster, matchSettings);
   const map = compileMap(mapSource);
   validateSpawnSeats(map, roster.competitors, "scenario.roster.competitors");
-  validateBorder(map, border.initialDiameterBlocks, border.finalDiameterBlocks, "scenario.border");
   validatePreparedChunks(map, server.viewDistanceChunks);
+  if (border.mode === GameMode.HungerGames) {
+    validateBorder(map, border.settings.initialDiameterBlocks, border.settings.finalDiameterBlocks, "scenario.border");
+    const semanticId = hashScenario(
+      { mode: border.mode, border: border.settings },
+      seed,
+      policyReference,
+      roster,
+      server,
+      matchSettings,
+      bots,
+      record,
+      map.semanticId,
+    );
+    return Object.freeze({
+      name,
+      mode: border.mode,
+      seed,
+      mapReference,
+      policyReference,
+      roster,
+      server,
+      matchSettings,
+      border: border.settings,
+      bots,
+      record,
+      map,
+      semanticId,
+    });
+  }
+
+  if (civilization === undefined) throw new Error("civilization scenario was parsed without civilization rules");
+  validateCivilizationMap(map, civilization);
+  validateBorder(map, border.settings.diameterBlocks, border.settings.diameterBlocks, "scenario.border");
   const semanticId = hashScenario(
-    mode,
+    { mode: border.mode, border: border.settings, civilization },
     seed,
     policyReference,
     roster,
     server,
     matchSettings,
-    border,
     bots,
     record,
     map.semanticId,
   );
-
   return Object.freeze({
     name,
-    mode,
+    mode: border.mode,
     seed,
     mapReference,
     policyReference,
     roster,
     server,
     matchSettings,
-    border,
+    border: border.settings,
+    civilization,
     bots,
     record,
     map,
@@ -159,7 +290,7 @@ export function compileScenario(scenarioSource: string, mapSource: string): Scen
 
 function parseScenarioRoot(source: string): raw.RawTable {
   const root = raw.asTable(raw.parseDocument(source, "scenario"), "scenario");
-  raw.checkFields(root, SCENARIO_FIELDS, SCENARIO_FIELDS, "scenario");
+  raw.checkFields(root, [...SCENARIO_FIELDS, ...OPTIONAL_SCENARIO_FIELDS], SCENARIO_FIELDS, "scenario");
   if (raw.integer(raw.field(root, "schema", "scenario"), "scenario.schema") !== 1n) {
     throw new SpecError(SpecErrorKind.InvalidValue, "scenario.schema", "only schema version 1 is supported");
   }
@@ -226,7 +357,7 @@ function parseMatch(value: raw.RawValue): MatchSettings {
   return settings;
 }
 
-function parseBorder(value: raw.RawValue, matchSettings: MatchSettings): BorderSettings {
+function parseShrinkingBorder(value: raw.RawValue, matchSettings: MatchSettings): ShrinkingBorderSettings {
   const path = "scenario.border";
   const table = raw.asTable(value, path);
   raw.checkFields(table, ["initial_diameter_blocks", "shrink_start_tick", "shrink_end_tick", "final_diameter_blocks"], ["initial_diameter_blocks", "shrink_start_tick", "shrink_end_tick", "final_diameter_blocks"], path);
@@ -247,6 +378,218 @@ function parseBorder(value: raw.RawValue, matchSettings: MatchSettings): BorderS
     throw new SpecError(SpecErrorKind.Range, "scenario.border.shrink_end_tick", "must finish before authoritative_max_ticks");
   }
   return Object.freeze({ initialDiameterBlocks, shrinkStartTick, shrinkEndTick, finalDiameterBlocks });
+}
+
+function parseFixedBorder(value: raw.RawValue): FixedBorderSettings {
+  const path = "scenario.border";
+  const table = raw.asTable(value, path);
+  raw.checkFields(table, ["kind", "diameter_blocks"], ["kind", "diameter_blocks"], path);
+  const kind = raw.string(raw.field(table, "kind", path), `${path}.kind`);
+  if (kind !== "fixed") {
+    throw new SpecError(SpecErrorKind.InvalidValue, `${path}.kind`, "civilization requires a fixed world border");
+  }
+  boundedNumber(
+    raw.field(table, "diameter_blocks", path),
+    `${path}.diameter_blocks`,
+    BigInt(CIVILIZATION_MAP_DIAMETER_BLOCKS),
+    BigInt(CIVILIZATION_MAP_DIAMETER_BLOCKS),
+  );
+  return Object.freeze({ kind: "fixed", diameterBlocks: CIVILIZATION_MAP_DIAMETER_BLOCKS });
+}
+
+type ModeBorder =
+  | { readonly mode: typeof GameMode.HungerGames; readonly settings: ShrinkingBorderSettings }
+  | { readonly mode: typeof GameMode.Civilization; readonly settings: FixedBorderSettings };
+
+function parseModeBorder(mode: GameMode, value: raw.RawValue, matchSettings: MatchSettings): ModeBorder {
+  if (mode === GameMode.HungerGames) {
+    return Object.freeze({ mode, settings: parseShrinkingBorder(value, matchSettings) });
+  }
+  return Object.freeze({ mode, settings: parseFixedBorder(value) });
+}
+
+function parseCivilization(value: raw.RawValue): CivilizationRulesIr {
+  const path = "scenario.civilization";
+  const table = raw.asTable(value, path);
+  raw.checkFields(table, ["factions", "starting_kit", "capture_zone", "blueprint"], ["factions", "starting_kit", "capture_zone", "blueprint"], path);
+  const factions = parseFactions(raw.field(table, "factions", path));
+  const startingKit = parseStartingKit(raw.field(table, "starting_kit", path));
+  const captureZone = parseCaptureZone(raw.field(table, "capture_zone", path));
+  const blueprint = parseOutpostBlueprint(raw.field(table, "blueprint", path));
+  return Object.freeze({ factions, startingKit, captureZone, blueprint });
+}
+
+function parseFactions(value: raw.RawValue): readonly [CivilizationFactionIr, CivilizationFactionIr] {
+  const path = "scenario.civilization.factions";
+  const values = raw.asArray(value, path);
+  if (values.length !== CIVILIZATION_FACTION_IDS.length) {
+    throw new SpecError(SpecErrorKind.Range, path, `must contain exactly ${CIVILIZATION_FACTION_IDS.length} factions`);
+  }
+  const factions = values.map((factionValue, factionIndex): CivilizationFactionIr => {
+    const factionPath = `${path}[${factionIndex}]`;
+    const faction = raw.asTable(factionValue, factionPath);
+    raw.checkFields(faction, ["id", "members"], ["id", "members"], factionPath);
+    const idText = raw.string(raw.field(faction, "id", factionPath), `${factionPath}.id`);
+    const id = CIVILIZATION_FACTION_IDS.find((candidate) => candidate === idText);
+    const expectedId = CIVILIZATION_FACTION_IDS[factionIndex];
+    if (id === undefined || id !== expectedId) {
+      throw new SpecError(
+        SpecErrorKind.InvalidValue,
+        `${factionPath}.id`,
+        `must be ${expectedId ?? "a declared faction"} at this position`,
+      );
+    }
+
+    const members = parseFactionMembers(raw.field(faction, "members", factionPath), id, factionIndex);
+    return Object.freeze({ id, members });
+  });
+  const ember = factions[0];
+  const tide = factions[1];
+  if (ember === undefined || tide === undefined) throw new Error("validated civilization factions are incomplete");
+  return Object.freeze([ember, tide]);
+}
+
+function parseFactionMembers(
+  value: raw.RawValue,
+  faction: CivilizationFactionId,
+  factionIndex: number,
+): readonly [CivilizationFactionMemberIr, CivilizationFactionMemberIr, CivilizationFactionMemberIr] {
+  const path = `scenario.civilization.factions[${factionIndex}].members`;
+  const values = raw.asArray(value, path);
+  if (values.length !== CIVILIZATION_ROLES.length) {
+    throw new SpecError(SpecErrorKind.Range, path, `must contain exactly ${CIVILIZATION_ROLES.length} members`);
+  }
+  const members = values.map((memberValue, memberIndex): CivilizationFactionMemberIr => {
+    const memberPath = `${path}[${memberIndex}]`;
+    const member = raw.asTable(memberValue, memberPath);
+    raw.checkFields(member, ["seat", "role"], ["seat", "role"], memberPath);
+    const seat = boundedNumber(raw.field(member, "seat", memberPath), `${memberPath}.seat`, 0n, 5n);
+    const roleText = raw.string(raw.field(member, "role", memberPath), `${memberPath}.role`);
+    const role = CIVILIZATION_ROLES.find((candidate) => candidate === roleText);
+    if (role === undefined) {
+      throw new SpecError(SpecErrorKind.InvalidValue, `${memberPath}.role`, `unknown civilization role \`${roleText}\``);
+    }
+    const profile = civilizationProfileForSeat(seat);
+    if (profile === null) {
+      throw new SpecError(SpecErrorKind.Range, `${memberPath}.seat`, "must be a civilization competitor seat from 0 through 5");
+    }
+    const expectedSeat = factionIndex * CIVILIZATION_ROLES.length + memberIndex;
+    if (seat !== expectedSeat || profile.faction !== faction || profile.role !== role) {
+      throw new SpecError(
+        SpecErrorKind.InvalidValue,
+        memberPath,
+        `seat ${seat} must belong to faction \`${profile.faction}\` with role \`${profile.role}\``,
+      );
+    }
+    return Object.freeze({ seat, role });
+  });
+  const first = members[0];
+  const second = members[1];
+  const third = members[2];
+  if (first === undefined || second === undefined || third === undefined) {
+    throw new Error("validated civilization faction members are incomplete");
+  }
+  return Object.freeze([first, second, third]);
+}
+
+function parseStartingKit(value: raw.RawValue): CivilizationStartingKitIr {
+  const path = "scenario.civilization.starting_kit";
+  const values = raw.asArray(value, path);
+  if (values.length !== CIVILIZATION_STARTING_KIT.length) {
+    throw new SpecError(SpecErrorKind.InvalidValue, path, "must declare the equal food and tool starting kit");
+  }
+  const [bread, axe, pickaxe, sword] = CIVILIZATION_STARTING_KIT;
+  return Object.freeze([
+    parseStartingKitItem(requiredArrayValue(values, 0), `${path}[0]`, bread),
+    parseStartingKitItem(requiredArrayValue(values, 1), `${path}[1]`, axe),
+    parseStartingKitItem(requiredArrayValue(values, 2), `${path}[2]`, pickaxe),
+    parseStartingKitItem(requiredArrayValue(values, 3), `${path}[3]`, sword),
+  ]);
+}
+
+function parseStartingKitItem<const Expected extends ItemStackIr>(
+  value: raw.RawValue,
+  path: string,
+  expected: Expected,
+): Expected {
+  const item = raw.asTable(value, path);
+  raw.checkFields(item, ["item", "count"], ["item", "count"], path);
+  const resourceId = parseResourceId(raw.field(item, "item", path), `${path}.item`);
+  const count = boundedNumber(raw.field(item, "count", path), `${path}.count`, 1n, 64n);
+  if (resourceId !== expected.item || count !== expected.count) {
+    throw new SpecError(SpecErrorKind.InvalidValue, path, "does not match the declared civilization starting kit");
+  }
+  return expected;
+}
+
+function requiredArrayValue(values: readonly raw.RawValue[], index: number): raw.RawValue {
+  const value = values[index];
+  if (value === undefined) throw new Error("validated civilization starting kit is incomplete");
+  return value;
+}
+
+function parseCaptureZone(value: raw.RawValue): CaptureZoneIr {
+  const path = "scenario.civilization.capture_zone";
+  const table = raw.asTable(value, path);
+  raw.checkFields(table, ["min", "max", "uncontested_ticks", "score_points_per_tick"], ["min", "max", "uncontested_ticks", "score_points_per_tick"], path);
+  const min = parseBlockPosition(raw.field(table, "min", path), `${path}.min`);
+  const max = parseBlockPosition(raw.field(table, "max", path), `${path}.max`);
+  if (min.x > max.x || min.y > max.y || min.z > max.z) {
+    throw new SpecError(SpecErrorKind.Range, path, "capture-zone minimum coordinates must not exceed maximum coordinates");
+  }
+  boundedNumber(
+    raw.field(table, "uncontested_ticks", path),
+    `${path}.uncontested_ticks`,
+    BigInt(CIVILIZATION_CAPTURE_UNCONTESTED_TICKS),
+    BigInt(CIVILIZATION_CAPTURE_UNCONTESTED_TICKS),
+  );
+  boundedNumber(
+    raw.field(table, "score_points_per_tick", path),
+    `${path}.score_points_per_tick`,
+    BigInt(CIVILIZATION_SCORE_POINTS_PER_TICK),
+    BigInt(CIVILIZATION_SCORE_POINTS_PER_TICK),
+  );
+  return Object.freeze({
+    min,
+    max,
+    uncontestedTicks: CIVILIZATION_CAPTURE_UNCONTESTED_TICKS,
+    pointsPerOwnedTick: CIVILIZATION_SCORE_POINTS_PER_TICK,
+  });
+}
+
+function parseOutpostBlueprint(value: raw.RawValue): OutpostBlueprintIr {
+  const path = "scenario.civilization.blueprint";
+  const table = raw.asTable(value, path);
+  raw.checkFields(table, ["id", "anchors"], ["id", "anchors"], path);
+  const idText = raw.string(raw.field(table, "id", path), `${path}.id`);
+  if (idText !== OUTPOST_BLUEPRINT_ID) {
+    throw new SpecError(SpecErrorKind.InvalidValue, `${path}.id`, `unknown blueprint \`${idText}\``);
+  }
+  const anchorTable = raw.asTable(raw.field(table, "anchors", path), `${path}.anchors`);
+  raw.checkFields(anchorTable, CIVILIZATION_FACTION_IDS, CIVILIZATION_FACTION_IDS, `${path}.anchors`);
+  const anchors = Object.fromEntries(CIVILIZATION_FACTION_IDS.map((faction) => [
+    faction,
+    parseBlueprintAnchor(
+      raw.field(anchorTable, faction, `${path}.anchors`),
+      `${path}.anchors.${faction}`,
+      faction === "ember" ? 0 : 180,
+    ),
+  ])) as Record<CivilizationFactionId, BlueprintAnchorIr>;
+  return Object.freeze({ id: OUTPOST_BLUEPRINT_ID, anchors: Object.freeze(anchors) });
+}
+
+function parseBlueprintAnchor(value: raw.RawValue, path: string, expectedRotation: 0 | 180): BlueprintAnchorIr {
+  const table = raw.asTable(value, path);
+  raw.checkFields(table, ["position", "rotation_degrees"], ["position", "rotation_degrees"], path);
+  const position = parseBlockPosition(raw.field(table, "position", path), `${path}.position`);
+  const rotationDegreesValue = raw.integer(raw.field(table, "rotation_degrees", path), `${path}.rotation_degrees`);
+  if (rotationDegreesValue !== 0n && rotationDegreesValue !== 180n) {
+    throw new SpecError(SpecErrorKind.InvalidValue, `${path}.rotation_degrees`, "must be 0 or 180");
+  }
+  if (rotationDegreesValue !== BigInt(expectedRotation)) {
+    throw new SpecError(SpecErrorKind.InvalidValue, `${path}.rotation_degrees`, `must be ${expectedRotation} for this faction`);
+  }
+  return Object.freeze({ position, rotationDegrees: Number(rotationDegreesValue) as 0 | 180 });
 }
 
 function parseBots(value: raw.RawValue): BotSettings {
@@ -318,8 +661,150 @@ function validateMode(mode: GameMode, roster: Roster, settings: MatchSettings): 
       if (!settings.blockBreaking || !settings.blockPlacing) {
         throw new SpecError(SpecErrorKind.InvalidValue, "scenario.match", "civilization enables block breaking and placing");
       }
+      if (settings.graceTicks !== 2_400n) {
+        throw new SpecError(SpecErrorKind.InvalidValue, "scenario.match.grace_ticks", "civilization requires a 2,400-tick grace period");
+      }
+      if (settings.authoritativeMaxTicks !== 18_000n) {
+        throw new SpecError(SpecErrorKind.InvalidValue, "scenario.match.authoritative_max_ticks", "civilization requires an 18,000-tick match limit");
+      }
       break;
   }
+}
+
+/** Objectives must start clear and reachable because players activate them during a match. */
+function validateCivilizationMap(map: MapIr, rules: CivilizationRulesIr): void {
+  const path = "scenario.civilization";
+  if (
+    map.dimensions.width !== CIVILIZATION_MAP_DIAMETER_BLOCKS
+    || map.dimensions.depth !== CIVILIZATION_MAP_DIAMETER_BLOCKS
+  ) {
+    throw new SpecError(SpecErrorKind.Geometry, "scenario.civilization.map", "civilization requires a 192 by 192 block map");
+  }
+
+  const blockKeys = new Set(map.blocks.map(({ position }) => positionKey(position)));
+  const capture = rules.captureZone;
+  validateMapPosition(map, capture.min, `${path}.capture_zone.min`);
+  validateMapPosition(map, capture.max, `${path}.capture_zone.max`);
+  if (capture.min.y <= map.dimensions.minY || capture.max.y + 1 > map.dimensions.maxY) {
+    throw new SpecError(SpecErrorKind.Geometry, `${path}.capture_zone`, "capture zone needs floor support and clear headroom");
+  }
+  const captureCenter = blockPosition(
+    Math.floor((capture.min.x + capture.max.x) / 2),
+    capture.min.y,
+    Math.floor((capture.min.z + capture.max.z) / 2),
+  );
+  validateReachableSurfacePosition(map, captureCenter, `${path}.capture_zone`);
+  for (let x = capture.min.x; x <= capture.max.x; x += 1) {
+    for (let z = capture.min.z; z <= capture.max.z; z += 1) {
+      if (!blockKeys.has(positionKey(blockPosition(x, capture.min.y - 1, z)))) {
+        throw new SpecError(SpecErrorKind.Geometry, `${path}.capture_zone`, "capture zone needs continuous full-block floor support");
+      }
+    }
+  }
+  for (const { position } of map.blocks) {
+    if (insideBox(position, capture.min, capture.max, capture.max.y + 1)) {
+      throw new SpecError(SpecErrorKind.Geometry, `${path}.capture_zone`, "capture zone must have clear headroom");
+    }
+  }
+  for (const spawn of map.spawns) {
+    if (insideBox(spawn.position, capture.min, capture.max, capture.max.y)) {
+      throw new SpecError(SpecErrorKind.Geometry, `${path}.capture_zone`, `capture zone overlaps spawn seat ${spawn.seat}`);
+    }
+  }
+  for (const [x, z] of [
+    [capture.min.x, capture.min.z],
+    [capture.min.x, capture.max.z],
+    [capture.max.x, capture.min.z],
+    [capture.max.x, capture.max.z],
+  ] as const) {
+    validateCivilizationBorderPosition(map, blockPosition(x, capture.min.y, z), `${path}.capture_zone`);
+  }
+
+  const occupiedBlueprintCells = new Set<string>();
+  for (const faction of CIVILIZATION_FACTION_IDS) {
+    const anchor = rules.blueprint.anchors[faction];
+    const anchorPath = `${path}.blueprint.anchors.${faction}`;
+    validateMapPosition(map, anchor.position, `${anchorPath}.position`);
+    validateCivilizationBorderPosition(map, anchor.position, `${anchorPath}.position`);
+    const cells = civilizationOutpostCells(anchor.position, anchor.rotationDegrees);
+    if (cells.length !== OUTPOST_BLOCK_COUNT) throw new Error("core outpost cell count does not match its declared block count");
+
+    const minX = Math.min(...cells.map(({ position }) => position.x));
+    const maxX = Math.max(...cells.map(({ position }) => position.x));
+    const minZ = Math.min(...cells.map(({ position }) => position.z));
+    const maxZ = Math.max(...cells.map(({ position }) => position.z));
+    const topY = Math.max(...cells.map(({ position }) => position.y));
+    const stand = blockPosition(minX - 1, anchor.position.y, minZ + 1);
+    validateReachableSurfacePosition(map, stand, `${anchorPath}.position`);
+    validateCivilizationBorderPosition(map, stand, `${anchorPath}.position`);
+
+    for (let x = minX; x <= maxX; x += 1) {
+      for (let z = minZ; z <= maxZ; z += 1) {
+        const support = blockPosition(x, anchor.position.y - 1, z);
+        validateMapPosition(map, support, anchorPath);
+        if (!blockKeys.has(positionKey(support))) {
+          throw new SpecError(SpecErrorKind.Geometry, anchorPath, "blueprint needs full-block support under every floor cell");
+        }
+        for (let y = anchor.position.y; y <= topY; y += 1) {
+          const position = blockPosition(x, y, z);
+          if (blockKeys.has(positionKey(position)) || insideBox(position, capture.min, capture.max, capture.max.y)) {
+            throw new SpecError(SpecErrorKind.Geometry, anchorPath, "blueprint build volume must be clear of map blocks and the capture zone");
+          }
+        }
+      }
+    }
+    if (topY + 1 > map.dimensions.maxY) {
+      throw new SpecError(SpecErrorKind.Geometry, anchorPath, "blueprint needs one clear block above its highest cell");
+    }
+    for (const { position, supportPosition } of cells) {
+      validateMapPosition(map, position, anchorPath);
+      validateMapPosition(map, supportPosition, anchorPath);
+      const key = positionKey(position);
+      if (occupiedBlueprintCells.has(key)) {
+        throw new SpecError(SpecErrorKind.Conflict, anchorPath, "faction blueprint build volumes overlap");
+      }
+      occupiedBlueprintCells.add(key);
+      validateCivilizationBorderPosition(map, position, anchorPath);
+    }
+    for (const spawn of map.spawns) {
+      if (
+        spawn.position.y >= anchor.position.y && spawn.position.y <= topY + 1
+        && spawn.position.x >= minX - 1 && spawn.position.x <= maxX + 1
+        && spawn.position.z >= minZ - 1 && spawn.position.z <= maxZ + 1
+      ) {
+        throw new SpecError(SpecErrorKind.Geometry, anchorPath, `blueprint build volume is too close to spawn seat ${spawn.seat}`);
+      }
+    }
+  }
+}
+
+function validateMapPosition(map: MapIr, position: BlockPosition, path: string): void {
+  if (
+    position.x < 0 || position.x >= map.dimensions.width
+    || position.z < 0 || position.z >= map.dimensions.depth
+    || position.y < map.dimensions.minY || position.y > map.dimensions.maxY
+  ) {
+    throw new SpecError(SpecErrorKind.Geometry, path, "position lies outside the map dimensions");
+  }
+}
+
+function validateCivilizationBorderPosition(map: MapIr, position: BlockPosition, path: string): void {
+  const centerX = (map.dimensions.width - 1) / 2;
+  const centerZ = (map.dimensions.depth - 1) / 2;
+  const radius = CIVILIZATION_MAP_DIAMETER_BLOCKS / 2;
+  if ((position.x - centerX) ** 2 + (position.z - centerZ) ** 2 > radius ** 2) {
+    throw new SpecError(SpecErrorKind.Geometry, path, "position lies outside the fixed civilization border");
+  }
+}
+
+function insideBox(position: BlockPosition, min: BlockPosition, max: BlockPosition, maxY: number): boolean {
+  return position.x >= min.x && position.x <= max.x
+    && position.y >= min.y && position.y <= maxY
+    && position.z >= min.z && position.z <= max.z;
+}
+
+function positionKey(position: BlockPosition): string {
+  return `${position.x},${position.y},${position.z}`;
 }
 
 function nonnegativeU64(value: raw.RawValue, path: string): bigint {
@@ -364,20 +849,23 @@ function validatePreparedChunks(map: MapIr, viewDistanceChunks: number): void {
   }
 }
 
+type ScenarioHashMode =
+  | { readonly mode: typeof GameMode.HungerGames; readonly border: ShrinkingBorderSettings }
+  | { readonly mode: typeof GameMode.Civilization; readonly border: FixedBorderSettings; readonly civilization: CivilizationRulesIr };
+
 function hashScenario(
-  mode: GameMode,
+  modeSettings: ScenarioHashMode,
   seed: bigint,
   policy: ResourceReference,
   roster: Roster,
   server: ServerSettings,
   matchSettings: MatchSettings,
-  border: BorderSettings,
   bots: BotSettings,
   record: RecordSettings,
   mapId: SemanticId,
 ): SemanticId {
   const hash = new CanonicalHasher("arena.scenario.ir.v1\0");
-  hash.u8(mode === GameMode.HungerGames ? 0 : 1);
+  hash.u8(modeSettings.mode === GameMode.HungerGames ? 0 : 1);
   hash.u64(seed);
   hash.string(policy);
   hash.u16(roster.competitors);
@@ -394,10 +882,15 @@ function hashScenario(
   hash.u8(Number(matchSettings.blockPlacing));
   hash.u8(Number(matchSettings.naturalMobs));
   hash.u8(Number(matchSettings.naturalRandomTicks));
-  hash.f64(border.initialDiameterBlocks);
-  hash.u64(border.shrinkStartTick);
-  hash.u64(border.shrinkEndTick);
-  hash.f64(border.finalDiameterBlocks);
+  if (modeSettings.mode === GameMode.HungerGames) {
+    hash.f64(modeSettings.border.initialDiameterBlocks);
+    hash.u64(modeSettings.border.shrinkStartTick);
+    hash.u64(modeSettings.border.shrinkEndTick);
+    hash.f64(modeSettings.border.finalDiameterBlocks);
+  } else {
+    hash.string("fixed");
+    hash.f64(modeSettings.border.diameterBlocks);
+  }
   hash.u64(bots.strategyIntervalTicks);
   hash.u64(bots.pathExpansionsPerSlice);
   hash.u64(bots.maxPendingPathsPerBot);
@@ -405,7 +898,39 @@ function hashScenario(
   hash.u8(Number(record.policyReplay));
   hash.u8(Number(record.worldOutcomes));
   hash.bytes(Buffer.from(mapId, "hex"));
+  if (modeSettings.mode === GameMode.Civilization) hashCivilizationRules(hash, modeSettings.civilization);
   return hash.finish();
+}
+
+function hashCivilizationRules(hash: CanonicalHasher, rules: CivilizationRulesIr): void {
+  for (const faction of rules.factions) {
+    hash.string(faction.id);
+    for (const member of faction.members) {
+      hash.u16(member.seat);
+      hash.string(member.role);
+    }
+  }
+  hash.u64(BigInt(rules.startingKit.length));
+  for (const item of rules.startingKit) {
+    hash.string(item.item);
+    hash.u16(item.count);
+  }
+  for (const point of [rules.captureZone.min, rules.captureZone.max]) {
+    hash.i32(point.x);
+    hash.i32(point.y);
+    hash.i32(point.z);
+  }
+  hash.u64(BigInt(rules.captureZone.uncontestedTicks));
+  hash.u16(rules.captureZone.pointsPerOwnedTick);
+  hash.string(rules.blueprint.id);
+  for (const faction of CIVILIZATION_FACTION_IDS) {
+    const anchor = rules.blueprint.anchors[faction];
+    hash.string(faction);
+    hash.i32(anchor.position.x);
+    hash.i32(anchor.position.y);
+    hash.i32(anchor.position.z);
+    hash.u16(anchor.rotationDegrees);
+  }
 }
 
 const I64_MAX = 9_223_372_036_854_775_807n;

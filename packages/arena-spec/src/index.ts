@@ -7,14 +7,27 @@ export type { BlockPlacement, LootContainer, MapDimensions, MapIr, SpawnPoint } 
 export { GameMode, compileScenario, scenarioMapReference } from "./scenario.js";
 export type {
   BorderSettings,
+  BlueprintAnchorIr,
   BotSettings,
+  CaptureZoneIr,
+  CivilizationFactionIr,
+  CivilizationFactionMemberIr,
+  CivilizationRulesIr,
+  CivilizationScenarioIr,
+  CivilizationStartingKitIr,
+  FixedBorderSettings,
+  HungerGamesScenarioIr,
+  ItemStackIr,
   MatchSettings,
+  OutpostBlueprintIr,
   RecordSettings,
   ResourceReference,
   Roster,
   ScenarioIr,
   ServerSettings,
+  ShrinkingBorderSettings,
 } from "./scenario.js";
 export type { SemanticId } from "./hash.js";
 export type { BlockPosition } from "@arena/core";
+export type { CivilizationFactionId, CivilizationRole, OutpostBlueprintId } from "@arena/core";
 export { MAX_SOURCE_BYTES } from "./raw.js";

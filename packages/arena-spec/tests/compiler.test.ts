@@ -4,7 +4,15 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import test from "node:test";
 
-import { blockPosition, PolicyParams } from "@arena/core";
+import {
+  blockPosition,
+  CIVILIZATION_FACTION_IDS,
+  CIVILIZATION_ROLES,
+  civilizationOutpostCells,
+  OUTPOST_BLOCK_COUNT,
+  OUTPOST_BLUEPRINT_ID,
+  PolicyParams,
+} from "@arena/core";
 import {
   GameMode,
   SpecError,
@@ -20,6 +28,8 @@ const HUNGER = readRepoFile("scenarios/hunger-six.toml");
 const HUNGER_MAP = readRepoFile("maps/hunger-six.toml");
 const DUEL = readRepoFile("scenarios/duel.toml");
 const DUEL_MAP = readRepoFile("maps/duel.toml");
+const CIVILIZATION = readRepoFile("scenarios/civilization-six.toml");
+const CIVILIZATION_MAP = readRepoFile("maps/civilization-six.toml");
 const UNKNOWN_OPERATION = readRepoFile("fixtures/spec/unknown-operation.toml");
 const UNKNOWN_FIELD = readRepoFile("fixtures/spec/unknown-field.toml");
 const BASELINE_POLICY = readRepoFile("policies/baseline.toml");
@@ -101,6 +111,132 @@ test("scenario_v1_compiles_hunger_six_and_duel", () => {
   assert.equal(duel.map.lootContainers.length, 2);
   assert.equal(duel.seed, 88_172_645_463_325_252n);
   assert.notEqual(hunger.semanticId, duel.semanticId);
+});
+
+test("civilization_scenario_compiles_fixed_seats_goals_and_outposts", () => {
+  const scenario = compileScenario(CIVILIZATION, CIVILIZATION_MAP);
+  assert.equal(scenario.mode, GameMode.Civilization);
+  if (scenario.mode !== GameMode.Civilization) throw new Error("civilization fixture compiled as the wrong mode");
+
+  assert.deepEqual(scenario.civilization.factions.map(({ id }) => id), CIVILIZATION_FACTION_IDS);
+  assert.deepEqual(scenario.civilization.factions.map(({ members }) => members.map(({ seat }) => seat)), [[0, 1, 2], [3, 4, 5]]);
+  assert.deepEqual(scenario.civilization.factions.map(({ members }) => members.map(({ role }) => role)), [
+    [...CIVILIZATION_ROLES],
+    [...CIVILIZATION_ROLES],
+  ]);
+  assert.deepEqual(scenario.civilization.startingKit, [
+    { item: "minecraft:bread", count: 4 },
+    { item: "minecraft:wooden_axe", count: 1 },
+    { item: "minecraft:wooden_pickaxe", count: 1 },
+    { item: "minecraft:wooden_sword", count: 1 },
+  ]);
+  assert.equal(scenario.border.kind, "fixed");
+  assert.equal(scenario.border.diameterBlocks, 192);
+  assert.equal(scenario.matchSettings.graceTicks, 2_400n);
+  assert.equal(scenario.matchSettings.authoritativeMaxTicks, 18_000n);
+  assert.equal(scenario.civilization.captureZone.uncontestedTicks, 200);
+  assert.equal(scenario.civilization.captureZone.pointsPerOwnedTick, 1);
+  assert.equal(scenario.civilization.blueprint.id, OUTPOST_BLUEPRINT_ID);
+  assert.deepEqual(scenario.civilization.captureZone.min, blockPosition(92, 65, 92));
+  assert.deepEqual(scenario.civilization.captureZone.max, blockPosition(99, 70, 99));
+  assert.deepEqual(scenario.civilization.blueprint.anchors.ember.position, blockPosition(38, 65, 92));
+  assert.equal(scenario.civilization.blueprint.anchors.ember.rotationDegrees, 0);
+  assert.deepEqual(scenario.civilization.blueprint.anchors.tide.position, blockPosition(151, 65, 92));
+  assert.equal(scenario.civilization.blueprint.anchors.tide.rotationDegrees, 180);
+  for (const anchor of Object.values(scenario.civilization.blueprint.anchors)) {
+    assert.equal(civilizationOutpostCells(anchor.position, anchor.rotationDegrees).length, OUTPOST_BLOCK_COUNT);
+  }
+  assert.deepEqual(scenario.map.spawns.map(({ position }) => position), [
+    blockPosition(24, 65, 94),
+    blockPosition(24, 65, 96),
+    blockPosition(24, 65, 98),
+    blockPosition(167, 65, 94),
+    blockPosition(167, 65, 96),
+    blockPosition(167, 65, 98),
+  ]);
+  assert.equal(scenario.map.lootContainers.length, 2);
+
+  const movedZone = compileScenario(CIVILIZATION.replace("x = 92", "x = 93"), CIVILIZATION_MAP);
+  assert.equal(movedZone.map.semanticId, scenario.map.semanticId);
+  assert.notEqual(movedZone.semanticId, scenario.semanticId);
+
+  const negativeHeightMap = CIVILIZATION_MAP
+    .replace("min_y = 0", "min_y = -100")
+    .replace("max_y = 128", "max_y = 28")
+    .replaceAll("y = 64", "y = -36")
+    .replaceAll("y = 65", "y = -35")
+    .replaceAll("y = 68", "y = -32")
+    .replaceAll("y = 69", "y = -31");
+  const negativeHeightScenario = CIVILIZATION
+    .replaceAll("y = 65", "y = -35")
+    .replaceAll("y = 70", "y = -30");
+  const belowZero = compileScenario(negativeHeightScenario, negativeHeightMap);
+  assert.equal(belowZero.mode, GameMode.Civilization);
+  assert.equal(belowZero.map.dimensions.minY, -100);
+  if (belowZero.mode !== GameMode.Civilization) throw new Error("negative-height fixture compiled as the wrong mode");
+  assert.equal(belowZero.civilization.captureZone.min.y, -35);
+});
+
+test("civilization_scenario_rejects_roster_match_and_blueprint_conflicts", () => {
+  const missingRulesSource = CIVILIZATION.slice(0, CIVILIZATION.indexOf("\n[[civilization.factions]]"));
+  const missingRules = specError(() => compileScenario(missingRulesSource, CIVILIZATION_MAP));
+  assert.equal(missingRules.kind, SpecErrorKind.MissingField);
+  assert.equal(missingRules.path, "scenario.civilization");
+
+  const modeMismatch = specError(() => compileScenario(
+    `${HUNGER}\n[civilization]\nunused = true\n`,
+    HUNGER_MAP,
+  ));
+  assert.equal(modeMismatch.kind, SpecErrorKind.InvalidValue);
+  assert.equal(modeMismatch.path, "scenario.civilization");
+
+  const invalidRoster = specError(() => compileScenario(CIVILIZATION.replace("competitors = 6", "competitors = 5"), CIVILIZATION_MAP));
+  assert.equal(invalidRoster.kind, SpecErrorKind.Range);
+  assert.equal(invalidRoster.path, "scenario.roster.competitors");
+
+  const invalidRole = specError(() => compileScenario(
+    CIVILIZATION.replace('seat = 1, role = "builder"', 'seat = 1, role = "gatherer_crafter"'),
+    CIVILIZATION_MAP,
+  ));
+  assert.equal(invalidRole.kind, SpecErrorKind.InvalidValue);
+  assert.equal(invalidRole.path, "scenario.civilization.factions[0].members[1]");
+
+  const invalidGrace = specError(() => compileScenario(CIVILIZATION.replace("grace_ticks = 2400", "grace_ticks = 2399"), CIVILIZATION_MAP));
+  assert.equal(invalidGrace.kind, SpecErrorKind.InvalidValue);
+  assert.equal(invalidGrace.path, "scenario.match.grace_ticks");
+
+  const invalidMaxTicks = specError(() => compileScenario(CIVILIZATION.replace("authoritative_max_ticks = 18000", "authoritative_max_ticks = 18001"), CIVILIZATION_MAP));
+  assert.equal(invalidMaxTicks.kind, SpecErrorKind.InvalidValue);
+  assert.equal(invalidMaxTicks.path, "scenario.match.authoritative_max_ticks");
+
+  const invalidKit = specError(() => compileScenario(CIVILIZATION.replace('item = "minecraft:bread"\ncount = 4', 'item = "minecraft:bread"\ncount = 3'), CIVILIZATION_MAP));
+  assert.equal(invalidKit.kind, SpecErrorKind.InvalidValue);
+  assert.equal(invalidKit.path, "scenario.civilization.starting_kit[0]");
+
+  const invalidBorder = specError(() => compileScenario(CIVILIZATION.replace("diameter_blocks = 192", "diameter_blocks = 191"), CIVILIZATION_MAP));
+  assert.equal(invalidBorder.kind, SpecErrorKind.Range);
+  assert.equal(invalidBorder.path, "scenario.border.diameter_blocks");
+
+  const invalidRotation = specError(() => compileScenario(CIVILIZATION.replace("rotation_degrees = 180", "rotation_degrees = 90"), CIVILIZATION_MAP));
+  assert.equal(invalidRotation.kind, SpecErrorKind.InvalidValue);
+  assert.equal(invalidRotation.path, "scenario.civilization.blueprint.anchors.tide.rotation_degrees");
+
+  const wrongSizeMap = CIVILIZATION_MAP
+    .replace("width = 192", "width = 191")
+    .replace("to = { x = 191, y = 64, z = 191 }", "to = { x = 190, y = 64, z = 191 }");
+  const wrongMapSize = specError(() => compileScenario(CIVILIZATION, wrongSizeMap));
+  assert.equal(wrongMapSize.kind, SpecErrorKind.Geometry);
+  assert.equal(wrongMapSize.path, "scenario.civilization.map");
+
+  const obstructedCapture = `${CIVILIZATION_MAP}\n[[operations]]\nkind = "path"\nposition = { x = 95, y = 65, z = 95 }\nblock = "stone"\n`;
+  const captureError = specError(() => compileScenario(CIVILIZATION, obstructedCapture));
+  assert.equal(captureError.kind, SpecErrorKind.Geometry);
+  assert.equal(captureError.path, "scenario.civilization.capture_zone");
+
+  const occupiedAnchor = `${CIVILIZATION_MAP}\n[[operations]]\nkind = "path"\nposition = { x = 38, y = 65, z = 92 }\nblock = "cobblestone"\n`;
+  const anchorError = specError(() => compileScenario(CIVILIZATION, occupiedAnchor));
+  assert.equal(anchorError.kind, SpecErrorKind.Geometry);
+  assert.equal(anchorError.path, "scenario.civilization.blueprint.anchors.ember");
 });
 
 test("scenario_map_reference_is_available_before_loading_map_source", () => {

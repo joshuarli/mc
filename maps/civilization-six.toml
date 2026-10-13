@@ -1,0 +1,102 @@
+schema = 1
+name = "civilization-six"
+
+[dimensions]
+width = 192
+depth = 192
+min_y = 0
+max_y = 128
+
+[[operations]]
+kind = "cuboid"
+from = { x = 0, y = 64, z = 0 }
+to = { x = 191, y = 64, z = 191 }
+block = "minecraft:stone"
+
+[[operations]]
+kind = "cuboid"
+from = { x = 53, y = 68, z = 85 }
+to = { x = 55, y = 69, z = 87 }
+block = "minecraft:oak_leaves"
+
+[[operations]]
+kind = "cuboid"
+from = { x = 53, y = 68, z = 105 }
+to = { x = 55, y = 69, z = 107 }
+block = "minecraft:oak_leaves"
+
+[[operations]]
+kind = "cuboid"
+from = { x = 136, y = 68, z = 85 }
+to = { x = 138, y = 69, z = 87 }
+block = "minecraft:oak_leaves"
+
+[[operations]]
+kind = "cuboid"
+from = { x = 136, y = 68, z = 105 }
+to = { x = 138, y = 69, z = 107 }
+block = "minecraft:oak_leaves"
+
+[[operations]]
+kind = "cuboid"
+from = { x = 54, y = 65, z = 86 }
+to = { x = 54, y = 68, z = 86 }
+block = "minecraft:oak_log"
+
+[[operations]]
+kind = "cuboid"
+from = { x = 54, y = 65, z = 106 }
+to = { x = 54, y = 68, z = 106 }
+block = "minecraft:oak_log"
+
+[[operations]]
+kind = "cuboid"
+from = { x = 137, y = 65, z = 86 }
+to = { x = 137, y = 68, z = 86 }
+block = "minecraft:oak_log"
+
+[[operations]]
+kind = "cuboid"
+from = { x = 137, y = 65, z = 106 }
+to = { x = 137, y = 68, z = 106 }
+block = "minecraft:oak_log"
+
+[[operations]]
+kind = "spawn"
+seat = 0
+position = { x = 24, y = 65, z = 94 }
+
+[[operations]]
+kind = "spawn"
+seat = 1
+position = { x = 24, y = 65, z = 96 }
+
+[[operations]]
+kind = "spawn"
+seat = 2
+position = { x = 24, y = 65, z = 98 }
+
+[[operations]]
+kind = "spawn"
+seat = 3
+position = { x = 167, y = 65, z = 94 }
+
+[[operations]]
+kind = "spawn"
+seat = 4
+position = { x = 167, y = 65, z = 96 }
+
+[[operations]]
+kind = "spawn"
+seat = 5
+position = { x = 167, y = 65, z = 98 }
+
+[[operations]]
+kind = "loot_container"
+position = { x = 30, y = 65, z = 94 }
+inventory = ["minecraft:bread", "minecraft:bread"]
+
+[[operations]]
+kind = "loot_container"
+position = { x = 161, y = 65, z = 94 }
+inventory = ["minecraft:bread", "minecraft:bread"]

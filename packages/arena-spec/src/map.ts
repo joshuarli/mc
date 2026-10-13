@@ -3,6 +3,7 @@ import type { BlockPosition } from "@arena/core";
 
 import { CanonicalHasher, type SemanticId } from "./hash.js";
 import { SpecError, SpecErrorKind } from "./errors.js";
+import { parseResourceId } from "./resource-id.js";
 import * as raw from "./raw.js";
 
 const MAX_BLOCK_WRITES = 1_000_000n;
@@ -245,6 +246,23 @@ export function validateSpawnSeats(map: MapIr, count: number, path: string): voi
   }
 }
 
+/** Scenario objectives must begin on the same walkable component as the spawn seats. */
+export function validateReachableSurfacePosition(map: MapIr, position: BlockPosition, path: string): void {
+  const metadata = geometryByMap.get(map);
+  if (metadata === undefined) throw new Error("compiled map geometry is missing");
+  const key = columnKey(position.x, position.z);
+  if (metadata.surfaceY.get(key) !== position.y) {
+    throw new SpecError(SpecErrorKind.Geometry, path, "position must be on a walkable surface with two clear blocks of headroom");
+  }
+  const firstSpawn = map.spawns[0];
+  if (firstSpawn === undefined) throw new Error("validated map has no spawn points");
+  const spawnComponent = metadata.components.get(columnKey(firstSpawn.position.x, firstSpawn.position.z));
+  const positionComponent = metadata.components.get(key);
+  if (spawnComponent === undefined || positionComponent === undefined || positionComponent !== spawnComponent) {
+    throw new SpecError(SpecErrorKind.Geometry, path, "position is not reachable from a spawn seat");
+  }
+}
+
 export function validateBorder(
   map: MapIr,
   initialDiameter: number,
@@ -300,13 +318,18 @@ function parseDimensions(value: raw.RawValue): MapDimensions {
   return Object.freeze({ width, depth, minY, maxY });
 }
 
-function parsePosition(value: raw.RawValue, path: string, dimensions: MapDimensions): BlockPosition {
+/** Parses signed block coordinates before a caller applies map-specific bounds. */
+export function parseBlockPosition(value: raw.RawValue, path: string): BlockPosition {
   const table = raw.asTable(value, path);
   raw.checkFields(table, ["x", "y", "z"], ["x", "y", "z"], path);
   const x = signedI32(raw.field(table, "x", path), `${path}.x`);
   const y = signedI32(raw.field(table, "y", path), `${path}.y`);
   const z = signedI32(raw.field(table, "z", path), `${path}.z`);
-  const position = makePosition(x, y, z);
+  return makePosition(x, y, z);
+}
+
+function parsePosition(value: raw.RawValue, path: string, dimensions: MapDimensions): BlockPosition {
+  const position = parseBlockPosition(value, path);
   checkPosition(position, dimensions, path);
   return position;
 }
@@ -347,36 +370,6 @@ function nonnegativeU16(value: raw.RawValue, path: string): number {
   if (integer < 0n) throw new SpecError(SpecErrorKind.Range, path, "must not be negative");
   if (integer > U16_MAX) throw new SpecError(SpecErrorKind.Range, path, "exceeds the supported seat range");
   return Number(integer);
-}
-
-function parseResourceId(value: raw.RawValue, path: string): string {
-  const text = raw.string(value, path);
-  const separator = text.indexOf(":");
-  const namespace = separator === -1 ? "minecraft" : text.slice(0, separator);
-  const resourcePath = separator === -1 ? text : text.slice(separator + 1);
-  if (separator !== -1 && resourcePath.includes(":")) return invalidResourceId(path);
-  if (
-    namespace.length === 0
-    || resourcePath.length === 0
-    || ![...namespace].every(validNamespaceCharacter)
-    || ![...resourcePath].every(validPathCharacter)
-    || resourcePath.startsWith("/")
-    || resourcePath.endsWith("/")
-    || resourcePath.includes("//")
-  ) return invalidResourceId(path);
-  return `${namespace}:${resourcePath}`;
-}
-
-function invalidResourceId(path: string): never {
-  throw new SpecError(SpecErrorKind.InvalidValue, path, "must be a valid Minecraft resource identifier");
-}
-
-function validNamespaceCharacter(character: string): boolean {
-  return /^[a-z0-9_.-]$/.test(character);
-}
-
-function validPathCharacter(character: string): boolean {
-  return character === "/" || validNamespaceCharacter(character);
 }
 
 function addBlockWrites(current: bigint, additional: bigint, path: string): bigint {
