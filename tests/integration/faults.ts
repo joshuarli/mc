@@ -324,7 +324,7 @@ function replacePluginIdentity(pluginJarPath: string, javaExecutable: string, sc
   assert.notEqual(mismatch, descriptor, "the packaged plugin descriptor must contain one supported name line");
 
   writeFileSync(descriptorPath, mismatch, { encoding: "utf8", flag: "w" });
-  execFileSync(jarExecutable, ["--update", "--file", jarPath, "--directory", jarDirectory, "plugin.yml"], {
+  execFileSync(jarExecutable, ["--update", "--file", jarPath, "-C", jarDirectory, "plugin.yml"], {
     cwd: ROOT,
     encoding: "utf8",
   });
