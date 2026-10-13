@@ -12,6 +12,9 @@ export interface ErrorSource {
   readonly os_code?: number;
   readonly cleanup_os_code?: number;
   readonly published?: boolean;
+  readonly reason?: string;
+  readonly run_id?: string;
+  readonly relative_artifact?: string;
 }
 
 export class RunnerError extends Error {

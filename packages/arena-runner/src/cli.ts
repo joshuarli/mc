@@ -1,19 +1,25 @@
+import { randomUUID } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { isAbsolute, resolve } from 'node:path';
-import { OwnedFilesError } from './owned-files/index.js';
+import { TextDecoder } from 'node:util';
+import { compilePolicy, compileScenario, MAX_SOURCE_BYTES, scenarioMapReference, SpecError } from '@arena/spec';
+import { OwnedFilesError, readOwnedFile } from './owned-files/index.js';
 import { consumeRawArgv, RawArgvError, rawArgumentText } from './owned-files/raw-argv.js';
 import { comparisonJson, inspectJson, reconstruct, reportJson, type Evidence } from './evidence.js';
 import { canonicalJson } from './canonical.js';
 import { RunnerError } from './errors.js';
-import { prepareRun } from './prepare.js';
+import { prepareRun, resolveScenarioResource } from './prepare.js';
 import { replayPolicyJson } from './policy-replay.js';
 import { isValidRunId } from './run-id.js';
 import { inspectStoppedRun } from './runtime/inspect.js';
+import { runPreparedRun } from './runtime/run.js';
 import { readSegment, TraceError, type TraceSegment } from './trace.js';
 
 export type CliResult =
   | { readonly kind: 'success'; readonly exitCode: 0; readonly stdout: string }
   | { readonly kind: 'failure'; readonly exitCode: 2 | 3 | 5 | 6; readonly stderr: string };
+
+const SOURCE_UTF8 = new TextDecoder('utf-8', { fatal: true });
 
 export async function runCli(args: readonly string[]): Promise<CliResult> {
   return await runCliBytes(args.map((argument) => Buffer.from(argument, 'utf8')));
@@ -50,7 +56,8 @@ async function runCliBytes(args: readonly Buffer[]): Promise<CliResult> {
       return success(comparisonJson(left, right));
     }
     if (command === 'prepare') return await prepareCommand(rest);
-    if (command === 'run') throw invalidInput('run_requires_scenario');
+    if (command === 'validate') return await validateCommand(rest);
+    if (command === 'run') return await runCommand(rest);
     throw invalidInput('unknown_command');
   } catch (error) {
     return failure(error);
@@ -131,13 +138,7 @@ async function prepareCommand(args: readonly Buffer[]): Promise<CliResult> {
   if (!isValidRunId(runId)) {
     throw new RunnerError('invalid_input', 'run id', { kind: 'invalid_run_id' });
   }
-  const helperPath = process.env.ARENA_FS_HELPER;
-  if (helperPath === undefined || helperPath.length === 0) {
-    throw new RunnerError('missing_prerequisite', 'filesystem helper', { kind: 'helper_not_configured' });
-  }
-  if (!isAbsolute(helperPath)) {
-    throw new RunnerError('invalid_input', 'filesystem helper', { kind: 'helper_path_not_absolute' });
-  }
+  const helperPath = configuredAbsolutePath('ARENA_FS_HELPER', 'filesystem helper');
 
   const ownedRoot = Buffer.from(process.cwd(), 'utf8');
   const prepared = await prepareRun(helperPath, ownedRoot, scenarioPath, runId);
@@ -158,19 +159,241 @@ async function inspectRunCommand(args: readonly Buffer[]): Promise<CliResult> {
   if (!isValidRunId(runId)) {
     throw new RunnerError('invalid_input', 'run id', { kind: 'invalid_run_id' });
   }
-  const helperPath = process.env.ARENA_FS_HELPER;
-  if (helperPath === undefined || helperPath.length === 0) {
-    throw new RunnerError('missing_prerequisite', 'filesystem helper', { kind: 'helper_not_configured' });
-  }
-  if (!isAbsolute(helperPath)) {
-    throw new RunnerError('invalid_input', 'filesystem helper', { kind: 'helper_path_not_absolute' });
-  }
+  const helperPath = configuredAbsolutePath('ARENA_FS_HELPER', 'filesystem helper');
   const inspection = await inspectStoppedRun({
     helperPath,
     ownedRoot: Buffer.from(process.cwd(), 'utf8'),
     runId,
   });
   return success(inspection);
+}
+
+async function validateCommand(args: readonly Buffer[]): Promise<CliResult> {
+  if (args.length !== 2 || argumentText(args[0]!, 1) !== '--scenario') {
+    throw invalidInput('validate_requires_scenario');
+  }
+  const scenarioPath = normalizeScenarioPath(args[1]!);
+  const helperPath = configuredAbsolutePath('ARENA_FS_HELPER', 'filesystem helper');
+  const inputs = await compileScenarioAndPolicy(helperPath, Buffer.from(process.cwd(), 'utf8'), scenarioPath);
+  return success({
+    schema: 1,
+    scenario: {
+      name: inputs.scenario.name,
+      mode: inputs.scenario.mode,
+      seed: inputs.scenario.seed.toString(10),
+      semantic_id: inputs.scenario.semanticId,
+    },
+    map: {
+      semantic_id: inputs.scenario.map.semanticId,
+      dimensions: inputs.scenario.map.dimensions,
+      block_count: inputs.scenario.map.blocks.length,
+      spawn_count: inputs.scenario.map.spawns.length,
+      loot_container_count: inputs.scenario.map.lootContainers.length,
+    },
+    policy: {
+      version: inputs.policy.version,
+      semantic_id: inputs.policy.semanticId,
+    },
+    roster: {
+      competitors: inputs.scenario.roster.competitors,
+      spectator_capacity: inputs.scenario.roster.spectatorCapacity.toString(10),
+    },
+  });
+}
+
+async function runCommand(args: readonly Buffer[]): Promise<CliResult> {
+  let scenarioArgument: Buffer | undefined;
+  let runId: string | undefined;
+  for (let index = 0; index < args.length;) {
+    const option = argumentText(args[index]!, index + 1);
+    if (option === '--scenario') {
+      if (scenarioArgument !== undefined || index + 1 >= args.length) {
+        throw invalidInput('run_requires_scenario');
+      }
+      scenarioArgument = args[index + 1]!;
+      index += 2;
+      continue;
+    }
+    if (option === '--run-id') {
+      if (runId !== undefined || index + 1 >= args.length) throw invalidInput('run_invalid_run_id_option');
+      runId = argumentText(args[index + 1]!, index + 2);
+      index += 2;
+      continue;
+    }
+    throw invalidInput('unexpected_argument');
+  }
+  if (scenarioArgument === undefined) throw invalidInput('run_requires_scenario');
+  const scenarioPath = normalizeScenarioPath(scenarioArgument);
+  runId ??= randomUUID();
+  if (!isValidRunId(runId)) {
+    throw new RunnerError('invalid_input', 'run id', { kind: 'invalid_run_id' });
+  }
+
+  const helperPath = configuredAbsolutePath('ARENA_FS_HELPER', 'filesystem helper');
+  const javaHome = configuredAbsolutePath('ARENA_JAVA_HOME', 'Java runtime');
+  const paperJarPath = configuredAbsolutePath('ARENA_PAPER_JAR', 'Paper server JAR');
+  const pluginJarPath = configuredAbsolutePath('ARENA_PLUGIN_JAR', 'Arena plugin JAR');
+  const ownedRoot = Buffer.from(process.cwd(), 'utf8');
+  return await withProcessAbortSignal(async (signal) => {
+    await compileScenarioAndPolicy(helperPath, ownedRoot, scenarioPath, signal);
+    const preparedRun = await prepareRun(helperPath, ownedRoot, scenarioPath, runId!, signal);
+    const completed = await runPreparedRun({
+      preparedRun,
+      helperPath,
+      ownedRoot,
+      javaExecutable: resolve(javaHome, 'bin', 'java'),
+      paperJarPath,
+      pluginJarPath,
+      signal,
+    });
+    if (completed.outcome.kind === 'abort') {
+      const finalTrace = completed.trace.segments.at(-1);
+      throw new RunnerError('runtime_failure', 'completed run', {
+        kind: 'operational_abort',
+        reason: completed.outcome.reason,
+        run_id: completed.runId,
+        ...(finalTrace === undefined ? {} : { relative_artifact: finalTrace.relativePath.toString('utf8') }),
+      });
+    }
+
+    const inspection = await inspectStoppedRun({ helperPath, ownedRoot, runId: completed.runId });
+    return success({
+      schema: 1,
+      run_id: completed.runId,
+      created_paths: {
+        run_directory: preparedRun.runDirectoryPath.toString('utf8'),
+        world_plan: preparedRun.worldPlanPath.toString('utf8'),
+        server_directory: Buffer.concat([preparedRun.runDirectoryPath, Buffer.from('/server', 'ascii')]).toString('utf8'),
+      },
+      trace: {
+        segments: completed.trace.segments.map((segment) => ({
+          path: segment.relativePath.toString('utf8'),
+          byte_length: segment.byteLength,
+        })),
+        total_byte_length: completed.trace.totalByteLength,
+      },
+      report: inspection.report,
+      stats: inspection.stats,
+    });
+  });
+}
+
+async function compileScenarioAndPolicy(
+  helperPath: string,
+  ownedRoot: Buffer,
+  scenarioPath: Buffer,
+  signal?: AbortSignal,
+): Promise<Readonly<{
+  scenario: ReturnType<typeof compileScenario>;
+  policy: ReturnType<typeof compilePolicy>;
+}>> {
+  const scenarioSource = decodeSource(await readSource(helperPath, ownedRoot, scenarioPath, 'scenario input', signal), 'scenario input');
+  let mapReference: ReturnType<typeof scenarioMapReference>;
+  try {
+    mapReference = scenarioMapReference(scenarioSource);
+  } catch (error) {
+    throw mapSpecError(error);
+  }
+  const mapPath = resolveScenarioResource({ scenarioPath, reference: mapReference });
+  const mapSource = decodeSource(await readSource(helperPath, ownedRoot, mapPath, 'map input', signal), 'map input');
+  let scenario: ReturnType<typeof compileScenario>;
+  try {
+    scenario = compileScenario(scenarioSource, mapSource);
+  } catch (error) {
+    throw mapSpecError(error);
+  }
+  const policyPath = resolveScenarioResource({ scenarioPath, reference: scenario.policyReference });
+  const policySource = decodeSource(await readSource(helperPath, ownedRoot, policyPath, 'policy input', signal), 'policy input');
+  let policy: ReturnType<typeof compilePolicy>;
+  try {
+    policy = compilePolicy(policySource);
+  } catch (error) {
+    throw mapSpecError(error);
+  }
+  return Object.freeze({ scenario, policy });
+}
+
+async function readSource(
+  helperPath: string,
+  ownedRoot: Buffer,
+  relativePath: Buffer,
+  resource: string,
+  signal?: AbortSignal,
+): Promise<Buffer> {
+  try {
+    return await readOwnedFile({
+      helperPath,
+      ownedRoot,
+      relativePath,
+      maxBytes: MAX_SOURCE_BYTES,
+      ...(signal === undefined ? {} : { signal }),
+    });
+  } catch (error) {
+    if (!(error instanceof OwnedFilesError)) throw error;
+    const category = error.category === 'not_found' || error.category === 'helper_start'
+      ? 'missing_prerequisite'
+      : error.category === 'too_large' || error.category === 'invalid_path'
+        || error.category === 'unsupported_file_type' || error.category === 'symlink_rejected'
+        ? 'invalid_input'
+        : 'runtime_failure';
+    throw new RunnerError(category, resource, {
+      kind: error.category,
+      ...(error.errno === undefined ? {} : { os_code: error.errno }),
+    });
+  }
+}
+
+function decodeSource(bytes: Buffer, resource: string): string {
+  try {
+    return SOURCE_UTF8.decode(bytes);
+  } catch {
+    throw new RunnerError('invalid_input', resource, { kind: 'invalid_utf8' });
+  }
+}
+
+function mapSpecError(error: unknown): RunnerError {
+  if (error instanceof SpecError) {
+    const source: {
+      kind: string;
+      field?: string;
+      line?: number;
+      column?: number;
+    } = { kind: error.kind };
+    if (error.path !== undefined) source.field = error.path;
+    if (error.sourceLocation !== undefined) {
+      source.line = error.sourceLocation.line;
+      source.column = error.sourceLocation.column;
+    }
+    const resource = error.path.startsWith('map.')
+      ? 'map input'
+      : error.path.startsWith('policy.') ? 'policy input' : 'scenario input';
+    return new RunnerError('invalid_input', resource, source);
+  }
+  return new RunnerError('invalid_input', 'scenario input', { kind: 'invalid_scenario' });
+}
+
+function configuredAbsolutePath(name: string, resource: string): string {
+  const value = process.env[name];
+  if (value === undefined || value.length === 0) {
+    throw new RunnerError('missing_prerequisite', resource, { kind: 'path_not_configured' });
+  }
+  if (!isAbsolute(value)) {
+    throw new RunnerError('invalid_input', resource, { kind: 'path_not_absolute' });
+  }
+  return value;
+}
+
+async function withProcessAbortSignal<T>(operation: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  const controller = new AbortController();
+  const abort = (): void => controller.abort(new Error('runner process interrupted'));
+  process.once('SIGINT', abort);
+  process.once('SIGTERM', abort);
+  try {
+    return await operation(controller.signal);
+  } finally {
+    process.removeListener('SIGINT', abort);
+    process.removeListener('SIGTERM', abort);
+  }
 }
 
 function normalizeScenarioPath(path: Buffer): Buffer {
@@ -208,12 +431,14 @@ function helpJson(): object {
   return {
     schema: 1,
     commands: {
-      doctor: 'Report offline evidence capabilities and parked integrations.',
+      doctor: 'Report runner and runtime capabilities.',
       'inspect <segment>...': 'Validate and display ordered records from completed trace segments.',
       'inspect --run-id <id>': 'Reconstruct a stopped run result and read its player statistics.',
       'report <segment>...': 'Reconstruct the terminal result from prepared-roster and authoritative event records.',
       'compare <left-segment> <right-segment>': 'Compare two single-segment record streams exactly.',
       'prepare --scenario <path> --run-id <id>': 'Compile a scenario and stage its world plan in a new run directory.',
+      'validate --scenario <path>': 'Compile the scenario, map, and policy without staging a run.',
+      'run --scenario <path> [--run-id <id>]': 'Run a headless match and report its stopped result.',
       'replay-policy <segment>...': 'Replay recorded core policy decisions and validate correlated skill/path effect records.',
     },
     errors: {
@@ -228,17 +453,18 @@ function helpJson(): object {
 function doctorJson(): object {
   return {
     schema: 1,
-    mode: 'offline_prepare_and_evidence',
+    mode: 'headless_runtime_and_evidence',
     capabilities: {
       trace_validation: 'available',
       ordered_record_reconstruction: 'available',
       generic_record_comparison: 'available',
       policy_replay: 'available_for_recorded_policy_frames',
       authoritative_result_reporting: 'available_from_typed_event_stream',
-      process_supervision_and_world_reset: 'parked_missing_live_prerequisites',
+      process_supervision_and_world_reset: 'available',
       scenario_compilation: 'available',
       world_plan_staging: 'available',
       safe_owned_path_staging: 'available',
+      stopped_run_inspection: 'available',
     },
   };
 }

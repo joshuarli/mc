@@ -17,20 +17,38 @@ function output(result: Awaited<ReturnType<typeof runCli>>): Record<string, unkn
   return JSON.parse(result.stdout) as Record<string, unknown>;
 }
 
-test('doctor describes preparation and offline evidence capabilities', async () => {
+test('doctor describes runner, runtime, and evidence capabilities', async () => {
   const result = output(await runCli(['doctor']));
-  assert.equal(result.mode, 'offline_prepare_and_evidence');
+  assert.equal(result.mode, 'headless_runtime_and_evidence');
   assert.deepEqual(result.capabilities, {
     trace_validation: 'available',
     ordered_record_reconstruction: 'available',
     generic_record_comparison: 'available',
     policy_replay: 'available_for_recorded_policy_frames',
     authoritative_result_reporting: 'available_from_typed_event_stream',
-    process_supervision_and_world_reset: 'parked_missing_live_prerequisites',
+    process_supervision_and_world_reset: 'available',
     scenario_compilation: 'available',
     world_plan_staging: 'available',
     safe_owned_path_staging: 'available',
+    stopped_run_inspection: 'available',
   });
+});
+
+test('validate compiles a scenario, map, and policy without preparing a run', async () => {
+  const helperPath = resolve(repositoryRoot, '.work/arena-fs/arena-fs');
+  const previousHelper = process.env.ARENA_FS_HELPER;
+  process.env.ARENA_FS_HELPER = helperPath;
+  try {
+    const result = output(await runCli(['validate', '--scenario', 'scenarios/hunger-six.toml']));
+    assert.equal(result.schema, 1);
+    assert.equal(typeof (result.scenario as Record<string, unknown>).semantic_id, 'string');
+    assert.equal(typeof (result.map as Record<string, unknown>).semantic_id, 'string');
+    assert.equal(typeof (result.policy as Record<string, unknown>).semantic_id, 'string');
+    assert.deepEqual(result.roster, { competitors: 6, spectator_capacity: '4' });
+  } finally {
+    if (previousHelper === undefined) delete process.env.ARENA_FS_HELPER;
+    else process.env.ARENA_FS_HELPER = previousHelper;
+  }
 });
 
 test('prepare requires both the scenario path and run id options', async () => {

@@ -16,16 +16,24 @@ import {
   type TraceSegment,
 } from '../trace.js';
 import { readStoppedPlayerStats } from './observations.js';
+import type { StoppedPlayerStats } from './observations.js';
 
 const RUN_DIRECTORY_PREFIX = '.work/arena/runs/';
 const MAX_TRACE_SEGMENTS = 100_000;
+
+export interface StoppedRunInspection {
+  readonly schema: 1;
+  readonly run_id: string;
+  readonly report: ReturnType<typeof reconstructRunEvidence>['report'];
+  readonly stats: readonly StoppedPlayerStats[];
+}
 
 /** Inspects a stopped owned run from its persisted lifecycle evidence and Minecraft stats. */
 export async function inspectStoppedRun(options: Readonly<{
   helperPath: string;
   ownedRoot: Buffer;
   runId: string;
-}>): Promise<object> {
+}>): Promise<StoppedRunInspection> {
   if (!isValidRunId(options.runId)) {
     throw new RunnerError('invalid_input', 'run id', { kind: 'invalid_run_id' });
   }

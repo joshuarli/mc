@@ -1,11 +1,13 @@
 # Runner operations
 
-The runner supports offline scenario preparation, stopped-run inspection, and evidence commands. `prepare` compiles a repository scenario and stages its world plan in a new run directory. Live match supervision remains parked while the Paper/Mineflayer lifecycle coordinator is completed.
+The runner supports scenario validation and preparation, headless match supervision, stopped-run inspection, and evidence commands. `validate` compiles the scenario, map, and policy without creating a run. `prepare` compiles a repository scenario and stages its world plan in a new run directory. `run` stages the world plan, starts an owned Paper server, runs the configured competitors, stops the server, and reports the reconstructed result and player statistics.
 
 ```sh
 ./arena doctor
+./arena validate --scenario scenarios/hunger-six.toml
 ./arena prepare --scenario scenarios/hunger-six.toml --run-id smoke-001
-./arena inspect --run-id smoke-001
+./arena run --scenario scenarios/hunger-six.toml --run-id smoke-002
+./arena inspect --run-id smoke-002
 ./arena inspect tests/fixtures/replay-report-v2/segment-0001.json
 ./arena replay-policy path/to/policy-trace-segment.json
 ./arena report path/to/lifecycle-trace-segment.json
@@ -14,7 +16,7 @@ The runner supports offline scenario preparation, stopped-run inspection, and ev
 
 Successful commands print one JSON object to stdout. `inspect`, `replay-policy`, and `report` accept one or more complete trace segments; segments are sorted by their declared sequence range and must belong to one run with no gaps or overlaps. `inspect` accepts generic records. `replay-policy` verifies `policy-replay-v1` decisions and post-decision RNG states against the core policy; separate correlated `policy-effect-v1` records preserve skill outcomes and actual path updates. `report` requires the typed lifecycle stream and reconstructs the terminal outcome and elimination counts from the prepared roster, ordered elimination events, public states, and terminal clock. `compare` accepts two single-segment files and compares sequence ranges and ordered records exactly. It ignores only the envelope `run_id`; it does not normalize any record content.
 
-`prepare` requires a repository-relative scenario path and a run ID of 1–64 ASCII letters, digits, underscores, or hyphens, beginning with a letter or digit. It reads bounded UTF-8 scenario and map sources, then writes `.work/arena/runs/<run-id>/world-plan.json`. A successful command prints the concrete run-directory and world-plan paths. `doctor` describes the paths available in the TypeScript runner. Policy replay and event-derived result reporting are available for complete recorded evidence; live lifecycle supervision and world reset still require the prepared Paper/Mineflayer stack.
+`prepare` requires a repository-relative scenario path and a run ID of 1–64 ASCII letters, digits, underscores, or hyphens, beginning with a letter or digit. It reads bounded UTF-8 scenario and map sources, then writes `.work/arena/runs/<run-id>/world-plan.json`. `validate` also compiles the referenced policy and does not create a run directory. `run` accepts the same repository-relative scenario path and an optional run ID; without one, it generates a UUID. It requires the Java runtime, Paper server JAR, plugin JAR, and owned-files helper configured by `./arena`. A successful run prints the concrete created paths, trace segments, reconstructed result, and stopped player statistics. `doctor` describes the available runner and runtime paths.
 
 `inspect --run-id <id>` reads the completed run's consecutive TypeScript trace-v2 segments, reconstructs its authoritative result, and reads stopped-player statistics by the offline UUIDs in the prepared roster. It rejects an active run while holding the run lease. Missing stats files are reported as absent with null counters; a missing Minecraft counter in an existing stats file is reported as zero.
 
