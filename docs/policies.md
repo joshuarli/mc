@@ -80,3 +80,9 @@ Geometry uses safe-integer block coordinates. Distances and border checks use ex
 `arena-bots` converts each client's receipt-tracked view into `AgentObservation`. That conversion owns the assignment of current, stale, and unknown states. Navigation and policy must use the same per-client knowledge; shared pathfinder state cannot widen the client's view. Equipment and food intents address the exact inventory slots validated from that client's received inventory.
 
 This offline core slice does not prove receipt isolation. Before any fairness claim, the adapter must pass the live two-client test with disjoint chunk/entity receipt, hidden-state perturbation, and identical permitted observations producing identical decisions. Core fixtures prove deterministic policy behavior only.
+
+## Civilization client
+
+`createMineflayerCivilizationClient()` binds one Mineflayer connection to a validated seat, faction, role, objective, and public six-seat roster. `observe(sharedMatchTick)` combines that connection's ordinary observation and civilization view at the same authoritative match tick. Own material knowledge starts unknown until the client receives its full inventory window snapshot, and becomes stale on respawn until another snapshot arrives. Resource sightings and outpost cells come only from blocks and entities received by that client.
+
+Team reports enter through `receiveTeamReport()` with an authenticated sender seat and current shared tick supplied separately from the decoded report. The client validates report fields, faction eligibility, age, rate, encoded size, and queue capacity before exposing a message in an observation. `run()` accepts the existing adapter skill intents, including exact block arrival; `runCivilization()` accepts the civilization gathering, crafting, transfer, and building intents. Both use the same client-owned skill lifecycle.

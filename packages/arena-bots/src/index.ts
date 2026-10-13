@@ -18,6 +18,14 @@ export type {
   PathDiagnosticRecord,
 } from './path-diagnostics.js';
 
+export { createMineflayerCivilizationClient } from './civilization-client.js';
+export type {
+  CivilizationRosterMember,
+  CivilizationTeamReportInput,
+  MineflayerCivilizationClient,
+  MineflayerCivilizationClientOptions,
+} from './civilization-client.js';
+
 export interface MineflayerArenaClient {
   observe(tick: number): AgentObservation;
   /** Runs a core policy intent or awaits exact arrival for the bot-only block navigation intent. */
