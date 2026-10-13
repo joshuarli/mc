@@ -1,24 +1,28 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {
-  type ControlMessage,
-  type ReadyPayload,
-} from '../src/control/index.js';
+import { type ControlMessage } from '../src/control/index.js';
 import { parseSegment } from '../src/trace.js';
 import { RunnerError } from '../src/errors.js';
 import { RuntimeTraceBuilder } from '../src/runtime/trace.js';
 
 const RUN_ID = 'runtime-trace-test';
-const READY: ReadyPayload = {
-  server: { name: 'Paper', version: 'test', minecraft_version: 'test', protocol_version: 1 },
-  plugin: { name: 'Arena', version: 'test' },
-  capabilities: ['hunger_games_v1'],
+const READY: Extract<ControlMessage, { readonly type: 'ready' }> = {
+  protocol: 1,
+  run_id: RUN_ID,
+  sequence: 2n,
+  correlation: 1n,
+  type: 'ready',
+  payload: {
+    server: { name: 'Paper', version: 'test', minecraft_version: 'test', protocol_version: 1 },
+    plugin: { name: 'Arena', version: 'test' },
+    capabilities: ['hunger_games_v1'],
+  },
 };
 
 test('runtime trace retains critical clocks and terminal outcome', () => {
   const trace = new RuntimeTraceBuilder(RUN_ID);
   trace.recordReady(READY);
-  trace.record(clockMessage(2n, 'waiting'));
+  trace.record(clockMessage(3n, 'waiting'));
   trace.record({
     protocol: 1,
     run_id: RUN_ID,
@@ -26,11 +30,11 @@ test('runtime trace retains critical clocks and terminal outcome', () => {
     type: 'heartbeat',
     payload: {},
   });
-  trace.record(clockMessage(4n, 'waiting'));
+  trace.record(clockMessage(5n, 'waiting'));
   trace.record({
     protocol: 1,
     run_id: RUN_ID,
-    sequence: 5n,
+    sequence: 6n,
     type: 'outcome',
     payload: {
       kind: 'abort',
@@ -45,12 +49,20 @@ test('runtime trace retains critical clocks and terminal outcome', () => {
   assert.equal(segment.runId, RUN_ID);
   assert.equal(segment.firstSequence, 1n);
   assert.equal(segment.lastSequence, 4n);
-  assert.deepEqual(segment.records.map((record) => record.event), [
+  assert.deepEqual(segment.records.map((record) => record.type), [
     'ready',
     'public_clock',
     'public_clock',
     'outcome',
   ]);
+  assert.deepEqual(segment.records[0], {
+    protocol: 1,
+    run_id: RUN_ID,
+    sequence: '2',
+    correlation: '1',
+    type: 'ready',
+    payload: READY.payload,
+  });
   assert.equal(trace.finalize().equals(bytes), true);
   assert.throws(() => trace.record(clockMessage(6n, 'aborted')), (error: unknown) =>
     error instanceof RunnerError && error.source.kind === 'trace_finalized');
@@ -92,7 +104,7 @@ test('runtime trace rejects hello frames so credentials cannot enter evidence', 
   trace.record({
     protocol: 1,
     run_id: RUN_ID,
-    sequence: 2n,
+    sequence: 3n,
     type: 'outcome',
     payload: { kind: 'abort', reason: 'operator', survivors: [], at: null },
   });
@@ -108,7 +120,7 @@ test('runtime trace fails before its bounded record buffer can grow without limi
       trace.record({
         protocol: 1,
         run_id: RUN_ID,
-        sequence: BigInt(index + 2),
+        sequence: BigInt(index + 3),
         type: 'public_state',
         payload: { at: { domain: 'match', value: BigInt(index + 1) }, alive_seats: [0, 1] },
       });

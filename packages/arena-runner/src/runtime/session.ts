@@ -10,7 +10,6 @@ import {
   type ControlCapability,
   type ControlMessage,
   type PreparePayload,
-  type ReadyPayload,
 } from '../control/index.js';
 
 const CONTROL_HOST = '127.0.0.1';
@@ -207,7 +206,7 @@ class TcpControlListenerLease implements ControlListenerLease {
       const ready = receiver.acceptFrame(await reader.readFrame());
       if (signal?.aborted) throw new ControlSessionError('cancelled', signal.reason);
       if (ready.type !== 'ready') throw new ControlSessionError('invalid_handshake');
-      return new AuthenticatedControlSession(socket, reader, receiver, this.#options.runId, ready.payload, acknowledgmentSequence);
+      return new AuthenticatedControlSession(socket, reader, receiver, this.#options.runId, ready, acknowledgmentSequence);
     } catch (error) {
       socket.destroy();
       if (signal?.aborted) throw new ControlSessionError('cancelled', signal.reason);
@@ -258,14 +257,14 @@ export async function bindControlListener(options: ControlListenerOptions): Prom
 
 /** Owns the authenticated plugin socket and its independent runner sequence. */
 export interface ControlSession {
-  readonly ready: ReadyPayload;
+  readonly ready: Extract<ControlMessage, { readonly type: 'ready' }>;
   send(command: RunnerCommand): Promise<bigint>;
   messages(): AsyncGenerator<ControlMessage>;
   close(): Promise<void>;
 }
 
 class AuthenticatedControlSession implements ControlSession {
-  readonly ready: ReadyPayload;
+  readonly ready: Extract<ControlMessage, { readonly type: 'ready' }>;
   readonly #socket: Socket;
   readonly #reader: ControlFrameReader;
   readonly #receiver: ControlReceiver;
@@ -282,7 +281,7 @@ class AuthenticatedControlSession implements ControlSession {
     reader: ControlFrameReader,
     receiver: ControlReceiver,
     runId: string,
-    ready: ReadyPayload,
+    ready: Extract<ControlMessage, { readonly type: 'ready' }>,
     lastOutgoingSequence: bigint,
   ) {
     this.#socket = socket;
@@ -348,6 +347,15 @@ class AuthenticatedControlSession implements ControlSession {
           throw new ControlSessionError('invalid_acknowledgment');
         }
         this.#pendingAcknowledgment = undefined;
+      } else if (message.type === 'error') {
+        if (this.#pendingAcknowledgment === undefined || message.correlation !== this.#pendingAcknowledgment) {
+          this.#terminateAfterProtocolFailure();
+          throw new ControlSessionError('invalid_acknowledgment');
+        }
+        this.#pendingAcknowledgment = undefined;
+      } else if (message.correlation !== undefined) {
+        this.#terminateAfterProtocolFailure();
+        throw new ControlSessionError('control_protocol');
       }
       if (message.type === 'outcome') this.#terminal = true;
       yield message;
@@ -443,7 +451,7 @@ class ControlFrameReader {
   }
 }
 
-async function writeFrame(socket: Socket, frame: Buffer): Promise<void> {
+async function writeFrame(socket: Socket, frame: Uint8Array): Promise<void> {
   if (socket.destroyed) throw new ControlSessionError('control_closed');
   await new Promise<void>((resolve, reject) => {
     socket.write(frame, (error?: Error | null) => {

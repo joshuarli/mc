@@ -1,5 +1,5 @@
 import { canonicalJson, sha256Json } from '../canonical.js';
-import type { ControlMessage, ReadyPayload } from '../control/index.js';
+import type { ControlMessage } from '../control/index.js';
 import type { StrictJsonValue } from '../control/strict-json.js';
 import { MAX_OWNED_FILE_BYTES, stageOwnedFile, type FileIdentity } from '../owned-files/index.js';
 import { RunnerError } from '../errors.js';
@@ -20,6 +20,7 @@ export class RuntimeTraceBuilder {
   #recordBytes = 0;
   #hasReady = false;
   #hasOutcome = false;
+  #lastControlSequence = 0n;
   #finalized: Buffer | undefined;
 
   constructor(runId: string) {
@@ -37,12 +38,17 @@ export class RuntimeTraceBuilder {
   }
 
   /** Records readiness without accepting the hello payload that carries the control token. */
-  recordReady(ready: ReadyPayload): void {
+  recordReady(ready: Extract<ControlMessage, { readonly type: 'ready' }>): void {
     if (this.#hasReady || this.#records.length !== 0) {
       throw new RunnerError('runtime_failure', 'run trace', { kind: 'readiness_out_of_order' });
     }
-    this.#append({ type: 'ready', payload: toTraceValue(ready) });
+    if (ready.protocol !== 1 || ready.run_id !== this.#runId || ready.sequence <= 0n
+        || ready.correlation === undefined || ready.correlation <= 0n) {
+      throw new RunnerError('runtime_failure', 'run trace', { kind: 'invalid_readiness_envelope' });
+    }
+    this.#append(toTraceRecord(ready));
     this.#hasReady = true;
+    this.#lastControlSequence = ready.sequence;
   }
 
   /** Records each semantic event; a size limit failure invalidates the run instead of dropping it. */
@@ -57,6 +63,9 @@ export class RuntimeTraceBuilder {
     if (message.run_id !== this.#runId) {
       throw new RunnerError('runtime_failure', 'run trace', { kind: 'run_id_mismatch' });
     }
+    if (message.sequence <= this.#lastControlSequence) {
+      throw new RunnerError('runtime_failure', 'run trace', { kind: 'non_monotonic_control_sequence' });
+    }
     if (this.#hasOutcome) {
       throw new RunnerError('runtime_failure', 'run trace', { kind: 'event_after_outcome' });
     }
@@ -64,6 +73,7 @@ export class RuntimeTraceBuilder {
     switch (message.type) {
       case 'heartbeat':
       case 'metrics':
+        this.#lastControlSequence = message.sequence;
         return;
       case 'prepare':
       case 'start':
@@ -73,16 +83,8 @@ export class RuntimeTraceBuilder {
         break;
     }
 
-    const payload = message.type === 'error'
-      ? { code: message.payload.code }
-      : toTraceValue(message.payload);
-    const record: Record<string, unknown> = {
-      type: message.type,
-      control_sequence: message.sequence.toString(),
-      payload,
-    };
-    if (message.correlation !== undefined) record.correlation = message.correlation.toString();
-    this.#append(toTraceRecord(record));
+    this.#append(toTraceRecord(message));
+    this.#lastControlSequence = message.sequence;
     if (message.type === 'outcome') this.#hasOutcome = true;
   }
 
@@ -156,7 +158,7 @@ export async function stageRuntimeTrace(options: Readonly<{
   return Object.freeze({ relativePath, identity, byteLength: contents.byteLength });
 }
 
-function toTraceRecord(value: Record<string, unknown>): TraceRecord {
+function toTraceRecord(value: unknown): TraceRecord {
   const converted = toTraceValue(value);
   if (converted === null || typeof converted !== 'object' || Array.isArray(converted)) {
     throw new RunnerError('runtime_failure', 'run trace', { kind: 'invalid_record' });
