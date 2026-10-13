@@ -9,6 +9,8 @@ const suites = new Map([
   ["spec", join(root, ".work", "build", "packages", "arena-spec", "tests")],
   ["bots", join(root, ".work", "build", "packages", "arena-bots", "tests")],
   ["runner", join(root, ".work", "build", "packages", "arena-runner", "tests")],
+  ["owned-files", join(root, ".work", "build", "packages", "arena-runner", "tests")],
+  ["runtime", join(root, ".work", "build", "packages", "arena-runner", "tests")],
   ["tooling", join(root, "tests", "tooling", "typescript-build.test.mjs")]
 ]);
 const integrationCases = new Map([
@@ -60,6 +62,10 @@ if (suite === "integration") {
 } else if (suite === "protocol") {
   const testDirectory = join(root, ".work", "build", "packages", "arena-runner", "tests");
   targets = compiledTestFiles(testDirectory, /^control-.*\.test\.js$/, "control test output is unavailable; build the control target first");
+} else if (suite === "owned-files") {
+  targets = compiledTestFiles(target, /^owned-files-native\.test\.js$/, "owned-files test output is unavailable; build the owned-files target first");
+} else if (suite === "runtime") {
+  targets = compiledTestFiles(target, /^runtime-.*\.test\.js$/, "runtime test output is unavailable; build the runtime target first");
 } else if (target && suite !== "tooling") {
   targets = compiledTestFiles(target, /\.test\.js$/, `no compiled ${suite} tests are available; build the ${suite} target first`);
 } else if (target) {

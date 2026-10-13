@@ -24,7 +24,7 @@ test("typescript build rejects an unknown target", () => {
   assert.equal(result.error, undefined);
   assert.equal(result.status, 2);
   assert.equal(result.stdout, "");
-  assert.equal(result.stderr, "typescript build: expected all, stack, control, core, spec, bots, or runner\n");
+  assert.equal(result.stderr, "typescript build: expected all, stack, control, owned-files, runtime, core, spec, bots, or runner\n");
 });
 
 test("named test runner dispatches suite files and rejects unknown cases", (context) => {

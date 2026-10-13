@@ -440,9 +440,9 @@ usage() {
     cat <<'EOF'
 usage:
   ./arena bootstrap
-  ./arena build [--package core|spec|bots|control|runner|all]
+  ./arena build [--package core|spec|bots|control|owned-files|runtime|runner|all]
   ./arena check <compatibility|build-script>
-  ./arena test --suite <core|spec|bots|runner|protocol|integration|acceptance|java> --case <name>
+  ./arena test --suite <core|spec|bots|owned-files|runtime|runner|protocol|integration|acceptance|java> --case <name>
   ./arena <report|inspect|compare|prepare|validate|doctor|run|replay-policy> <arguments...>
 EOF
 }
@@ -458,11 +458,11 @@ bootstrap() {
 build_command() {
     target=all
     if [ "$#" -gt 0 ]; then
-        [ "$#" -eq 2 ] && [ "$1" = --package ] || fail "usage: ./arena build [--package core|spec|bots|control|runner|all]"
+        [ "$#" -eq 2 ] && [ "$1" = --package ] || fail "usage: ./arena build [--package core|spec|bots|control|owned-files|runtime|runner|all]"
         target=$2
     fi
     case "$target" in
-        core|spec|bots|control|runner|all) ;;
+        core|spec|bots|control|owned-files|runtime|runner|all) ;;
         *) fail "unknown TypeScript package: $target" ;;
     esac
     prepare_node
@@ -566,6 +566,19 @@ test_command() {
             ensure_workspace_dependencies
             build_typescript control
             run_named_tests protocol "$case_name"
+            ;;
+        owned-files:*)
+            prepare_node
+            ensure_workspace_dependencies
+            build_typescript owned-files
+            build_fs_helper
+            run_named_tests owned-files "$case_name"
+            ;;
+        runtime:*)
+            prepare_node
+            ensure_workspace_dependencies
+            build_typescript runtime
+            run_named_tests runtime "$case_name"
             ;;
         integration:stack|integration:maps-reset|integration:match-rules|integration:legal-player|integration:fairness)
             [ -f "$root/tests/integration/$case_name.ts" ] || fail "blocked: integration case is not ready: $case_name"

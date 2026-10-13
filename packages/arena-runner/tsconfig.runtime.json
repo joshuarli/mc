@@ -1,0 +1,7 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "tsBuildInfoFile": "../../.work/build/tsbuildinfo/arena-runner-runtime.tsbuildinfo"
+  },
+  "include": ["src/runtime/**/*.ts", "tests/runtime-*.test.ts"]
+}

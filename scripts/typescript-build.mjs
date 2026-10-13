@@ -122,10 +122,14 @@ if (target === "all") {
   compile(join("tests", "tsconfig.json"));
 } else if (target === "control") {
   compile(join("packages", "arena-runner", "tsconfig.control.json"));
+} else if (target === "owned-files") {
+  compile(join("packages", "arena-runner", "tsconfig.owned-files.json"));
+} else if (target === "runtime") {
+  compile(join("packages", "arena-runner", "tsconfig.runtime.json"));
 } else if (packages.has(target)) {
   compilePackage(target, new Set(), new Set());
 } else {
-  fail("expected all, stack, control, core, spec, bots, or runner");
+  fail("expected all, stack, control, owned-files, runtime, core, spec, bots, or runner");
 }
 
 stagePackageAliases();

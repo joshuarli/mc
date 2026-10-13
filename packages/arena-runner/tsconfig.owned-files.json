@@ -1,0 +1,7 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "tsBuildInfoFile": "../../.work/build/tsbuildinfo/arena-runner-owned-files.tsbuildinfo"
+  },
+  "include": ["src/owned-files/**/*.ts", "tests/owned-files-native.test.ts"]
+}
