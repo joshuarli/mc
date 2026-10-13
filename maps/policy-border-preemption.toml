@@ -1,0 +1,34 @@
+schema = 1
+name = "policy-border-preemption"
+
+[dimensions]
+width = 64
+depth = 64
+min_y = 0
+max_y = 128
+
+[[operations]]
+kind = "cuboid"
+from = { x = 0, y = 64, z = 0 }
+to = { x = 63, y = 64, z = 63 }
+block = "minecraft:stone"
+
+[[operations]]
+kind = "spawn"
+seat = 0
+position = { x = 4, y = 65, z = 32 }
+
+[[operations]]
+kind = "spawn"
+seat = 1
+position = { x = 52, y = 65, z = 32 }
+
+[[operations]]
+kind = "loot_container"
+position = { x = 30, y = 65, z = 31 }
+inventory = ["minecraft:bread", "minecraft:stone_sword"]
+
+[[operations]]
+kind = "loot_container"
+position = { x = 33, y = 65, z = 32 }
+inventory = ["minecraft:bread", "minecraft:stone_axe"]

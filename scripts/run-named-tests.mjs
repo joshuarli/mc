@@ -35,6 +35,7 @@ const integrationCases = new Map([
   ["faults-sigint", "faults.js"],
   ["legal-player", "legal-player.js"],
   ["legal-player-ramp", "legal-player.js"],
+  ["policy-border-preemption", "policy-border-preemption.js"],
   ["replay-report", "replay-report.js"],
   ["fairness", "fairness.js"]
 ]);
