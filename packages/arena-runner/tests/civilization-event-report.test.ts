@@ -49,3 +49,54 @@ test('civilization report requires equal authoritative scores for a scored draw'
     kind: 'draw', reason: 'tick_limit', scores: equalScores, survivors: [0, 1, 2, 3, 4, 5], at } };
   assert.equal(reconstructEventResult(runId, prepare, records).outcome.kind, 'draw');
 });
+
+function countdownDisconnectEvents(allSeats: boolean, resolutionTick = 0n): ControlMessage[] {
+  const initial = { domain: 'countdown' as const, value: 0n };
+  const disconnectedAt = { domain: 'countdown' as const, value: 1n };
+  const resolvedAt = { domain: 'match' as const, value: resolutionTick };
+  const survivors = allSeats ? [] : [0, 1, 2];
+  const disconnected = allSeats ? [0, 1, 2, 3, 4, 5] : [3, 4, 5];
+  const zeroScores = [{ faction_id: 'ember' as const, points: 0n }, { faction_id: 'tide' as const, points: 0n }] as const;
+  return [
+    { protocol: 1, run_id: runId, sequence: 1n, type: 'public_clock', payload: { phase: 'countdown', tick: initial, border_diameter_blocks: 192 } },
+    { protocol: 1, run_id: runId, sequence: 2n, type: 'public_state', payload: { at: initial, alive_seats: [0, 1, 2, 3, 4, 5] } },
+    { protocol: 1, run_id: runId, sequence: 3n, type: 'elimination', payload: { at: disconnectedAt,
+      eliminations: disconnected.map((seat) => ({ seat, cause: 'disconnect' as const })) } },
+    { protocol: 1, run_id: runId, sequence: 4n, type: 'public_state', payload: { at: disconnectedAt, alive_seats: survivors } },
+    { protocol: 1, run_id: runId, sequence: 5n, type: 'civilization_state', payload: {
+      at: resolvedAt, occupants: [], owner_faction: null, challenger_faction: null, capture_progress_ticks: 0n, scores: zeroScores } },
+    { protocol: 1, run_id: runId, sequence: 6n, type: 'public_clock', payload: { phase: 'finished', tick: resolvedAt, border_diameter_blocks: 192 } },
+    { protocol: 1, run_id: runId, sequence: 7n, type: 'outcome', payload: allSeats
+      ? { kind: 'draw', reason: 'no_survivors', scores: zeroScores, survivors, at: resolvedAt }
+      : { kind: 'faction_winner', winner_faction_id: 'ember', reason: 'elimination', scores: zeroScores, survivors, at: resolvedAt } },
+  ];
+}
+
+test('civilization report resolves a faction disconnected during countdown at match zero', () => {
+  const records = countdownDisconnectEvents(false);
+  const report = reconstructEventResult(runId, prepare, records);
+  assert.equal(report.outcome.kind, 'faction_winner');
+  assert.deepEqual(report.outcome.at, { domain: 'match', value: '0' });
+  assert.equal(report.statistics.disconnect_count, 3);
+  assert.deepEqual(report.statistics.survivor_seats, [0, 1, 2]);
+  const elimination = records[2]!;
+  if (elimination.type !== 'elimination') throw new Error('elimination required');
+  assert.deepEqual(elimination.payload.at, { domain: 'countdown', value: 1n });
+});
+
+test('civilization report resolves all countdown disconnects as a match-zero draw', () => {
+  const report = reconstructEventResult(runId, prepare, countdownDisconnectEvents(true));
+  assert.equal(report.outcome.kind, 'draw');
+  assert.equal(report.outcome.reason, 'no_survivors');
+  assert.deepEqual(report.outcome.at, { domain: 'match', value: '0' });
+  assert.equal(report.statistics.disconnect_count, 6);
+  assert.deepEqual(report.statistics.survivor_seats, []);
+});
+
+test('civilization report rejects countdown elimination resolution delayed to match one', () => {
+  for (const allSeats of [false, true]) {
+    assert.throws(() => reconstructEventResult(runId, prepare, countdownDisconnectEvents(allSeats, 1n)),
+      (error: unknown) => error instanceof TraceError && error.source.kind ===
+        (allSeats ? 'no_survivors_draw_mismatch' : 'faction_winner_does_not_match_eliminations'));
+  }
+});

@@ -192,14 +192,18 @@ function validateOutcome(
     if (lastPublicState === undefined || !sameSeats(lastPublicState.seats, survivors)) {
       throw reportFailure('terminal_public_state_mismatch', record);
     }
+    // Countdown eliminations are emitted immediately and settled by civilization at its first match tick.
+    const eliminationResolvedAtOutcome = lastEliminationTick !== undefined
+      && (sameTick(lastEliminationTick, outcome.at)
+        || (lastEliminationTick.domain === 'countdown' && outcome.at.domain === 'match' && outcome.at.value === 0n));
     const factions = new Set(survivors.map((seat) => seat < 3 ? 'ember' : 'tide'));
     if (outcome.kind === 'faction_winner' && outcome.reason === 'elimination') {
       if (factions.size !== 1 || !factions.has(outcome.winner_faction_id)
-          || lastEliminationTick === undefined || !sameTick(lastEliminationTick, outcome.at)) {
+          || !eliminationResolvedAtOutcome) {
         throw reportFailure('faction_winner_does_not_match_eliminations', record);
       }
     } else if (outcome.kind === 'draw' && outcome.reason === 'no_survivors') {
-      if (survivors.length !== 0 || lastEliminationTick === undefined || !sameTick(lastEliminationTick, outcome.at)) {
+      if (survivors.length !== 0 || !eliminationResolvedAtOutcome) {
         throw reportFailure('no_survivors_draw_mismatch', record);
       }
     } else {
