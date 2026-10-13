@@ -8,9 +8,11 @@ import { readOwnedFile, stageOwnedFile } from "../../packages/arena-runner/src/o
 import { parseSegment, MAX_TRACE_SEGMENT_BYTES } from "../../packages/arena-runner/src/trace.js";
 import { archiveDirectoryPath } from "../../packages/arena-runner/src/runtime/inspect.js";
 import { readStoppedPlayerStatsFile } from "../../packages/arena-runner/src/runtime/observations.js";
+import { runPreparedRun } from "../../packages/arena-runner/src/runtime/run.js";
 import { recordHungerGameplayEvidence, type HungerGameplayEvidence } from "./hunger-gameplay.js";
 import { createHungerRunMeasurements, type HungerRunMeasurementEvidence } from "./hunger-measurements.js";
-import { runOwnedAcceptanceScenario, type AcceptanceRunContext } from "../integration/support/owned-run.js";
+import { withHungerResourceDiagnostic } from "./hunger-resource-diagnostic.js";
+import { prepareOwnedAcceptanceRun, inspectOwnedAcceptanceRun, type runOwnedAcceptanceScenario, type AcceptanceRunContext } from "../integration/support/owned-run.js";
 
 const SCENARIOS = [
   { path: "tests/acceptance/fixtures/hunger-six-seed-481516.toml", seed: 481516n },
@@ -34,53 +36,63 @@ test("hunger-six", { timeout: 2_700_000 }, async (t) => {
     let measurementEvidence: HungerRunMeasurementEvidence | undefined;
     const measurements = createHungerRunMeasurements([0, 1, 2, 3, 4, 5]);
     const observedPolicyTick = { value: null as number | null };
-    const run = await runOwnedAcceptanceScenario(
+    const prepared = await prepareOwnedAcceptanceRun(
       scenario.path,
       `hunger-six-seed-${scenario.seed}`,
-      async (active, signal) => {
-        assertCanonicalHungerScenario(active, scenario.seed);
-        prepareSixBotRoster(active);
-        const recorder = recordHungerGameplayEvidence(active, () => observedPolicyTick.value);
-        try {
-          await active.start();
-          measurements.markActiveBoundary(await waitForActivePhase(active, signal));
-          recorder.markActiveBoundary();
-
-          if (index === 0) {
-            const eliminatedSeat = await waitForDeathElimination(active, signal);
-            const victim = competitorForSeat(active, eliminatedSeat);
-            await waitForEliminatedState(active, eliminatedSeat, signal);
-
-            const identityBeforeReconnect = victim.identity;
-            const reconnected = await active.reconnectCompetitor(eliminatedSeat);
-            assert.equal(reconnected.identity.username, identityBeforeReconnect.username);
-            assert.equal(reconnected.identity.offlineUuid, identityBeforeReconnect.offlineUuid);
-            assert.equal(reconnected.bot.username, identityBeforeReconnect.username);
-            const eventCountAfterReconnect = active.events().length;
-            await waitForGameMode(reconnected.bot, "spectator", signal);
-            assert.equal(
-              reconnected.bot.game.gameMode,
-              "spectator",
-              "a reconnect after death must join in actual spectator mode",
-            );
-            await waitForEliminatedState(active, eliminatedSeat, signal, eventCountAfterReconnect);
-          }
-
-          await active.waitForOutcome();
-          gameplayEvidence = recorder.snapshot();
-        } finally {
-          recorder.close();
-        }
-      },
       t.signal,
-      {
+    );
+    const completed = await withHungerResourceDiagnostic(
+      { ...prepared, seed: scenario.seed },
+      async (onResourceSample) => await runPreparedRun({
+        ...prepared,
+        competitorDriver: "baselinePolicy",
+        evaluate: async (active, signal) => {
+          assertCanonicalHungerScenario(active, scenario.seed);
+          prepareSixBotRoster(active);
+          const recorder = recordHungerGameplayEvidence(active, () => observedPolicyTick.value);
+          try {
+            await active.start();
+            measurements.markActiveBoundary(await waitForActivePhase(active, signal));
+            recorder.markActiveBoundary();
+
+            if (index === 0) {
+              const eliminatedSeat = await waitForDeathElimination(active, signal);
+              const victim = competitorForSeat(active, eliminatedSeat);
+              await waitForEliminatedState(active, eliminatedSeat, signal);
+
+              const identityBeforeReconnect = victim.identity;
+              const reconnected = await active.reconnectCompetitor(eliminatedSeat);
+              assert.equal(reconnected.identity.username, identityBeforeReconnect.username);
+              assert.equal(reconnected.identity.offlineUuid, identityBeforeReconnect.offlineUuid);
+              assert.equal(reconnected.bot.username, identityBeforeReconnect.username);
+              const eventCountAfterReconnect = active.events().length;
+              await waitForGameMode(reconnected.bot, "spectator", signal);
+              assert.equal(
+                reconnected.bot.game.gameMode,
+                "spectator",
+                "a reconnect after death must join in actual spectator mode",
+              );
+              await waitForEliminatedState(active, eliminatedSeat, signal, eventCountAfterReconnect);
+            }
+
+            await active.waitForOutcome();
+            gameplayEvidence = recorder.snapshot();
+          } finally {
+            recorder.close();
+          }
+        },
         onPolicyActivity: (event) => {
           if (event.kind === "decision") observedPolicyTick.value = event.tick;
           measurements.onPolicyActivity(event);
         },
-        onResourceSample: measurements.onResourceSample,
-      },
+        onResourceSample: (event) => {
+          onResourceSample(event);
+          measurements.onResourceSample(event);
+        },
+      }),
+      stageOwnedFile,
     );
+    const run = { ...completed, inspection: await inspectOwnedAcceptanceRun(completed.runId) };
     // Runtime shutdown settles owned actions and emits the final resource sample before returning.
     measurementEvidence = measurements.snapshot();
 
