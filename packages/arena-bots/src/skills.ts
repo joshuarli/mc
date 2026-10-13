@@ -411,7 +411,7 @@ export class SkillOwner {
       throw new SkillFault('preconditionsNotMet', `opponent ${targetId} is outside melee reach`);
     }
     const aim = target.position.offset(0, target.height * 0.65, 0);
-    await this.#awaitOwnedOperation(active, 'look at opponent', () => this.#bot.lookAt(aim, true));
+    await this.#awaitOwnedOperation(active, 'look at opponent', () => this.#bot.lookAt(aim));
     throwIfInterrupted(active.controller.signal);
     target = this.#visibleOpponent(targetId);
     if (distance(this.#bot.entity.position, target.position) > APPROACH_RANGE_BLOCKS) {
@@ -420,7 +420,7 @@ export class SkillOwner {
     await this.#awaitOwnedOperation(
       active,
       'look at opponent',
-      () => this.#bot.lookAt(target.position.offset(0, target.height * 0.65, 0), true),
+      () => this.#bot.lookAt(target.position.offset(0, target.height * 0.65, 0)),
     );
     throwIfInterrupted(active.controller.signal);
     target = this.#visibleOpponent(targetId);
@@ -448,7 +448,7 @@ export class SkillOwner {
       }
     }
     const drop = this.#visibleDrop(entityIdValue);
-    await this.#awaitOwnedOperation(active, 'look at dropped item', () => this.#bot.lookAt(drop.position.offset(0, 0.15, 0), true));
+    await this.#awaitOwnedOperation(active, 'look at dropped item', () => this.#bot.lookAt(drop.position.offset(0, 0.15, 0)));
     throwIfInterrupted(active.controller.signal);
     this.#visibleDrop(entityIdValue);
     const confirmation = waitForDropCollection(this.#bot, entityIdValue, active.controller.signal, ACTION_TIMEOUT_MS);
@@ -485,7 +485,7 @@ export class SkillOwner {
     await this.#awaitOwnedOperation(
       active,
       'look at container',
-      () => this.#bot.lookAt(block.position.offset(0.5, 0.5, 0.5), true),
+      () => this.#bot.lookAt(block.position.offset(0.5, 0.5, 0.5)),
     );
     throwIfInterrupted(active.controller.signal);
     const currentBlock = this.#bot.blockAt(block.position);

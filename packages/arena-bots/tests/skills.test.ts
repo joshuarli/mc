@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import test from 'node:test';
-import { blockPosition, inventorySlot } from '@arena/core';
+import { blockPosition, entityId, inventorySlot } from '@arena/core';
 import type { Bot } from 'mineflayer';
 import { MineflayerObserver } from '../src/observer.js';
 import { SkillOwner } from '../src/skills.js';
@@ -145,6 +145,65 @@ test('successful weapon equip keeps the hotbar slot holding the weapon selected'
     }), { kind: 'succeeded' });
     assert.equal(harness.bot.quickBarSlot, 7);
     assert.equal(harness.bot.heldItem, sword);
+  } finally {
+    await harness.owner.close();
+    harness.observer.close();
+  }
+});
+
+test('attack waits for tick-driven non-forced look before launching', async () => {
+  const harness = makeHarness();
+  const targetPosition = new TestPosition(0, 64, -2);
+  const opponent = {
+    id: 2,
+    type: 'player',
+    position: targetPosition,
+    height: 1.8,
+  } as Bot['entity'];
+  const targetBlock = {
+    name: 'stone',
+    position: targetPosition,
+  } as NonNullable<ReturnType<Bot['blockAt']>>;
+  let lookCalls = 0;
+  let attackCalls = 0;
+  const lookForces: (boolean | undefined)[] = [];
+  Object.assign(harness.bot, {
+    entity: {
+      id: 1,
+      position: new TestPosition(0, 64, 0),
+      eyeHeight: 1.62,
+      yaw: 0,
+      pitch: 0,
+    },
+    entities: { 2: opponent },
+    players: { rival: { entity: opponent, gamemode: 0 } },
+    blockAt: () => targetBlock,
+    canSeeBlock: () => true,
+    lookAt: async (_point: unknown, force?: boolean) => {
+      lookCalls += 1;
+      lookForces.push(force);
+      if (force === true) return;
+      await new Promise<void>((resolve) => harness.bot.once('physicsTick', resolve));
+    },
+    attack: (target: typeof opponent) => {
+      attackCalls += 1;
+      harness.bot.emit('entityHurt', target, harness.bot.entity);
+    },
+  });
+
+  try {
+    const running = harness.owner.run({ kind: 'attack', target: entityId(2) });
+    await waitUntil(() => lookCalls >= 1);
+    assert.equal(attackCalls, 0);
+    harness.bot.emit('physicsTick');
+
+    await waitUntil(() => lookCalls >= 2);
+    assert.equal(attackCalls, 0);
+    harness.bot.emit('physicsTick');
+
+    assert.deepEqual(await running, { kind: 'succeeded' });
+    assert.deepEqual(lookForces, [undefined, undefined]);
+    assert.equal(attackCalls, 1);
   } finally {
     await harness.owner.close();
     harness.observer.close();
