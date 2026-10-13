@@ -51,6 +51,8 @@ import type {
 } from './types.js';
 import { startOwnedServerProcess } from './process.js';
 import type { OwnedServerProcess, ServerProcessExit } from './process.js';
+import { startOwnedResourceMonitor, type OwnedResourceMonitor } from './resource-monitor.js';
+import type { OperationalFailureCleanupV1, OperationalFailurePrimaryV1 } from './failure-artifact.js';
 import type { PartiallyComputedPath } from 'mineflayer-pathfinder';
 import { TextDecoder } from 'node:util';
 
@@ -101,6 +103,8 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
   let listener: ControlListenerLease | undefined;
   let session: ControlSession | undefined;
   let serverProcess: OwnedServerProcess | undefined;
+  let resourceMonitor: ObservedResourceMonitor | undefined;
+  let trace: RuntimeTraceBuilder | undefined;
   let coordinator: ControlCoordinator | undefined;
   let clients: readonly RuntimeCompetitorClient[] = [];
   let spectators: readonly RuntimeSpectatorClient[] = [];
@@ -145,12 +149,13 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
     });
     void leaseLost.catch(() => {});
 
-    const trace = new RuntimeTraceBuilder({
+    const runtimeTrace = new RuntimeTraceBuilder({
       runId: options.preparedRun.runId,
       helperPath: options.helperPath,
       ownedRoot: options.ownedRoot,
       preparedRun: options.preparedRun,
     });
+    trace = runtimeTrace;
     const serverPath = Buffer.concat([options.preparedRun.runDirectoryPath, SERVER_DIRECTORY]);
     await createOwnedDirectory({
       helperPath: options.helperPath,
@@ -194,7 +199,8 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
       capabilities: CONTROL_CAPABILITIES,
     });
     serverProcess = await startPaper(options, serverInputs, listener.address.port, token, runSignal);
-    const processFailure = unexpectedExit(serverProcess);
+    resourceMonitor = observeResourceMonitor(await startOwnedResourceMonitor({ javaPid: serverProcess.pid }));
+    const processFailure = unexpectedExit(serverProcess, resourceMonitor.failure);
     session = await withStartupTimeout(
       listener.accept(runSignal),
       processFailure,
@@ -202,14 +208,14 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
       leaseLost,
     );
     coldStartDeadline.clear();
-    await trace.recordReady(session.ready);
+    await runtimeTrace.recordReady(session.ready);
 
     const outcome = deferred<OutcomePayload>();
     void outcome.promise.catch(() => {});
     const completedEvents: RuntimeAuthorityEvent[] = [];
     coordinator = new ControlCoordinator({
       session,
-      trace,
+      trace: runtimeTrace,
       runId: options.preparedRun.runId,
       prepare: preparePayload,
       completedEvents,
@@ -322,11 +328,13 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
     if (clientFailure !== undefined) throw clientFailure;
 
     await closeClients(clients, spectators);
+    await stopResourceMonitor(resourceMonitor);
+    resourceMonitor = undefined;
     const exit = await serverProcess.shutdown();
     assertSuccessfulExit(exit);
     await session.close();
     await listener.close();
-    const traceResult = await trace.finalize();
+    const traceResult = await runtimeTrace.finalize();
     const stats = await readStoppedPlayerStats({
       helperPath: options.helperPath,
       ownedRoot: options.ownedRoot,
@@ -348,12 +356,16 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
     });
   } catch (error) {
     const failure = runSignal.reason instanceof RunnerError ? runSignal.reason : error;
-    if (!runSignal.aborted) controller.abort(failure);
-    evaluatorAbort?.abort(failure);
+    const primaryFailure = mapRuntimeFailure(failure);
+    if (!runSignal.aborted) controller.abort(primaryFailure);
+    evaluatorAbort?.abort(primaryFailure);
     const cleanupFailure = await cleanupOwnedRun({
       listener,
       session,
       process: serverProcess,
+      resourceMonitor,
+      trace,
+      primaryFailure,
       clients,
       spectators,
       coordinator,
@@ -363,12 +375,12 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
       evaluatorTask,
       lease,
       releaseLease,
-      abortReason: cleanupAbortReason(failure),
+      abortReason: cleanupAbortReason(primaryFailure),
     });
     if (cleanupFailure !== undefined) {
-      throw withCleanupFailure(failure, cleanupFailure);
+      throw withCleanupFailure(primaryFailure, cleanupFailure);
     }
-    throw mapRuntimeFailure(failure);
+    throw primaryFailure;
   } finally {
     coldStartDeadline.clear();
     wallClockDeadline.clear();
@@ -784,6 +796,7 @@ async function createBootstrapWorld(options: Readonly<{
     capabilities: CONTROL_CAPABILITIES,
   });
   let server: OwnedServerProcess | undefined;
+  let resourceMonitor: ObservedResourceMonitor | undefined;
   let session: ControlSession | undefined;
   let startupFailure: unknown;
   try {
@@ -795,17 +808,22 @@ async function createBootstrapWorld(options: Readonly<{
       options.signal,
       serverPath,
     );
+    resourceMonitor = observeResourceMonitor(await startOwnedResourceMonitor({ javaPid: server.pid }));
     session = await withStartupTimeout(
       listener.accept(options.signal),
-      unexpectedExit(server),
+      unexpectedExit(server, resourceMonitor.failure),
       options.abortPromise,
       options.leaseLost,
     );
+    await stopResourceMonitor(resourceMonitor);
+    resourceMonitor = undefined;
     assertSuccessfulExit(await server.shutdown());
   } catch (error) {
     startupFailure = error;
   }
   let cleanupFailure: unknown;
+  try { await stopResourceMonitor(resourceMonitor, startupFailure); }
+  catch (error) { cleanupFailure ??= error; }
   try { await server?.shutdown(); } catch (error) { cleanupFailure ??= error; }
   try { await session?.close(); } catch (error) { cleanupFailure ??= error; }
   try { await listener.close(); } catch (error) { cleanupFailure ??= error; }
@@ -888,6 +906,9 @@ async function cleanupOwnedRun(options: Readonly<{
   listener: ControlListenerLease | undefined;
   session: ControlSession | undefined;
   process: OwnedServerProcess | undefined;
+  resourceMonitor: ObservedResourceMonitor | undefined;
+  trace: RuntimeTraceBuilder | undefined;
+  primaryFailure: RunnerError;
   clients: readonly RuntimeCompetitorClient[];
   spectators: readonly RuntimeSpectatorClient[];
   coordinator: ControlCoordinator | undefined;
@@ -905,7 +926,9 @@ async function cleanupOwnedRun(options: Readonly<{
     try {
       await options.coordinator.sendForCleanup(options.abortReason);
     } catch (error) {
-      if (!(error instanceof ControlSessionError && error.code === 'control_closed')) failure ??= error;
+      if (!(error instanceof ControlSessionError && error.code === 'control_closed')) {
+        failure ??= cleanupErrorUnlessPrimary(error, options.primaryFailure);
+      }
     }
   }
   if (options.coordinator !== undefined) {
@@ -917,7 +940,7 @@ async function cleanupOwnedRun(options: Readonly<{
         'runtime policy tasks',
       );
     } catch (error) {
-      failure ??= error;
+      failure ??= cleanupErrorUnlessPrimary(error, options.primaryFailure);
     }
   }
   const clientsClosed = await Promise.allSettled([
@@ -925,19 +948,45 @@ async function cleanupOwnedRun(options: Readonly<{
     ...options.spectators.map((client) => client.close()),
   ]);
   const clientFailure = clientsClosed.find((result): result is PromiseRejectedResult => result.status === 'rejected');
-  failure ??= clientFailure?.reason;
-  try { await options.process?.shutdown(); } catch (error) { failure ??= error; }
-  try { await options.session?.close(); } catch (error) { failure ??= error; }
-  try { await options.listener?.close(); } catch (error) { failure ??= error; }
+  if (clientFailure !== undefined) {
+    failure ??= cleanupErrorUnlessPrimary(clientFailure.reason, options.primaryFailure);
+  }
+  try { await stopResourceMonitor(options.resourceMonitor, options.primaryFailure); }
+  catch (error) { failure ??= cleanupErrorUnlessPrimary(error, options.primaryFailure); }
+  let processReaped = options.process === undefined;
+  if (options.process !== undefined) {
+    try {
+      await options.process.shutdown();
+      processReaped = true;
+    } catch (error) {
+      failure ??= cleanupErrorUnlessPrimary(error, options.primaryFailure);
+      processReaped = await processExitObserved(options.process);
+    }
+  }
+  try { await options.session?.close(); }
+  catch (error) { failure ??= cleanupErrorUnlessPrimary(error, options.primaryFailure); }
+  try { await options.listener?.close(); }
+  catch (error) { failure ??= cleanupErrorUnlessPrimary(error, options.primaryFailure); }
   if (options.coordinator !== undefined) {
     try { await options.coordinator.join(); } catch { /* The initiating failure already explains the pump error. */ }
   }
   if (options.evaluatorTask !== undefined) {
     try { await withTimeout(options.evaluatorTask, EVALUATOR_JOIN_TIMEOUT_MS, 'evaluator_did_not_stop'); }
-    catch (error) { failure ??= error; }
+    catch (error) { failure ??= cleanupErrorUnlessPrimary(error, options.primaryFailure); }
   }
-  if (options.lease !== undefined && !options.releaseLease) {
-    try { await options.lease.release(); } catch (error) { failure ??= error; }
+  if (processReaped && options.trace !== undefined) {
+    try {
+      await options.trace.persistFailurePartial(
+        failurePrimary(options.primaryFailure),
+        failureCleanup(failure),
+      );
+    } catch (error) {
+      failure ??= cleanupErrorUnlessPrimary(error, options.primaryFailure);
+    }
+  }
+  if (processReaped && options.lease !== undefined && !options.releaseLease) {
+    try { await options.lease.release(); }
+    catch (error) { failure ??= cleanupErrorUnlessPrimary(error, options.primaryFailure); }
   }
   return failure;
 }
@@ -947,13 +996,72 @@ function isAuthorityEvent(message: ControlMessage): message is RuntimeAuthorityE
     || message.type === 'elimination' || message.type === 'outcome';
 }
 
-function unexpectedExit(process: OwnedServerProcess): Promise<never> {
-  return process.exited.then((exit) => {
+interface ObservedResourceMonitor {
+  readonly monitor: OwnedResourceMonitor;
+  readonly failure: Promise<never>;
+  readonly error: RunnerError | undefined;
+}
+
+function observeResourceMonitor(monitor: OwnedResourceMonitor): ObservedResourceMonitor {
+  let error: RunnerError | undefined;
+  const failure = monitor.failure.then((failure) => {
+    error = failure;
+    throw failure;
+  });
+  void failure.catch(() => {});
+  return Object.freeze({
+    monitor,
+    failure,
+    get error() { return error; },
+  });
+}
+
+async function stopResourceMonitor(
+  monitor: ObservedResourceMonitor | undefined,
+  primaryFailure?: unknown,
+): Promise<void> {
+  if (monitor === undefined) return;
+  await monitor.monitor.stop();
+  await Promise.resolve();
+  if (monitor.error !== undefined && monitor.error !== primaryFailure) throw monitor.error;
+}
+
+async function processExitObserved(process: OwnedServerProcess): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      process.exited.then(() => true),
+      new Promise<boolean>((resolve) => {
+        timer = setTimeout(() => resolve(false), 0);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+function failurePrimary(error: RunnerError): OperationalFailurePrimaryV1 {
+  return Object.freeze({ category: error.category, resource: error.resource, source: error.source });
+}
+
+function failureCleanup(error: unknown): OperationalFailureCleanupV1 {
+  if (error === undefined) return Object.freeze({ status: 'succeeded', source: null });
+  return Object.freeze({ status: 'failed', source: mapRuntimeFailure(error).source });
+}
+
+function cleanupErrorUnlessPrimary(error: unknown, primaryFailure: RunnerError): unknown | undefined {
+  return error === primaryFailure ? undefined : error;
+}
+
+function unexpectedExit(process: OwnedServerProcess, resourceFailure: Promise<never>): Promise<never> {
+  const outputFailure = process.fatalOutputError.then((error) => { throw error; });
+  const exitFailure = process.exited.then((exit) => {
     throw new RunnerError('runtime_failure', 'Paper server', {
       kind: 'server_exited_before_shutdown',
       ...(exit.code === null ? {} : { field: String(exit.code) }),
     });
   });
+  return Promise.race([outputFailure, resourceFailure, exitFailure]);
 }
 
 function withStartupTimeout<T>(
