@@ -121,6 +121,36 @@ test('cancellation quarantines an inventory operation that never receives its up
   }
 });
 
+test('successful weapon equip keeps the hotbar slot holding the weapon selected', async () => {
+  const harness = makeHarness();
+  const sword = { name: 'stone_sword', type: 5, metadata: 0, count: 1, slot: 43 } as NonNullable<Bot['inventory']['slots'][number]>;
+  harness.bot.inventory.slots[43] = sword;
+  Object.assign(harness.bot, {
+    setQuickBarSlot: (slot: number) => Object.assign(harness.bot, {
+      quickBarSlot: slot,
+      heldItem: harness.bot.inventory.slots[36 + slot] ?? null,
+    }),
+    equip: async (item: NonNullable<Bot['inventory']['slots'][number]>, destination: string) => {
+      assert.equal(destination, 'hand');
+      harness.bot.setQuickBarSlot(item.slot - 36);
+    },
+  });
+
+  try {
+    assert.deepEqual(await harness.owner.run({
+      kind: 'equip',
+      inventorySlot: inventorySlot(43),
+      equipmentSlot: 'weapon',
+      rating: 2,
+    }), { kind: 'succeeded' });
+    assert.equal(harness.bot.quickBarSlot, 7);
+    assert.equal(harness.bot.heldItem, sword);
+  } finally {
+    await harness.owner.close();
+    harness.observer.close();
+  }
+});
+
 test('cancellation quarantines a look operation that never settles', async () => {
   const harness = makeHarness();
   prepareChest(harness.bot);

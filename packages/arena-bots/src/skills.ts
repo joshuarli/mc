@@ -66,7 +66,7 @@ interface SkillResources {
   eating: boolean;
   inventoryTouched: boolean;
   window: MineflayerChest | null;
-  originalQuickBarSlot: number;
+  quickBarSlotToRestore: number | null;
 }
 
 interface PathSearchWaiter {
@@ -229,7 +229,7 @@ export class SkillOwner {
           eating: false,
           inventoryTouched: false,
           window: null,
-          originalQuickBarSlot: this.#bot.quickBarSlot,
+          quickBarSlotToRestore: this.#bot.quickBarSlot,
         },
         cancellation: null,
         promise: Promise.resolve({ kind: 'pending' }),
@@ -654,6 +654,7 @@ export class SkillOwner {
     if (equipped === null || equipped === undefined || equipped.type !== item.type || equipped.name !== item.name) {
       throw new SkillFault('noProgress', `inventory slot ${slot} was not equipped as ${equipmentSlot}`);
     }
+    if (equipmentSlot === 'weapon') active.resources.quickBarSlotToRestore = null;
   }
 
   #visibleOpponent(entityIdValue: number): MineflayerEntity {
@@ -718,8 +719,9 @@ export class SkillOwner {
     try {
       // An unresolved inventory operation may still be applying server updates to the selected slot.
       if (this.#cleanupFailure === null
-        && this.#bot.quickBarSlot !== active.resources.originalQuickBarSlot) {
-        this.#bot.setQuickBarSlot(active.resources.originalQuickBarSlot);
+        && active.resources.quickBarSlotToRestore !== null
+        && this.#bot.quickBarSlot !== active.resources.quickBarSlotToRestore) {
+        this.#bot.setQuickBarSlot(active.resources.quickBarSlotToRestore);
       }
     } catch (error) {
       failures.push(error);
