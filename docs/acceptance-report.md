@@ -31,13 +31,17 @@ All acceptance cases are unattended and headless, using bot clients for every pa
 
 The Java plugin emits startup diagnostics for the prepared map and server readiness. Those diagnostics are useful for locating startup failures, but a marker alone does not prove generated blocks, chest contents, reset behavior, a legal action, or an authoritative match result. Acceptance cases must read block and inventory state through Mineflayer and consume the plugin's typed outcome stream. Match actions must use ordinary client mechanics; no administrative damage or injected live inventory is accepted.
 
-The TypeScript support oracle in this change compares the full declared block sequence, client-observed spawn positions in seat order, and all 27 slots of every declared chest against a compiled map. It also requires a recorded death before reset and zero deaths afterward. None of these assertions has been exercised against a live client observation. The planned `arena inspect` check reads stopped-run stats for the same offline UUID from `<run>/server/world/stats/<offline-uuid>.json`; this read remains an integration prerequisite. Tests must consume `inspect` output rather than probing server files directly. The oracle's existence is not acceptance evidence.
+The TypeScript support oracle compares the full declared block sequence, client-observed spawn positions in seat order, and all 27 slots of every declared chest against a compiled map. It also requires a recorded death before reset and zero deaths afterward. None of these assertions has been exercised against a configured live client observation. `arena inspect --run-id` now reads stopped-run stats for the same offline UUID from `<run>/server/world/stats/<offline-uuid>.json`; its configured live use remains unverified. Tests consume `inspect` output rather than probing server files directly.
+
+At `1cd0a60`, the strict TypeScript stack build and `all live acceptance scenario and policy sources compile offline` passed. This check compiles every live fixture's scenario, referenced map, and policy. It caught malformed recording fields and a border end tick equal to the match limit before a server was started. The native helper's strict C build and 19 owned-file cases also passed, including bounded resource accounting and rejection of symlinked work roots. These are offline checks.
+
+At `e6357db`, the five focused Java test classes passed all 44 cases, including the pre-release phase policy. The plugin now freezes competitive positions and blocks inventory actions before release; the live `match-rules` case still must verify the Bukkit event wiring and initial player reset.
 
 ## Contract changes and measurements
 
-This slice adds only private test-support types and assertions; no product API, schema, rule, permission, or transaction contract is changed. No runtime, binary-size, startup, six-seat, or performance measurements were collected.
+The runtime now exposes `run --scenario`, read-only `validate --scenario`, and stopped-run inspection. Scripted acceptance cases select an evaluator driver; normal Hunger runs retain the baseline policy. Conflict and cancellation errors use exits 4 and 130 respectively. Configured live behavior remains unverified. No startup, six-seat, or performance gate measurements were collected.
 
 ## Remaining prerequisites
 
-1. Complete the configured-world runner lifecycle and expose stopped-run stats through `arena inspect`.
+1. Verify configured-world startup, bounded shutdown, and stopped-run stats through `arena inspect`.
 2. Run the remaining cases against genuine Mineflayer observations and retain exact commands and results here.
