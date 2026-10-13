@@ -15,6 +15,8 @@
 
 Mineflayer 4.39.0 and `minecraft-protocol` 1.68.0 advertise Minecraft 26.1 support, and the protocol data maps Minecraft 26.1.2 to protocol 775. The exact server artifact and matching Paper API are pinned in `versions.lock.toml`.
 
+Mineflayer 4.39.0's feature table omits `entityActionUsesStringMapper` for protocol 775. Its numeric sprint fallback encodes `start_sprinting` as action 3, which the protocol maps to `start_riding_jump`; the bots adapter supplies the missing feature answer for this protocol so Mineflayer serializes sprint actions by name. Remove this correction when Mineflayer's feature table reports the mapper capability for protocol 775.
+
 **Arena live compatibility status: confirmed on macOS arm64 for the two-client stack smoke.** `./arena test --suite integration --case stack` passed with the locked Node.js 24.21.0, Mineflayer 4.39.0, and Paper 26.1.2 build 74 (protocol 775). Both clients logged in, received fixture chunks, moved, transferred chest items, produced a server-observed ordinary hit, and disconnected; the wrong-protocol control was rejected. This proves the stack smoke on macOS arm64 only. Linux x86_64 and full gameplay acceptance remain unverified. The smoke is a compatibility check, not a performance measurement.
 
 The pinned Node and npm bootstrap also completed on macOS arm64. Linux x86_64 is the other supported native target and still needs a host run.
