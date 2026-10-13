@@ -254,7 +254,9 @@ export class RuntimeTraceBuilder {
     });
   }
 
-  /** Persists each nonterminal checkpoint at global observation counts 200, 400, and onward. */
+  /** Persists each nonterminal checkpoint at recorded decision counts 200, 400, and onward.
+   * Pending effects are absent until they settle; this watermark does not assert action completion.
+   */
   checkpoint(globalObservationCount: number): Promise<void> {
     return this.#enqueue(async () => {
       this.#assertMutable();

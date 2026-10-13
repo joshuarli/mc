@@ -299,7 +299,10 @@ test('runtime trace records a pending skill cancellation after authoritative out
 
   const effect = makePolicyEffectRecord(BigInt(decision.sequence), { kind: 'cancelled', reason: 'shutdown' }, []);
   await trace.recordPolicyEffect(effect);
+  await trace.checkpoint(200);
+  await trace.checkpoint(400);
   const finalized = await trace.finalize();
+  assert.equal(finalized.segments.length, 1);
   const records: string[] = [];
   for (const segment of finalized.segments) {
     const bytes = await readOwnedFile({
