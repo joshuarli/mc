@@ -37,10 +37,13 @@ const integrationCases = new Map([
   ["legal-player-ramp", "legal-player.js"],
   ["policy-border-preemption", "policy-border-preemption.js"],
   ["replay-report", "replay-report.js"],
-  ["fairness", "fairness.js"]
+  ["fairness", "fairness.js"],
+  ["civilization-six", "civilization-six.js"],
+  ["civilization-rules", "civilization-rules.js"]
 ]);
 const acceptanceCases = new Map([
-  ["hunger-six", "hunger.js"]
+  ["hunger-six", "hunger.js"],
+  ["civilization-baseline", "civilization-baseline.js"]
 ]);
 
 function fail(message) {

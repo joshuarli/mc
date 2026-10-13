@@ -38,6 +38,14 @@ Focused live runtime proofs can be run one at a time. Each fault selector starts
 ./arena test --suite integration --case faults
 ```
 
+The prepared Civilization selectors are pending live verification and run only after M1 passes. `civilization-six` checks both faction material chains and capture changes; `civilization-rules` checks cancellation and competing material actions; `civilization-baseline` checks the autonomous six-seat policy and resource evidence. Registering these commands does not establish live acceptance.
+
+```sh
+./arena test --suite integration --case civilization-six
+./arena test --suite integration --case civilization-rules
+./arena test --suite acceptance --case civilization-baseline
+```
+
 `lifecycle-smoke` checks one start/stop and archive cycle. `lifecycle` runs ten sequential cycles and checks resource cleanup after each.
 The lifecycle check expects the one-connection control listener to be closed once authentication completes and observes the live control and bot sockets during evaluation. After Paper is reaped, it checks that the listener and sockets return to baseline before opening the temporary port-25565 probe, then confirms that the port can be rebound; the probe's own TCP handle stays outside the runtime resource counts.
 
