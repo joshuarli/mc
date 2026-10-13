@@ -32,6 +32,13 @@ const map: MapIr = {
   semanticId: "a".repeat(64) as MapIr["semanticId"],
 };
 
+const blockRegistry = {
+  blocksByName: {
+    stone: { defaultState: 1 },
+    chest: { defaultState: 3988 },
+  },
+};
+
 function observedWorld(): SemanticWorldObservation {
   const slots: (SemanticWorldObservation["containers"][number]["slots"][number])[] = Array.from(
     { length: 27 },
@@ -42,12 +49,12 @@ function observedWorld(): SemanticWorldObservation {
 
   return {
     blocks: [
-      { position: { x: 0, y: 0, z: 0 }, block: "minecraft:stone" },
-      { position: { x: 1, y: 0, z: 0 }, block: "minecraft:chest" },
+      { position: { x: 0, y: 0, z: 0 }, block: "minecraft:stone", stateId: 1 },
+      { position: { x: 1, y: 0, z: 0 }, block: "minecraft:chest", stateId: 3988 },
     ],
     spawns: [
-      { seat: 0, position: { x: 0, y: 1, z: 0 } },
-      { seat: 1, position: { x: 2, y: 1, z: 0 } },
+      { seat: 0, position: { x: 0.5, y: 1, z: 0.5 } },
+      { seat: 1, position: { x: 2.5, y: 1, z: 0.5 } },
     ],
     containers: [{ position: { x: 1, y: 0, z: 0 }, slots }],
   };
@@ -55,7 +62,7 @@ function observedWorld(): SemanticWorldObservation {
 
 test("semantic world oracle rejects wrong block content and order", () => {
   const observed = observedWorld();
-  assertSemanticWorldMatchesMap(map, observed);
+  assertSemanticWorldMatchesMap(map, observed, blockRegistry);
 
   assert.throws(
     () => assertSemanticWorldMatchesMap(map, {
@@ -63,18 +70,33 @@ test("semantic world oracle rejects wrong block content and order", () => {
       blocks: observed.blocks.map((block, index) => index === 0
         ? { ...block, block: "minecraft:dirt" }
         : block),
-    }),
+    }, blockRegistry),
     /client-observed map blocks must match/,
   );
   assert.throws(
-    () => assertSemanticWorldMatchesMap(map, { ...observed, blocks: [...observed.blocks].reverse() }),
+    () => assertSemanticWorldMatchesMap(map, { ...observed, blocks: [...observed.blocks].reverse() }, blockRegistry),
+    /client-observed map blocks must match/,
+  );
+});
+
+test("semantic world oracle requires each registry-default block state", () => {
+  const observed = observedWorld();
+  assertSemanticWorldMatchesMap(map, observed, blockRegistry);
+
+  assert.throws(
+    () => assertSemanticWorldMatchesMap(map, {
+      ...observed,
+      blocks: observed.blocks.map((block, index) => index === 1
+        ? { ...block, stateId: 3987 }
+        : block),
+    }, blockRegistry),
     /client-observed map blocks must match/,
   );
 });
 
 test("semantic world oracle rejects wrong spawn seats, positions, and order", () => {
   const observed = observedWorld();
-  assertSemanticWorldMatchesMap(map, observed);
+  assertSemanticWorldMatchesMap(map, observed, blockRegistry);
 
   assert.throws(
     () => assertSemanticWorldMatchesMap(map, {
@@ -82,8 +104,8 @@ test("semantic world oracle rejects wrong spawn seats, positions, and order", ()
       spawns: observed.spawns.map((spawn, index) => index === 0
         ? { ...spawn, seat: 1 }
         : spawn),
-    }),
-    /prepared spawn positions must retain/,
+    }, blockRegistry),
+    /client-observed spawn centers must match/,
   );
   assert.throws(
     () => assertSemanticWorldMatchesMap(map, {
@@ -91,18 +113,18 @@ test("semantic world oracle rejects wrong spawn seats, positions, and order", ()
       spawns: observed.spawns.map((spawn, index) => index === 0
         ? { ...spawn, position: { ...spawn.position, x: 1 } }
         : spawn),
-    }),
-    /prepared spawn positions must retain/,
+    }, blockRegistry),
+    /client-observed spawn centers must match/,
   );
   assert.throws(
-    () => assertSemanticWorldMatchesMap(map, { ...observed, spawns: [...observed.spawns].reverse() }),
-    /prepared spawn positions must retain/,
+    () => assertSemanticWorldMatchesMap(map, { ...observed, spawns: [...observed.spawns].reverse() }, blockRegistry),
+    /client-observed spawn centers must match/,
   );
 });
 
 test("semantic world oracle checks chest item slots, empty slots, and window size", () => {
   const observed = observedWorld();
-  assertSemanticWorldMatchesMap(map, observed);
+  assertSemanticWorldMatchesMap(map, observed, blockRegistry);
 
   const chest = observed.containers[0]!;
   const reversedItems = [...chest.slots];
@@ -111,7 +133,7 @@ test("semantic world oracle checks chest item slots, empty slots, and window siz
     () => assertSemanticWorldMatchesMap(map, {
       ...observed,
       containers: [{ ...chest, slots: reversedItems }],
-    }),
+    }, blockRegistry),
     /client-observed chest inventories must match/,
   );
 
@@ -121,14 +143,14 @@ test("semantic world oracle checks chest item slots, empty slots, and window siz
     () => assertSemanticWorldMatchesMap(map, {
       ...observed,
       containers: [{ ...chest, slots: occupiedEmptySlot }],
-    }),
+    }, blockRegistry),
     /client-observed chest inventories must match/,
   );
   assert.throws(
     () => assertSemanticWorldMatchesMap(map, {
       ...observed,
       containers: [{ ...chest, slots: chest.slots.slice(0, 26) }],
-    }),
+    }, blockRegistry),
     /client-observed chest inventories must match/,
   );
 });

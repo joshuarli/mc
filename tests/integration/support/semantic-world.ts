@@ -5,6 +5,12 @@ import type { BlockPosition, MapIr } from "@arena/spec";
 export interface ObservedBlock {
   readonly position: { readonly x: number; readonly y: number; readonly z: number };
   readonly block: string;
+  /** Canonical protocol state ID, which includes the block's default properties. */
+  readonly stateId: number;
+}
+
+export interface BlockStateRegistry {
+  readonly blocksByName: Readonly<Record<string, { readonly defaultState: number } | undefined>>;
 }
 
 export interface ObservedContainer {
@@ -50,7 +56,7 @@ export interface SemanticWorldReader {
   readBlock(position: BlockPosition): ObservedBlock | null;
   readSpawn(seat: number, signal: AbortSignal): Promise<{
     readonly seat: number;
-    readonly position: BlockPosition;
+    readonly position: { readonly x: number; readonly y: number; readonly z: number };
   }>;
   readContainer(position: BlockPosition, signal: AbortSignal): Promise<ObservedContainer>;
 }
@@ -94,16 +100,33 @@ export async function captureSemanticWorld(
  * Compares client-observed blocks and every chest slot with the compiled map.
  * The caller must query positions in the order supplied by the compiled map.
  */
-export function assertSemanticWorldMatchesMap(map: MapIr, observed: SemanticWorldObservation): void {
+export function assertSemanticWorldMatchesMap(
+  map: MapIr,
+  observed: SemanticWorldObservation,
+  registry: BlockStateRegistry,
+): void {
   assert.deepStrictEqual(
     observed.blocks,
-    map.blocks.map(({ position, block }) => ({ position, block })),
-    "client-observed map blocks must match the compiled semantic world in canonical order",
+    map.blocks.map(({ position, block }) => {
+      assert.ok(block.startsWith("minecraft:"), `map block must use a Minecraft resource id: ${block}`);
+      const material = block.slice("minecraft:".length);
+      const registryBlock = registry.blocksByName[material];
+      assert.ok(registryBlock, `locked Mineflayer registry has no block ${block}`);
+      assert.ok(
+        Number.isSafeInteger(registryBlock.defaultState),
+        `locked Mineflayer registry has no default state for ${block}`,
+      );
+      return { position, block, stateId: registryBlock.defaultState };
+    }),
+    "client-observed map blocks and default states must match the compiled semantic world in canonical order",
   );
   assert.deepStrictEqual(
     observed.spawns,
-    map.spawns.map(({ seat, position }) => ({ seat, position })),
-    "prepared spawn positions must retain their stable seat order",
+    map.spawns.map(({ seat, position }) => ({
+      seat,
+      position: { x: position.x + 0.5, y: position.y, z: position.z + 0.5 },
+    })),
+    "client-observed spawn centers must match their stable prepared seat order",
   );
   assert.deepStrictEqual(
     observed.containers,
