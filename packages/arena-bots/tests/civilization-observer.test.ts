@@ -14,28 +14,21 @@ import { MineflayerObserver } from '../src/observer.js';
 
 const packageRequire = createRequire(import.meta.url);
 const mineflayerRequire = createRequire(packageRequire.resolve('mineflayer'));
-const loadRegistry = mineflayerRequire('minecraft-data') as (version: string) => {
-  readonly blocksByName: Readonly<Record<string, { readonly id: number; readonly defaultState: number }>>;
-};
-const loadBlockFactory = mineflayerRequire('prismarine-block') as (registry: unknown) => {
-  fromStateId(stateId: number, biomeId: number): NonNullable<ReturnType<Bot['blockAt']>>;
-};
-const loadWorld = mineflayerRequire('prismarine-world') as (version: string) => new (
+const loadRegistry = mineflayerRequire('prismarine-registry') as (version: string) => Bot['registry'];
+const loadWorld = mineflayerRequire('prismarine-world') as (registry: Bot['registry']) => new (
   generator: null,
 ) => { readonly sync: PinnedWorld };
+const loadChunk = mineflayerRequire('prismarine-chunk') as (registry: Bot['registry']) => new (
+  options: { readonly minY: number; readonly worldHeight: number },
+) => NonNullable<ReturnType<Bot['world']['getColumn']>>;
 const { Vec3 } = mineflayerRequire('vec3') as {
   readonly Vec3: new (x: number, y: number, z: number) => Bot['entity']['position'];
 };
 const pinnedRegistry = loadRegistry('26.1.2');
-const pinnedBlockFactory = loadBlockFactory(pinnedRegistry);
-const PinnedWorldConstructor = loadWorld('26.1.2');
+const PinnedWorldConstructor = loadWorld(pinnedRegistry);
+const PinnedChunkConstructor = loadChunk(pinnedRegistry);
 
 type PinnedWorld = Bot['world'] & {
-  setColumn(
-    chunkX: number,
-    chunkZ: number,
-    column: { getBlock(position: Bot['entity']['position']): NonNullable<ReturnType<Bot['blockAt']>> },
-  ): void;
   unloadColumn(chunkX: number, chunkZ: number): void;
 };
 
@@ -197,7 +190,7 @@ test('civilization observations exclude rostered teammates and retain rostered e
         entity: enemy,
       },
     },
-    registry: { blocksByName: { oak_log: { id: 1 }, chest: { id: 2 }, trapped_chest: { id: 3 } } },
+    registry: pinnedRegistry,
     findBlocks: () => [],
   });
   const base = new MineflayerObserver(bot as unknown as Bot);
@@ -225,13 +218,7 @@ test('unloaded outpost cells are omitted instead of reported as air', () => {
   bot.unloadColumn(0, 0);
   Object.assign(bot, {
     entity: { id: 1, position: vector(0, 64, 0), yaw: 0, pitch: 0, eyeHeight: 1.62, height: 1.8 },
-    registry: {
-      blocksByName: {
-        oak_log: { id: 1 },
-        chest: { id: 2 },
-        trapped_chest: { id: 3 },
-      },
-    },
+    registry: pinnedRegistry,
     entities: {},
     findBlocks: () => [],
   });
@@ -268,15 +255,9 @@ test('container contents become current only for this client’s synchronized op
       eyeHeight: 1.62,
       height: 1.8,
     },
-    registry: {
-      blocksByName: {
-        oak_log: { id: 1 },
-        chest: { id: 2 },
-        trapped_chest: { id: 3 },
-      },
-    },
+    registry: pinnedRegistry,
     entities: {},
-    findBlocks: ({ matching }: { matching: number }) => matching === 2 ? [vector(1, 64, 0)] : [],
+    findBlocks: ({ matching }: { matching: number }) => matching === pinnedRegistry.blocksByName.chest!.id ? [vector(1, 64, 0)] : [],
   });
   const base = new MineflayerObserver(bot as unknown as Bot);
   const observer = new MineflayerCivilizationObserver(bot as unknown as Bot, context(), publicRoster());
@@ -351,21 +332,11 @@ function makeBot(fullView = false): EventEmitter & {
     currentWindow: unknown;
   };
   const world = new PinnedWorldConstructor(null).sync;
-  const blockStates = new Map<string, number>();
-  const airState = pinnedRegistry.blocksByName.air?.defaultState;
-  if (airState === undefined) throw new Error('pinned registry has no air block state');
   const minimumChunk = fullView ? -3 : -1;
   const maximumChunk = fullView ? 2 : 0;
   for (let chunkX = minimumChunk; chunkX <= maximumChunk; chunkX += 1) {
     for (let chunkZ = minimumChunk; chunkZ <= maximumChunk; chunkZ += 1) {
-      world.setColumn(chunkX, chunkZ, {
-        getBlock: (position) => {
-          const x = chunkX * 16 + Math.floor(position.x);
-          const y = Math.floor(position.y);
-          const z = chunkZ * 16 + Math.floor(position.z);
-          return pinnedBlockFactory.fromStateId(blockStates.get(positionKey(x, y, z)) ?? airState, 0);
-        },
-      });
+      world.setColumn(chunkX, chunkZ, new PinnedChunkConstructor({ minY: -64, worldHeight: 384 }));
     }
   }
   bot._client = new EventEmitter();
@@ -376,7 +347,8 @@ function makeBot(fullView = false): EventEmitter & {
     players: {},
     entities: {},
     world,
-    registry: { blocksByName: { chest: { id: 1 }, trapped_chest: { id: 2 } } },
+    game: { minY: -64, height: 384 },
+    registry: pinnedRegistry,
     findBlocks: () => [],
     blockAt: (position: Bot['entity']['position']) => world.getBlock(position),
   });
@@ -384,7 +356,7 @@ function makeBot(fullView = false): EventEmitter & {
   bot.setBlock = (position, name) => {
     const state = pinnedRegistry.blocksByName[name]?.defaultState;
     if (state === undefined) throw new Error(`pinned registry has no ${name} block state`);
-    blockStates.set(positionKey(position.x, position.y, position.z), state);
+    world.setBlockStateId(position, state);
   };
   bot.unloadColumn = (chunkX, chunkZ) => world.unloadColumn(chunkX, chunkZ);
   return bot;
@@ -392,10 +364,6 @@ function makeBot(fullView = false): EventEmitter & {
 
 function vector(x: number, y: number, z: number): Bot['entity']['position'] {
   return new Vec3(x, y, z);
-}
-
-function positionKey(x: number, y: number, z: number): string {
-  return `${Math.floor(x)},${Math.floor(y)},${Math.floor(z)}`;
 }
 
 function resourceContainer(resources: { readonly kind: string; readonly value?: readonly unknown[] }): {
