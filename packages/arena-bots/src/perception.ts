@@ -1,7 +1,6 @@
 import { blockPosition, type BlockPosition } from '@arena/core';
 import type { Bot } from 'mineflayer';
 import {
-  hasLocalVoxelLineOfSight,
   hasLocalVoxelRayToTarget,
   isInsidePerceptionCone,
   type ViewDirection,

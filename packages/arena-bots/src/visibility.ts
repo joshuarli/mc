@@ -1,8 +1,19 @@
+import { createRequire } from 'node:module';
 import type { Bot } from 'mineflayer';
 
 const MAX_ENTITY_RANGE_BLOCKS = 40;
 const HALF_HORIZONTAL_FOV_RADIANS = Math.PI / 3;
 const HALF_VERTICAL_FOV_RADIANS = Math.PI / 4;
+const packageRequire = createRequire(import.meta.url);
+const mineflayerRequire = createRequire(packageRequire.resolve('mineflayer'));
+// The load check must use the same iterator as the collision raycast.
+const { RaycastIterator } = mineflayerRequire('prismarine-world').iterators as {
+  readonly RaycastIterator: new (
+    position: Parameters<Bot['world']['raycast']>[0],
+    direction: Parameters<Bot['world']['raycast']>[1],
+    range: number,
+  ) => { next(): { readonly x: number; readonly y: number; readonly z: number } | null };
+};
 
 export interface ViewDirection {
   readonly position: { readonly x: number; readonly y: number; readonly z: number };
@@ -60,7 +71,7 @@ export function hasLocalVoxelLineOfSight(
   });
 }
 
-/** Checks visibility to an exact point inside a loaded target voxel. */
+/** Checks visibility to an exact ray endpoint in a loaded voxel. */
 export function hasLocalVoxelRayToTarget(
   bot: Pick<Bot, 'blockAt' | 'entity' | 'world'>,
   target: LocalVoxelRayTarget,
@@ -79,7 +90,7 @@ export function hasLocalVoxelRayToTarget(
   if (!isFinitePosition(eyePosition)) return false;
 
   const rayLength = eyePosition.distanceTo(rayTarget);
-  if (!Number.isFinite(rayLength) || rayLength === 0) return false;
+  if (!Number.isFinite(rayLength) || rayLength === 0 || rayLength > MAX_ENTITY_RANGE_BLOCKS) return false;
   const rayDirection = rayTarget.minus(eyePosition).scaled(1 / rayLength);
   if (!hasLoadedVoxelRay(bot, eyePosition, rayDirection, rayLength)) return false;
 
@@ -112,42 +123,11 @@ function hasLoadedVoxelRay(
   direction: Parameters<Bot['world']['raycast']>[1],
   range: number,
 ): boolean {
-  const block = from.floored();
-  const stepX = Math.sign(direction.x);
-  const stepY = Math.sign(direction.y);
-  const stepZ = Math.sign(direction.z);
-  const tDeltaX = direction.x === 0 ? Number.MAX_VALUE : Math.abs(1 / direction.x);
-  const tDeltaY = direction.y === 0 ? Number.MAX_VALUE : Math.abs(1 / direction.y);
-  const tDeltaZ = direction.z === 0 ? Number.MAX_VALUE : Math.abs(1 / direction.z);
-  let tMaxX = direction.x === 0
-    ? Number.MAX_VALUE
-    : Math.abs((block.x + (direction.x > 0 ? 1 : 0) - from.x) / direction.x);
-  let tMaxY = direction.y === 0
-    ? Number.MAX_VALUE
-    : Math.abs((block.y + (direction.y > 0 ? 1 : 0) - from.y) / direction.y);
-  let tMaxZ = direction.z === 0
-    ? Number.MAX_VALUE
-    : Math.abs((block.z + (direction.z > 0 ? 1 : 0) - from.z) / direction.z);
-
-  if (!isLoadedVoxel(bot, from, block.x, block.y, block.z)) return false;
-  while (Math.min(tMaxX, tMaxY, tMaxZ) <= range) {
-    if (tMaxX < tMaxY) {
-      if (tMaxX < tMaxZ) {
-        block.x += stepX;
-        tMaxX += tDeltaX;
-      } else {
-        block.z += stepZ;
-        tMaxZ += tDeltaZ;
-      }
-    } else if (tMaxY < tMaxZ) {
-      block.y += stepY;
-      tMaxY += tDeltaY;
-    } else {
-      block.z += stepZ;
-      tMaxZ += tDeltaZ;
-    }
-
-    if (!isSafePosition(block) || !isLoadedVoxel(bot, from, block.x, block.y, block.z)) return false;
+  const iterator = new RaycastIterator(from, direction, range);
+  let position: { readonly x: number; readonly y: number; readonly z: number } | null = from.floored();
+  while (position !== null) {
+    if (!isSafePosition(position) || !isLoadedVoxel(bot, from, position.x, position.y, position.z)) return false;
+    position = iterator.next();
   }
   return true;
 }
