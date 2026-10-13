@@ -33,13 +33,13 @@ const worldRegistry = loadMinecraftData('26.1.2');
 const worldBlockFactory = loadPrismarineBlock(worldRegistry);
 const PinnedWorldConstructor = loadPrismarineWorld('26.1.2');
 
-interface PinnedWorld extends Bot['world'] {
+type PinnedWorld = Bot['world'] & {
   setColumn(
     chunkX: number,
     chunkZ: number,
     column: { getBlock(position: Bot['entity']['position']): NonNullable<ReturnType<Bot['blockAt']>> },
   ): void;
-}
+};
 
 test('client waits for a received full inventory snapshot and validates reports at their shared tick', async () => {
   const bot = makeBot(0);
@@ -126,7 +126,7 @@ test('invalid civilization context unwinds the already-created base observer', (
   assert.throws(() => createMineflayerCivilizationClient(bot as unknown as Bot, {
     ...valid,
     context: { ...valid.context, faction: 'tide' },
-  }), /does not match its canonical seat profile/);
+  }), /do not match the six-seat roster/);
 
   assert.equal(bot.listenerCount('spawn'), 0);
   assert.equal(bot.listenerCount('health'), 0);

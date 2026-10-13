@@ -30,14 +30,14 @@ const pinnedRegistry = loadRegistry('26.1.2');
 const pinnedBlockFactory = loadBlockFactory(pinnedRegistry);
 const PinnedWorldConstructor = loadWorld('26.1.2');
 
-interface PinnedWorld extends Bot['world'] {
+type PinnedWorld = Bot['world'] & {
   setColumn(
     chunkX: number,
     chunkZ: number,
     column: { getBlock(position: Bot['entity']['position']): NonNullable<ReturnType<Bot['blockAt']>> },
   ): void;
   unloadColumn(chunkX: number, chunkZ: number): void;
-}
+};
 
 test('own materials stay unknown until this client receives a full inventory snapshot', () => {
   const bot = makeBot();

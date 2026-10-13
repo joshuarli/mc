@@ -42,13 +42,13 @@ const worldRegistry = loadMinecraftData(MINECRAFT_VERSION);
 const worldBlockFactory = loadPrismarineBlock(worldRegistry);
 const PinnedWorldConstructor = loadPrismarineWorld(MINECRAFT_VERSION);
 
-interface PinnedWorld extends Bot['world'] {
+type PinnedWorld = Bot['world'] & {
   setColumn(
     chunkX: number,
     chunkZ: number,
     column: { getBlock(position: Bot['entity']['position']): NonNullable<ReturnType<Bot['blockAt']>> },
   ): void;
-}
+};
 
 test('craft spends four observed oak logs for sixteen observed oak planks', async () => {
   const harness = makeHarness();
@@ -324,8 +324,8 @@ test('place spends a plank only when the received target and inventory both chan
   harness.setBlock(targetPosition, block('air', targetPosition));
   Object.assign(harness.bot, {
     equip: async (stack: typeof planks) => { Object.assign(harness.bot, { heldItem: stack }); },
-    placeBlock: async (support: { readonly position: TestVector }, face: TestVector) => {
-      assert.deepEqual(face, new TestVector(0, 1, 0));
+    placeBlock: async (support: { readonly position: TestVector }, face: Bot['entity']['position']) => {
+      assert.deepEqual([face.x, face.y, face.z], [0, 1, 0]);
       const placedPosition = support.position.offset(face.x, face.y, face.z);
       harness.setBlock(placedPosition, block('oak_planks', placedPosition));
       planks.count = 15;
