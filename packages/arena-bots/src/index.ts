@@ -1,17 +1,20 @@
 import type {
   AgentObservation,
-  Intent,
   SkillCancellation,
   SkillOutcome,
 } from '@arena/core';
 import type { Bot } from 'mineflayer';
 import { bindEntityActionStringMapperFeature } from './mineflayer-compat.js';
 import { MineflayerObserver } from './observer.js';
+import type { ArenaSkillIntent } from './skill-intent.js';
 import { SkillOwner } from './skills.js';
+
+export type { ArenaSkillIntent } from './skill-intent.js';
 
 export interface MineflayerArenaClient {
   observe(tick: number): AgentObservation;
-  run(intent: Intent): Promise<SkillOutcome>;
+  /** Runs a core policy intent or awaits exact arrival for the bot-only block navigation intent. */
+  run(intent: ArenaSkillIntent): Promise<SkillOutcome>;
   cancel(reason: SkillCancellation): Promise<void>;
   close(): Promise<void>;
 }

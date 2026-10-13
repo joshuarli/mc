@@ -1,10 +1,13 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
+import { createRequire } from 'node:module';
 import test from 'node:test';
 import { blockPosition, entityId, inventorySlot } from '@arena/core';
 import type { Bot } from 'mineflayer';
 import { MineflayerObserver } from '../src/observer.js';
 import { SkillOwner } from '../src/skills.js';
+
+const { goals } = createRequire(import.meta.url)('mineflayer-pathfinder') as typeof import('mineflayer-pathfinder');
 
 test('cancellation stops the owned path and clears client controls before settling', async () => {
   const harness = makeHarness();
@@ -12,12 +15,54 @@ test('cancellation stops the owned path and clears client controls before settli
   try {
     const running = harness.owner.run({ kind: 'navigate', target: blockPosition(20, 64, 0) });
     await waitUntil(() => harness.pathfinder.goal !== null);
+    assert.ok(harness.pathfinder.goal instanceof goals.GoalNear);
 
     const cancellation = harness.owner.cancel('shutdown');
     assert.deepEqual(await running, { kind: 'cancelled', reason: 'shutdown' });
     await cancellation;
     assert.equal(harness.pathfinder.goal, null);
     assert.ok(harness.controlsCleared() > 0);
+  } finally {
+    await harness.owner.close();
+    harness.observer.close();
+  }
+});
+
+test('navigateToBlock requires the ramp top and the owned skill checks the observed tile', async () => {
+  const target = blockPosition(31, 66, 21);
+  const goal = new goals.GoalBlock(target.x, target.y, target.z);
+  const pathfinderNode = (x: number, y: number, z: number) => ({
+    x,
+    y,
+    z,
+    remainingBlocks: 0,
+    cost: 0,
+    toBreak: [],
+    toPlace: [],
+    parkour: false,
+    hash: `${x},${y},${z}`,
+  } satisfies Parameters<typeof goal.isEnd>[0]);
+  assert.equal(goal.isEnd(pathfinderNode(31, 66, 20)), false);
+  assert.equal(goal.isEnd(pathfinderNode(31, 66, 21)), true);
+
+  const harness = makeHarness();
+  Object.assign(harness.bot, { entity: { id: 1, position: new TestPosition(31.5, 66, 20.5) } });
+
+  try {
+    let settled = false;
+    const running = harness.owner.run({ kind: 'navigateToBlock', target });
+    void running.then(() => { settled = true; });
+    await waitUntil(() => harness.pathfinder.goal !== null);
+    const firstGoal = harness.pathfinder.goal;
+    assert.ok(firstGoal instanceof goals.GoalBlock);
+
+    harness.bot.emit('goal_reached', firstGoal as never);
+    await waitUntil(() => harness.pathfinder.goal !== null && harness.pathfinder.goal !== firstGoal);
+    assert.equal(settled, false);
+
+    Object.assign(harness.bot, { entity: { id: 1, position: new TestPosition(31.5, 66, 21.5) } });
+    harness.bot.emit('goal_reached', harness.pathfinder.goal as never);
+    assert.deepEqual(await running, { kind: 'succeeded' });
   } finally {
     await harness.owner.close();
     harness.observer.close();

@@ -5,7 +5,6 @@ import {
   isOutsideBorder,
   type BlockPosition,
   type EquipmentSlot,
-  type Intent,
   type SkillCancellation,
   type SkillFailure,
   type SkillOutcome,
@@ -14,6 +13,7 @@ import type { Bot, BotEvents } from 'mineflayer';
 import { classifyItem, mineflayerEquipmentDestination } from './items.js';
 import { MineflayerObserver } from './observer.js';
 import { isTargetablePlayer, isVisibleEntity, toBlockPosition } from './perception.js';
+import type { ArenaSkillIntent } from './skill-intent.js';
 import { hasLocalVoxelLineOfSight } from './visibility.js';
 
 const { Movements, goals, pathfinder } = createRequire(import.meta.url)('mineflayer-pathfinder') as typeof import('mineflayer-pathfinder');
@@ -60,6 +60,11 @@ interface ActiveSkill {
   cancellation: SkillCancellation | null;
   promise: Promise<SkillOutcome>;
 }
+
+/** Separates the existing near-target policy behavior from exact bot-owned block arrival. */
+type NavigationArrival =
+  | { readonly kind: 'withinRange'; readonly range: number }
+  | { readonly kind: 'exactBlock' };
 
 interface SkillResources {
   navigationActive: boolean;
@@ -215,7 +220,7 @@ export class SkillOwner {
     this.#bot.on('health', this.#onHealth);
   }
 
-  run(intent: Intent): Promise<SkillOutcome> {
+  run(intent: ArenaSkillIntent): Promise<SkillOutcome> {
     const started = this.#enqueue(async () => {
       if (this.#closed) throw new Error('Mineflayer skill owner is closed');
       if (this.#cleanupFailure !== null || this.#quarantinedOperation !== null) {
@@ -272,7 +277,7 @@ export class SkillOwner {
     await active.promise;
   }
 
-  async #runOwned(intent: Intent, active: ActiveSkill): Promise<SkillOutcome> {
+  async #runOwned(intent: ArenaSkillIntent, active: ActiveSkill): Promise<SkillOutcome> {
     let outcome: SkillOutcome | null = null;
     let unhandled: unknown;
     try {
@@ -309,7 +314,7 @@ export class SkillOwner {
     return outcome;
   }
 
-  async #execute(intent: Intent, active: ActiveSkill): Promise<void> {
+  async #execute(intent: ArenaSkillIntent, active: ActiveSkill): Promise<void> {
     const signal = active.controller.signal;
     throwIfInterrupted(signal);
     switch (intent.kind) {
@@ -317,6 +322,9 @@ export class SkillOwner {
         return;
       case 'navigate':
         await this.#navigateTo(intent.target, 2, active);
+        return;
+      case 'navigateToBlock':
+        await this.#navigateToBlock(intent.target, active);
         return;
       case 'approach':
         await this.#approach(intent.target, active);
@@ -342,6 +350,14 @@ export class SkillOwner {
   }
 
   async #navigateTo(position: BlockPosition, range: number, active: ActiveSkill): Promise<void> {
+    await this.#navigate(position, { kind: 'withinRange', range }, active);
+  }
+
+  async #navigateToBlock(position: BlockPosition, active: ActiveSkill): Promise<void> {
+    await this.#navigate(position, { kind: 'exactBlock' }, active);
+  }
+
+  async #navigate(position: BlockPosition, arrival: NavigationArrival, active: ActiveSkill): Promise<void> {
     const deadline = performance.now() + PATH_TIMEOUT_MS;
     for (let leg = 0; leg < MAX_NAVIGATION_LEGS; leg += 1) {
       throwIfInterrupted(active.controller.signal);
@@ -352,15 +368,22 @@ export class SkillOwner {
 
       const current = this.#bot.entity.position;
       const remainingDistance = distance(current, position);
-      if (remainingDistance <= range) return;
+      if (hasArrived(current, position, arrival)) return;
       const remainingMs = deadline - performance.now();
       if (remainingMs <= 0) throw new SkillFault('timedOut', 'bounded navigation exceeded its deadline');
 
-      const waypoint = remainingDistance <= MAX_PATH_LEG_BLOCKS + range
+      const finalLegAllowance = arrival.kind === 'withinRange' ? arrival.range : 0;
+      const waypoint = remainingDistance <= MAX_PATH_LEG_BLOCKS + finalLegAllowance
         ? position
         : waypointToward(current, position, MAX_PATH_LEG_BLOCKS);
-      const goalRange = waypoint === position ? range : 2;
-      const goal = new goals.GoalNear(waypoint.x, waypoint.y, waypoint.z, goalRange);
+      const goal = waypoint === position && arrival.kind === 'exactBlock'
+        ? new goals.GoalBlock(waypoint.x, waypoint.y, waypoint.z)
+        : new goals.GoalNear(
+          waypoint.x,
+          waypoint.y,
+          waypoint.z,
+          waypoint === position && arrival.kind === 'withinRange' ? arrival.range : 2,
+        );
       const releaseBudget = await acquirePathSearchShare(this.#bot.pathfinder, active.controller.signal, deadline);
       const searchRemainingMs = deadline - performance.now();
       if (searchRemainingMs <= 0) {
@@ -377,7 +400,7 @@ export class SkillOwner {
         this.#bot.pathfinder.setGoal(goal, false);
         await Promise.race([reached, pathFailure]);
         throwIfInterrupted(active.controller.signal);
-        if (distance(this.#bot.entity.position, position) <= range) return;
+        if (hasArrived(this.#bot.entity.position, position, arrival)) return;
         if (leg === MAX_NAVIGATION_LEGS - 1) {
           throw new SkillFault('noProgress', `navigation exceeded ${MAX_NAVIGATION_LEGS} bounded path segments`);
         }
@@ -1157,6 +1180,17 @@ function slotCount(bot: Bot, slot: number, target: MineflayerItem): number {
 
 function distance(first: { readonly x: number; readonly y: number; readonly z: number }, second: { readonly x: number; readonly y: number; readonly z: number }): number {
   return Math.hypot(first.x - second.x, first.y - second.y, first.z - second.z);
+}
+
+function hasArrived(
+  current: { readonly x: number; readonly y: number; readonly z: number },
+  target: BlockPosition,
+  arrival: NavigationArrival,
+): boolean {
+  if (arrival.kind === 'withinRange') return distance(current, target) <= arrival.range;
+  return Math.floor(current.x) === target.x
+    && Math.floor(current.y) === target.y
+    && Math.floor(current.z) === target.z;
 }
 
 function waypointToward(
