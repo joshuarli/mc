@@ -317,6 +317,8 @@ Use exact locked source/API for implementation. Mutable links below are research
 
 Append one line per execution judgment that a reader would otherwise miss: date, item, decision and reason. Owner decisions and prescribed choices above are already recorded; do not duplicate them here.
 
+- 2026-10-13 — Java diagnostic loop: a clean Gradle cache exposed missing verification metadata for the already resolved JUnit 5.7.1 BOM module. Add only its SHA-256 after comparing the downloaded bytes with Maven Central's published checksum; keep strict verification and all dependency versions unchanged.
+
 Decisions dated 2026-10-12 are historical and are superseded where they select Rust, Azalea, or Paper 26.2 for bots. Their evidence remains valid only for the exact earlier stack.
 
 - 2026-10-13 — M1 continuation at `0672d9a`: prioritize the owner's six-player steering; reproduce checkpoint scheduling and policy responsiveness deterministically, reopen ramp navigation only with bounded live diagnostics, and account for path searches separately from following. Preserve the locked stack, gameplay floors, local failure evidence, and serialized Paper ownership. GitHub Actions work is omitted by the owner's later instruction. Current review classifications are recorded in the acceptance report.
