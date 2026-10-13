@@ -7,7 +7,7 @@ import {
   type FileIdentity,
 } from '../owned-files/index.js';
 import { RunnerError } from '../errors.js';
-import type { PolicyEffectRecord, PolicyReplayRecord } from '../policy-replay.js';
+import { isCivilizationMaterialAction, type PolicyEffectRecord, type PolicyReplayRecord } from '../policy-replay.js';
 import type { PreparedRun } from '../prepare.js';
 import {
   MAX_EVIDENCE_BYTES,
@@ -63,6 +63,7 @@ export class RuntimeTraceBuilder {
   readonly #records: TraceRecord[] = [];
   readonly #policyDecisionSequences = new Set<string>();
   readonly #civilizationDecisionSequences = new Set<string>();
+  readonly #materialActionSequences = new Set<string>();
   #mode: 'hunger_games' | 'civilization' | undefined;
   readonly #activePolicyActions = new Map<number, string>();
   readonly #policyActionSeats = new Map<string, number>();
@@ -253,7 +254,10 @@ export class RuntimeTraceBuilder {
       await this.#append(toTraceRecord(undefined, record));
       this.#lastPolicyDecisionSequence = sequence;
       this.#policyDecisionSequences.add(record.sequence);
-      if (record.schema === 'civilization-policy-replay-v1') this.#civilizationDecisionSequences.add(record.sequence);
+      if (record.schema === 'civilization-policy-replay-v1') {
+        this.#civilizationDecisionSequences.add(record.sequence);
+        if (isCivilizationMaterialAction(record.decision)) this.#materialActionSequences.add(record.sequence);
+      }
     });
   }
 
@@ -282,7 +286,8 @@ export class RuntimeTraceBuilder {
           kind: this.#hasOutcome ? 'policy_effect_not_pending_after_outcome' : 'policy_effect_not_pending',
         });
       }
-      if (this.#policyActionSeats.has(record.decision_sequence) && (record.skill.kind === 'pending' || record.skill.kind === 'progress')) {
+      if (this.#policyActionSeats.has(record.decision_sequence) && (record.skill.kind === 'pending'
+          || (record.skill.kind === 'progress' && !this.#materialActionSequences.has(record.decision_sequence)))) {
         throw new RunnerError('runtime_failure', 'run trace', { kind: 'nonterminal_policy_effect' });
       }
       await this.#append(toTraceRecord(undefined, record));

@@ -10,6 +10,8 @@ import {
   decideCivilization,
   normalizePolicyReplayInput,
   type CivilizationDecision,
+  type CivilizationGoal,
+  type CivilizationActionIntent,
   type CivilizationObservation,
   type CivilizationObservationInput,
   type CivilizationPolicyContext,
@@ -169,6 +171,19 @@ export function makeCivilizationPolicyEffectRecord(
   return Object.freeze({ ...makePolicyEffectRecord(decisionSequence, skill, pathUpdates), schema: 'civilization-policy-effect-v1' });
 }
 
+/** Settled progress belongs to material work; shared actions still require terminal outcomes. */
+export function isCivilizationMaterialAction(decision: CivilizationDecision): decision is CivilizationDecision & {
+  readonly goal: Extract<CivilizationGoal, { readonly kind: 'gatherMaterial' | 'craftMaterial' | 'transferMaterial' | 'buildOutpost' }>;
+  readonly intent: CivilizationActionIntent;
+} {
+  const { goal, intent } = decision;
+  if (goal.kind !== 'gatherMaterial' && goal.kind !== 'craftMaterial'
+      && goal.kind !== 'transferMaterial' && goal.kind !== 'buildOutpost') return false;
+  return intent.kind === 'mineBlock' || intent.kind === 'craft' || intent.kind === 'containerTransfer'
+    || intent.kind === 'placeBlock' || intent.kind === 'navigate' || intent.kind === 'dropCollect'
+    || intent.kind === 'containerOpen';
+}
+
 export interface PolicyReplaySummary {
   readonly schema: 1;
   readonly run_id: string;
@@ -272,7 +287,9 @@ export function replayPolicyJson(evidence: Evidence): PolicyReplaySummary {
       if ((initiator.schema === 'civilization-policy-replay-v1') !== (effect.schema === 'civilization-policy-effect-v1')) {
         throw replayFailure('policy_effect_namespace_mismatch', index + 1, 'schema');
       }
-      if (initiator.schema !== 'policy-replay-v1' && (effect.skill.kind === 'pending' || effect.skill.kind === 'progress')) {
+      if (initiator.schema !== 'policy-replay-v1' && (effect.skill.kind === 'pending'
+          || (effect.skill.kind === 'progress' && (initiator.schema !== 'civilization-policy-replay-v1'
+            || !isCivilizationMaterialAction(initiator.decision))))) {
         throw replayFailure('nonterminal_policy_effect', index + 1, 'skill');
       }
       if (initiator.schema !== 'policy-replay-v1' && !actionOwners.has(effect.decision_sequence)) {

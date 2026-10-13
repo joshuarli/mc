@@ -1,14 +1,16 @@
-import { TraceError } from '../src/trace.js';
+import { canonicalJson, sha256Json } from '../src/canonical.js';
+import { parseSegment, TraceError } from '../src/trace.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   agentObservation, agentState, blockPosition, civilizationObservation, civilizationPolicyContext,
   civilizationPolicyFeedbackBatch, civilizationOutpostCells, outpostCell, type CivilizationObservationInput,
+  rehydratePolicyReplayInput,
   createPolicyFeedback, currentKnowledge, decideCivilization, DeterministicRandom, emptyEquipment, emptyCivilizationPolicyMemory,
   materialStack, observationSequence, PolicyParams, tick, worldBorder,
 } from '@arena/core';
 import {
-  makeCivilizationPolicyEffectRecord, makeCivilizationPolicyReplayRecord,
+  isCivilizationMaterialAction, makeCivilizationPolicyEffectRecord, makeCivilizationPolicyReplayRecord,
   normalizeCivilizationPolicyReplayInput, replayPolicyJson,
 } from '../src/policy-replay.js';
 import type { Evidence } from '../src/evidence.js';
@@ -136,4 +138,37 @@ test('civilization replay preserves material action feedback and failed-target m
   const modified = { ...record, input: { ...record.input, feedback: { ...record.input.feedback, actions: [] } } };
   assert.throws(() => replayPolicyJson(evidence([modified])),
     (error: unknown) => error instanceof TraceError && error.source.kind === 'policy_decision_mismatch');
+});
+
+test('civilization craft progress survives record reading and following-decision feedback replay', () => {
+  const first = sample();
+  if (!isCivilizationMaterialAction(first.decision)) throw new Error('material craft required');
+  const skill = { kind: 'progress' as const, progress: { completedSteps: 4, totalSteps: 16 } };
+  const effect = makeCivilizationPolicyEffectRecord(1n, skill, []);
+  const base = rehydratePolicyReplayInput({ schema: 'policy-input-v2', observation: first.input.observation.base,
+    memory: first.decision.memory.policy, feedback: [], params: first.input.params, rng_state: first.rng_state_after });
+  if (base.schema !== 'policy-input-v2') throw new Error('v2 survival input required');
+  const context = civilizationPolicyContext(first.input.context);
+  const observation = civilizationObservation({ ...first.input.observation, base: base.observation }, context);
+  const feedback = civilizationPolicyFeedbackBatch({ shared: [], actions: [{
+    goal: first.decision.goal, intent: first.decision.intent,
+    outcome: skill,
+    startedAt: observation.base.tick, completedAt: observation.base.tick,
+  }] });
+  const input = normalizeCivilizationPolicyReplayInput({ context, observation, memory: first.decision.memory,
+    feedback, params: base.params, random: base.random });
+  const decision = decideCivilization(context, observation, first.decision.memory, base.params, base.random, feedback);
+  const next = makeCivilizationPolicyReplayRecord({ sequence: 2n, seat: 0, input, decision,
+    rngStateAfter: base.random.snapshotState(), disposition: decision.intent.kind === 'hold' ? { kind: 'hold' } : { kind: 'start', action_sequence: '2' } });
+  const records = [first, effect, next];
+  const segment = parseSegment(Buffer.from(canonicalJson({ schema: 2, run_id: 'civ-replay', first_sequence: '1',
+    last_sequence: '3', records, sha256: sha256Json(records), trailer: { complete: true } })));
+  assert.equal(next.input.feedback.actions[0]?.outcome.kind, 'progress');
+  assert.equal(replayPolicyJson(evidence(segment.records)).effect_count, 1);
+});
+
+test('civilization nonmaterial actions reject progress effects', () => {
+  const effect = makeCivilizationPolicyEffectRecord(1n, { kind: 'progress', progress: { completedSteps: 1, totalSteps: 2 } }, []);
+  assert.throws(() => replayPolicyJson(evidence([sample('navigate'), effect])),
+    (error: unknown) => error instanceof TraceError && error.source.kind === 'nonterminal_policy_effect');
 });

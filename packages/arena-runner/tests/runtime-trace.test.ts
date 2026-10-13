@@ -728,7 +728,8 @@ function frame(message: ControlMessage): Buffer {
   return Buffer.from(encodeControlFrame(message));
 }
 
-test('civilization trace checkpoints pending effects and joins cancellation after outcome', async (t) => {
+for (const settlement of ['cancellation', 'material progress'] as const) {
+test(`civilization trace checkpoints pending effects and joins ${settlement} after outcome`, async (t) => {
   const { session, client } = await authenticatedSession(t, ['civilization_v1']);
   const { trace, ownedRoot } = await createTrace(t);
   const fixture = decodeControlEnvelope(readFileSync(join(repositoryRoot, 'fixtures/protocol/control-prepare-civilization.json')));
@@ -752,7 +753,9 @@ test('civilization trace checkpoints pending effects and joins cancellation afte
   await trace.recordPolicyDecision(record);
   await trace.checkpoint(200);
   await endOneSeatRun(trace, session, client, messages, 7n, [0, 1, 2, 3, 4, 5]);
-  await trace.recordPolicyEffect(makeCivilizationPolicyEffectRecord(1n, { kind: 'cancelled', reason: 'shutdown' }, []));
+  await trace.recordPolicyEffect(makeCivilizationPolicyEffectRecord(1n, settlement === 'cancellation'
+    ? { kind: 'cancelled', reason: 'shutdown' }
+    : { kind: 'progress', progress: { completedSteps: 4, totalSteps: 16 } }, []));
   const finalized = await trace.finalize();
   assert.equal(finalized.segments.length, 2);
   const last = finalized.segments[1]!;
@@ -761,3 +764,4 @@ test('civilization trace checkpoints pending effects and joins cancellation afte
   assert.equal(records.at(-2)?.type, 'outcome');
   assert.equal(records.at(-1)?.schema, 'civilization-policy-effect-v1');
 });
+}

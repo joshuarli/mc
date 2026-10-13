@@ -323,3 +323,10 @@ test('policy replay v2 accepts goal persistence without claiming another action 
     decision: deferred.decision, rngStateAfter: BigInt(deferred.rng_state_after), disposition: deferred.disposition });
   assert.deepEqual(produced.disposition, { kind: 'defer', action_sequence: '1', reason: 'goalPersistence' });
 });
+
+test('policy replay v2 rejects shared action progress effects', () => {
+  const first = actionRecord(1n, { kind: 'start', action_sequence: '1' });
+  const effect = makePolicyEffectRecord(1n, { kind: 'progress', progress: { completedSteps: 1, totalSteps: 2 } }, []);
+  assert.throws(() => replayPolicyJson(evidence([first, effect])),
+    (error: unknown) => error instanceof TraceError && error.source.kind === 'nonterminal_policy_effect');
+});
