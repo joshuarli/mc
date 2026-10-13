@@ -56,6 +56,10 @@ At `e6357db`, the five focused Java test classes passed all 44 cases, including 
 
 The runtime exposes `run --scenario`, read-only `validate --scenario`, stopped-run inspection, and explicit selected-run `gc --dry-run` / `gc --apply`. Scripted acceptance cases select an evaluator driver; normal Hunger runs retain the baseline policy and configured strategy cadence. Conflict and cancellation errors use exits 4 and 130, including independent cleanup failures. Evaluators may finish their assertions after outcome before cancellation, and baseline policy actions stop on actual death or spectator mode. Configured reset and stopped inspection passed. No six-seat or performance gate measurements were collected.
 
+## Compact retained evidence
+
+`./arena report tests/fixtures/operator-abort/trace-v2-000001.json` reconstructs the real operator abort at tick 4, with both competitors surviving and no eliminations. The fixture retains the original trace, cancellation artifact, and all three stopped Minecraft stats files. Every file was compared byte for byte against the stopped run, and both report results matched before explicit GC removed its older full directory. These compact files survive a checkout; the other full runs and archives under `.work/arena/` are disposable local evidence.
+
 ## Remaining prerequisites
 
 1. Verify configured-world startup, bounded shutdown, and stopped-run stats through `arena inspect`.
