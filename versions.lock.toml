@@ -23,9 +23,9 @@ plugin_api_version = "26.2"
 
 [java]
 distribution = "Eclipse Temurin"
-version = "25.0.4"
+version = "25.0.4.1"
 build = "25.0.4.1+1"
-runtime_build = "25.0.4+11-LTS"
+runtime_build = "25.0.4.1+1-LTS"
 
 [java.macos_arm64]
 archive_file = "OpenJDK25U-jdk_aarch64_mac_hotspot_25.0.4.1_1.tar.gz"
