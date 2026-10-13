@@ -22,7 +22,7 @@ import {
   withCleanupFailure,
 } from './failures.js';
 import { clonePristineWorld } from './world.js';
-import { LivePolicyLoop } from './live-policy-loop.js';
+import { LivePolicyLoop, type PolicyActivityEvent } from './live-policy-loop.js';
 import { joinEvaluatorAfterOutcome } from './evaluator.js';
 import { armRuntimeDeadline, COLD_START_TIMEOUT_MS, type RuntimeDeadline } from './deadline.js';
 import {
@@ -55,7 +55,7 @@ import type {
 } from './types.js';
 import { startOwnedServerProcess } from './process.js';
 import type { OwnedServerProcess, ServerProcessExit } from './process.js';
-import { startOwnedResourceMonitor, type OwnedResourceMonitor } from './resource-monitor.js';
+import { startOwnedResourceMonitor, type OwnedResourceMonitor, type ResourceMonitorSampleEvent } from './resource-monitor.js';
 import type { OperationalFailurePrimaryV1 } from './failure-artifact.js';
 import { TextDecoder } from 'node:util';
 
@@ -81,6 +81,8 @@ export interface RunPreparedRunOptions {
   readonly coldStartDeadline?: RuntimeDeadline;
   readonly evaluate?: ActiveRunEvaluator;
   readonly competitorDriver?: 'baselinePolicy' | 'evaluator';
+  readonly onPolicyActivity?: (event: PolicyActivityEvent) => void;
+  readonly onResourceSample?: (event: ResourceMonitorSampleEvent) => void;
 }
 
 /** Owns a headless Paper run from its pristine world through stopped evidence. */
@@ -204,7 +206,10 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
       capabilities: CONTROL_CAPABILITIES,
     });
     serverProcess = await startPaper(options, serverInputs, listener.address.port, token, runSignal);
-    resourceMonitor = observeResourceMonitor(await startOwnedResourceMonitor({ javaPid: serverProcess.pid }));
+    resourceMonitor = observeResourceMonitor(await startOwnedResourceMonitor({
+      javaPid: serverProcess.pid,
+      ...(options.onResourceSample === undefined ? {} : { onSample: options.onResourceSample }),
+    }));
     const processFailure = unexpectedExit(serverProcess, resourceMonitor.failure);
     session = await withStartupTimeout(
       listener.accept(runSignal),
@@ -233,6 +238,7 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
       policySeed: scenario.seed,
       strategyIntervalTicks: scenario.bots.strategyIntervalTicks,
       competitors: () => clients,
+      ...(options.onPolicyActivity === undefined ? {} : { onPolicyActivity: options.onPolicyActivity }),
       recordPolicy: scenario.record.policyReplay,
     });
     coordinator.startPump();
@@ -413,6 +419,7 @@ class ControlCoordinator {
   readonly #failureState = deferred<never>();
   readonly #traceOrder = new SerialExecutor();
   readonly #policyLoop: LivePolicyLoop | undefined;
+  readonly #measurePolicyActivity: boolean;
   #failure: unknown;
   #pending: { readonly correlation: bigint; readonly acknowledgment: Deferred<ControlMessage> } | undefined;
   #runnerSequence: bigint;
@@ -434,6 +441,7 @@ class ControlCoordinator {
     strategyIntervalTicks: bigint;
     competitors(): readonly RuntimeCompetitorClient[];
     recordPolicy: boolean;
+    onPolicyActivity?: (event: PolicyActivityEvent) => void;
   }>) {
     this.#session = options.session;
     this.#trace = options.trace;
@@ -445,6 +453,7 @@ class ControlCoordinator {
     this.#abortPromise = options.abortPromise;
     this.#leaseLost = options.leaseLost;
     this.#competitors = options.competitors;
+    this.#measurePolicyActivity = options.onPolicyActivity !== undefined;
     this.#runnerSequence = options.session.ready.correlation!;
     void this.#failureState.promise.catch(() => {});
     if (options.policy !== undefined) {
@@ -456,6 +465,7 @@ class ControlCoordinator {
         recordPolicy: options.recordPolicy,
         competitors: options.competitors,
         fail: (error) => this.#fail(error),
+        ...(options.onPolicyActivity === undefined ? {} : { onActivity: options.onPolicyActivity }),
       });
     }
   }
@@ -536,6 +546,7 @@ class ControlCoordinator {
   async #consume(): Promise<void> {
     try {
       for await (const message of this.#session.messages()) {
+        const tickReceivedAtNs = this.#measurePolicyActivity && message.type === 'public_clock' ? process.hrtime.bigint() : undefined;
         if (message.type === 'outcome') {
           this.#outcomeReceived = true;
           this.#policyLoop?.stopLaunching();
@@ -573,7 +584,7 @@ class ControlCoordinator {
             && (message.payload.phase === 'grace' || message.payload.phase === 'active')) {
           const value = Number(message.payload.tick.value);
           if (!Number.isSafeInteger(value)) throw new RunnerError('runtime_failure', 'policy clock', { kind: 'tick_out_of_range' });
-          this.#policyLoop.onTick(value);
+          this.#policyLoop.onTick(value, tickReceivedAtNs);
         }
       }
       if (!this.#outcomeReceived) throw new RunnerError('runtime_failure', 'control session', { kind: 'outcome_missing' });
@@ -686,7 +697,10 @@ async function createBootstrapWorld(options: Readonly<{
       options.signal,
       serverPath,
     );
-    resourceMonitor = observeResourceMonitor(await startOwnedResourceMonitor({ javaPid: server.pid }));
+    resourceMonitor = observeResourceMonitor(await startOwnedResourceMonitor({
+      javaPid: server.pid,
+      ...(options.options.onResourceSample === undefined ? {} : { onSample: options.options.onResourceSample }),
+    }));
     session = await withStartupTimeout(
       listener.accept(options.signal),
       unexpectedExit(server, resourceMonitor.failure),

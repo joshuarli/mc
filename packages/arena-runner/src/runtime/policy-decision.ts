@@ -6,11 +6,12 @@ import {
   type DeterministicRandom,
   type PolicyMemory,
   type PolicyParams,
-  type PolicyReplayInputV1,
+  type PolicyReplayInputV2,
+  type PolicyFeedbackBatch,
 } from '@arena/core';
 
 export interface RuntimePolicyDecision {
-  readonly input: PolicyReplayInputV1;
+  readonly input: PolicyReplayInputV2;
   readonly decision: Decision;
   readonly rngStateAfter: bigint;
 }
@@ -26,8 +27,9 @@ export function decideRuntimePolicy(
   memory: PolicyMemory,
   params: PolicyParams,
   random: DeterministicRandom,
+  feedback: PolicyFeedbackBatch = [],
 ): RuntimePolicyDecision {
-  const input = normalizePolicyReplayInput({ observation, memory, params, random });
-  const decision = decide(observation, memory, params, random);
+  const input = normalizePolicyReplayInput({ observation, memory, params, random, feedback });
+  const decision = decide(observation, memory, params, random, feedback);
   return Object.freeze({ input, decision, rngStateAfter: random.snapshotState() });
 }

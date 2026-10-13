@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
-import { once } from 'node:events';
+import { EventEmitter, once } from 'node:events';
+import type { Bot } from 'mineflayer';
+import type { MineflayerArenaClient } from '@arena/bots';
+import { LivePolicyLoop } from '../src/runtime/live-policy-loop.js';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { createConnection, type Socket } from 'node:net';
 import { basename, join, resolve } from 'node:path';
@@ -10,6 +13,8 @@ import {
   blockPosition,
   currentKnowledge,
   decide,
+  decidePolicyReplayV1,
+  type PolicyReplayInputV1,
   DeterministicRandom,
   emptyEquipment,
   emptyPolicyMemory,
@@ -26,9 +31,10 @@ import {
   encodeControlFrame,
   type ControlMessage,
 } from '../src/control/index.js';
+import { canonicalJson } from '../src/canonical.js';
 import { RunnerError } from '../src/errors.js';
 import { createRunDirectory, readOwnedFile } from '../src/owned-files/index.js';
-import { makePolicyEffectRecord, makePolicyReplayRecord } from '../src/policy-replay.js';
+import { makePolicyEffectRecord, replayPolicyJson } from '../src/policy-replay.js';
 import { parseSegment } from '../src/trace.js';
 import { failureArtifactPath, parseOperationalFailureArtifact, readOperationalFailureArtifact } from '../src/runtime/failure-artifact.js';
 import { RuntimeTraceBuilder } from '../src/runtime/trace.js';
@@ -363,6 +369,67 @@ test('runtime trace cannot finalize while a policy skill result is still pending
     error instanceof RunnerError && error.source.kind === 'policy_skill_result_pending');
 });
 
+test('live runtime persists exact decision watermarks with a pending effect and keeps outcome private until join', async (t) => {
+  const { session, client } = await authenticatedSession(t);
+  const { trace, ownedRoot } = await createTrace(t);
+  const messages = await beginOneSeatRun(trace, session, client, 6);
+  let finish!: (outcome: import('@arena/core').SkillOutcome) => void;
+  const skill = new Promise<import('@arena/core').SkillOutcome>((resolve) => { finish = resolve; });
+  const bot = Object.assign(new EventEmitter(), { health: 20, game: { gameMode: 'survival' } }) as unknown as Bot;
+  const policyClient: MineflayerArenaClient = {
+    observe: (value) => agentObservation({
+      tick: tick(value), sequence: observationSequence(value + 1),
+      agent: currentKnowledge(agentState({ position: blockPosition(99, 64, 0), healthHalfHearts: 40, hungerPoints: 20,
+        foodStacks: [], equipped: emptyEquipment(), upgrades: [] })),
+      border: currentKnowledge(worldBorder(0, 0, 100)), opponents: currentKnowledge([]), loot: unknownKnowledge(),
+    }),
+    run: () => skill,
+    cancel: async (reason) => { finish({ kind: 'cancelled', reason }); },
+    close: async () => {},
+  };
+  const failures: unknown[] = [];
+  const loop = new LivePolicyLoop({ trace, params: PolicyParams.baseline(), seed: 1n, strategyIntervalTicks: 1n,
+    recordPolicy: true, competitors: () => [
+      { seat: 0, bot, client: policyClient },
+      ...Array.from({ length: 5 }, (_, index) => ({ seat: index + 1,
+        bot: Object.assign(new EventEmitter(), { health: 20, game: { gameMode: 'survival' } }) as unknown as Bot,
+        client: { ...policyClient, run: async () => ({ kind: 'succeeded' as const }), cancel: async () => {} },
+      })),
+    ], fail: (error) => failures.push(error) });
+  const flush = async (sequence: bigint) => {
+    client.write(frame({ protocol: 1, run_id: RUN_ID, sequence, type: 'heartbeat', payload: {} }));
+    await recordNextMessage(trace, messages);
+  };
+  for (let value = 0; value < 34; value += 1) loop.onTick(value);
+  await flush(7n);
+  const readSegment = async (index: number) => parseSegment(await readOwnedFile({ helperPath, ownedRoot,
+    relativePath: Buffer.from(`run/trace-v2-${String(index).padStart(6, '0')}.json`), maxBytes: 1024 * 1024 }));
+  const first = await readSegment(1);
+  assert.equal(first.records.filter((record) => record.schema === 'policy-replay-v2').length, 200);
+  assert.equal(first.records.some((record) => record.schema === 'policy-effect-v1'), false);
+  for (let value = 34; value < 68; value += 1) loop.onTick(value);
+  await flush(8n);
+  const second = await readSegment(2);
+  assert.equal(second.records.filter((record) => record.schema === 'policy-replay-v2').length, 200);
+  assert.equal(second.records.some((record) => record.schema === 'policy-effect-v1' && record.decision_sequence === '1'), false);
+  loop.stopLaunching();
+  await endOneSeatRun(trace, session, client, messages, 9n, [0, 1, 2, 3, 4, 5]);
+  await assert.rejects(readSegment(3));
+  await loop.stopAndJoin();
+  const result = await trace.finalize();
+  assert.equal(result.segments.length, 3);
+  const terminal = await readSegment(3);
+  assert.deepEqual(terminal.records.filter((record) => record.schema === 'policy-effect-v1' && record.decision_sequence === '1').map((record) => canonicalJson(record.skill)),
+    [canonicalJson({ kind: 'cancelled', reason: 'shutdown' })]);
+  assert.equal(terminal.records.some((record) => record.type === 'outcome'), true);
+  const records = [...first.records, ...second.records, ...terminal.records];
+  assert.equal(records.some((record) => record.schema === 'policy-effect-v1' && record.decision_sequence !== '1'), true);
+  const replay = replayPolicyJson({ run_id: RUN_ID, first_sequence: '1', last_sequence: String(records.length), segments: [], records });
+  assert.equal(replay.decision_count, 408);
+  assert.equal(replay.verified, true);
+  assert.deepEqual(failures, []);
+});
+
 async function createTrace(t: TestContext, runDirectoryPath = Buffer.from('run', 'ascii')): Promise<Readonly<{
   trace: RuntimeTraceBuilder;
   ownedRoot: Buffer;
@@ -426,10 +493,11 @@ async function beginOneSeatRun(
   trace: RuntimeTraceBuilder,
   session: ControlSession,
   client: Socket,
+  seats = 1,
 ): Promise<AsyncGenerator<ControlMessage>> {
   await trace.recordReady(session.ready);
   const messages = session.messages();
-  const prepare = await session.send({ type: 'prepare', payload: preparePayload() });
+  const prepare = await session.send({ type: 'prepare', payload: preparePayload(seats) });
   await trace.recordRunnerCommand(prepare);
   client.write(frame({
     protocol: 1,
@@ -466,7 +534,7 @@ async function beginOneSeatRun(
       run_id: RUN_ID,
       sequence: 6n,
       type: 'public_state',
-      payload: { at: { domain: 'match', value: 0n }, alive_seats: [0] },
+      payload: { at: { domain: 'match', value: 0n }, alive_seats: Array.from({ length: seats }, (_, seat) => seat) },
     }),
   ]));
   await recordNextMessage(trace, messages);
@@ -479,6 +547,8 @@ async function endOneSeatRun(
   session: ControlSession,
   client: Socket,
   messages: AsyncGenerator<ControlMessage>,
+  firstSequence = 7n,
+  survivors = [0],
 ): Promise<void> {
   const abort = await session.send({ type: 'abort', payload: { reason: 'operator' } });
   await trace.recordRunnerCommand(abort);
@@ -486,7 +556,7 @@ async function endOneSeatRun(
     frame({
       protocol: 1,
       run_id: RUN_ID,
-      sequence: 7n,
+      sequence: firstSequence,
       correlation: abort.sequence,
       type: 'ack',
       payload: {},
@@ -494,16 +564,16 @@ async function endOneSeatRun(
     frame({
       protocol: 1,
       run_id: RUN_ID,
-      sequence: 8n,
+      sequence: firstSequence + 1n,
       type: 'public_clock',
       payload: { phase: 'aborted', tick: { domain: 'match', value: 0n }, border_diameter_blocks: 100 },
     }),
     frame({
       protocol: 1,
       run_id: RUN_ID,
-      sequence: 9n,
+      sequence: firstSequence + 2n,
       type: 'outcome',
-      payload: { kind: 'abort', reason: 'operator', survivors: [0], at: { domain: 'match', value: 0n } },
+      payload: { kind: 'abort', reason: 'operator', survivors, at: { domain: 'match', value: 0n } },
     }),
   ]));
   await recordNextMessage(trace, messages);
@@ -536,16 +606,21 @@ function policyDecisionRecord(sequence: bigint) {
     opponents: currentKnowledge([]),
     loot: unknownKnowledge(),
   });
-  const input = normalizePolicyReplayInput({
+  const normalized = normalizePolicyReplayInput({
     observation,
     memory: emptyPolicyMemory(),
+    feedback: [],
     params: PolicyParams.baseline(),
     random: DeterministicRandom.fromState(1n),
   });
+  const input: PolicyReplayInputV1 = { schema: 'policy-input-v1', observation: normalized.observation,
+    memory: { lastGoal: normalized.memory.lastGoal, lastOpponent: normalized.memory.lastOpponent },
+    params: normalized.params, rng_state: normalized.rng_state };
   const restored = rehydratePolicyReplayInput(input);
-  const decision = decide(restored.observation, restored.memory, restored.params, restored.random);
+  if (restored.schema !== 'policy-input-v1') throw new Error('expected legacy input');
+  const decision = decidePolicyReplayV1(restored.observation, restored.memory, restored.params, restored.random);
   assert.notEqual(decision.intent.kind, 'hold');
-  return makePolicyReplayRecord(sequence, 0, input, decision, restored.random.snapshotState());
+  return { schema: 'policy-replay-v1' as const, sequence: sequence.toString(), seat: 0, input, decision, rng_state_after: restored.random.snapshotState().toString() };
 }
 
 class TestFrameReader {
@@ -595,7 +670,7 @@ function clockMessage(sequence: bigint, phase: 'waiting' | 'aborted'): ControlMe
   };
 }
 
-function preparePayload(): Extract<ControlMessage, { readonly type: 'prepare' }>['payload'] {
+function preparePayload(seats = 1): Extract<ControlMessage, { readonly type: 'prepare' }>['payload'] {
   return {
     map_semantic_id: '0'.repeat(64),
     scenario_semantic_id: '1'.repeat(64),
@@ -619,13 +694,13 @@ function preparePayload(): Extract<ControlMessage, { readonly type: 'prepare' }>
         final_diameter_blocks: 10,
       },
     },
-    roster: [{
-      kind: 'bot',
-      seat: 0,
-      participant_id: 'seat-0',
-      username: 'ArenaBot0',
-      offline_uuid: '00000000-0000-3000-8000-000000000000',
-    }],
+    roster: Array.from({ length: seats }, (_, seat) => ({
+      kind: 'bot' as const,
+      seat,
+      participant_id: `seat-${seat}`,
+      username: `ArenaBot${seat}`,
+      offline_uuid: `00000000-0000-3000-8000-${String(seat).padStart(12, '0')}`,
+    })),
   };
 }
 

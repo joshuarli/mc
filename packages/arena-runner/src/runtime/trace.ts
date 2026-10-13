@@ -7,7 +7,7 @@ import {
   type FileIdentity,
 } from '../owned-files/index.js';
 import { RunnerError } from '../errors.js';
-import type { PolicyEffectRecordV1, PolicyReplayRecordV1 } from '../policy-replay.js';
+import type { PolicyEffectRecordV1, PolicyReplayRecord } from '../policy-replay.js';
 import type { PreparedRun } from '../prepare.js';
 import {
   MAX_EVIDENCE_BYTES,
@@ -62,6 +62,8 @@ export class RuntimeTraceBuilder {
   readonly #segments: RuntimeTraceSegment[] = [];
   readonly #records: TraceRecord[] = [];
   readonly #policyDecisionSequences = new Set<string>();
+  readonly #activePolicyActions = new Map<number, string>();
+  readonly #policyActionSeats = new Map<string, number>();
   // An action can still settle after Java publishes the terminal result.
   readonly #pendingPolicyEffectSequences = new Set<string>();
   readonly #policyEffectSequences = new Set<string>();
@@ -203,7 +205,7 @@ export class RuntimeTraceBuilder {
   }
 
   /** Records the exact core policy input, decision, and resulting random state. */
-  recordPolicyDecision(record: PolicyReplayRecordV1): Promise<void> {
+  recordPolicyDecision(record: PolicyReplayRecord): Promise<void> {
     return this.#enqueue(async () => {
       this.#assertMutable();
       if (!this.#hasReady || !this.#hasPrepare) {
@@ -212,17 +214,39 @@ export class RuntimeTraceBuilder {
       if (this.#hasOutcome) {
         throw new RunnerError('runtime_failure', 'run trace', { kind: 'policy_decision_after_outcome' });
       }
-      if (record.schema !== 'policy-replay-v1') {
+      if (record.schema !== 'policy-replay-v1' && record.schema !== 'policy-replay-v2') {
         throw new RunnerError('runtime_failure', 'run trace', { kind: 'invalid_policy_decision' });
       }
       const sequence = parsePolicySequence(record.sequence, 'sequence');
       if (sequence <= this.#lastPolicyDecisionSequence || this.#policyDecisionSequences.has(record.sequence)) {
         throw new RunnerError('runtime_failure', 'run trace', { kind: 'policy_sequence_not_increasing' });
       }
+      if (record.schema === 'policy-replay-v1') {
+        if (record.decision.intent.kind !== 'hold') this.#pendingPolicyEffectSequences.add(record.sequence);
+      } else {
+        const disposition = record.disposition;
+        const active = this.#activePolicyActions.get(record.seat);
+        if (disposition.kind === 'hold') {
+          if (active !== undefined || record.decision.intent.kind !== 'hold') {
+            throw new RunnerError('runtime_failure', 'run trace', { kind: 'invalid_policy_hold_disposition' });
+          }
+        } else if (disposition.kind === 'start' || disposition.kind === 'replace') {
+          if (disposition.action_sequence !== record.sequence || record.decision.intent.kind === 'hold'
+              || (disposition.kind === 'start' ? active !== undefined : active !== disposition.replaces_action_sequence)) {
+            throw new RunnerError('runtime_failure', 'run trace', { kind: 'invalid_policy_action_identity' });
+          }
+          this.#activePolicyActions.set(record.seat, record.sequence);
+          this.#policyActionSeats.set(record.sequence, record.seat);
+          this.#pendingPolicyEffectSequences.add(record.sequence);
+        } else if (active !== disposition.action_sequence
+            || this.#policyActionSeats.get(disposition.action_sequence) !== record.seat
+            || !this.#pendingPolicyEffectSequences.has(disposition.action_sequence)) {
+          throw new RunnerError('runtime_failure', 'run trace', { kind: 'unmatched_policy_action' });
+        }
+      }
       await this.#append(toTraceRecord(undefined, record));
       this.#lastPolicyDecisionSequence = sequence;
       this.#policyDecisionSequences.add(record.sequence);
-      if (record.decision.intent.kind !== 'hold') this.#pendingPolicyEffectSequences.add(record.sequence);
     });
   }
 
@@ -248,9 +272,16 @@ export class RuntimeTraceBuilder {
           kind: this.#hasOutcome ? 'policy_effect_not_pending_after_outcome' : 'policy_effect_not_pending',
         });
       }
+      if (this.#policyActionSeats.has(record.decision_sequence) && (record.skill.kind === 'pending' || record.skill.kind === 'progress')) {
+        throw new RunnerError('runtime_failure', 'run trace', { kind: 'nonterminal_policy_effect' });
+      }
       await this.#append(toTraceRecord(undefined, record));
       this.#policyEffectSequences.add(record.decision_sequence);
       this.#pendingPolicyEffectSequences.delete(record.decision_sequence);
+      const seat = this.#policyActionSeats.get(record.decision_sequence);
+      if (seat !== undefined && this.#activePolicyActions.get(seat) === record.decision_sequence) {
+        this.#activePolicyActions.delete(seat);
+      }
     });
   }
 

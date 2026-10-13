@@ -8,6 +8,8 @@ import {
   blockPosition,
   currentKnowledge,
   decide,
+  decidePolicyReplayV1,
+  type PolicyReplayInputV1,
   DeterministicRandom,
   emptyEquipment,
   emptyPolicyMemory,
@@ -57,15 +59,20 @@ function policyRecord(sequence = 1n, randomState = MAX_U64) {
   });
   const memory = emptyPolicyMemory();
   const params = PolicyParams.baseline();
-  const input = normalizePolicyReplayInput({
+  const normalized = normalizePolicyReplayInput({
     observation,
     memory,
+    feedback: [],
     params,
     random: DeterministicRandom.fromState(randomState),
   });
+  const input: PolicyReplayInputV1 = { schema: 'policy-input-v1', observation: normalized.observation,
+    memory: { lastGoal: normalized.memory.lastGoal, lastOpponent: normalized.memory.lastOpponent },
+    params: normalized.params, rng_state: normalized.rng_state };
   const restored = rehydratePolicyReplayInput(input);
-  const decision = decide(restored.observation, restored.memory, restored.params, restored.random);
-  return makePolicyReplayRecord(sequence, 255, input, decision, restored.random.snapshotState());
+  if (restored.schema !== 'policy-input-v1') throw new Error('expected legacy input');
+  const decision = decidePolicyReplayV1(restored.observation, restored.memory, restored.params, restored.random);
+  return { schema: 'policy-replay-v1' as const, sequence: sequence.toString(), seat: 255, input, decision, rng_state_after: restored.random.snapshotState().toString() };
 }
 
 test('replays exact core decisions and verifies full-u64 policy sequences and RNG states', () => {
@@ -260,4 +267,48 @@ test('rejects fabricated or malformed path results in effect evidence', () => {
     assert.equal(error.source.kind, 'invalid_policy_path_position');
     return true;
   });
+});
+
+function actionRecord(sequence: bigint, disposition: import('../src/policy-replay.js').PolicyDisposition, seat = 255) {
+  const frame = policyRecord(sequence);
+  return { ...frame, schema: 'policy-replay-v2' as const, seat, disposition,
+    input: { ...frame.input, schema: 'policy-input-v2' as const, memory: { ...frame.input.memory, failedTargets: [] }, feedback: [] },
+    decision: { ...frame.decision, memory: { ...frame.decision.memory, failedTargets: [] } },
+  };
+}
+
+test('policy replay v2 verifies continued actions and replacement effects by their initiating identity', () => {
+  const first = actionRecord(1n, { kind: 'start', action_sequence: '1' });
+  const continued = actionRecord(2n, { kind: 'continue', action_sequence: '1' });
+  const replacement = actionRecord(3n, { kind: 'replace', action_sequence: '3', replaces_action_sequence: '1', reason: 'higherPriority' });
+  const summary = replayPolicyJson(evidence([first, continued, replacement,
+    makePolicyEffectRecord(1n, { kind: 'cancelled', reason: 'replaced' }, []),
+    actionRecord(4n, { kind: 'defer', action_sequence: '3', reason: 'cleanupPending' }),
+    makePolicyEffectRecord(3n, { kind: 'succeeded' }, []),
+  ]));
+  assert.equal(summary.decision_count, 4);
+  assert.equal(summary.effect_count, 2);
+});
+
+test('policy replay v2 rejects unknown reasons unmatched and cross-seat actions and duplicate effects', () => {
+  const first = actionRecord(1n, { kind: 'start', action_sequence: '1' });
+  for (const records of [
+    [first, actionRecord(2n, { kind: 'defer', action_sequence: '1', reason: 'mystery' as 'hysteresis' })],
+    [first, actionRecord(2n, { kind: 'continue', action_sequence: '99' })],
+    [first, actionRecord(2n, { kind: 'continue', action_sequence: '1' }, 254)],
+    [first, makePolicyEffectRecord(1n, { kind: 'succeeded' }, []), actionRecord(2n, { kind: 'continue', action_sequence: '1' })],
+    [first, makePolicyEffectRecord(1n, { kind: 'succeeded' }, []), makePolicyEffectRecord(1n, { kind: 'succeeded' }, [])],
+    [first, actionRecord(2n, { kind: 'continue', action_sequence: '1' }), makePolicyEffectRecord(2n, { kind: 'succeeded' }, [])],
+    [first, makePolicyEffectRecord(1n, { kind: 'pending' }, [])],
+  ]) assert.throws(() => replayPolicyJson(evidence(records)), TraceError);
+});
+
+test('policy replay v2 producer rejects invalid action identities and disposition reasons', () => {
+  const frame = actionRecord(1n, { kind: 'start', action_sequence: '1' });
+  const source = { sequence: 1n, seat: frame.seat, input: frame.input, decision: frame.decision,
+    rngStateAfter: BigInt(frame.rng_state_after), disposition: frame.disposition };
+  assert.equal(makePolicyReplayRecord(source).schema, 'policy-replay-v2');
+  assert.throws(() => makePolicyReplayRecord({ ...source, disposition: { kind: 'start', action_sequence: '2' } }), TypeError);
+  assert.throws(() => makePolicyReplayRecord({ ...source,
+    disposition: { kind: 'defer', action_sequence: '1', reason: 'unknown' as 'hysteresis' } }), TypeError);
 });
