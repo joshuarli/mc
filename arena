@@ -464,10 +464,20 @@ launch_runner() {
     prepare_node
     ensure_workspace_dependencies
     build_typescript runner
+    build_fs_helper
+    fs_helper="$root/.work/arena-fs/arena-fs"
     cli="$root/.work/build/packages/arena-runner/src/cli.js"
     [ -f "$cli" ] || fail "runner CLI is not built at $cli"
-    fs_helper="$root/.work/build/native/arena-fs-helper"
     (cd "$root" && ARENA_FS_HELPER="$fs_helper" "$NODE_HOME/bin/node" "$cli" "$cli_command" "$@")
+}
+
+build_fs_helper() {
+    fs_root="$root/.work/arena-fs"
+    ensure_work_directory "$fs_root"
+    helper="$fs_root/arena-fs"
+    [ ! -L "$helper" ] || fail "filesystem helper path must not be a symlink"
+    make -C "$root/native/arena-fs" build || fail "build the native filesystem helper"
+    [ -f "$helper" ] && [ -x "$helper" ] && [ ! -L "$helper" ] || fail "native filesystem helper is not executable at $helper"
 }
 
 check_command() {
