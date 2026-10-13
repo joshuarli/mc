@@ -106,6 +106,8 @@ export function paperArguments(
   runId: string,
 ): readonly string[] {
   return Object.freeze([
+    '-Xms512m',
+    '-Xmx2g',
     `-Djava.io.tmpdir=${options.javaTmpDir}`,
     `-Darena.control-port=${controlPort}`,
     `-Darena.run-id=${runId}`,

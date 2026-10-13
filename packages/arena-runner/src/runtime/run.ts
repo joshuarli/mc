@@ -1,14 +1,12 @@
 import {
   DeterministicRandom,
   RandomStream,
-  decide,
   emptyPolicyMemory,
-  normalizePolicyReplayInput,
   seatId,
   type PolicyMemory,
 } from '@arena/core';
 import { compilePolicy, MAX_SOURCE_BYTES, SpecError } from '@arena/spec';
-import type { ControlMessage, OutcomePayload } from '../control/index.js';
+import type { AbortReason, ControlMessage, OutcomePayload } from '../control/index.js';
 import { reconstructEventResult } from '../event-report.js';
 import { RunnerError } from '../errors.js';
 import {
@@ -26,6 +24,8 @@ import { bindControlListener, ControlSessionError, createControlToken } from './
 import type { ControlListenerLease, ControlSession, RunnerCommand, RunnerCommandEnvelope } from './session.js';
 import { RuntimeTraceBuilder } from './trace.js';
 import { clonePristineWorld } from './world.js';
+import { decideRuntimePolicy } from './policy-decision.js';
+import { armRuntimeDeadline, COLD_START_TIMEOUT_MS, type RuntimeDeadline } from './deadline.js';
 import {
   collectClientFailures,
   connectCompetitor,
@@ -59,8 +59,10 @@ const SERVER_DIRECTORY = Buffer.from('/server', 'ascii');
 const CLIENT_HOST = '127.0.0.1' as const;
 const GAME_PORT = 25565;
 const STARTUP_TIMEOUT_MS = 60_000;
+const WALL_CLOCK_TIMEOUT_MS = 600_000;
 const EVALUATOR_JOIN_TIMEOUT_MS = 5_000;
-const MAX_CRITICAL_EVENTS = 100_000;
+// Retained events feed both outcome reconstruction and the returned run result.
+const MAX_RETAINED_AUTHORITY_EVENTS = 100_000;
 const UTF8 = new TextDecoder('utf-8', { fatal: true });
 
 export interface RunPreparedRunOptions {
@@ -71,6 +73,7 @@ export interface RunPreparedRunOptions {
   readonly paperJarPath: string;
   readonly pluginJarPath: string;
   readonly signal?: AbortSignal;
+  readonly coldStartDeadline?: RuntimeDeadline;
   readonly evaluate?: ActiveRunEvaluator;
   readonly competitorDriver?: 'baselinePolicy' | 'evaluator';
 }
@@ -78,12 +81,19 @@ export interface RunPreparedRunOptions {
 /** Owns a headless Paper run from its pristine world through stopped evidence. */
 export async function runPreparedRun(options: RunPreparedRunOptions): Promise<CompletedOwnedRun> {
   const controller = new AbortController();
-  const onParentAbort = (): void => controller.abort(options.signal?.reason);
+  const onParentAbort = (): void => controller.abort(abortFailure(options.signal!));
   options.signal?.addEventListener('abort', onParentAbort, { once: true });
   if (options.signal?.aborted) onParentAbort();
 
   const runSignal = controller.signal;
-  const abortPromise = abortSignalPromise(runSignal);
+  const coldStartDeadline = options.coldStartDeadline
+    ?? armRuntimeDeadline(controller, 'cold_start', COLD_START_TIMEOUT_MS);
+  const wallClockDeadline = armRuntimeDeadline(controller, 'wall_clock', WALL_CLOCK_TIMEOUT_MS);
+  const abortPromise = Promise.race([
+    abortSignalPromise(runSignal),
+    coldStartDeadline.failure,
+    wallClockDeadline.failure,
+  ]);
   void abortPromise.catch(() => {});
   const never = new Promise<never>(() => {});
   let leaseLost: Promise<never> = never;
@@ -123,8 +133,13 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
     });
     leaseLost = lease.closed.then((closed) => {
       if (closed.kind === 'lost') {
-        controller.abort(closed.error);
-        throw ownedFilesFailure(closed.error, 'prepared run lease');
+        const error = new RunnerError('runtime_failure', 'run lease', {
+          kind: 'lease_lost',
+          field: closed.error.category,
+          ...(closed.error.errno === undefined ? {} : { os_code: closed.error.errno }),
+        });
+        controller.abort(error);
+        throw error;
       }
       return never;
     });
@@ -151,6 +166,7 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
       javaExecutable: options.javaExecutable,
       paperJarPath: options.paperJarPath,
       pluginJarPath: options.pluginJarPath,
+      pluginJarBytes: pluginBytes,
       serverPath,
       signal: runSignal,
       createBootstrapWorld: async () => await createBootstrapWorld({
@@ -185,6 +201,7 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
       abortPromise,
       leaseLost,
     );
+    coldStartDeadline.clear();
     await trace.recordReady(session.ready);
 
     const outcome = deferred<OutcomePayload>();
@@ -252,7 +269,7 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
       start,
       waitForOutcome: () => outcome.promise,
       reconnectCompetitor: async (seat: number) => {
-        if (matchOutcomeReceived) {
+        if (coordinator!.outcomeReceived) {
           throw new RunnerError('runtime_failure', 'competitor reconnect', { kind: 'outcome_already_received' });
         }
         const competitor = clients.find((candidate) => candidate.seat === seat);
@@ -330,7 +347,9 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
       stats,
     });
   } catch (error) {
-    evaluatorAbort?.abort(error);
+    const failure = runSignal.reason instanceof RunnerError ? runSignal.reason : error;
+    if (!runSignal.aborted) controller.abort(failure);
+    evaluatorAbort?.abort(failure);
     const cleanupFailure = await cleanupOwnedRun({
       listener,
       session,
@@ -338,21 +357,21 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
       clients,
       spectators,
       coordinator,
-      hasOutcome: matchOutcomeReceived,
+      hasOutcome: matchOutcomeReceived || coordinator?.outcomeReceived === true,
       started: startAttempted,
       commandPending,
       evaluatorTask,
       lease,
       releaseLease,
+      abortReason: cleanupAbortReason(failure),
     });
     if (cleanupFailure !== undefined) {
-      throw new RunnerError('runtime_failure', 'runtime cleanup', {
-        kind: 'cleanup_failed',
-        field: errorKind(cleanupFailure),
-      });
+      throw withCleanupFailure(failure, cleanupFailure);
     }
-    throw mapRuntimeFailure(error);
+    throw mapRuntimeFailure(failure);
   } finally {
+    coldStartDeadline.clear();
+    wallClockDeadline.clear();
     options.signal?.removeEventListener('abort', onParentAbort);
   }
 }
@@ -420,6 +439,10 @@ class ControlCoordinator {
     return this.#failureState.promise;
   }
 
+  get outcomeReceived(): boolean {
+    return this.#outcomeReceived;
+  }
+
   startPump(): void {
     if (this.#pump !== undefined) throw new RunnerError('runtime_failure', 'control session', { kind: 'pump_already_started' });
     this.#pump = this.#consume();
@@ -427,6 +450,14 @@ class ControlCoordinator {
   }
 
   async send(command: RunnerCommand): Promise<RunnerCommandEnvelope> {
+    return await this.#send(command, false);
+  }
+
+  async sendForCleanup(reason: AbortReason): Promise<void> {
+    await this.#send({ type: 'abort', payload: { reason } }, true);
+  }
+
+  async #send(command: RunnerCommand, cleanup: boolean): Promise<RunnerCommandEnvelope> {
     if (this.#pending !== undefined) throw new RunnerError('runtime_failure', 'control command', { kind: 'command_pending' });
     if (this.#outcomeReceived) throw new RunnerError('runtime_failure', 'control command', { kind: 'command_after_outcome' });
     const correlation = this.#runnerSequence + 1n;
@@ -443,13 +474,15 @@ class ControlCoordinator {
         await this.#trace.recordRunnerCommand(envelope);
         this.#runnerSequence = envelope.sequence;
       });
-      const response = await raceWithRunState(
-        acknowledgment.promise,
-        this.#abortPromise,
-        this.#leaseLost,
-        this.#processFailure,
-        this.failure,
-      );
+      const response = cleanup
+        ? await withTimeout(acknowledgment.promise, 1_000, 'abort_acknowledgment_timeout', 'control cleanup')
+        : await raceWithRunState(
+          acknowledgment.promise,
+          this.#abortPromise,
+          this.#leaseLost,
+          this.#processFailure,
+          this.failure,
+        );
       if (response.type === 'error') {
         throw new RunnerError('runtime_failure', 'plugin control command', {
           kind: 'plugin_rejected_command',
@@ -467,6 +500,10 @@ class ControlCoordinator {
     await this.#policyLoop?.stopAndJoin();
   }
 
+  stopPolicyLaunching(): void {
+    this.#policyLoop?.stopLaunching();
+  }
+
   async join(): Promise<void> {
     await this.#pump;
   }
@@ -474,6 +511,10 @@ class ControlCoordinator {
   async #consume(): Promise<void> {
     try {
       for await (const message of this.#session.messages()) {
+        if (message.type === 'outcome') {
+          this.#outcomeReceived = true;
+          this.#policyLoop?.stopLaunching();
+        }
         await this.#traceOrder.run(async () => {
           await this.#trace.recordControlMessage(message);
           if (message.type === 'ack' || message.type === 'error') {
@@ -486,13 +527,11 @@ class ControlCoordinator {
             return;
           }
           if (!isAuthorityEvent(message)) return;
-          if (this.#events.length >= MAX_CRITICAL_EVENTS) {
+          if (this.#events.length >= MAX_RETAINED_AUTHORITY_EVENTS) {
             throw new RunnerError('runtime_failure', 'control events', { kind: 'critical_event_limit_exceeded' });
           }
           this.#events.push(message);
           if (message.type === 'outcome') {
-            this.#outcomeReceived = true;
-            this.#policyLoop?.stopLaunching();
             try {
               reconstructEventResult(this.#runId, this.#prepare, this.#events);
             } catch (error) {
@@ -611,7 +650,8 @@ class LivePolicyLoop {
     const memory = this.#memories.get(seat) ?? emptyPolicyMemory();
     const random = this.#randoms.get(seat)
       ?? DeterministicRandom.forStream(this.#seed, RandomStream.policy(seatId(seat)));
-    const decision = decide(observation, memory, this.#params, random);
+    const step = decideRuntimePolicy(observation, memory, this.#params, random);
+    const { decision } = step;
     this.#memories.set(seat, decision.memory);
     this.#randoms.set(seat, random);
 
@@ -621,9 +661,8 @@ class LivePolicyLoop {
       this.#sequence += 1n;
       sequence = this.#sequence;
       this.#observationCount += 1;
-      const input = normalizePolicyReplayInput({ observation, memory, params: this.#params, random });
       decisionRecorded = this.#trace.recordPolicyDecision(
-        makePolicyReplayRecord(sequence, seat, input, decision, random.snapshotState()),
+        makePolicyReplayRecord(sequence, seat, step.input, decision, step.rngStateAfter),
       );
     }
 
@@ -746,6 +785,7 @@ async function createBootstrapWorld(options: Readonly<{
   });
   let server: OwnedServerProcess | undefined;
   let session: ControlSession | undefined;
+  let startupFailure: unknown;
   try {
     server = await startPaper(
       options.options,
@@ -763,14 +803,17 @@ async function createBootstrapWorld(options: Readonly<{
     );
     assertSuccessfulExit(await server.shutdown());
   } catch (error) {
-    if (server !== undefined) {
-      try { await server.shutdown(); } catch { /* Keep the startup error. */ }
-    }
-    throw error;
-  } finally {
-    await session?.close();
-    await listener.close();
+    startupFailure = error;
   }
+  let cleanupFailure: unknown;
+  try { await server?.shutdown(); } catch (error) { cleanupFailure ??= error; }
+  try { await session?.close(); } catch (error) { cleanupFailure ??= error; }
+  try { await listener.close(); } catch (error) { cleanupFailure ??= error; }
+  if (startupFailure !== undefined && cleanupFailure !== undefined) {
+    throw withCleanupFailure(startupFailure, cleanupFailure);
+  }
+  if (startupFailure !== undefined) throw startupFailure;
+  if (cleanupFailure !== undefined) throw mapRuntimeFailure(cleanupFailure);
   return Buffer.concat([serverPath, Buffer.from('/world', 'ascii')]);
 }
 
@@ -854,13 +897,27 @@ async function cleanupOwnedRun(options: Readonly<{
   evaluatorTask: Promise<void> | undefined;
   lease: OwnedRunLease | undefined;
   releaseLease: boolean;
+  abortReason: AbortReason;
 }>): Promise<unknown | undefined> {
   let failure: unknown;
+  options.coordinator?.stopPolicyLaunching();
   if (options.coordinator !== undefined && options.started && !options.commandPending && !options.hasOutcome) {
     try {
-      await options.coordinator.send({ type: 'abort', payload: { reason: 'protocol_error' } });
+      await options.coordinator.sendForCleanup(options.abortReason);
     } catch (error) {
       if (!(error instanceof ControlSessionError && error.code === 'control_closed')) failure ??= error;
+    }
+  }
+  if (options.coordinator !== undefined) {
+    try {
+      await withTimeout(
+        options.coordinator.stopPolicyTasks(),
+        EVALUATOR_JOIN_TIMEOUT_MS,
+        'policy_tasks_did_not_stop',
+        'runtime policy tasks',
+      );
+    } catch (error) {
+      failure ??= error;
     }
   }
   const clientsClosed = await Promise.allSettled([
@@ -869,13 +926,12 @@ async function cleanupOwnedRun(options: Readonly<{
   ]);
   const clientFailure = clientsClosed.find((result): result is PromiseRejectedResult => result.status === 'rejected');
   failure ??= clientFailure?.reason;
-  if (options.coordinator !== undefined) {
-    try { await options.coordinator.stopPolicyTasks(); } catch (error) { failure ??= error; }
-    try { await options.coordinator.join(); } catch { /* The initiating failure already explains the pump error. */ }
-  }
   try { await options.process?.shutdown(); } catch (error) { failure ??= error; }
   try { await options.session?.close(); } catch (error) { failure ??= error; }
   try { await options.listener?.close(); } catch (error) { failure ??= error; }
+  if (options.coordinator !== undefined) {
+    try { await options.coordinator.join(); } catch { /* The initiating failure already explains the pump error. */ }
+  }
   if (options.evaluatorTask !== undefined) {
     try { await withTimeout(options.evaluatorTask, EVALUATOR_JOIN_TIMEOUT_MS, 'evaluator_did_not_stop'); }
     catch (error) { failure ??= error; }
@@ -916,10 +972,14 @@ function withStartupTimeout<T>(
 }
 
 function abortSignalPromise(signal: AbortSignal): Promise<never> {
-  if (signal.aborted) return Promise.reject(cancelledFailure());
+  if (signal.aborted) return Promise.reject(abortFailure(signal));
   return new Promise<never>((_resolve, reject) => {
-    signal.addEventListener('abort', () => reject(cancelledFailure()), { once: true });
+    signal.addEventListener('abort', () => reject(abortFailure(signal)), { once: true });
   });
+}
+
+function abortFailure(signal: AbortSignal): RunnerError {
+  return signal.reason instanceof RunnerError ? signal.reason : cancelledFailure();
 }
 
 function assertRunning(signal: AbortSignal): void {
@@ -927,7 +987,18 @@ function assertRunning(signal: AbortSignal): void {
 }
 
 function cancelledFailure(): RunnerError {
-  return new RunnerError('runtime_failure', 'arena run', { kind: 'cancelled' });
+  return new RunnerError('cancelled', 'arena run', { kind: 'cancelled' });
+}
+
+function cleanupAbortReason(error: unknown): AbortReason {
+  if (!(error instanceof RunnerError)) return 'protocol_error';
+  switch (error.source.kind) {
+    case 'runtime_timeout': return 'runtime_timeout';
+    case 'lease_lost': return 'lease_lost';
+    case 'invalid_world': return 'invalid_world';
+    case 'cancelled': return 'operator';
+    default: return 'protocol_error';
+  }
 }
 
 function raceWithRunState<T>(promise: Promise<T>, ...failures: readonly Promise<never>[]): Promise<T> {
@@ -963,10 +1034,15 @@ class SerialExecutor {
   }
 }
 
-async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, kind: string): Promise<T> {
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  kind: string,
+  resource = 'active evaluator',
+): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_resolve, reject) => {
-    timer = setTimeout(() => reject(new RunnerError('runtime_failure', 'active evaluator', { kind })), timeoutMs);
+    timer = setTimeout(() => reject(new RunnerError('runtime_failure', resource, { kind })), timeoutMs);
   });
   try {
     return await Promise.race([promise, timeout]);
@@ -993,6 +1069,12 @@ function ownedFilesFailure(error: unknown, resource: string): RunnerError {
   if (!(error instanceof OwnedFilesError)) {
     return new RunnerError('runtime_failure', resource, { kind: 'owned_file_operation' });
   }
+  if (error.category === 'conflict' && error.operation === 'hold-run-lease') {
+    return new RunnerError('owner_conflict', 'run lease', { kind: 'owner_conflict' });
+  }
+  if (error.category === 'cancelled') {
+    return new RunnerError('cancelled', resource, { kind: 'cancelled' });
+  }
   const category = error.category === 'not_found' || error.category === 'helper_start'
     ? 'missing_prerequisite'
     : error.category === 'invalid_path' || error.category === 'too_large'
@@ -1005,16 +1087,51 @@ function ownedFilesFailure(error: unknown, resource: string): RunnerError {
 }
 
 function controlFailure(error: ControlSessionError): RunnerError {
+  if (error.code === 'cancelled') return cancelledFailure();
+  const osCode = systemErrorCode(error.cause);
+  if (error.code === 'listener_failed' && systemErrorName(error.cause) === 'EADDRINUSE') {
+    return new RunnerError('owner_conflict', 'control port', {
+      kind: 'port_in_use',
+      ...(osCode === undefined ? {} : { os_code: osCode }),
+    });
+  }
   return new RunnerError('runtime_failure', 'control session', { kind: error.code });
 }
 
 function mapRuntimeFailure(error: unknown): RunnerError {
-  if (error instanceof RunnerError) return error;
+  if (error instanceof RunnerError) {
+    return error.source.kind === 'cancelled' && error.category === 'runtime_failure'
+      ? cancelledFailure()
+      : error;
+  }
   if (error instanceof ControlSessionError) return controlFailure(error);
   if (error instanceof OwnedFilesError) return ownedFilesFailure(error, 'owned run');
   return new RunnerError('runtime_failure', 'arena run', { kind: errorKind(error) });
 }
 
 function errorKind(error: unknown): string {
+  if (error instanceof RunnerError) return error.source.kind;
   return error instanceof Error ? error.name : 'unknown_error';
+}
+
+function withCleanupFailure(primaryFailure: unknown, cleanupFailure: unknown): RunnerError {
+  const primary = mapRuntimeFailure(primaryFailure);
+  const cleanupOsCode = systemErrorCode(cleanupFailure);
+  return new RunnerError('runtime_failure', primary.resource, {
+    ...primary.source,
+    cleanup_kind: errorKind(cleanupFailure),
+    ...(cleanupOsCode === undefined ? {} : { cleanup_os_code: cleanupOsCode }),
+  });
+}
+
+function systemErrorCode(error: unknown): number | undefined {
+  return error instanceof Error && 'errno' in error && typeof error.errno === 'number'
+    ? error.errno
+    : undefined;
+}
+
+function systemErrorName(error: unknown): string | undefined {
+  return error instanceof Error && 'code' in error && typeof error.code === 'string'
+    ? error.code
+    : undefined;
 }

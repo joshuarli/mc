@@ -1,4 +1,5 @@
 import { sha256Json } from '../canonical.js';
+import { createHash } from 'node:crypto';
 import {
   cloneOwnedTree,
   createOwnedDirectory,
@@ -21,6 +22,7 @@ export async function clonePristineWorld(options: Readonly<{
   javaExecutable: string;
   paperJarPath: string;
   pluginJarPath: string;
+  pluginJarBytes: Buffer;
   serverPath: Buffer;
   signal?: AbortSignal;
   createBootstrapWorld(): Promise<Buffer>;
@@ -30,6 +32,7 @@ export async function clonePristineWorld(options: Readonly<{
     javaExecutable: options.javaExecutable,
     paperJarPath: options.paperJarPath,
     pluginJarPath: options.pluginJarPath,
+    pluginJarBytes: options.pluginJarBytes,
   });
   const runWorld = Buffer.concat([options.serverPath, Buffer.from('/world', 'ascii')]);
   try {
@@ -57,11 +60,12 @@ export async function clonePristineWorld(options: Readonly<{
   }
 }
 
-function templateWorldPath(options: Readonly<{
+export function templateWorldPath(options: Readonly<{
   scenario: ScenarioIr;
   javaExecutable: string;
   paperJarPath: string;
   pluginJarPath: string;
+  pluginJarBytes: Buffer;
 }>): Buffer {
   const key = sha256Json({
     scenario_semantic_id: options.scenario.semanticId,
@@ -69,6 +73,7 @@ function templateWorldPath(options: Readonly<{
     java_executable: options.javaExecutable,
     paper_artifact: options.paperJarPath,
     plugin_artifact: options.pluginJarPath,
+    plugin_sha256: createHash('sha256').update(options.pluginJarBytes).digest('hex'),
   });
   return Buffer.from(`.work/arena/templates/${key}/world`, 'ascii');
 }
