@@ -9,4 +9,3 @@
 - Do not bind a Minecraft server outside loopback. Bot identities are offline and non-operator.
 - Never set shipped EULA acceptance by default. Local campaign smoke runs may write explicit acceptance in their disposable world directory.
 - Reject unsupported schema versions and unknown fields. Keep code comments self-contained.
-- Existing Rust crates and Azalea integration are historical migration input only. Do not extend, build, or run them for the revised campaign; remove them only after their required behavior has a TypeScript replacement and focused verification.

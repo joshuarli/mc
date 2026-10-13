@@ -45,7 +45,7 @@ test('rejects duplicate object names at every depth before checksum validation',
   });
 });
 
-test('rejects historical Rust trace-v1 without a compatibility fallback', async () => {
+test('rejects trace-v1 without a compatibility fallback', async () => {
   const historical = await readFile(join(repositoryRoot, 'tests/fixtures/replay-report/segment-0001.json'), 'utf8');
   assert.throws(() => parseSegment(historical), (error: unknown) => {
     assert.ok(error instanceof TraceError);
