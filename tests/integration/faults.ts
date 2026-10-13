@@ -306,6 +306,7 @@ function faultMapSource(): string {
   ].join("\n");
 }
 
+// Paper resolves the world generator by plugin name, so vary the version to reach the identity check.
 function replacePluginIdentity(pluginJarPath: string, javaExecutable: string, scratch: string): string {
   const jarPath = join(scratch, "wrong-plugin.jar");
   copyFileSync(pluginJarPath, jarPath);
@@ -319,9 +320,9 @@ function replacePluginIdentity(pluginJarPath: string, javaExecutable: string, sc
 
   const descriptorPath = join(jarDirectory, "plugin.yml");
   const descriptor = readFileSync(descriptorPath, "utf8");
-  const identityLine = /^name: ([A-Za-z0-9][A-Za-z0-9._+-]{0,127})$/m;
-  const mismatch = descriptor.replace(identityLine, "name: ArenaWrongIdentity");
-  assert.notEqual(mismatch, descriptor, "the packaged plugin descriptor must contain one supported name line");
+  const versionLine = /^version: ([A-Za-z0-9][A-Za-z0-9._+-]{0,127})$/m;
+  const mismatch = descriptor.replace(versionLine, "version: 0.1.0-wrong");
+  assert.notEqual(mismatch, descriptor, "the packaged plugin descriptor must contain one supported version line");
 
   writeFileSync(descriptorPath, mismatch, { encoding: "utf8", flag: "w" });
   execFileSync(jarExecutable, ["--update", "--file", jarPath, "-C", jarDirectory, "plugin.yml"], {
