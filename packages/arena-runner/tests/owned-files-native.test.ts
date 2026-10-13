@@ -8,6 +8,7 @@ import { setImmediate as nextTurn } from 'node:timers/promises';
 import { test } from 'node:test';
 import {
   acquireOwnedRunLease,
+  assertOwnedRunLeaseMatches,
   cloneOwnedTree,
   createOwnedDirectory,
   createRunDirectory,
@@ -219,6 +220,34 @@ test('removes only the leased run tree and unlinks nested symlinks without follo
     await assert.rejects(access(join(rootText, '.work/arena/runs', runId)));
     await assert.rejects(lstat(linkPath));
     assert.deepEqual(await readFile(join(externalDirectory, 'keep.txt')), Buffer.from('outside the run'));
+  });
+});
+
+test('asserts that a held lease matches the owned run identity', async () => {
+  await withOwnedRoot(async (root) => {
+    const runId = 'lease-identity-check';
+    const runPath = Buffer.from(`.work/arena/runs/${runId}`);
+    await createRunDirectory({ helperPath, ownedRoot: root, relativePath: runPath });
+    const run = (await listOwnedRuns({ helperPath, ownedRoot: root }))[0]!;
+    const lease = await acquireOwnedRunLease({ helperPath, ownedRoot: root, relativePath: runPath });
+    try {
+      assert.doesNotThrow(() => assertOwnedRunLeaseMatches({
+        lease, ownedRoot: root, runId, identity: run.identity,
+      }));
+      assert.throws(() => assertOwnedRunLeaseMatches({
+        lease, ownedRoot: root, runId, identity: { device: '0', inode: '0' },
+      }), nativeFailure('conflict'));
+      assert.throws(() => assertOwnedRunLeaseMatches({
+        lease, ownedRoot: Buffer.from(`${root.toString()}/other-root`), runId, identity: run.identity,
+      }), nativeFailure('conflict'));
+
+      await lease.release();
+      assert.throws(() => assertOwnedRunLeaseMatches({
+        lease, ownedRoot: root, runId, identity: run.identity,
+      }), nativeFailure('conflict'));
+    } finally {
+      await lease.release();
+    }
   });
 });
 

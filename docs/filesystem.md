@@ -52,11 +52,14 @@ terminal consecutive trace segment and `operational-failure-v1.json` when
 present. The terminal trace sequence is included with its modification time.
 It does not create the runs directory or acquire run leases.
 `removeOwnedRun` removes only `.work/arena/runs/<run-id>` and requires the
-matching active lease and directory identity from that owned root. The helper
-checks the run identity before each detach, never follows nested symlinks, and
-preflights a maximum of 1,000,000 entries, 64 directory levels, and 64 GiB of
-logical leaf data. Nested symlinks are removed as links, leaving their targets
-untouched. Cancellation or an I/O failure can leave a partially removed tree;
+matching active lease and directory identity from that owned root.
+`assertOwnedRunLeaseMatches` checks an active lease against a listed run
+identity without changing the tree; `removeOwnedRun` repeats that check before
+removal. The native helper checks the current run identity before each detach
+and never follows nested symlinks. It preflights at most 1,000,000 entries, 64
+directory levels, and 64 GiB of logical leaf data. Nested symlinks are removed
+as links, leaving their targets untouched. Cancellation or an I/O failure can
+leave a partially removed tree;
 the error is returned to the caller.
 
 `cloneOwnedTree` copies a stopped, pristine tree from one relative path under

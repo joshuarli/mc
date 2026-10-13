@@ -1500,16 +1500,19 @@ function validateRunIdentity(identity: FileIdentity): FileIdentity {
   return identityFrom(identity.device, identity.inode, 'remove-owned-run-tree');
 }
 
-export async function removeOwnedRun(options: Readonly<{
-  helperPath: string;
+type OwnedRunLeaseMatch = Readonly<{
+  runPath: Buffer;
+  identity: FileIdentity;
+  provenance: OwnedRunLeaseProvenance;
+}>;
+
+function requireOwnedRunLeaseMatch(options: Readonly<{
   ownedRoot: Buffer;
   runId: string;
   identity: FileIdentity;
   lease: OwnedRunLease;
-  signal?: AbortSignal;
-}>): Promise<void> {
-  const { helperPath, ownedRoot, runId, identity, lease, signal } = options;
-  const operation: NativeOperation = 'remove-owned-run-tree';
+}>): OwnedRunLeaseMatch {
+  const { ownedRoot, runId, identity, lease } = options;
   if (!isValidRunId(runId)) throw invalidOwnedRunRemoval('run removal requires a valid run id', runId);
   const expectedIdentity = validateRunIdentity(identity);
   const runPath = Buffer.from(`.work/arena/runs/${runId}`, 'ascii');
@@ -1521,13 +1524,37 @@ export async function removeOwnedRun(options: Readonly<{
       provenance.runDirectoryIdentity.device !== expectedIdentity.device ||
       provenance.runDirectoryIdentity.inode !== expectedIdentity.inode) {
     throw new OwnedFilesError({
-      message: 'run removal requires an active lease for the matching owned run directory',
+      message: 'run operation requires an active lease for the matching owned run directory',
       category: 'conflict',
-      operation,
+      operation: 'remove-owned-run-tree',
       relativePath: runPath,
       identity: expectedIdentity,
     });
   }
+  return { runPath, identity: expectedIdentity, provenance };
+}
+
+export function assertOwnedRunLeaseMatches(options: Readonly<{
+  lease: OwnedRunLease;
+  ownedRoot: Buffer;
+  runId: string;
+  identity: FileIdentity;
+}>): void {
+  requireOwnedRunLeaseMatch(options);
+}
+
+export async function removeOwnedRun(options: Readonly<{
+  helperPath: string;
+  ownedRoot: Buffer;
+  runId: string;
+  identity: FileIdentity;
+  lease: OwnedRunLease;
+  signal?: AbortSignal;
+}>): Promise<void> {
+  const { helperPath, ownedRoot, runId, identity, lease, signal } = options;
+  const operation: NativeOperation = 'remove-owned-run-tree';
+  const match = requireOwnedRunLeaseMatch({ ownedRoot, runId, identity, lease });
+  const { identity: expectedIdentity, runPath, provenance } = match;
 
   const leaseAbort = new AbortController();
   void lease.closed.then(() => leaseAbort.abort());
