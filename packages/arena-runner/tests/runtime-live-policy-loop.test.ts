@@ -5,7 +5,7 @@ import type { Bot } from 'mineflayer';
 import {
   agentObservation, agentState, blockPosition, currentKnowledge, emptyEquipment,
   observationSequence, PolicyParams, tick, unknownKnowledge, worldBorder,
-  visibleOpponent, visibleDrop, entityId, type SkillOutcome, civilizationPolicyContext, civilizationProfileForSeat, civilizationObservation,
+  visibleOpponent, visibleDrop, entityId, type SkillOutcome, civilizationPolicyContext, civilizationProfileForSeat, civilizationObservation, skillProgress, materialStack,
 } from '@arena/core';
 import type { MineflayerArenaClient, MineflayerCivilizationClient } from '@arena/bots';
 import { LivePolicyLoop, type PolicyActivityEvent } from '../src/runtime/live-policy-loop.js';
@@ -498,7 +498,7 @@ test('civilization decisions receive the current failed shared-action feedback b
         assert.equal(record.schema, 'civilization-policy-replay-v1');
         if (record.schema !== 'civilization-policy-replay-v1') assert.fail('expected Civilization decision');
         goals.push(record.decision.goal.kind);
-        feedback.push(record.input.feedback);
+        feedback.push(record.input.feedback.shared);
       },
       recordPolicyEffect: async () => {}, checkpoint: async () => {},
     },
@@ -514,5 +514,73 @@ test('civilization decisions receive the current failed shared-action feedback b
   assert.notEqual(goals[1], 'loot');
   assert.deepEqual(feedback[0], []);
   assert.equal((feedback[1] as { kind: string }[])[0]?.kind, 'failed');
+  assert.deepEqual(failures, []);
+});
+
+
+for (const task of ['craft', 'gatherApproach'] as const) test(`civilization loop feeds ${task} failure and settled receipts with shared ticks`, async () => {
+  const baseline = competitor(0, async () => ({ kind: 'succeeded' }), false, 0);
+  const profile = civilizationProfileForSeat(0)!;
+  const context = civilizationPolicyContext({ ...profile, objective: {
+    captureBox: { min: blockPosition(10, 64, 10), max: blockPosition(12, 66, 12) },
+    outpost: { blueprintId: 'oak-outpost-v1', anchor: blockPosition(20, 64, 20), rotationDegrees: 0 },
+  } });
+  let launches = 0;
+  const result = (): SkillOutcome => ++launches === 1 ? { kind: 'failed', cause: 'noProgress' }
+    : task === 'craft' ? { kind: 'progress', progress: skillProgress(1, 2) } : { kind: 'succeeded' };
+  const client: MineflayerCivilizationClient = {
+    observe: (value) => civilizationObservation({ base: baseline.client.observe(value),
+      ownMaterials: currentKnowledge(task === 'craft' ? [materialStack(9, 'oak_log', 4)] : []),
+      observedResources: currentKnowledge(task === 'craft' ? [] : [{ kind: 'logBlock', position: blockPosition(10, 64, 0) }]), teamMessages: [],
+    }, context),
+    run: async (intent) => {
+      assert.equal(task, 'gatherApproach');
+      assert.equal(intent.kind, 'navigate');
+      return result();
+    },
+    runCivilization: async (intent) => {
+      assert.equal(intent.kind, 'craft');
+      return result();
+    },
+    receiveTeamReport: () => {}, cancel: async () => {}, close: async () => {},
+  };
+  const seat = { seat: 0, bot: baseline.bot, client, gameplay: { mode: 'civilization' as const, context, client } };
+  const records: import('../src/policy-replay.js').CivilizationPolicyReplayRecordV1[] = [];
+  const effects: import('../src/policy-replay.js').CivilizationPolicyEffectRecordV1[] = [];
+  const failures: unknown[] = [];
+  const loop = new LivePolicyLoop({
+    trace: {
+      recordPolicyDecision: async (record) => {
+        if (record.schema !== 'civilization-policy-replay-v1') assert.fail('expected Civilization decision');
+        records.push(record);
+      },
+      recordPolicyEffect: async (record) => {
+        if (record.schema !== 'civilization-policy-effect-v1') assert.fail('expected Civilization effect');
+        effects.push(record);
+      }, checkpoint: async () => {},
+    },
+    params: PolicyParams.baseline(), seed: 1n, strategyIntervalTicks: 1n,
+    recordPolicy: true, competitors: () => [seat], fail: (error) => failures.push(error),
+  });
+  loop.onTick(0);
+  await settle();
+  loop.onTick(1);
+  await settle();
+  assert.equal(launches, 1);
+  assert.equal(records[1]!.input.feedback.actions[0]!.outcome.kind, 'failed');
+  assert.equal(records[1]!.input.feedback.actions[0]!.startedAt, tick(0));
+  assert.equal(records[1]!.input.feedback.actions[0]!.completedAt, tick(0));
+  assert.equal(records[1]!.decision.memory.failedMaterialTargets[0]!.retryAt, tick(20));
+  loop.onTick(20);
+  await settle();
+  assert.equal(launches, 2);
+  assert.equal(effects[1]!.skill.kind, task === 'craft' ? 'progress' : 'succeeded');
+  loop.onTick(21);
+  await settle();
+  assert.equal(records[3]!.input.feedback.actions[0]!.outcome.kind, task === 'craft' ? 'progress' : 'succeeded');
+  assert.equal(records[3]!.input.feedback.actions[0]!.startedAt, tick(20));
+  assert.equal(records[3]!.input.feedback.actions[0]!.completedAt, tick(20));
+  assert.deepEqual(records[3]!.decision.memory.failedMaterialTargets, []);
+  await loop.stopAndJoin();
   assert.deepEqual(failures, []);
 });

@@ -1,4 +1,4 @@
-import { DeterministicRandom, RandomStream, emptyPolicyMemory, seatId, type PolicyMemory, type Decision, type SkillCancellation, type SkillOutcome, createPolicyFeedback, policyFeedbackBatch, type PolicyFeedbackBatch, type AgentObservation, decideCivilization, type CivilizationDecision, type PolicyFeedbackSource, CIVILIZATION_TEAM_MESSAGE_MAX_BYTES, CIVILIZATION_TEAM_MESSAGE_MIN_INTERVAL_TICKS, type CivilizationObservation } from '@arena/core';
+import { DeterministicRandom, RandomStream, emptyPolicyMemory, seatId, type PolicyMemory, type Decision, type SkillCancellation, type SkillOutcome, createPolicyFeedback, policyFeedbackBatch, type PolicyFeedbackBatch, type AgentObservation, decideCivilization, type CivilizationDecision, type PolicyFeedbackSource, CIVILIZATION_TEAM_MESSAGE_MAX_BYTES, CIVILIZATION_TEAM_MESSAGE_MIN_INTERVAL_TICKS, type CivilizationObservation, type CivilizationPolicyMemory, type CivilizationPolicyFeedbackBatch, type CivilizationGoal, type CivilizationActionIntent, emptyCivilizationPolicyMemory, civilizationPolicyFeedbackBatch, tick } from '@arena/core';
 import type { compilePolicy } from '@arena/spec';
 import type { PartiallyComputedPath } from 'mineflayer-pathfinder';
 import { RunnerError } from '../errors.js';
@@ -10,7 +10,7 @@ import { decideRuntimePolicy, isStrategyDecisionTick } from './policy-decision.j
 import { PolicyCompetitorGate } from './policy-gate.js';
 import type { RuntimeCompetitorClient } from './clients.js';
 
-type PolicyCompetitor = Pick<RuntimeCompetitorClient, 'seat' | 'client' | 'gameplay' | 'bot'>;
+type PolicyCompetitor = Pick<RuntimeCompetitorClient, 'seat' | 'gameplay' | 'bot'>;
 type GameplayDecision = Decision | CivilizationDecision;
 type PolicyTrace = Pick<RuntimeTraceBuilder, 'recordPolicyDecision' | 'recordPolicyEffect' | 'checkpoint'>;
 const ACTION_CLEANUP_TIMEOUT_MS = 5_000;
@@ -37,6 +37,7 @@ interface OwnedAction {
   priority: number;
   cancelTask?: Promise<void>;
   startedAtNs: bigint | null;
+  startedAtTick: number | null;
 }
 
 /** Reobserves at the strategy cadence while one owner per seat executes or replaces its action. */
@@ -51,6 +52,8 @@ export class LivePolicyLoop {
   readonly #onActivity: ((event: PolicyActivityEvent) => void) | undefined;
   readonly #memories = new Map<number, PolicyMemory>();
   readonly #feedback = new Map<number, PolicyFeedbackBatch>();
+  readonly #civilizationMemories = new Map<number, CivilizationPolicyMemory>();
+  readonly #civilizationFeedback = new Map<number, CivilizationPolicyFeedbackBatch>();
   readonly #lastReportTicks = new Map<number, number>();
   readonly #randoms = new Map<number, DeterministicRandom>();
   readonly #tasks = new Set<Promise<void>>();
@@ -118,17 +121,20 @@ export class LivePolicyLoop {
     const decisionStartedAtNs = this.#onActivity === undefined ? undefined : process.hrtime.bigint();
     const seat = competitor.seat;
     const gameplay = competitor.gameplay;
-    const memory = this.#memories.get(seat) ?? emptyPolicyMemory();
     const random = this.#randoms.get(seat) ?? DeterministicRandom.forStream(this.#seed, RandomStream.policy(seatId(seat)));
-    const feedback = this.#feedback.get(seat) ?? [];
-    this.#feedback.delete(seat);
     const step = gameplay.mode === 'hunger_games'
       ? (() => {
+        const memory = this.#memories.get(seat) ?? emptyPolicyMemory();
+        const feedback = this.#feedback.get(seat) ?? [];
+        this.#feedback.delete(seat);
         const inputObservation = gameplay.client.observe(tick);
         const result = decideRuntimePolicy(inputObservation, memory, this.#params, random, feedback);
         return { mode: 'hunger_games' as const, observation: inputObservation, ...result };
       })()
       : (() => {
+        const memory = this.#civilizationMemories.get(seat) ?? emptyCivilizationPolicyMemory();
+        const feedback = this.#civilizationFeedback.get(seat) ?? civilizationPolicyFeedbackBatch({ shared: [], actions: [] });
+        this.#civilizationFeedback.delete(seat);
         const inputObservation = gameplay.client.observe(tick);
         this.#relayTeamReport(competitor, inputObservation, tick);
         const input = normalizeCivilizationPolicyReplayInput({ context: gameplay.context, observation: inputObservation,
@@ -137,7 +143,8 @@ export class LivePolicyLoop {
         return { mode: 'civilization' as const, observation: inputObservation.base, input, decision, rngStateAfter: random.snapshotState() };
       })();
     const { decision } = step;
-    this.#memories.set(seat, decision.memory);
+    if (step.mode === 'hunger_games') this.#memories.set(seat, step.decision.memory);
+    else this.#civilizationMemories.set(seat, step.decision.memory);
     this.#randoms.set(seat, random);
     const sequence = ++this.#sequence;
     const previous = this.#actions.get(seat);
@@ -158,7 +165,7 @@ export class LivePolicyLoop {
       const barrier = previous === undefined ? Promise.resolve() : this.#cancel(previous, 'replaced');
       const action: OwnedAction = {
         sequence, decision, initiatingObservation: step.observation, acceptedTick: tick, competitor, barrier,
-        cancellation: deferred<SkillCancellation>(), task: Promise.resolve(), state: 'reserved', priority: goalPriority(decision), startedAtNs: null,
+        cancellation: deferred<SkillCancellation>(), task: Promise.resolve(), state: 'reserved', priority: goalPriority(decision), startedAtNs: null, startedAtTick: null,
       };
       this.#actions.set(seat, action);
       action.task = this.#execute(action, recorded);
@@ -242,6 +249,7 @@ export class LivePolicyLoop {
         outcome = { kind: 'cancelled', reason: this.#disabledSeats.has(action.competitor.seat) ? 'agentEliminated' : this.#stopped ? 'shutdown' : 'replaced' };
       } else {
         action.state = 'running';
+        action.startedAtTick = this.#lastTick;
         if (this.#onActivity !== undefined) action.startedAtNs = process.hrtime.bigint();
         capture = this.#recordPolicy ? capturePathUpdates(action.competitor.bot) : undefined;
         const gameplay = action.competitor.gameplay;
@@ -253,16 +261,27 @@ export class LivePolicyLoop {
       capture?.close();
       const pathUpdates = capture?.values() ?? [];
       capture = undefined;
-      if (outcome.kind === 'pending' || outcome.kind === 'progress') throw new RunnerError('runtime_failure', 'policy skill', { kind: 'nonterminal_skill_outcome' });
+      if (outcome.kind === 'pending' || (outcome.kind === 'progress'
+          && (action.competitor.gameplay.mode !== 'civilization' || !isMaterialAction(action.decision)))) throw new RunnerError('runtime_failure', 'policy skill', { kind: 'nonterminal_skill_outcome' });
       // The skill promise includes its resource cleanup. Release ownership before trace I/O so
       // a later observation cannot claim to continue an already settled action.
       action.state = 'settled';
       if (this.#actions.get(action.competitor.seat) === action) this.#actions.delete(action.competitor.seat);
-      const source = sharedFeedbackSource(action, outcome);
+      const source = outcome.kind === 'progress' ? null : sharedFeedbackSource(action, outcome);
       const feedback = source === null ? null : createPolicyFeedback(source);
-      if (feedback !== null) {
-        const pending = this.#feedback.get(action.competitor.seat) ?? [];
-        this.#feedback.set(action.competitor.seat, policyFeedbackBatch([...pending, feedback]));
+      const seat = action.competitor.seat;
+      if (action.competitor.gameplay.mode === 'civilization') {
+        const pending = this.#civilizationFeedback.get(seat) ?? civilizationPolicyFeedbackBatch({ shared: [], actions: [] });
+        const materialAction = isMaterialAction(action.decision);
+        const actions = materialAction && outcome.kind !== 'cancelled' && action.startedAtTick !== null
+          ? [...pending.actions, { goal: action.decision.goal, intent: action.decision.intent, outcome,
+            startedAt: tick(action.startedAtTick), completedAt: tick(this.#lastTick) }]
+          : pending.actions;
+        if (feedback !== null || actions !== pending.actions) this.#civilizationFeedback.set(seat,
+          civilizationPolicyFeedbackBatch({ shared: feedback === null ? pending.shared : [...pending.shared, feedback], actions }));
+      } else if (feedback !== null) {
+        const pending = this.#feedback.get(seat) ?? [];
+        this.#feedback.set(seat, policyFeedbackBatch([...pending, feedback]));
       }
       if (this.#recordPolicy) await this.#trace.recordPolicyEffect(action.competitor.gameplay.mode === 'civilization'
         ? makeCivilizationPolicyEffectRecord(action.sequence, outcome, pathUpdates) : makePolicyEffectRecord(action.sequence, outcome, pathUpdates));
@@ -293,7 +312,7 @@ export class LivePolicyLoop {
     const wasRunning = action.state === 'running';
     action.cancellation.resolve(reason);
     action.cancelTask = boundedCleanup((async () => {
-      if (wasRunning) await action.competitor.client.cancel(reason);
+      if (wasRunning) await action.competitor.gameplay.client.cancel(reason);
       await action.task;
       // A superseded reservation still waits for the original control owner to release.
       await action.barrier;
@@ -356,7 +375,19 @@ function isCivilizationIntent(intent: GameplayDecision['intent']): intent is imp
   return intent.kind === 'mineBlock' || intent.kind === 'craft' || intent.kind === 'containerTransfer'
     || intent.kind === 'placeBlock' || (intent.kind === 'hold' && (intent.reason === 'materialsUnknown' || intent.reason === 'resourcesUnknown'
       || intent.reason === 'blueprintObstructed' || intent.reason === 'blueprintComplete'
-      || intent.reason === 'materialsUnavailable' || intent.reason === 'captureZoneOccupied'));
+      || intent.reason === 'materialsUnavailable' || intent.reason === 'captureZoneOccupied'
+      || intent.reason === 'materialTargetCoolingDown'));
+}
+
+function isMaterialAction(decision: GameplayDecision): decision is CivilizationDecision & {
+  readonly goal: CivilizationGoal; readonly intent: CivilizationActionIntent;
+} {
+  switch (decision.goal.kind) {
+    case 'gatherMaterial': case 'craftMaterial': case 'transferMaterial': case 'buildOutpost':
+      return decision.intent.kind === 'navigate' || decision.intent.kind === 'dropCollect'
+        || decision.intent.kind === 'containerOpen' || (isCivilizationIntent(decision.intent) && decision.intent.kind !== 'hold');
+    default: return false;
+  }
 }
 
 function sharedIntent(intent: GameplayDecision['intent']): Decision['intent'] {
