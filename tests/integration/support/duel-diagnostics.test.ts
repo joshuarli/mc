@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import { createRequire } from "node:module";
+import { resolve } from "node:path";
 import { test } from "node:test";
 import type { Bot } from "mineflayer";
 
@@ -116,6 +118,62 @@ test("duel combat diagnostics capture poses, border, damage, and combat packets,
   assert.equal(artifact.records.length, capturedCount);
 });
 
+test("duel combat diagnostics tolerate Mineflayer clearing a destroyed player's entity", async () => {
+  const { active } = duelContext();
+  const attacker = active.competitors[0]!.bot as Bot;
+  const runtimeAttacker = attacker as unknown as {
+    version: string;
+    registry: unknown;
+    supportFeature: (feature: string) => boolean;
+    _client: EventEmitter & { username: string };
+  };
+  const require = createRequire(import.meta.url);
+  const modules = resolve(process.cwd(), ".work/arena/npm-workspace/node_modules");
+  const injectEntities = require(resolve(modules, "mineflayer/lib/plugins/entities.js")) as (bot: unknown) => void;
+  const minecraftData = require(resolve(modules, "minecraft-data")) as (version: string) => unknown;
+  runtimeAttacker.version = "1.21.11";
+  runtimeAttacker.registry = minecraftData(runtimeAttacker.version);
+  runtimeAttacker.supportFeature = (feature) => feature === "doublePosition";
+  runtimeAttacker._client.username = "bot_0";
+  injectEntities(runtimeAttacker);
+  runtimeAttacker._client.emit("login", { entityId: 1 });
+  runtimeAttacker._client.emit("player_info", {
+    action: "add_player",
+    data: [{ name: "bot_1", uuid: "uuid-1", ping: 0, gamemode: 0 }],
+  });
+  runtimeAttacker._client.emit("named_entity_spawn", {
+    entityId: 2,
+    playerUUID: "uuid-1",
+    x: 40,
+    y: 65,
+    z: 32,
+    yaw: 0,
+    pitch: 0,
+    metadata: [],
+  });
+  const targetPlayer = attacker.players.bot_1;
+  assert.ok(targetPlayer?.entity);
+  runtimeAttacker._client.emit("entity_destroy", { entityIds: [2] });
+  assert.equal(targetPlayer.entity, null, "the pinned runtime handler clears the entity reference");
+  let artifact: DuelCombatDiagnosticArtifact | undefined;
+
+  await captureDuelCombatWindow({
+    active,
+    attackerSeat: 0,
+    targetSeat: 1,
+    snapshotKnockback: () => ({}),
+    closeKnockback: () => {},
+    stageArtifact: async (captured) => { artifact = captured; },
+    runCombat: async () => { attacker.emit("physicsTick"); },
+  });
+
+  assert.ok(artifact);
+  assert.ok(artifact.records.some((record) => record.kind === "pose"
+    && record.seat === 0
+    && record.data.target === null
+    && record.data.distanceBlocks === null));
+});
+
 test("duel combat diagnostics retain a byte-bounded recent window and serialize within the cap", async () => {
   const { active } = duelContext();
   let artifact: DuelCombatDiagnosticArtifact | undefined;
@@ -161,7 +219,7 @@ function duelContext() {
   const makeBot = (id: number, username: string) => {
     const bot = new EventEmitter() as EventEmitter & {
       entity: Record<string, unknown>;
-      players: Record<string, { entity: Record<string, unknown> }>;
+      players: Record<string, { entity: Record<string, unknown> | null }>;
       _client: EventEmitter & { write: (name: string, packet: unknown) => void };
       entityAtCursor: () => Record<string, unknown>;
       blockAtCursor: () => { name: string; position: { x: number; y: number; z: number } };

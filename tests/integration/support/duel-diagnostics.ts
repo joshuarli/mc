@@ -176,14 +176,13 @@ function createDuelCombatDiagnostics(
       const { bot, remote, remoteUsername, seat } = participant;
       const onPhysicsTick = (): void => {
         const self = bot.entity;
-        const remoteEntity = bot.players[remoteUsername]?.entity;
-        const targetPosition = remoteEntity === undefined ? null : vector(remoteEntity.position);
+        const remoteEntity = bot.players[remoteUsername]?.entity ?? undefined;
         const aimEntity = seat === attackerSeat ? bot.entityAtCursor(3.5) : undefined;
         const blockingBlock = seat === attackerSeat ? bot.blockAtCursor(3.5) : null;
         append("pose", seat, {
           self: entityPose(self),
           target: remoteEntity === undefined ? null : entityPose(remoteEntity),
-          distanceBlocks: targetPosition === null ? null : distance(self.position, remoteEntity!.position),
+          distanceBlocks: remoteEntity === undefined ? null : distance(self.position, remoteEntity.position),
           aimEntityId: aimEntity?.id ?? null,
           blockingBlock: blockingBlock === null ? null : {
             name: blockingBlock.name,
