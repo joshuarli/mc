@@ -163,18 +163,17 @@ inventory = ["bread"]
   const inlineTables = `
 schema = 1
 name = "nested-array-table"
+operations = [
+  { kind = "cuboid", from = { x = 0, y = 1, z = 0 }, to = { x = 7, y = 1, z = 7 }, block = "stone" },
+  { kind = "spawn", seat = 0, position = { x = 1, y = 2, z = 1 } },
+  { kind = "loot_container", position = { x = 4, y = 2, z = 4 }, inventory = ["bread"] }
+]
 
 [dimensions]
 width = 8
 depth = 8
 min_y = 0
 max_y = 8
-
-operations = [
-  { kind = "cuboid", from = { x = 0, y = 1, z = 0 }, to = { x = 7, y = 1, z = 7 }, block = "stone" },
-  { kind = "spawn", seat = 0, position = { x = 1, y = 2, z = 1 } },
-  { kind = "loot_container", position = { x = 4, y = 2, z = 4 }, inventory = ["bread"] }
-]
 `;
 
   assert.equal(compileMap(nestedTables).semanticId, compileMap(inlineTables).semanticId);
