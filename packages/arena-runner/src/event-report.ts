@@ -1,4 +1,4 @@
-import type { AuthoritativeTick, ControlMessage, OutcomePayload, PreparePayload } from './control/types.js';
+import type { AuthoritativeTick, CivilizationStatePayload, ControlMessage, OutcomePayload, PreparePayload } from './control/types.js';
 import { TraceError } from './trace.js';
 
 export interface EventDerivedResult {
@@ -30,6 +30,7 @@ export function reconstructEventResult(
   let lastPublicState: { readonly at: AuthoritativeTick; readonly seats: readonly number[] } | undefined;
   let terminalClock: { readonly phase: string; readonly tick: AuthoritativeTick | null } | undefined;
   let outcome: OutcomePayload | undefined;
+  let lastCivilizationState: CivilizationStatePayload | undefined;
   let initialStateSeen = false;
   let terminalStartStateSeen = false;
   let pendingEliminationStateTick: AuthoritativeTick | undefined;
@@ -110,9 +111,28 @@ export function reconstructEventResult(
         pendingEliminationStateTick = at;
         break;
       }
+      case 'civilization_state': {
+        if (prepare.mode !== 'civilization') throw reportFailure('civilization_event_in_hunger_games', record);
+        if (terminalClock !== undefined) throw reportFailure('event_after_terminal_clock', record);
+        const state = event.payload;
+        if (state.occupants.some((seat) => !alive.has(seat))) throw reportFailure('civilization_dead_occupant', record);
+        if ((state.challenger_faction === null) !== (state.capture_progress_ticks === 0n)
+            || state.capture_progress_ticks >= BigInt(prepare.settings.civilization.capture_zone.uncontested_ticks)) {
+          throw reportFailure('civilization_capture_progress_mismatch', record);
+        }
+        if (lastCivilizationState !== undefined) {
+          if (sameTick(lastCivilizationState.at, state.at)) throw reportFailure('duplicate_civilization_state_tick', record);
+          if (state.scores.some((score, index) => score.points < lastCivilizationState!.scores[index]!.points)) {
+            throw reportFailure('civilization_score_decreased', record);
+          }
+        }
+        previousTick = requireMonotonicTick(previousTick, state.at, record);
+        lastCivilizationState = state;
+        break;
+      }
       case 'outcome':
         outcome = event.payload;
-        validateOutcome(outcome, prepare, initialSeats, alive, lastEliminationTick, terminalClock, lastPublicState, record);
+        validateOutcome(outcome, prepare, initialSeats, alive, lastEliminationTick, terminalClock, lastPublicState, lastCivilizationState, record);
         break;
       default:
         throw reportFailure('non_authoritative_event', record);
@@ -143,6 +163,7 @@ function validateOutcome(
   lastEliminationTick: AuthoritativeTick | undefined,
   terminalClock: { readonly phase: string; readonly tick: AuthoritativeTick | null } | undefined,
   lastPublicState: { readonly at: AuthoritativeTick; readonly seats: readonly number[] } | undefined,
+  lastCivilizationState: CivilizationStatePayload | undefined,
   record: number,
 ): void {
   const survivors = [...alive].sort(compareNumber);
@@ -154,6 +175,48 @@ function validateOutcome(
     return;
   }
 
+  if (prepare.mode === 'civilization') {
+    if (outcome.kind === 'winner' || (outcome.kind === 'draw' && !('scores' in outcome))) {
+      throw reportFailure('hunger_games_outcome_in_civilization', record);
+    }
+    if (lastCivilizationState === undefined || !sameTick(lastCivilizationState.at, outcome.at)) {
+      throw reportFailure('civilization_terminal_state_missing', record);
+    }
+    if (outcome.scores.some((score, index) => score.faction_id !== lastCivilizationState.scores[index]!.faction_id
+        || score.points !== lastCivilizationState.scores[index]!.points)) {
+      throw reportFailure('civilization_outcome_scores_mismatch', record);
+    }
+    if (terminalClock?.phase !== 'finished' || terminalClock.tick === null || !sameTick(terminalClock.tick, outcome.at)) {
+      throw reportFailure('terminal_clock_mismatch', record);
+    }
+    if (lastPublicState === undefined || !sameSeats(lastPublicState.seats, survivors)) {
+      throw reportFailure('terminal_public_state_mismatch', record);
+    }
+    const factions = new Set(survivors.map((seat) => seat < 3 ? 'ember' : 'tide'));
+    if (outcome.kind === 'faction_winner' && outcome.reason === 'elimination') {
+      if (factions.size !== 1 || !factions.has(outcome.winner_faction_id)
+          || lastEliminationTick === undefined || !sameTick(lastEliminationTick, outcome.at)) {
+        throw reportFailure('faction_winner_does_not_match_eliminations', record);
+      }
+    } else if (outcome.kind === 'draw' && outcome.reason === 'no_survivors') {
+      if (survivors.length !== 0 || lastEliminationTick === undefined || !sameTick(lastEliminationTick, outcome.at)) {
+        throw reportFailure('no_survivors_draw_mismatch', record);
+      }
+    } else {
+      if (outcome.at.domain !== 'match' || outcome.at.value !== prepare.settings.match.authoritative_max_ticks || factions.size !== 2) {
+        throw reportFailure('civilization_tick_limit_mismatch', record);
+      }
+      const [ember, tide] = lastCivilizationState.scores;
+      if (outcome.kind === 'draw' ? ember.points !== tide.points
+          : (outcome.winner_faction_id === 'ember' ? ember.points <= tide.points : tide.points <= ember.points)) {
+        throw reportFailure('civilization_score_outcome_mismatch', record);
+      }
+    }
+    return;
+  }
+  if (outcome.kind === 'faction_winner' || (outcome.kind === 'draw' && 'scores' in outcome)) {
+    throw reportFailure('civilization_outcome_in_hunger_games', record);
+  }
   if (outcome.kind === 'winner') {
     if (survivors.length !== 1 || survivors[0] !== outcome.winner_seat) {
       throw reportFailure('winner_does_not_match_eliminations', record);
@@ -198,6 +261,7 @@ function outcomeJson(outcome: OutcomePayload): Readonly<Record<string, unknown>>
   }
   return {
     ...outcome,
+    ...('scores' in outcome ? { scores: outcome.scores.map((score) => ({ faction_id: score.faction_id, points: score.points.toString() })) } : {}),
     at: { domain: outcome.at.domain, value: outcome.at.value.toString() },
   };
 }

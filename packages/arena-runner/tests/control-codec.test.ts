@@ -90,7 +90,7 @@ test("control decoder rejects numeric, noncanonical, overflow, unknown, and remo
   }
 });
 
-test("prepare rejects civilization and noncontiguous bot seats", () => {
+test("prepare rejects incomplete civilization settings and noncontiguous bot seats", () => {
   const template = {
     protocol: 1,
     run_id: "fixture-run",

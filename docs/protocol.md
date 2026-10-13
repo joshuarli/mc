@@ -86,3 +86,11 @@ events. They must not be copied unfiltered into a policy observation. A policy
 gets only its own Mineflayer client's received observations and explicit team
 messages; the control channel's public state does not authorize access to
 hidden world data, entities, health, inventories, or seed.
+
+## Civilization control-v1
+
+Control-v1 adds the closed `civilization_v1` capability and `prepare.mode = civilization` variant. Hunger Games frames retain their existing shapes. A handshake advertising only `hunger_games_v1` rejects `civilization_state`, `faction_winner`, and draws carrying faction scores. Authentication still precedes capability checks; readiness must repeat the authenticated capability set exactly.
+
+Civilization preparation uses the existing numeric-string u64 envelope and roster, exactly six bot seats, fixed 192-block border, 2400 grace ticks, 18000 maximum ticks, no respawn, and enabled block breaking and placing. Its `civilization` settings contain factions ordered ember then tide (seats 0–2 and 3–5 with gatherer/crafter, builder, defender/scout roles), the canonical bread/wooden-tool kit, inclusive capture-zone bounds, and the `oak-outpost-v1` anchors. The four civilization protocol fixtures define the exact interoperable field shapes; unknown fields and variants are rejected.
+
+`civilization_state` publishes an authoritative match tick, ordered living capture-zone occupants, nullable `owner_faction` and `challenger_faction`, canonical decimal-string `capture_progress_ticks`, and scores ordered ember then tide as `{faction_id,points}`. Outcomes use `kind = faction_winner`, `winner_faction_id`, `reason = elimination | tick_limit`, exact faction scores, survivors, and an authoritative match tick. Civilization draws add the same scores to the existing draw shape. Aborts retain the shared abort shape. The plugin emits the final civilization state before the terminal clock and outcome at the exact outcome tick.

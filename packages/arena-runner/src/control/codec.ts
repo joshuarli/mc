@@ -8,21 +8,37 @@ import {
 import type {
   AbortReason,
   AuthoritativeTick,
+  BlockPosition,
   BorderSettings,
   BuildProgressPayload,
   ClockPayload,
   BotCompetitor,
+  CaptureZone,
+  CivilizationBlueprint,
+  CivilizationDrawOutcome,
+  CivilizationFactions,
+  CivilizationPrepareSettings,
+  CivilizationScenarioSettings,
+  CivilizationStartingKit,
+  CivilizationStatePayload,
   ControlCapability,
   ControlErrorCode,
   ControlMessage,
+  EmberFaction,
+  FactionId,
+  FactionScores,
   EliminationPayload,
+  FixedBorderSettings,
   HelloPayload,
+  HungerGamesDrawOutcome,
+  HungerGamesPrepareSettings,
   MatchSettings,
   MetricsPayload,
   OutcomePayload,
   PreparePayload,
   PublicStatePayload,
-  ReadyPayload
+  ReadyPayload,
+  TideFaction
 } from "./types.js";
 
 export const MAX_CONTROL_FRAME_BYTES = 1_048_576;
@@ -127,7 +143,7 @@ export class ControlReceiver {
       throw new ControlCodecError("invalid_handshake", "control receiver requires a valid run id and token");
     }
     const supported = new Set(supportedCapabilities);
-    if (supported.size !== supportedCapabilities.length || !supported.has("hunger_games_v1")
+    if (supported.size !== supportedCapabilities.length || supported.size === 0
         || supportedCapabilities.some((capability) => !CAPABILITIES.has(capability))) {
       throw new ControlCodecError("invalid_handshake", "control receiver capability set is invalid");
     }
@@ -186,6 +202,11 @@ export class ControlReceiver {
       throw new ControlCodecError("invalid_handshake", "plugin sent a runner-only command or repeated handshake event");
     }
 
+    if (this.handshake === "complete" && requiresCivilizationCapability(message)
+        && !this.helloCapabilities.includes("civilization_v1")) {
+      throw new ControlCodecError("unsupported_capability", "plugin sent a civilization event without advertising civilization_v1");
+    }
+
     this.lastSequence = message.sequence;
     if (this.handshake === "complete" && message.type === "outcome") this.handshake = "terminal";
     return message;
@@ -200,15 +221,12 @@ export class ControlReceiver {
         throw new ControlCodecError("unsupported_capability", "plugin announced an unsupported capability");
       }
     }
-    if (!payload.capabilities.includes("hunger_games_v1")) {
-      throw new ControlCodecError("unsupported_capability", "plugin does not support Hunger Games control");
-    }
     this.helloCapabilities = Object.freeze([...payload.capabilities]);
   }
 }
 
 const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
-const CAPABILITIES = new Set<ControlCapability>(["hunger_games_v1"]);
+const CAPABILITIES = new Set<ControlCapability>(["hunger_games_v1", "civilization_v1"]);
 const ABORT_REASONS = new Set<AbortReason>([
   "operator", "lease_lost", "invalid_world", "protocol_error", "runtime_timeout"
 ]);
@@ -222,7 +240,15 @@ type RequiredObject<Keys extends readonly string[]> = StrictJsonObject & {
 function isPluginEvent(message: ControlMessage): boolean {
   return message.type === "heartbeat" || message.type === "build_progress" || message.type === "public_clock"
     || message.type === "public_state" || message.type === "elimination" || message.type === "outcome"
-    || message.type === "metrics" || message.type === "ack" || message.type === "error";
+    || message.type === "civilization_state" || message.type === "metrics" || message.type === "ack"
+    || message.type === "error";
+}
+
+function requiresCivilizationCapability(message: ControlMessage): boolean {
+  if (message.type === "civilization_state") return true;
+  if (message.type !== "outcome") return false;
+  return message.payload.kind === "faction_winner"
+    || (message.payload.kind === "draw" && "scores" in message.payload);
 }
 
 function readEnvelope(value: StrictJsonValue): ControlMessage {
@@ -263,6 +289,8 @@ function readEnvelope(value: StrictJsonValue): ControlMessage {
       return { ...fields, type, payload: readPublicState(payload) };
     case "elimination":
       return { ...fields, type, payload: readElimination(payload) };
+    case "civilization_state":
+      return { ...fields, type, payload: readCivilizationState(payload) };
     case "outcome":
       return { ...fields, type, payload: readOutcome(payload) };
     case "metrics":
@@ -332,8 +360,22 @@ function readPrepare(value: StrictJsonValue): PreparePayload {
   const payload = readObject(value, "payload", ["map_semantic_id", "scenario_semantic_id", "seed", "mode", "settings", "roster"],
     ["map_semantic_id", "scenario_semantic_id", "seed", "mode", "settings", "roster"]);
   const mode = readString(payload.mode, "payload.mode", 1, 64);
-  if (mode !== "hunger_games") invalid("payload.mode", "mode is unsupported by control-v1");
-  const settings = readObject(payload.settings, "payload.settings", ["match", "border"], ["match", "border"]);
+  if (mode !== "hunger_games" && mode !== "civilization") invalid("payload.mode", "mode is unsupported by control-v1");
+  const roster = readRoster(payload.roster);
+  const common = {
+    map_semantic_id: readString(payload.map_semantic_id, "payload.map_semantic_id", 64, 64, /^[0-9a-f]{64}$/),
+    scenario_semantic_id: readString(payload.scenario_semantic_id, "payload.scenario_semantic_id", 64, 64, /^[0-9a-f]{64}$/),
+    seed: readU64(payload.seed, "payload.seed", false)
+  };
+  if (mode === "hunger_games") {
+    return { ...common, mode, settings: readHungerGamesPrepareSettings(payload.settings), roster };
+  }
+  if (roster.length !== 6) invalid("payload.roster", "civilization requires exactly six bot competitors");
+  return { ...common, mode, settings: readCivilizationPrepareSettings(payload.settings), roster };
+}
+
+function readHungerGamesPrepareSettings(value: StrictJsonValue): HungerGamesPrepareSettings {
+  const settings = readObject(value, "payload.settings", ["match", "border"], ["match", "border"]);
   const match = readMatchSettings(settings.match);
   const border = readBorderSettings(settings.border);
   if (match.grace_ticks >= match.authoritative_max_ticks) invalid("payload.settings.match.grace_ticks", "grace period must end before the tick limit");
@@ -342,14 +384,35 @@ function readPrepare(value: StrictJsonValue): PreparePayload {
       || border.shrink_end_tick >= match.authoritative_max_ticks) {
     invalid("payload.settings.border.shrink_end_tick", "border schedule must end after it starts and before the tick limit");
   }
-  const roster = readRoster(payload.roster);
+  return { match, border };
+}
+
+function readCivilizationPrepareSettings(value: StrictJsonValue): CivilizationPrepareSettings {
+  const settings = readObject(value, "payload.settings",
+    ["match", "border", "civilization"],
+    ["match", "border", "civilization"]);
+  const match = readMatchSettings(settings.match);
+  if (match.grace_ticks !== 2400n || match.authoritative_max_ticks !== 18000n
+      || match.respawn || !match.block_breaking || !match.block_placing) {
+    invalid("payload.settings.match", "civilization requires its fixed match rules");
+  }
   return {
-    map_semantic_id: readString(payload.map_semantic_id, "payload.map_semantic_id", 64, 64, /^[0-9a-f]{64}$/),
-    scenario_semantic_id: readString(payload.scenario_semantic_id, "payload.scenario_semantic_id", 64, 64, /^[0-9a-f]{64}$/),
-    seed: readU64(payload.seed, "payload.seed", false),
-    mode,
-    settings: { match, border },
-    roster
+    match,
+    border: readFixedBorderSettings(settings.border),
+    civilization: readCivilizationSettings(settings.civilization)
+  };
+}
+
+function readCivilizationSettings(value: StrictJsonValue | undefined): CivilizationScenarioSettings {
+  const path = "payload.settings.civilization";
+  const civilization = readObject(value, path,
+    ["factions", "starting_kit", "capture_zone", "blueprint"],
+    ["factions", "starting_kit", "capture_zone", "blueprint"]);
+  return {
+    factions: readCivilizationFactions(civilization.factions),
+    starting_kit: readCivilizationStartingKit(civilization.starting_kit),
+    capture_zone: readCaptureZone(civilization.capture_zone),
+    blueprint: readCivilizationBlueprint(civilization.blueprint)
   };
 }
 
@@ -386,6 +449,144 @@ function readBorderSettings(value: StrictJsonValue | undefined): BorderSettings 
     shrink_end_tick: readU64(border.shrink_end_tick, `${path}.shrink_end_tick`, false),
     final_diameter_blocks: final
   };
+}
+
+function readFixedBorderSettings(value: StrictJsonValue | undefined): FixedBorderSettings {
+  const path = "payload.settings.border";
+  const border = readObject(value, path, ["kind", "diameter_blocks"], ["kind", "diameter_blocks"]);
+  if (readString(border.kind, `${path}.kind`, 1, 16) !== "fixed"
+      || readSafeInteger(border.diameter_blocks, `${path}.diameter_blocks`, 192, 192, border, "diameter_blocks") !== 192) {
+    invalid(path, "civilization requires a fixed 192-block border");
+  }
+  return { kind: "fixed", diameter_blocks: 192 };
+}
+
+function readCivilizationFactions(value: StrictJsonValue | undefined): CivilizationFactions {
+  const path = "payload.settings.civilization.factions";
+  const factions = readArray(value, path, 2, 2);
+  const first = readObject(factions[0], `${path}[0]`, ["id", "members"], ["id", "members"]);
+  const second = readObject(factions[1], `${path}[1]`, ["id", "members"], ["id", "members"]);
+  if (readString(first.id, `${path}[0].id`, 1, 16) !== "ember"
+      || readString(second.id, `${path}[1].id`, 1, 16) !== "tide") {
+    invalid(path, "factions must be ordered ember then tide");
+  }
+  const emberMembers = readFactionMembers<EmberFaction["members"]>(first.members, `${path}[0].members`, 0);
+  const tideMembers = readFactionMembers<TideFaction["members"]>(second.members, `${path}[1].members`, 3);
+  return [
+    { id: "ember", members: emberMembers },
+    { id: "tide", members: tideMembers }
+  ] as const;
+}
+
+function readFactionMembers<Members extends CivilizationFactions[number]["members"]>(
+  value: StrictJsonValue | undefined,
+  path: string,
+  firstSeat: number
+): Members {
+  const members = readArray(value, path, 3, 3);
+  const roles = ["gatherer_crafter", "builder", "defender_scout"] as const;
+  return members.map((entry, index) => {
+    const memberPath = `${path}[${index}]`;
+    const member = readObject(entry, memberPath, ["seat", "role"], ["seat", "role"]);
+    const seat = readSafeInteger(member.seat, `${memberPath}.seat`, firstSeat + index, firstSeat + index, member, "seat");
+    const role = readString(member.role, `${memberPath}.role`, 1, 32);
+    if (role !== roles[index]) invalid(`${memberPath}.role`, "faction roles must be ordered gatherer_crafter, builder, defender_scout");
+    return { seat, role };
+  }) as unknown as Members;
+}
+
+function readCivilizationStartingKit(value: StrictJsonValue | undefined): CivilizationStartingKit {
+  const path = "payload.settings.civilization.starting_kit";
+  const expected = [
+    ["minecraft:bread", 4],
+    ["minecraft:wooden_axe", 1],
+    ["minecraft:wooden_pickaxe", 1],
+    ["minecraft:wooden_sword", 1]
+  ] as const;
+  const entries = readArray(value, path, expected.length, expected.length);
+  return entries.map((entry, index) => {
+    const entryPath = `${path}[${index}]`;
+    const item = readObject(entry, entryPath, ["item", "count"], ["item", "count"]);
+    if (readString(item.item, `${entryPath}.item`, 1, 128) !== expected[index]![0]
+        || readSafeInteger(item.count, `${entryPath}.count`, expected[index]![1], expected[index]![1], item, "count") !== expected[index]![1]) {
+      invalid(entryPath, "civilization starting kit differs from the canonical kit");
+    }
+    return { item: expected[index]![0], count: expected[index]![1] };
+  }) as unknown as CivilizationStartingKit;
+}
+
+function readCaptureZone(value: StrictJsonValue | undefined): CaptureZone {
+  const path = "payload.settings.civilization.capture_zone";
+  const zone = readObject(value, path,
+    ["min", "max", "uncontested_ticks", "score_points_per_tick"],
+    ["min", "max", "uncontested_ticks", "score_points_per_tick"]);
+  const minimum = readBlockPosition(zone.min, `${path}.min`);
+  const maximum = readBlockPosition(zone.max, `${path}.max`);
+  for (const axis of ["x", "y", "z"] as const) {
+    if (minimum[axis] > maximum[axis]) invalid(path, "inclusive capture zone minimum must not exceed its maximum");
+  }
+  if (readSafeInteger(zone.uncontested_ticks, `${path}.uncontested_ticks`, 200, 200, zone, "uncontested_ticks") !== 200
+      || readSafeInteger(zone.score_points_per_tick, `${path}.score_points_per_tick`, 1, 1, zone, "score_points_per_tick") !== 1) {
+    invalid(path, "civilization capture requires 200 uncontested ticks and one point per owned end tick");
+  }
+  return {
+    min: minimum,
+    max: maximum,
+    uncontested_ticks: 200,
+    score_points_per_tick: 1
+  };
+}
+
+function readBlockPosition(value: StrictJsonValue | undefined, path: string): BlockPosition {
+  const position = readObject(value, path, ["x", "y", "z"], ["x", "y", "z"]);
+  return {
+    x: readSafeInteger(position.x, `${path}.x`, 0, Number.MAX_SAFE_INTEGER, position, "x"),
+    y: readSafeInteger(position.y, `${path}.y`, 0, Number.MAX_SAFE_INTEGER, position, "y"),
+    z: readSafeInteger(position.z, `${path}.z`, 0, Number.MAX_SAFE_INTEGER, position, "z")
+  };
+}
+
+function readCivilizationBlueprint(value: StrictJsonValue | undefined): CivilizationBlueprint {
+  const path = "payload.settings.civilization.blueprint";
+  const blueprint = readObject(value, path, ["id", "anchors"], ["id", "anchors"]);
+  if (readString(blueprint.id, `${path}.id`, 1, 64) !== "oak-outpost-v1") {
+    invalid(`${path}.id`, "blueprint identity is unsupported");
+  }
+  const anchors = readObject(blueprint.anchors, `${path}.anchors`, ["ember", "tide"], ["ember", "tide"]);
+  return {
+    id: "oak-outpost-v1",
+    anchors: {
+      ember: readBlueprintAnchor(anchors.ember, `${path}.anchors.ember`, 0),
+      tide: readBlueprintAnchor(anchors.tide, `${path}.anchors.tide`, 180)
+    }
+  };
+}
+
+function readBlueprintAnchor(
+  value: StrictJsonValue | undefined,
+  path: string,
+  rotation: 0
+): { readonly position: BlockPosition; readonly rotation_degrees: 0 };
+function readBlueprintAnchor(
+  value: StrictJsonValue | undefined,
+  path: string,
+  rotation: 180
+): { readonly position: BlockPosition; readonly rotation_degrees: 180 };
+function readBlueprintAnchor(
+  value: StrictJsonValue | undefined,
+  path: string,
+  rotation: 0 | 180
+): { readonly position: BlockPosition; readonly rotation_degrees: 0 | 180 };
+function readBlueprintAnchor(
+  value: StrictJsonValue | undefined,
+  path: string,
+  rotation: 0 | 180
+): { readonly position: BlockPosition; readonly rotation_degrees: 0 | 180 } {
+  const anchor = readObject(value, path, ["position", "rotation_degrees"], ["position", "rotation_degrees"]);
+  if (readSafeInteger(anchor.rotation_degrees, `${path}.rotation_degrees`, rotation, rotation, anchor, "rotation_degrees") !== rotation) {
+    invalid(`${path}.rotation_degrees`, "anchor rotation does not match its faction");
+  }
+  return { position: readBlockPosition(anchor.position, `${path}.position`), rotation_degrees: rotation };
 }
 
 function readRoster(value: StrictJsonValue | undefined): readonly BotCompetitor[] {
@@ -462,39 +663,133 @@ function readElimination(value: StrictJsonValue): EliminationPayload {
   return { at: readTick(payload.at, "payload.at"), eliminations };
 }
 
+function readCivilizationState(value: StrictJsonValue): CivilizationStatePayload {
+  const payload = readObject(value, "payload",
+    ["at", "occupants", "owner_faction", "challenger_faction", "capture_progress_ticks", "scores"],
+    ["at", "occupants", "owner_faction", "challenger_faction", "capture_progress_ticks", "scores"]);
+  const at = readTick(payload.at, "payload.at");
+  if (at.domain !== "match") invalid("payload.at.domain", "civilization state requires a match tick");
+  const owner = readFactionId(payload.owner_faction, "payload.owner_faction", true);
+  const challenger = readFactionId(payload.challenger_faction, "payload.challenger_faction", true);
+  if (owner !== null && owner === challenger) {
+    invalid("payload.challenger_faction", "challenger must differ from the current owner");
+  }
+  return {
+    at,
+    occupants: readSeatList(payload.occupants, "payload.occupants"),
+    owner_faction: owner,
+    challenger_faction: challenger,
+    capture_progress_ticks: readU64(payload.capture_progress_ticks, "payload.capture_progress_ticks", false),
+    scores: readFactionScores(payload.scores, "payload.scores")
+  };
+}
+
 function readOutcome(value: StrictJsonValue): OutcomePayload {
-  const payload = readObject(value, "payload", ["kind", "winner_seat", "reason", "survivors", "at"],
+  const payload = readObject(value, "payload",
+    ["kind", "winner_seat", "winner_faction_id", "reason", "scores", "survivors", "at"],
     ["kind", "survivors", "at"]);
   const kind = readString(payload.kind, "payload.kind", 1, 16);
   const survivors = readSeatList(payload.survivors, "payload.survivors");
   const at = payload.at === null ? null : readTick(payload.at, "payload.at");
   if (kind === "winner") {
-    if (!Object.hasOwn(payload, "winner_seat") || Object.hasOwn(payload, "reason") || at === null) {
+    requireExactKeys(payload, "payload", ["kind", "winner_seat", "survivors", "at"]);
+    if (at === null) {
       invalid("payload", "winner outcome requires a winner seat and authoritative tick only");
     }
     const winnerSeat = readSafeInteger(payload.winner_seat, "payload.winner_seat", 0, 5, payload, "winner_seat");
     if (survivors.length !== 1 || survivors[0] !== winnerSeat) invalid("payload.survivors", "winner must be the sole survivor");
     return { kind, winner_seat: winnerSeat, survivors: [winnerSeat], at };
   }
-  if (kind === "draw") {
-    if (!Object.hasOwn(payload, "reason") || Object.hasOwn(payload, "winner_seat") || at === null) {
-      invalid("payload", "draw outcome requires a reason and authoritative tick only");
+  if (kind === "faction_winner") {
+    requireExactKeys(payload, "payload", ["kind", "winner_faction_id", "reason", "scores", "survivors", "at"]);
+    if (at === null || at.domain !== "match") invalid("payload.at", "faction winner requires an authoritative match tick");
+    const winner = readFactionId(payload.winner_faction_id, "payload.winner_faction_id", false)!;
+    const reason = readString(payload.reason, "payload.reason", 1, 32);
+    if (reason !== "elimination" && reason !== "tick_limit") {
+      invalid("payload.reason", "faction winner reason must be elimination or tick_limit");
     }
+    const scores = readFactionScores(payload.scores, "payload.scores");
+    const winnerPoints = scores[winner === "ember" ? 0 : 1].points;
+    const loserPoints = scores[winner === "ember" ? 1 : 0].points;
+    if (reason === "tick_limit" && winnerPoints <= loserPoints) {
+      invalid("payload.scores", "tick-limit winner must have strictly more points");
+    }
+    if (reason === "elimination"
+        && (survivors.length === 0 || survivors.some((seat) => factionForSeat(seat) !== winner))) {
+      invalid("payload.survivors", "elimination winner survivors must belong to the winning faction");
+    }
+    if (reason === "tick_limit"
+        && (!survivors.some((seat) => factionForSeat(seat) === "ember")
+          || !survivors.some((seat) => factionForSeat(seat) === "tide"))) {
+      invalid("payload.survivors", "tick-limit outcome requires a survivor from each faction");
+    }
+    return { kind, winner_faction_id: winner, reason, scores, survivors, at };
+  }
+  if (kind === "draw") {
+    if (at === null) invalid("payload.at", "draw outcome requires an authoritative tick");
     const reason = readString(payload.reason, "payload.reason", 1, 32);
     if (reason !== "no_survivors" && reason !== "tick_limit") invalid("payload.reason", "unknown draw reason");
+    if (Object.hasOwn(payload, "scores")) {
+      requireExactKeys(payload, "payload", ["kind", "reason", "scores", "survivors", "at"]);
+      if (at.domain !== "match") invalid("payload.at", "civilization draw requires an authoritative match tick");
+      const scores = readFactionScores(payload.scores, "payload.scores");
+      if ((reason === "no_survivors" && survivors.length !== 0)
+          || (reason === "tick_limit" && (survivors.length < 2
+            || !survivors.some((seat) => factionForSeat(seat) === "ember")
+            || !survivors.some((seat) => factionForSeat(seat) === "tide")))) {
+        invalid("payload.survivors", "civilization draw survivors do not match the draw reason");
+      }
+      if (reason === "tick_limit" && scores[0].points !== scores[1].points) {
+        invalid("payload.scores", "tick-limit draw requires equal faction scores");
+      }
+      return { kind, reason, survivors, at, scores } satisfies CivilizationDrawOutcome;
+    }
+    requireExactKeys(payload, "payload", ["kind", "reason", "survivors", "at"]);
     if ((reason === "no_survivors" && survivors.length !== 0)
         || (reason === "tick_limit" && survivors.length < 2)) {
       invalid("payload.survivors", "draw survivors do not match the draw reason");
     }
-    return { kind, reason, survivors, at };
+    return { kind, reason, survivors, at } satisfies HungerGamesDrawOutcome;
   }
   if (kind === "abort") {
-    if (!Object.hasOwn(payload, "reason") || Object.hasOwn(payload, "winner_seat")) {
-      invalid("payload", "abort outcome requires a reason and no winner seat");
-    }
+    requireExactKeys(payload, "payload", ["kind", "reason", "survivors", "at"]);
     return { kind, reason: readAbortReason(payload.reason, "payload.reason"), survivors, at };
   }
-  return invalid("payload.kind", "outcome kind must be winner, draw, or abort");
+  return invalid("payload.kind", "outcome kind must be winner, faction_winner, draw, or abort");
+}
+
+function readFactionScores(value: StrictJsonValue | undefined, path: string): FactionScores {
+  const entries = readArray(value, path, 2, 2);
+  const first = readObject(entries[0], `${path}[0]`, ["faction_id", "points"], ["faction_id", "points"]);
+  const second = readObject(entries[1], `${path}[1]`, ["faction_id", "points"], ["faction_id", "points"]);
+  if (readFactionId(first.faction_id, `${path}[0].faction_id`, false) !== "ember"
+      || readFactionId(second.faction_id, `${path}[1].faction_id`, false) !== "tide") {
+    invalid(path, "faction scores must be ordered ember then tide");
+  }
+  return [
+    { faction_id: "ember", points: readU64(first.points, `${path}[0].points`, false) },
+    { faction_id: "tide", points: readU64(second.points, `${path}[1].points`, false) }
+  ] as const;
+}
+
+function readFactionId(value: StrictJsonValue | undefined, path: string, nullable: true): FactionId | null;
+function readFactionId(value: StrictJsonValue | undefined, path: string, nullable: false): FactionId;
+function readFactionId(value: StrictJsonValue | undefined, path: string, nullable: boolean): FactionId | null {
+  if (nullable && value === null) return null;
+  const faction = readString(value, path, 1, 16);
+  if (faction !== "ember" && faction !== "tide") invalid(path, "unknown faction id");
+  return faction;
+}
+
+function factionForSeat(seat: number): FactionId {
+  return seat < 3 ? "ember" : "tide";
+}
+
+function requireExactKeys(value: StrictJsonObject, path: string, expected: readonly string[]): void {
+  const actual = Object.keys(value);
+  if (actual.length !== expected.length || expected.some((key) => !Object.hasOwn(value, key))) {
+    invalid(path, "fields do not match the selected outcome variant");
+  }
 }
 
 function readMetrics(value: StrictJsonValue): MetricsPayload {

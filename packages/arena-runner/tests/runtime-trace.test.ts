@@ -3,6 +3,7 @@ import { EventEmitter, once } from 'node:events';
 import type { Bot } from 'mineflayer';
 import type { MineflayerArenaClient } from '@arena/bots';
 import { LivePolicyLoop } from '../src/runtime/live-policy-loop.js';
+import { readFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { createConnection, type Socket } from 'node:net';
 import { basename, join, resolve } from 'node:path';
@@ -11,6 +12,10 @@ import {
   agentObservation,
   agentState,
   blockPosition,
+  civilizationPolicyContext,
+  civilizationObservation,
+  decideCivilization,
+  materialStack,
   currentKnowledge,
   decide,
   decidePolicyReplayV1,
@@ -27,6 +32,8 @@ import {
   worldBorder,
 } from '@arena/core';
 import {
+  type ControlCapability,
+  decodeControlEnvelope,
   decodeControlFrame,
   encodeControlFrame,
   type ControlMessage,
@@ -34,7 +41,7 @@ import {
 import { canonicalJson } from '../src/canonical.js';
 import { RunnerError } from '../src/errors.js';
 import { createRunDirectory, readOwnedFile } from '../src/owned-files/index.js';
-import { makePolicyEffectRecord, replayPolicyJson } from '../src/policy-replay.js';
+import { makeCivilizationPolicyReplayRecord, makeCivilizationPolicyEffectRecord, normalizeCivilizationPolicyReplayInput, makePolicyEffectRecord, replayPolicyJson } from '../src/policy-replay.js';
 import { parseSegment } from '../src/trace.js';
 import { failureArtifactPath, parseOperationalFailureArtifact, readOperationalFailureArtifact } from '../src/runtime/failure-artifact.js';
 import { RuntimeTraceBuilder } from '../src/runtime/trace.js';
@@ -453,13 +460,13 @@ async function readTestRootForTrace(t: TestContext): Promise<Buffer> {
   return Buffer.from(root, 'utf8');
 }
 
-async function authenticatedSession(t: TestContext): Promise<Readonly<{
+async function authenticatedSession(t: TestContext, capabilities: readonly ControlCapability[] = CAPABILITIES): Promise<Readonly<{
   session: ControlSession;
   client: Socket;
   token: string;
 }>> {
   const token = createControlToken();
-  const listener = await bindControlListener({ runId: RUN_ID, token, capabilities: CAPABILITIES });
+  const listener = await bindControlListener({ runId: RUN_ID, token, capabilities });
   const client = createConnection({ host: '127.0.0.1', port: listener.address.port });
   const reader = new TestFrameReader(client);
   let session: ControlSession | undefined;
@@ -476,13 +483,14 @@ async function authenticatedSession(t: TestContext): Promise<Readonly<{
     run_id: RUN_ID,
     sequence: 1n,
     type: 'hello',
-    payload: { token, capabilities: CAPABILITIES },
+    payload: { token, capabilities },
   }));
   const acknowledgment = decodeControlFrame(await reader.readFrame());
   assert.equal(acknowledgment.type, 'ack');
   if (acknowledgment.type !== 'ack') throw new Error('expected hello acknowledgment');
   client.write(frame({
     ...readyEnvelope(),
+    payload: { ...readyEnvelope().payload, capabilities },
     correlation: acknowledgment.sequence,
   }));
   session = await accepting;
@@ -494,10 +502,11 @@ async function beginOneSeatRun(
   session: ControlSession,
   client: Socket,
   seats = 1,
+  payload = preparePayload(seats),
 ): Promise<AsyncGenerator<ControlMessage>> {
   await trace.recordReady(session.ready);
   const messages = session.messages();
-  const prepare = await session.send({ type: 'prepare', payload: preparePayload(seats) });
+  const prepare = await session.send({ type: 'prepare', payload });
   await trace.recordRunnerCommand(prepare);
   client.write(frame({
     protocol: 1,
@@ -717,3 +726,37 @@ function prepareEnvelope(): Extract<ControlMessage, { readonly type: 'prepare' }
 function frame(message: ControlMessage): Buffer {
   return Buffer.from(encodeControlFrame(message));
 }
+
+test('civilization trace checkpoints pending effects and joins cancellation after outcome', async (t) => {
+  const { session, client } = await authenticatedSession(t, ['civilization_v1']);
+  const { trace, ownedRoot } = await createTrace(t);
+  const fixture = decodeControlEnvelope(readFileSync(join(repositoryRoot, 'fixtures/protocol/control-prepare-civilization.json')));
+  if (fixture.type !== 'prepare') throw new Error('prepare fixture required');
+  const messages = await beginOneSeatRun(trace, session, client, 6, fixture.payload);
+  const context = civilizationPolicyContext({ seat: 0, faction: 'ember', role: 'gatherer_crafter', objective: {
+    captureBox: { min: blockPosition(10, 64, 10), max: blockPosition(12, 66, 12) },
+    outpost: { blueprintId: 'oak-outpost-v1', anchor: blockPosition(30, 64, 30), rotationDegrees: 0 },
+  } });
+  const hg = policyDecisionRecord(1n);
+  const restored = rehydratePolicyReplayInput(hg.input);
+  const observation = civilizationObservation({ base: restored.observation,
+    ownMaterials: currentKnowledge([materialStack(9, 'oak_log', 4)]), observedResources: currentKnowledge([]), teamMessages: [] }, context);
+  const params = PolicyParams.baseline();
+  const memory = emptyPolicyMemory();
+  const random = DeterministicRandom.fromState(123n);
+  const input = normalizeCivilizationPolicyReplayInput({ context, observation, memory, feedback: [], params, random });
+  const decision = decideCivilization(context, observation, memory, params, random, []);
+  const record = makeCivilizationPolicyReplayRecord({ sequence: 1n, seat: 0, input, decision,
+    rngStateAfter: random.snapshotState(), disposition: { kind: 'start', action_sequence: '1' } });
+  await trace.recordPolicyDecision(record);
+  await trace.checkpoint(200);
+  await endOneSeatRun(trace, session, client, messages, 7n, [0, 1, 2, 3, 4, 5]);
+  await trace.recordPolicyEffect(makeCivilizationPolicyEffectRecord(1n, { kind: 'cancelled', reason: 'shutdown' }, []));
+  const finalized = await trace.finalize();
+  assert.equal(finalized.segments.length, 2);
+  const last = finalized.segments[1]!;
+  const bytes = await readOwnedFile({ helperPath, ownedRoot, relativePath: last.relativePath, maxBytes: last.byteLength });
+  const records = parseSegment(bytes).records;
+  assert.equal(records.at(-2)?.type, 'outcome');
+  assert.equal(records.at(-1)?.schema, 'civilization-policy-effect-v1');
+});

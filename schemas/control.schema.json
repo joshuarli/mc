@@ -10,7 +10,7 @@
     "run_id": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$", "not": { "pattern": "[\\r\\n\\u2028\\u2029]" } },
     "sequence": { "$ref": "#/$defs/positive_u64" },
     "correlation": { "$ref": "#/$defs/positive_u64" },
-    "type": { "enum": ["hello", "ready", "heartbeat", "build_progress", "prepare", "start", "abort", "public_clock", "public_state", "elimination", "outcome", "metrics", "ack", "error"] },
+    "type": { "enum": ["hello", "ready", "heartbeat", "build_progress", "prepare", "start", "abort", "public_clock", "public_state", "elimination", "civilization_state", "outcome", "metrics", "ack", "error"] },
     "payload": { "type": "object" }
   },
   "allOf": [
@@ -30,6 +30,7 @@
         { "properties": { "type": { "const": "public_clock" }, "payload": { "$ref": "#/$defs/public_clock_payload" } }, "required": ["type", "payload"] },
         { "properties": { "type": { "const": "public_state" }, "payload": { "$ref": "#/$defs/public_state_payload" } }, "required": ["type", "payload"] },
         { "properties": { "type": { "const": "elimination" }, "payload": { "$ref": "#/$defs/elimination_payload" } }, "required": ["type", "payload"] },
+        { "properties": { "type": { "const": "civilization_state" }, "payload": { "$ref": "#/$defs/civilization_state_payload" } }, "required": ["type", "payload"] },
         { "properties": { "type": { "const": "outcome" }, "payload": { "$ref": "#/$defs/outcome_payload" } }, "required": ["type", "payload"] },
         { "properties": { "type": { "const": "metrics" }, "payload": { "$ref": "#/$defs/metrics_payload" } }, "required": ["type", "payload"] },
         { "properties": { "type": { "const": "ack" }, "payload": { "$ref": "#/$defs/empty_payload" } }, "required": ["type", "payload"] },
@@ -50,7 +51,7 @@
         { "not": { "const": "0" } }
       ]
     },
-    "capability": { "const": "hunger_games_v1" },
+    "capability": { "enum": ["hunger_games_v1", "civilization_v1"] },
     "abort_reason": { "enum": ["operator", "lease_lost", "invalid_world", "protocol_error", "runtime_timeout"] },
     "tick": {
       "type": "object",
@@ -58,6 +59,15 @@
       "required": ["domain", "value"],
       "properties": {
         "domain": { "enum": ["countdown", "match"] },
+        "value": { "$ref": "#/$defs/u64" }
+      }
+    },
+    "match_tick": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["domain", "value"],
+      "properties": {
+        "domain": { "const": "match" },
         "value": { "$ref": "#/$defs/u64" }
       }
     },
@@ -75,7 +85,7 @@
       "required": ["token", "capabilities"],
       "properties": {
         "token": { "type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[A-Za-z0-9_-]+$", "not": { "pattern": "[\\r\\n\\u2028\\u2029]" } },
-        "capabilities": { "type": "array", "minItems": 1, "maxItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/capability" } }
+        "capabilities": { "type": "array", "minItems": 1, "maxItems": 2, "uniqueItems": true, "items": { "$ref": "#/$defs/capability" } }
       }
     },
     "ready_payload": {
@@ -103,7 +113,7 @@
             "version": { "type": "string", "minLength": 1, "maxLength": 128 }
           }
         },
-        "capabilities": { "type": "array", "minItems": 1, "maxItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/capability" } }
+        "capabilities": { "type": "array", "minItems": 1, "maxItems": 2, "uniqueItems": true, "items": { "$ref": "#/$defs/capability" } }
       }
     },
     "build_progress_payload": {
@@ -154,7 +164,163 @@
         "final_diameter_blocks": { "type": "number", "exclusiveMinimum": 0 }
       }
     },
+    "civilization_match_settings": {
+      "allOf": [
+        { "$ref": "#/$defs/match_settings" },
+        {
+          "properties": {
+            "grace_ticks": { "const": "2400" },
+            "authoritative_max_ticks": { "const": "18000" },
+            "respawn": { "const": false },
+            "block_breaking": { "const": true },
+            "block_placing": { "const": true }
+          }
+        }
+      ]
+    },
+    "fixed_border_settings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "diameter_blocks"],
+      "properties": {
+        "kind": { "const": "fixed" },
+        "diameter_blocks": { "const": 192 }
+      }
+    },
+    "block_position": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y", "z"],
+      "properties": {
+        "x": { "type": "integer", "minimum": 0 },
+        "y": { "type": "integer", "minimum": 0 },
+        "z": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "ember_faction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "members"],
+      "properties": {
+        "id": { "const": "ember" },
+        "members": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "prefixItems": [
+            { "type": "object", "additionalProperties": false, "required": ["seat", "role"], "properties": { "seat": { "const": 0 }, "role": { "const": "gatherer_crafter" } } },
+            { "type": "object", "additionalProperties": false, "required": ["seat", "role"], "properties": { "seat": { "const": 1 }, "role": { "const": "builder" } } },
+            { "type": "object", "additionalProperties": false, "required": ["seat", "role"], "properties": { "seat": { "const": 2 }, "role": { "const": "defender_scout" } } }
+          ],
+          "items": false
+        }
+      }
+    },
+    "tide_faction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "members"],
+      "properties": {
+        "id": { "const": "tide" },
+        "members": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "prefixItems": [
+            { "type": "object", "additionalProperties": false, "required": ["seat", "role"], "properties": { "seat": { "const": 3 }, "role": { "const": "gatherer_crafter" } } },
+            { "type": "object", "additionalProperties": false, "required": ["seat", "role"], "properties": { "seat": { "const": 4 }, "role": { "const": "builder" } } },
+            { "type": "object", "additionalProperties": false, "required": ["seat", "role"], "properties": { "seat": { "const": 5 }, "role": { "const": "defender_scout" } } }
+          ],
+          "items": false
+        }
+      }
+    },
+    "civilization_item_stack": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["item", "count"],
+      "properties": {
+        "item": { "enum": ["minecraft:bread", "minecraft:wooden_axe", "minecraft:wooden_pickaxe", "minecraft:wooden_sword"] },
+        "count": { "type": "integer", "minimum": 1, "maximum": 64 }
+      }
+    },
+    "civilization_factions": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "prefixItems": [{ "$ref": "#/$defs/ember_faction" }, { "$ref": "#/$defs/tide_faction" }],
+      "items": false
+    },
+    "civilization_starting_kit": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "prefixItems": [
+        { "const": { "item": "minecraft:bread", "count": 4 } },
+        { "const": { "item": "minecraft:wooden_axe", "count": 1 } },
+        { "const": { "item": "minecraft:wooden_pickaxe", "count": 1 } },
+        { "const": { "item": "minecraft:wooden_sword", "count": 1 } }
+      ],
+      "items": false
+    },
+    "capture_zone": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["min", "max", "uncontested_ticks", "score_points_per_tick"],
+      "properties": {
+        "min": { "$ref": "#/$defs/block_position" },
+        "max": { "$ref": "#/$defs/block_position" },
+        "uncontested_ticks": { "const": 200 },
+        "score_points_per_tick": { "const": 1 }
+      }
+    },
+    "civilization_blueprint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "anchors"],
+      "properties": {
+        "id": { "const": "oak-outpost-v1" },
+        "anchors": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["ember", "tide"],
+          "properties": {
+            "ember": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["position", "rotation_degrees"],
+              "properties": { "position": { "$ref": "#/$defs/block_position" }, "rotation_degrees": { "const": 0 }
+              }
+            },
+            "tide": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["position", "rotation_degrees"],
+              "properties": { "position": { "$ref": "#/$defs/block_position" }, "rotation_degrees": { "const": 180 }
+              }
+            }
+          }
+        }
+      }
+    },
+    "civilization_settings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["factions", "starting_kit", "capture_zone", "blueprint"],
+      "properties": {
+        "factions": { "$ref": "#/$defs/civilization_factions" },
+        "starting_kit": { "$ref": "#/$defs/civilization_starting_kit" },
+        "capture_zone": { "$ref": "#/$defs/capture_zone" },
+        "blueprint": { "$ref": "#/$defs/civilization_blueprint" }
+      }
+    },
     "prepare_payload": {
+      "oneOf": [
+        { "$ref": "#/$defs/hunger_games_prepare_payload" },
+        { "$ref": "#/$defs/civilization_prepare_payload" }
+      ]
+    },
+    "hunger_games_prepare_payload": {
       "type": "object",
       "additionalProperties": false,
       "required": ["map_semantic_id", "scenario_semantic_id", "seed", "mode", "settings", "roster"],
@@ -172,13 +338,48 @@
             "border": { "$ref": "#/$defs/border_settings" }
           }
         },
-        "roster": {
-          "type": "array",
-          "minItems": 1,
-          "maxItems": 6,
-          "items": { "$ref": "#/$defs/bot" }
-        }
+        "roster": { "$ref": "#/$defs/bot_roster" }
       }
+    },
+    "civilization_prepare_payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["map_semantic_id", "scenario_semantic_id", "seed", "mode", "settings", "roster"],
+      "properties": {
+        "map_semantic_id": { "type": "string", "pattern": "^[0-9a-f]{64}$", "not": { "pattern": "[\\r\\n\\u2028\\u2029]" } },
+        "scenario_semantic_id": { "type": "string", "pattern": "^[0-9a-f]{64}$", "not": { "pattern": "[\\r\\n\\u2028\\u2029]" } },
+        "seed": { "$ref": "#/$defs/u64" },
+        "mode": { "const": "civilization" },
+        "settings": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["match", "border", "civilization"],
+          "properties": {
+            "match": { "$ref": "#/$defs/civilization_match_settings" },
+            "border": { "$ref": "#/$defs/fixed_border_settings" },
+            "civilization": { "$ref": "#/$defs/civilization_settings" }
+          }
+        },
+        "roster": { "$ref": "#/$defs/civilization_bot_roster" }
+      }
+    },
+    "bot_roster": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 6,
+      "items": { "$ref": "#/$defs/bot" }
+    },
+    "civilization_bot_roster": {
+      "allOf": [
+        { "$ref": "#/$defs/bot_roster" },
+        { "minItems": 6, "maxItems": 6 },
+        { "contains": { "properties": { "seat": { "const": 0 } }, "required": ["seat"] }, "minContains": 1, "maxContains": 1 },
+        { "contains": { "properties": { "seat": { "const": 1 } }, "required": ["seat"] }, "minContains": 1, "maxContains": 1 },
+        { "contains": { "properties": { "seat": { "const": 2 } }, "required": ["seat"] }, "minContains": 1, "maxContains": 1 },
+        { "contains": { "properties": { "seat": { "const": 3 } }, "required": ["seat"] }, "minContains": 1, "maxContains": 1 },
+        { "contains": { "properties": { "seat": { "const": 4 } }, "required": ["seat"] }, "minContains": 1, "maxContains": 1 },
+        { "contains": { "properties": { "seat": { "const": 5 } }, "required": ["seat"] }, "minContains": 1, "maxContains": 1 }
+      ]
     },
     "abort_payload": {
       "type": "object",
@@ -203,6 +404,30 @@
       "properties": {
         "at": { "$ref": "#/$defs/tick" },
         "alive_seats": { "$ref": "#/$defs/seat_list" }
+      }
+    },
+    "faction_id": { "enum": ["ember", "tide"] },
+    "faction_scores": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "prefixItems": [
+        { "type": "object", "additionalProperties": false, "required": ["faction_id", "points"], "properties": { "faction_id": { "const": "ember" }, "points": { "$ref": "#/$defs/u64" } } },
+        { "type": "object", "additionalProperties": false, "required": ["faction_id", "points"], "properties": { "faction_id": { "const": "tide" }, "points": { "$ref": "#/$defs/u64" } } }
+      ],
+      "items": false
+    },
+    "civilization_state_payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["at", "occupants", "owner_faction", "challenger_faction", "capture_progress_ticks", "scores"],
+      "properties": {
+        "at": { "$ref": "#/$defs/match_tick" },
+        "occupants": { "$ref": "#/$defs/seat_list" },
+        "owner_faction": { "oneOf": [{ "$ref": "#/$defs/faction_id" }, { "type": "null" }] },
+        "challenger_faction": { "oneOf": [{ "$ref": "#/$defs/faction_id" }, { "type": "null" }] },
+        "capture_progress_ticks": { "$ref": "#/$defs/u64" },
+        "scores": { "$ref": "#/$defs/faction_scores" }
       }
     },
     "elimination_payload": {
@@ -238,6 +463,19 @@
         "at": { "$ref": "#/$defs/tick" }
       }
     },
+    "faction_winner_outcome": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "winner_faction_id", "reason", "scores", "survivors", "at"],
+      "properties": {
+        "kind": { "const": "faction_winner" },
+        "winner_faction_id": { "$ref": "#/$defs/faction_id" },
+        "reason": { "enum": ["elimination", "tick_limit"] },
+        "scores": { "$ref": "#/$defs/faction_scores" },
+        "survivors": { "type": "array", "minItems": 1, "maxItems": 6, "items": { "$ref": "#/$defs/seat" }, "uniqueItems": true },
+        "at": { "$ref": "#/$defs/match_tick" }
+      }
+    },
     "draw_outcome": {
       "type": "object",
       "additionalProperties": false,
@@ -247,6 +485,18 @@
         "reason": { "enum": ["no_survivors", "tick_limit"] },
         "survivors": { "$ref": "#/$defs/seat_list" },
         "at": { "$ref": "#/$defs/tick" }
+      }
+    },
+    "civilization_draw_outcome": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "reason", "scores", "survivors", "at"],
+      "properties": {
+        "kind": { "const": "draw" },
+        "reason": { "enum": ["no_survivors", "tick_limit"] },
+        "scores": { "$ref": "#/$defs/faction_scores" },
+        "survivors": { "$ref": "#/$defs/seat_list" },
+        "at": { "$ref": "#/$defs/match_tick" }
       }
     },
     "abort_outcome": {
@@ -263,7 +513,9 @@
     "outcome_payload": {
       "oneOf": [
         { "$ref": "#/$defs/winner_outcome" },
+        { "$ref": "#/$defs/faction_winner_outcome" },
         { "$ref": "#/$defs/draw_outcome" },
+        { "$ref": "#/$defs/civilization_draw_outcome" },
         { "$ref": "#/$defs/abort_outcome" }
       ]
     },

@@ -1,4 +1,14 @@
 import {
+  civilizationObservation,
+  civilizationPolicyContext,
+  decideCivilization,
+  normalizePolicyReplayInput,
+  type CivilizationDecision,
+  type CivilizationObservation,
+  type CivilizationObservationInput,
+  type CivilizationPolicyContext,
+  type CivilizationPolicyContextInput,
+  type PolicyReplayInputSource,
   decide,
   decidePolicyReplayV1,
   rehydratePolicyReplayInput,
@@ -47,7 +57,20 @@ export interface PolicyReplayRecordV2 extends Omit<PolicyReplayRecordV1, 'schema
   readonly disposition: PolicyDisposition;
 }
 
-export type PolicyReplayRecord = PolicyReplayRecordV1 | PolicyReplayRecordV2;
+export interface CivilizationPolicyReplayInputV1 {
+  readonly schema: 'civilization-policy-input-v1';
+  readonly context: CivilizationPolicyContextInput;
+  readonly base: PolicyReplayInputV2;
+  readonly observation: Omit<CivilizationObservationInput, 'base'>;
+}
+
+export interface CivilizationPolicyReplayRecordV1 extends Omit<PolicyReplayRecordV2, 'schema' | 'input' | 'decision'> {
+  readonly schema: 'civilization-policy-replay-v1';
+  readonly input: CivilizationPolicyReplayInputV1;
+  readonly decision: CivilizationDecision;
+}
+
+export type PolicyReplayRecord = PolicyReplayRecordV1 | PolicyReplayRecordV2 | CivilizationPolicyReplayRecordV1;
 
 export interface PolicyPathPoint {
   /** Pathfinder may place a waypoint at a fractional block coordinate. */
@@ -66,6 +89,69 @@ export interface PolicyEffectRecordV1 {
   readonly decision_sequence: string;
   readonly skill: SkillOutcome;
   readonly path_updates: readonly PolicyPathUpdate[];
+}
+
+export interface CivilizationPolicyEffectRecordV1 extends Omit<PolicyEffectRecordV1, 'schema'> {
+  readonly schema: 'civilization-policy-effect-v1';
+}
+
+export type PolicyEffectRecord = PolicyEffectRecordV1 | CivilizationPolicyEffectRecordV1;
+
+/** Civilization observations extend a validated survival replay input without changing its format. */
+export function normalizeCivilizationPolicyReplayInput(source: Readonly<
+  Omit<PolicyReplayInputSource, 'observation'> & {
+    context: CivilizationPolicyContext;
+    observation: CivilizationObservation;
+  }
+>): CivilizationPolicyReplayInputV1 {
+  const context = civilizationPolicyContext({ seat: source.context.seat, faction: source.context.faction,
+    role: source.context.role, objective: source.context.objective });
+  const observation = civilizationObservation({ base: source.observation.base,
+    ownMaterials: source.observation.ownMaterials, observedResources: source.observation.observedResources,
+    teamMessages: source.observation.teamMessages }, context);
+  return Object.freeze({
+    schema: 'civilization-policy-input-v1',
+    context: Object.freeze({ seat: context.seat, faction: context.faction, role: context.role, objective: context.objective }),
+    base: normalizePolicyReplayInput({ ...source, observation: observation.base }),
+    observation: Object.freeze({ ownMaterials: observation.ownMaterials,
+      observedResources: observation.observedResources, teamMessages: observation.teamMessages }),
+  });
+}
+
+export function makeCivilizationPolicyReplayRecord(options: Readonly<{
+  sequence: bigint;
+  seat: number;
+  input: CivilizationPolicyReplayInputV1;
+  decision: CivilizationDecision;
+  rngStateAfter: bigint;
+  disposition: PolicyDisposition;
+}>): CivilizationPolicyReplayRecordV1 {
+  assertSequence(options.sequence, 'sequence');
+  assertSeat(options.seat);
+  assertU64(options.rngStateAfter, 'rng_state_after');
+  const disposition = readDisposition(options.disposition, undefined);
+  const record: CivilizationPolicyReplayRecordV1 = Object.freeze({
+    schema: 'civilization-policy-replay-v1', sequence: options.sequence.toString(), seat: options.seat,
+    input: options.input, decision: options.decision, rng_state_after: options.rngStateAfter.toString(), disposition,
+  });
+  if (options.input.schema !== 'civilization-policy-input-v1' || options.input.context.seat !== options.seat) {
+    throw new TypeError('civilization replay input must match its decision seat and namespace');
+  }
+  if ((disposition.kind === 'hold') !== (record.decision.intent.kind === 'hold') && disposition.kind !== 'defer') {
+    throw new TypeError('civilization hold disposition must describe a hold intent');
+  }
+  if ((disposition.kind === 'start' || disposition.kind === 'replace') && disposition.action_sequence !== record.sequence) {
+    throw new TypeError('action identity must match its initiating decision');
+  }
+  return record;
+}
+
+export function makeCivilizationPolicyEffectRecord(
+  decisionSequence: bigint,
+  skill: SkillOutcome,
+  pathUpdates: readonly PolicyPathUpdate[],
+): CivilizationPolicyEffectRecordV1 {
+  return Object.freeze({ ...makePolicyEffectRecord(decisionSequence, skill, pathUpdates), schema: 'civilization-policy-effect-v1' });
 }
 
 export interface PolicyReplaySummary {
@@ -125,7 +211,7 @@ export function replayPolicyJson(evidence: Evidence): PolicyReplaySummary {
   const decisions = new Map<string, PolicyReplayRecord>();
   const activeActions = new Map<number, string>();
   const actionOwners = new Map<string, number>();
-  const preparedSeats = readPreparedSeats(evidence);
+  const prepared = readPreparedContext(evidence);
   let previousSequence = 0n;
   let firstSequence: string | undefined;
   let lastSequence: string | undefined;
@@ -134,10 +220,13 @@ export function replayPolicyJson(evidence: Evidence): PolicyReplaySummary {
   const effects = new Set<string>();
 
   for (const [index, record] of evidence.records.entries()) {
-    if (record.schema === 'policy-replay-v1' || record.schema === 'policy-replay-v2') {
+    if (record.schema === 'policy-replay-v1' || record.schema === 'policy-replay-v2' || record.schema === 'civilization-policy-replay-v1') {
       const decision = readPolicyDecision(record, index + 1);
-      if (preparedSeats !== undefined && !preparedSeats.has(decision.seat)) {
+      if (prepared !== undefined && !prepared.seats.has(decision.seat)) {
         throw replayFailure('policy_seat_not_in_roster', index + 1, 'seat');
+      }
+      if (prepared !== undefined && (decision.schema === 'civilization-policy-replay-v1') !== (prepared.mode === 'civilization')) {
+        throw replayFailure('policy_namespace_mode_mismatch', index + 1, 'schema');
       }
       const sequence = BigInt(decision.sequence);
       if (sequence <= previousSequence) throw replayFailure('policy_sequence_not_increasing', index + 1, 'sequence');
@@ -145,13 +234,13 @@ export function replayPolicyJson(evidence: Evidence): PolicyReplaySummary {
       firstSequence ??= decision.sequence;
       lastSequence = decision.sequence;
       replayDecision(decision, index + 1);
-      if (decision.schema === 'policy-replay-v2') {
+      if (decision.schema !== 'policy-replay-v1') {
         validateActionDecision(decision, activeActions, actionOwners, effects, index + 1);
       } else if (decision.decision.intent.kind !== 'hold') {
         actionOwners.set(decision.sequence, decision.seat);
       }
       decisions.set(decision.sequence, decision);
-    } else if (record.schema === 'policy-effect-v1') {
+    } else if (record.schema === 'policy-effect-v1' || record.schema === 'civilization-policy-effect-v1') {
       const effect = readPolicyEffect(record, index + 1);
       if (!decisions.has(effect.decision_sequence)) {
         throw replayFailure('unmatched_policy_effect', index + 1, 'decision_sequence');
@@ -160,21 +249,29 @@ export function replayPolicyJson(evidence: Evidence): PolicyReplaySummary {
         throw replayFailure('duplicate_policy_effect', index + 1, 'decision_sequence');
       }
       const initiator = decisions.get(effect.decision_sequence)!;
-      if (initiator.schema === 'policy-replay-v2' && (effect.skill.kind === 'pending' || effect.skill.kind === 'progress')) {
+      if ((initiator.schema === 'civilization-policy-replay-v1') !== (effect.schema === 'civilization-policy-effect-v1')) {
+        throw replayFailure('policy_effect_namespace_mismatch', index + 1, 'schema');
+      }
+      if (initiator.schema !== 'policy-replay-v1' && (effect.skill.kind === 'pending' || effect.skill.kind === 'progress')) {
         throw replayFailure('nonterminal_policy_effect', index + 1, 'skill');
       }
-      if (initiator.schema === 'policy-replay-v2' && !actionOwners.has(effect.decision_sequence)) {
+      if (initiator.schema !== 'policy-replay-v1' && !actionOwners.has(effect.decision_sequence)) {
         throw replayFailure('policy_effect_without_action', index + 1, 'decision_sequence');
       }
       effects.add(effect.decision_sequence);
       if (activeActions.get(initiator.seat) === effect.decision_sequence) activeActions.delete(initiator.seat);
       effectCount += 1;
       pathUpdateCount += effect.path_updates.length;
-    } else if (typeof record.schema === 'string' && record.schema.startsWith('policy-')) {
+    } else if (typeof record.schema === 'string' && (record.schema.startsWith('policy-') || record.schema.startsWith('civilization-policy-'))) {
       throw replayFailure('unsupported_policy_schema', index + 1, 'schema');
     }
   }
 
+  const hasTerminalOutcome = evidence.records.some((record) => record.direction === 'plugin' && record.type === 'outcome');
+  if (hasTerminalOutcome && [...actionOwners.keys()].some((sequence) =>
+      decisions.get(sequence)?.schema === 'civilization-policy-replay-v1' && !effects.has(sequence))) {
+    throw replayFailure('policy_skill_result_pending');
+  }
   if (firstSequence === undefined || lastSequence === undefined) throw replayFailure('policy_records_missing');
   return {
     schema: 1,
@@ -187,8 +284,8 @@ export function replayPolicyJson(evidence: Evidence): PolicyReplaySummary {
   };
 }
 
-function readPreparedSeats(evidence: Evidence): ReadonlySet<number> | undefined {
-  let seats: ReadonlySet<number> | undefined;
+function readPreparedContext(evidence: Evidence): { readonly seats: ReadonlySet<number>; readonly mode: 'hunger_games' | 'civilization' } | undefined {
+  let prepared: { readonly seats: ReadonlySet<number>; readonly mode: 'hunger_games' | 'civilization' } | undefined;
   for (const [index, record] of evidence.records.entries()) {
     if (record.direction !== 'runner' || record.type !== 'prepare') continue;
     const envelope: Record<string, unknown> = {};
@@ -205,13 +302,45 @@ function readPreparedSeats(evidence: Evidence): ReadonlySet<number> | undefined 
     if (message.type !== 'prepare' || message.run_id !== evidence.run_id) {
       throw replayFailure('invalid_policy_prepare', index + 1);
     }
-    if (seats !== undefined) throw replayFailure('duplicate_policy_prepare', index + 1);
-    seats = new Set(message.payload.roster.map((competitor) => competitor.seat));
+    if (prepared !== undefined) throw replayFailure('duplicate_policy_prepare', index + 1);
+    prepared = { seats: new Set(message.payload.roster.map((competitor) => competitor.seat)), mode: message.payload.mode };
   }
-  return seats;
+  return prepared;
 }
 
 function replayDecision(record: PolicyReplayRecord, recordNumber: number): void {
+  if (record.schema === 'civilization-policy-replay-v1') {
+    const input = strictObject(record.input);
+    if (input === undefined || input.schema !== 'civilization-policy-input-v1') {
+      throw replayFailure('invalid_policy_input_schema', recordNumber, 'input.schema');
+    }
+    assertExactFields(input, ['schema', 'context', 'base', 'observation'], recordNumber, 'input');
+    let actual: CivilizationDecision;
+    let state: bigint;
+    try {
+      const base = rehydratePolicyReplayInput(input.base);
+      if (base.schema !== 'policy-input-v2') throw replayFailure('invalid_policy_input_schema', recordNumber, 'input.base.schema');
+      const context = civilizationPolicyContext(input.context as CivilizationPolicyContextInput);
+      if (context.seat !== record.seat) throw replayFailure('policy_context_seat_mismatch', recordNumber, 'input.context.seat');
+      const extension = strictObject(input.observation);
+      if (extension === undefined) throw replayFailure('invalid_policy_input', recordNumber, 'input.observation');
+      assertExactFields(extension, ['ownMaterials', 'observedResources', 'teamMessages'], recordNumber, 'input.observation');
+      const observation = civilizationObservation({
+        base: base.observation,
+        ownMaterials: extension.ownMaterials as CivilizationObservationInput['ownMaterials'],
+        observedResources: extension.observedResources as CivilizationObservationInput['observedResources'],
+        teamMessages: extension.teamMessages as CivilizationObservationInput['teamMessages'],
+      }, context);
+      actual = decideCivilization(context, observation, base.memory, base.params, base.random, base.feedback);
+      state = base.random.snapshotState();
+    } catch (error) {
+      if (error instanceof TraceError) throw error;
+      throw replayFailure('invalid_policy_input', recordNumber, 'input');
+    }
+    if (canonicalJson(actual) !== canonicalJson(record.decision)) throw replayFailure('policy_decision_mismatch', recordNumber, 'decision');
+    if (state !== parseU64Decimal(record.rng_state_after, recordNumber)) throw replayFailure('policy_rng_state_mismatch', recordNumber, 'rng_state_after');
+    return;
+  }
   let restored: ReturnType<typeof rehydratePolicyReplayInput>;
   try {
     restored = rehydratePolicyReplayInput(record.input);
@@ -238,7 +367,7 @@ function replayDecision(record: PolicyReplayRecord, recordNumber: number): void 
 }
 
 function readPolicyDecision(record: TraceRecord, recordNumber: number): PolicyReplayRecord {
-  const isV2 = record.schema === 'policy-replay-v2';
+  const isV2 = record.schema === 'policy-replay-v2' || record.schema === 'civilization-policy-replay-v1';
   assertExactFields(record, isV2 ? [...POLICY_DECISION_FIELDS, 'disposition'] : POLICY_DECISION_FIELDS, recordNumber);
   const sequence = parseSequence(record.sequence, 'sequence', recordNumber).toString(10);
   if (typeof record.seat !== 'number' || !Number.isSafeInteger(record.seat) || record.seat < 0 || record.seat > 255) {
@@ -256,11 +385,15 @@ function readPolicyDecision(record: TraceRecord, recordNumber: number): PolicyRe
     decision: record.decision as unknown as DecisionV1,
     rng_state_after: record.rng_state_after,
   };
+  if (record.schema === 'civilization-policy-replay-v1') {
+    return { ...base, schema: 'civilization-policy-replay-v1', input: record.input as unknown as CivilizationPolicyReplayInputV1,
+      decision: record.decision as unknown as CivilizationDecision, disposition: readDisposition(record.disposition, recordNumber) };
+  }
   return isV2 ? { ...base, input: record.input as unknown as PolicyReplayInputV2, decision: record.decision as unknown as Decision, schema: 'policy-replay-v2', disposition: readDisposition(record.disposition, recordNumber) } : base;
 }
 
 function validateActionDecision(
-  record: PolicyReplayRecordV2,
+  record: PolicyReplayRecordV2 | CivilizationPolicyReplayRecordV1,
   active: Map<number, string>,
   owners: Map<string, number>,
   effects: ReadonlySet<string>,
@@ -319,7 +452,7 @@ function readDisposition(value: unknown, recordNumber: number | undefined): Poli
   }
 }
 
-function readPolicyEffect(record: TraceRecord, recordNumber: number): PolicyEffectRecordV1 {
+function readPolicyEffect(record: TraceRecord, recordNumber: number): PolicyEffectRecord {
   assertExactFields(record, POLICY_EFFECT_FIELDS, recordNumber);
   const decisionSequence = parseSequence(record.decision_sequence, 'decision_sequence', recordNumber).toString(10);
   const skill = readSkillOutcome(record.skill, recordNumber);
@@ -328,7 +461,7 @@ function readPolicyEffect(record: TraceRecord, recordNumber: number): PolicyEffe
   }
   const pathUpdates = record.path_updates.map((update, index) => readPathUpdate(update, recordNumber, index));
   return {
-    schema: 'policy-effect-v1',
+    schema: record.schema === 'civilization-policy-effect-v1' ? 'civilization-policy-effect-v1' : 'policy-effect-v1',
     decision_sequence: decisionSequence,
     skill,
     path_updates: pathUpdates,

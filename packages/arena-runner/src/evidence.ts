@@ -92,6 +92,7 @@ export function reportJson(evidence: Evidence): object {
 
 export function reconstructRunEvidence(evidence: Evidence): ReconstructedRunEvidence {
   let readySeen = false;
+  let civilizationCapability = false;
   let prepare: PreparePayload | undefined;
   let outcomeSeen = false;
   let startSeen = false;
@@ -103,7 +104,8 @@ export function reconstructRunEvidence(evidence: Evidence): ReconstructedRunEvid
 
   for (const [index, record] of evidence.records.entries()) {
     const recordNumber = index + 1;
-    if (record.schema === 'policy-replay-v1' || record.schema === 'policy-replay-v2' || record.schema === 'policy-effect-v1') continue;
+    if (record.schema === 'policy-replay-v1' || record.schema === 'policy-replay-v2' || record.schema === 'policy-effect-v1' || record.schema === 'civilization-policy-replay-v1'
+        || record.schema === 'civilization-policy-effect-v1') continue;
     const direction = record.direction;
     if (direction !== 'runner' && direction !== 'plugin') {
       throw eventRecordFailure('invalid_event_direction', recordNumber);
@@ -132,6 +134,7 @@ export function reconstructRunEvidence(evidence: Evidence): ReconstructedRunEvid
         throw eventRecordFailure('readiness_missing_or_out_of_order', recordNumber);
       }
       readySeen = true;
+      civilizationCapability = message.payload.capabilities.includes('civilization_v1');
       if (message.correlation === undefined) throw eventRecordFailure('invalid_readiness_correlation', recordNumber);
       lastSequence.set('runner', message.correlation);
       lastAcknowledgedRunnerSequence = message.correlation;
@@ -145,6 +148,9 @@ export function reconstructRunEvidence(evidence: Evidence): ReconstructedRunEvid
       if (message.type === 'prepare') {
         if (prepare !== undefined || events.length > 0 || startSeen || abortSeen) {
           throw eventRecordFailure('unexpected_runner_event', recordNumber);
+        }
+        if (message.payload.mode === 'civilization' && !civilizationCapability) {
+          throw eventRecordFailure('unsupported_civilization_capability', recordNumber);
         }
         prepare = message.payload;
         pendingRunnerSequence = message.sequence;
@@ -186,18 +192,18 @@ export function reconstructRunEvidence(evidence: Evidence): ReconstructedRunEvid
     if (message.type === 'heartbeat' || message.type === 'metrics') continue;
     if (prepare === undefined) throw eventRecordFailure('prepare_context_missing', recordNumber);
     const authoritativeEvent = message.type === 'public_clock' || message.type === 'public_state'
-      || message.type === 'elimination' || message.type === 'outcome';
+      || message.type === 'elimination' || message.type === 'civilization_state' || message.type === 'outcome';
     if (authoritativeEvent && pendingRunnerSequence !== undefined) {
       throw eventRecordFailure('event_before_command_acknowledgment', recordNumber);
     }
-    if (message.type === 'public_state' || message.type === 'elimination'
+    if (message.type === 'civilization_state' || message.type === 'public_state' || message.type === 'elimination'
         || (message.type === 'public_clock' && message.payload.phase !== 'waiting' && message.payload.phase !== 'aborted')
         || (message.type === 'outcome' && message.payload.kind !== 'abort')) {
       if (!startSeen) throw eventRecordFailure('event_before_start', recordNumber);
     }
     if (message.type === 'outcome') outcomeSeen = true;
     if (message.type === 'public_clock' || message.type === 'public_state'
-        || message.type === 'elimination' || message.type === 'outcome') {
+        || message.type === 'civilization_state' || message.type === 'elimination' || message.type === 'outcome') {
       events.push(message);
       continue;
     }

@@ -7,7 +7,7 @@ import {
   type FileIdentity,
 } from '../owned-files/index.js';
 import { RunnerError } from '../errors.js';
-import type { PolicyEffectRecordV1, PolicyReplayRecord } from '../policy-replay.js';
+import type { PolicyEffectRecord, PolicyReplayRecord } from '../policy-replay.js';
 import type { PreparedRun } from '../prepare.js';
 import {
   MAX_EVIDENCE_BYTES,
@@ -62,6 +62,8 @@ export class RuntimeTraceBuilder {
   readonly #segments: RuntimeTraceSegment[] = [];
   readonly #records: TraceRecord[] = [];
   readonly #policyDecisionSequences = new Set<string>();
+  readonly #civilizationDecisionSequences = new Set<string>();
+  #mode: 'hunger_games' | 'civilization' | undefined;
   readonly #activePolicyActions = new Map<number, string>();
   readonly #policyActionSeats = new Map<string, number>();
   // An action can still settle after Java publishes the terminal result.
@@ -138,6 +140,7 @@ export class RuntimeTraceBuilder {
           throw new RunnerError('runtime_failure', 'run trace', { kind: 'duplicate_prepare_command' });
         }
         this.#hasPrepare = true;
+        this.#mode = message.payload.mode;
       } else if (message.type === 'start') {
         if (!this.#hasPrepare || this.#hasStart) {
           throw new RunnerError('runtime_failure', 'run trace', { kind: 'invalid_start_command' });
@@ -214,8 +217,11 @@ export class RuntimeTraceBuilder {
       if (this.#hasOutcome) {
         throw new RunnerError('runtime_failure', 'run trace', { kind: 'policy_decision_after_outcome' });
       }
-      if (record.schema !== 'policy-replay-v1' && record.schema !== 'policy-replay-v2') {
+      if (record.schema !== 'policy-replay-v1' && record.schema !== 'policy-replay-v2' && record.schema !== 'civilization-policy-replay-v1') {
         throw new RunnerError('runtime_failure', 'run trace', { kind: 'invalid_policy_decision' });
+      }
+      if ((record.schema === 'civilization-policy-replay-v1') !== (this.#mode === 'civilization')) {
+        throw new RunnerError('runtime_failure', 'run trace', { kind: 'policy_namespace_mode_mismatch' });
       }
       const sequence = parsePolicySequence(record.sequence, 'sequence');
       if (sequence <= this.#lastPolicyDecisionSequence || this.#policyDecisionSequences.has(record.sequence)) {
@@ -247,22 +253,26 @@ export class RuntimeTraceBuilder {
       await this.#append(toTraceRecord(undefined, record));
       this.#lastPolicyDecisionSequence = sequence;
       this.#policyDecisionSequences.add(record.sequence);
+      if (record.schema === 'civilization-policy-replay-v1') this.#civilizationDecisionSequences.add(record.sequence);
     });
   }
 
   /** Records completed skill effects, including late cancellation of an already recorded decision. */
-  recordPolicyEffect(record: PolicyEffectRecordV1): Promise<void> {
+  recordPolicyEffect(record: PolicyEffectRecord): Promise<void> {
     return this.#enqueue(async () => {
       this.#assertMutable();
       if (!this.#hasReady || !this.#hasPrepare) {
         throw new RunnerError('runtime_failure', 'run trace', { kind: 'policy_effect_out_of_order' });
       }
-      if (record.schema !== 'policy-effect-v1') {
+      if (record.schema !== 'policy-effect-v1' && record.schema !== 'civilization-policy-effect-v1') {
         throw new RunnerError('runtime_failure', 'run trace', { kind: 'invalid_policy_effect' });
       }
       parsePolicySequence(record.decision_sequence, 'decision_sequence');
       if (!this.#policyDecisionSequences.has(record.decision_sequence)) {
         throw new RunnerError('runtime_failure', 'run trace', { kind: 'unmatched_policy_effect' });
+      }
+      if ((record.schema === 'civilization-policy-effect-v1') !== this.#civilizationDecisionSequences.has(record.decision_sequence)) {
+        throw new RunnerError('runtime_failure', 'run trace', { kind: 'policy_effect_namespace_mismatch' });
       }
       if (this.#policyEffectSequences.has(record.decision_sequence)) {
         throw new RunnerError('runtime_failure', 'run trace', { kind: 'duplicate_policy_effect' });

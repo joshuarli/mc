@@ -1,0 +1,1 @@
+{"protocol":1,"run_id":"fixture-run","sequence":"10","type":"outcome","payload":{"kind":"draw","reason":"tick_limit","scores":[{"faction_id":"ember","points":"4"},{"faction_id":"tide","points":"4"}],"survivors":[0,3],"at":{"domain":"match","value":"18000"}}}
