@@ -71,9 +71,6 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
     private static final String CONTROL_PORT_PROPERTY = "arena.control-port";
     private static final String RUN_ID_PROPERTY = "arena.run-id";
     private static final String CONTROL_TOKEN_ENV = "ARENA_CONTROL_TOKEN";
-    private static final List<ControlProtocol.Capability> CONTROL_CAPABILITIES = List.of(
-            ControlProtocol.Capability.HUNGER_GAMES_V1,
-            ControlProtocol.Capability.DYNAMIC_HUMAN_SEAT_V1);
     private final Set<UUID> reportedMovement = new HashSet<>();
     private final Map<Integer, UUID> playersBySeat = new HashMap<>();
     private final Map<UUID, Integer> seatsByPlayer = new HashMap<>();
@@ -87,8 +84,6 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
     private String controlToken;
     private ControlProtocol.PreparePayload preparedMatch;
     private MatchController matchController;
-    private boolean startRequested;
-    private boolean humanReady;
     private boolean skipMatchAdvanceThisTick;
     private boolean outcomeEmitted;
     private long lastHeartbeatNanos;
@@ -180,24 +175,6 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
         if (ARENA_WORLD.equals(event.getWorld().getName())) {
             initializeWorld(event.getWorld());
         }
-    }
-
-    @Override
-    public boolean onCommand(org.bukkit.command.CommandSender sender, org.bukkit.command.Command command,
-            String label, String[] args) {
-        if (!"arena".equalsIgnoreCase(command.getName())) {
-            return false;
-        }
-        if (args.length != 1 || !"ready".equalsIgnoreCase(args[0])) {
-            sender.sendMessage("Usage: /arena ready");
-            return true;
-        }
-        if (!(sender instanceof Player player)) {
-            sender.sendMessage("Only a player can claim the reserved arena seat.");
-            return true;
-        }
-        claimHumanSeat(player);
-        return true;
     }
 
     @EventHandler(priority = EventPriority.MONITOR)
@@ -304,6 +281,10 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
             throw new CommandFailure(ControlProtocol.ErrorCode.INVALID_STATE,
                     "prepare requires a ready, unused staged arena world");
         }
+        if (prepare.roster().stream().anyMatch(competitor -> !(competitor instanceof ControlProtocol.BotCompetitor))) {
+            throw new CommandFailure(ControlProtocol.ErrorCode.INVALID_COMMAND,
+                    "headless runtime accepts only configured bot seats");
+        }
         if (!generationPlan.mapSemanticId().equals(prepare.mapSemanticId())) {
             throw new CommandFailure(ControlProtocol.ErrorCode.INVALID_WORLD,
                     "prepare does not identify the staged arena map");
@@ -340,8 +321,6 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
 
         preparedMatch = prepare;
         matchController = controller;
-        startRequested = false;
-        humanReady = false;
         outcomeEmitted = false;
         pendingEliminations.clear();
         playersBySeat.clear();
@@ -354,7 +333,7 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
     }
 
     private void requestMatchStart() {
-        if (matchController == null || preparedMatch == null || startRequested
+        if (matchController == null || preparedMatch == null
                 || matchController.phase() != MatchController.Phase.WAITING) {
             throw new CommandFailure(ControlProtocol.ErrorCode.INVALID_STATE,
                     "start requires one prepared match that has not started");
@@ -363,10 +342,8 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
             throw new CommandFailure(ControlProtocol.ErrorCode.INVALID_STATE,
                     "every configured bot must join before start");
         }
-        startRequested = true;
-        if (!hasHumanSeat() || humanReady) {
-            beginCountdownIfReady();
-        }
+        matchController.startCountdown();
+        skipMatchAdvanceThisTick = true;
     }
 
     private void ensureCanAbort() {
@@ -375,51 +352,13 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
         }
     }
 
-    private void claimHumanSeat(Player player) {
-        if (startupMode != StartupMode.PLAN || matchController == null || !hasHumanSeat()) {
-            player.sendMessage("There is no reserved human seat in this match.");
-            return;
-        }
-        if (outcomeEmitted || matchController.phase() != MatchController.Phase.WAITING) {
-            player.sendMessage("The reserved human seat is already closed.");
-            player.setGameMode(GameMode.SPECTATOR);
-            return;
-        }
-        Integer assignedSeat = seatsByPlayer.get(player.getUniqueId());
-        if (assignedSeat != null) {
-            if (assignedSeat == 0) {
-                player.sendMessage("The reserved human seat is ready.");
-                humanReady = true;
-                if (beginCountdownIfReady()) {
-                    publishMatchStart();
-                }
-                return;
-            }
-            player.sendMessage("Configured bots cannot claim the human seat.");
-            return;
-        }
-        if (humanReady || isConfiguredBotIdentity(player)) {
-            player.sendMessage("The reserved human seat is unavailable to this player.");
-            player.setGameMode(GameMode.SPECTATOR);
-            return;
-        }
-        bindSeat(player, 0);
-        humanReady = true;
-        player.sendMessage("The reserved human seat is ready.");
-        if (beginCountdownIfReady()) {
-            publishMatchStart();
-        }
-    }
-
     private void handlePlanJoin(Player player) {
         if (!worldInitialized) {
+            player.setGameMode(GameMode.SPECTATOR);
             return;
         }
         if (preparedMatch != null && matchController.phase() == MatchController.Phase.WAITING
                 && bindBotIfExpected(player)) {
-            if (beginCountdownIfReady()) {
-                publishMatchStart();
-            }
             return;
         }
         player.setGameMode(GameMode.SPECTATOR);
@@ -458,18 +397,6 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
         player.teleport(new Location(Bukkit.getWorld(ARENA_WORLD), spawn.x() + 0.5, spawn.y(), spawn.z() + 0.5));
     }
 
-    private boolean isConfiguredBotIdentity(Player player) {
-        if (preparedMatch == null) {
-            return false;
-        }
-        return preparedMatch.roster().stream().anyMatch(competitor -> competitor instanceof ControlProtocol.BotCompetitor bot
-                && (bot.offlineUuid().equals(player.getUniqueId()) || bot.username().equals(player.getName())));
-    }
-
-    private boolean hasHumanSeat() {
-        return preparedMatch != null && preparedMatch.roster().getFirst() instanceof ControlProtocol.HumanCompetitor;
-    }
-
     private boolean allConfiguredBotsAreOnline() {
         for (ControlProtocol.Competitor competitor : preparedMatch.roster()) {
             if (competitor instanceof ControlProtocol.BotCompetitor bot
@@ -478,16 +405,6 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
                 return false;
             }
         }
-        return true;
-    }
-
-    private boolean beginCountdownIfReady() {
-        if (!startRequested || matchController == null || matchController.phase() != MatchController.Phase.WAITING
-                || (hasHumanSeat() && !humanReady) || !allConfiguredBotsAreOnline()) {
-            return false;
-        }
-        matchController.startCountdown();
-        skipMatchAdvanceThisTick = true;
         return true;
     }
 
@@ -704,7 +621,7 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
                     new ControlProtocol.ServerIdentity(Bukkit.getName(), Bukkit.getVersion(),
                             Bukkit.getMinecraftVersion(), Bukkit.getUnsafe().getProtocolVersion()),
                     new ControlProtocol.PluginIdentity(getPluginMeta().getName(), getPluginMeta().getVersion()),
-                    CONTROL_CAPABILITIES));
+                    ControlProtocol.Capability.SUPPORTED));
         }
         getLogger().info("ARENA_READY|protocol=775|port=" + Bukkit.getServer().getPort());
     }
@@ -873,9 +790,6 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
         }
         seatsByPlayer.remove(playerId);
         playersBySeat.remove(seat);
-        if (seat == 0 && hasHumanSeat()) {
-            humanReady = false;
-        }
     }
 
     private boolean isArenaChest(Inventory inventory) {

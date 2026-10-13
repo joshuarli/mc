@@ -8,7 +8,6 @@ import java.math.BigInteger;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.Socket;
-import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CountDownLatch;
@@ -127,9 +126,7 @@ final class ControlSession implements AutoCloseable {
             send(output, new ControlProtocol.Envelope(
                     new ControlProtocol.Header(runId, sequence, Optional.empty()),
                     ControlProtocol.Type.HELLO,
-                    new ControlProtocol.HelloPayload(token, List.of(
-                            ControlProtocol.Capability.HUNGER_GAMES_V1,
-                            ControlProtocol.Capability.DYNAMIC_HUMAN_SEAT_V1))));
+                    new ControlProtocol.HelloPayload(token, ControlProtocol.Capability.SUPPORTED)));
             highestSentSequence = sequence;
             long helloDeadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(CONNECT_TIMEOUT_MILLIS);
 

@@ -54,11 +54,10 @@ map setup. It never reconnects. Socket I/O runs off the Paper thread; commands,
 world mutation, elimination resolution, and outcomes run at server tick end.
 
 `prepare` must carry the staged `map_semantic_id`, resolved Hunger Games
-settings, and one to six ordered competitors. Bot seats bind only when both
-offline UUID and username match. A human entry reserves seat zero; the first
-eligible player claims it with `/arena ready`. Later players and competitive
-reconnects after the countdown are spectators. `start` waits for the reserved
-human to claim the seat before starting the countdown. Match configuration
+settings, and one to six ordered bot competitors. Each bot binds only when both
+its offline UUID and username match. Noncompetitor joins are spectators.
+`start` requires every configured bot to be online before the countdown begins;
+competitive reconnects after countdown are spectators. Match configuration
 controls respawn, block breaking and placing, natural mob spawning, random
 block ticks, and the world-border schedule. When respawn is disabled, death
 eliminates the seat and any respawned player remains a spectator. Disconnects
@@ -83,6 +82,8 @@ An abort while waiting has no phase tick. An abort during countdown carries the
 zero-based countdown tick; after release it carries the current match tick.
 World-border interpolation uses match ticks and reaches its configured final
 diameter at `shrink_end_tick`.
+
+The runner may abort with `runtime_timeout` when the operational deadline expires.
 
 The control protocol's versioned payload schema and cross-language fixtures are
 the wire contract. Join and combat log markers remain diagnostic; only typed

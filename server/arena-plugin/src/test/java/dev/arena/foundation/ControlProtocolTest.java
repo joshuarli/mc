@@ -22,12 +22,10 @@ final class ControlProtocolTest {
             "control-heartbeat.json",
             "control-hello.json",
             "control-metrics.json",
-            "control-outcome-abort.json",
             "control-outcome-draw.json",
             "control-outcome-runtime-timeout.json",
             "control-outcome-winner.json",
             "control-prepare-bots.json",
-            "control-prepare-human.json",
             "control-public-clock.json",
             "control-public-state.json",
             "control-ready.json",
@@ -63,13 +61,21 @@ final class ControlProtocolTest {
     }
 
     @Test
-    void retainsTheFullUnsigned64SeedAndTickRange() throws IOException {
-        ControlProtocol.Envelope humanPrepare = ControlProtocol.decodeBody(
-                Files.readAllBytes(fixturePath("control-prepare-human.json")));
-        ControlProtocol.PreparePayload prepare = (ControlProtocol.PreparePayload) humanPrepare.payload();
+    void retainsTheFullUnsigned64SeedForBotRosters() throws IOException {
+        ControlProtocol.Envelope botPrepare = ControlProtocol.decodeBody(
+                Files.readAllBytes(fixturePath("control-prepare-bots.json")));
+        ControlProtocol.PreparePayload original = (ControlProtocol.PreparePayload) botPrepare.payload();
+        ControlProtocol.PreparePayload maxSeed = new ControlProtocol.PreparePayload(
+                original.mapSemanticId(), original.scenarioSemanticId(), ControlProtocol.MAX_U64,
+                original.mode(), original.match(), original.border(), original.roster());
+        byte[] frame = ControlProtocol.encodeFrame(new ControlProtocol.Envelope(
+                botPrepare.header(), ControlProtocol.Type.PREPARE, maxSeed));
+        byte[] body = Arrays.copyOfRange(frame, Integer.BYTES, frame.length);
+        ControlProtocol.PreparePayload decoded = (ControlProtocol.PreparePayload)
+                ControlProtocol.decodeBody(body).payload();
 
-        assertEquals(ControlProtocol.MAX_U64, prepare.seed());
-        assertEquals("human-local", ((ControlProtocol.HumanCompetitor) prepare.roster().getFirst()).participantId());
+        assertEquals(ControlProtocol.MAX_U64, decoded.seed());
+        assertEquals(original.roster(), decoded.roster());
     }
 
     private static Path fixturePath(String filename) {

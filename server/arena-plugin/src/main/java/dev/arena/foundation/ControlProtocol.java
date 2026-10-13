@@ -78,6 +78,8 @@ final class ControlProtocol {
         HUNGER_GAMES_V1("hunger_games_v1"),
         DYNAMIC_HUMAN_SEAT_V1("dynamic_human_seat_v1");
 
+        static final List<Capability> SUPPORTED = List.of(HUNGER_GAMES_V1);
+
         private final String wireName;
 
         Capability(String wireName) {
