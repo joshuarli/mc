@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
-import { copyFileSync, lstatSync, mkdirSync, readFileSync, readlinkSync, relative, symlinkSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { copyFileSync, lstatSync, mkdirSync, readFileSync, readlinkSync, symlinkSync } from "node:fs";
+import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = fileURLToPath(new URL("../", import.meta.url));

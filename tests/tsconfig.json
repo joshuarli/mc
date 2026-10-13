@@ -6,5 +6,5 @@
     "outDir": "../.work/build",
     "tsBuildInfoFile": "../.work/build/tsbuildinfo/integration.tsbuildinfo"
   },
-  "include": ["integration/stack.ts"]
+  "include": ["integration/**/*.ts", "acceptance/**/*.ts", "support/**/*.ts"]
 }

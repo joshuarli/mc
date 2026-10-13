@@ -8,7 +8,18 @@ const suites = new Map([
   ["spec", join(root, ".work", "build", "packages", "arena-spec", "tests")],
   ["bots", join(root, ".work", "build", "packages", "arena-bots", "tests")],
   ["runner", join(root, ".work", "build", "packages", "arena-runner", "tests")],
-  ["integration", join(root, ".work", "build", "tests", "integration", "stack.js")]
+  ["tooling", join(root, "tests", "tooling", "typescript-build.test.mjs")]
+]);
+const integrationCases = new Map([
+  ["stack", "stack.js"],
+  ["maps-reset", "maps-reset.js"],
+  ["match-rules", "match-rules.js"],
+  ["legal-player", "legal-player.js"],
+  ["fairness", "fairness.js"]
+]);
+const acceptanceCases = new Map([
+  ["hunger-six", "hunger.js"],
+  ["play-seats", "seats.js"]
 ]);
 
 function fail(message) {
@@ -18,9 +29,18 @@ function fail(message) {
 
 const suite = process.argv[2];
 const name = process.argv[3];
-const target = suites.get(suite);
-if (!target) fail("unknown package suite");
 if (!name) fail("test name is required");
+let target = suites.get(suite);
+if (suite === "integration") {
+  const testFile = integrationCases.get(name);
+  if (!testFile) fail("unknown integration case");
+  target = join(root, ".work", "build", "tests", "integration", testFile);
+} else if (suite === "acceptance") {
+  const testFile = acceptanceCases.get(name);
+  if (!testFile) fail("unknown acceptance case");
+  target = join(root, ".work", "build", "tests", "acceptance", testFile);
+}
+if (!target) fail("unknown package suite");
 
 const exactName = `^${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`;
 const result = spawnSync(process.execPath, [
@@ -35,7 +55,7 @@ process.stdout.write(result.stdout ?? "");
 process.stderr.write(result.stderr ?? "");
 if (result.status !== 0) process.exit(result.status ?? 1);
 
-const summary = result.stdout?.match(/\n# tests (\d+)\n# pass (\d+)\n# fail (\d+)\n# cancelled (\d+)\n/);
+const summary = result.stdout?.match(/\n# tests (\d+)\n(?:# suites \d+\n)?# pass (\d+)\n# fail (\d+)\n# cancelled (\d+)\n/);
 if (!summary) fail("Node did not emit the expected TAP summary");
 const [, , passed, failed, cancelled] = summary;
 if (passed !== "1" || failed !== "0" || cancelled !== "0") {
