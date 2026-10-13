@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use azalea::{BlockPos, Event, WalkDirection, prelude::*};
-use eyre::{Context, bail, ensure};
+use eyre::{Context, ContextCompat, bail, ensure};
 use tokio::time::timeout;
 
 const EVENT_TIMEOUT: Duration = Duration::from_secs(20);
@@ -44,7 +44,7 @@ async fn main() -> eyre::Result<()> {
         .contents()
         .ok_or_else(|| eyre::eyre!("fixture chest closed before contents arrived"))?;
     ensure!(!contents.is_empty(), "fixture chest contents are empty");
-    chest.shift_click(0);
+    chest.shift_click(0u8);
     drop(chest);
     first.wait_for_ticks(5).await?;
 
@@ -150,7 +150,9 @@ impl SmokeClient {
                         bail!("client connection failed while waiting for its target: {error}");
                     }
                     Some(_) => {}
-                    None => bail!("client event stream ended while waiting for its target"),
+                    None => {
+                        bail!("client event stream ended while waiting for its target");
+                    }
                 }
             }
         })
@@ -169,7 +171,9 @@ impl SmokeClient {
                         bail!("client connection failed while waiting for attack cooldown: {error}");
                     }
                     Some(_) => {}
-                    None => bail!("client event stream ended while waiting for attack cooldown"),
+                    None => {
+                        bail!("client event stream ended while waiting for attack cooldown");
+                    }
                 }
             }
             Ok(())
@@ -191,7 +195,9 @@ impl SmokeClient {
                         bail!("client connection failed before action completed: {error}");
                     }
                     Some(_) => {}
-                    None => bail!("client event stream ended before action completed"),
+                    None => {
+                        bail!("client event stream ended before action completed");
+                    }
                 }
             }
             Ok(())
