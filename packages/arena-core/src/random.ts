@@ -37,6 +37,16 @@ export class DeterministicRandom {
     return new DeterministicRandom(mix64(seed ^ key));
   }
 
+  /** Restores the exact generator state recorded before a policy decision. */
+  static fromState(state: bigint): DeterministicRandom {
+    return new DeterministicRandom(state);
+  }
+
+  snapshotState(): bigint {
+    assertU64(this.state, 'random state');
+    return this.state;
+  }
+
   nextU64(): bigint {
     this.state = (this.state + SPLITMIX_INCREMENT) & U64_MASK;
     return mix64(this.state);

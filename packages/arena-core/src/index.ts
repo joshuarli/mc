@@ -82,6 +82,18 @@ export type {
 
 export { DeterministicRandom, RandomStream } from './random.js';
 
+export {
+  PolicyReplayInputError,
+  normalizePolicyReplayInput,
+  rehydratePolicyReplayInput,
+} from './replay.js';
+export type {
+  PolicyReplayInputErrorCode,
+  PolicyReplayInputSource,
+  PolicyReplayInputV1,
+  RehydratedPolicyReplayInput,
+} from './replay.js';
+
 export { skillProgress } from './outcome.js';
 export type {
   SkillCancellation,
