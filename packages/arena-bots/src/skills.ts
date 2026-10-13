@@ -716,16 +716,16 @@ export class SkillOwner {
       throw new SkillFault('preconditionsNotMet', `opponent ${targetId} is outside melee reach`);
     }
     const aim = target.position.offset(0, target.height * 0.65, 0);
-    await this.#awaitOwnedOperation(active, 'look at opponent', () => this.#bot.lookAt(aim));
+    await this.#lookAt(active, 'look at opponent', aim);
     throwIfInterrupted(active.controller.signal);
     target = this.#visibleOpponent(targetId);
     if (distance(this.#bot.entity.position, target.position) > APPROACH_RANGE_BLOCKS) {
       throw new SkillFault('noProgress', `opponent ${targetId} moved out of melee reach`);
     }
-    await this.#awaitOwnedOperation(
+    await this.#lookAt(
       active,
       'look at opponent',
-      () => this.#bot.lookAt(target.position.offset(0, target.height * 0.65, 0)),
+      target.position.offset(0, target.height * 0.65, 0),
     );
     throwIfInterrupted(active.controller.signal);
     target = this.#visibleOpponent(targetId);
@@ -753,7 +753,7 @@ export class SkillOwner {
       }
     }
     const drop = this.#visibleDrop(entityIdValue);
-    await this.#awaitOwnedOperation(active, 'look at dropped item', () => this.#bot.lookAt(drop.position.offset(0, 0.15, 0)));
+    await this.#lookAt(active, 'look at dropped item', drop.position.offset(0, 0.15, 0));
     throwIfInterrupted(active.controller.signal);
     this.#visibleDrop(entityIdValue);
     const confirmation = waitForDropCollection(this.#bot, entityIdValue, active.controller.signal, ACTION_TIMEOUT_MS);
@@ -787,10 +787,10 @@ export class SkillOwner {
       throw new SkillFault('preconditionsNotMet', 'another inventory window is already open');
     }
 
-    await this.#awaitOwnedOperation(
+    await this.#lookAt(
       active,
       'look at container',
-      () => this.#bot.lookAt(block.position.offset(0.5, 0.5, 0.5)),
+      block.position.offset(0.5, 0.5, 0.5),
     );
     throwIfInterrupted(active.controller.signal);
     const currentBlock = this.#bot.blockAt(block.position);
@@ -1078,15 +1078,33 @@ export class SkillOwner {
     await this.#awaitOwnedOperation(active, name, action, timeoutMs, signal);
   }
 
+  /**
+   * Pinned native look has no cancellation signal. An unchanged, nonforced look finishes
+   * its previous task without changing aim or controls; both promises must settle before
+   * ownership transfers. The zero-change native task has no remaining effects or timer.
+   */
+  #lookAt(active: ActiveSkill, name: string, point: Bot['entity']['position']): Promise<void> {
+    return this.#awaitOwnedOperation(
+      active,
+      name,
+      () => this.#bot.lookAt(point),
+      ACTION_TIMEOUT_MS,
+      active.controller.signal,
+      () => this.#bot.look(this.#bot.entity.yaw, this.#bot.entity.pitch),
+    );
+  }
+
   async #awaitOwnedOperation(
     active: ActiveSkill,
     name: string,
     action: () => Promise<void>,
     timeoutMs = ACTION_TIMEOUT_MS,
     signal: AbortSignal | null = active.controller.signal,
+    settleOnInterruption?: () => Promise<void>,
   ): Promise<void> {
     if (signal !== null) throwIfInterrupted(signal);
     if (signal?.aborted) throw new SkillInterrupted();
+    const deadline = performance.now() + timeoutMs;
     let settled = false;
     const pendingOperation = action();
     const operation = Promise.resolve(pendingOperation)
@@ -1100,14 +1118,45 @@ export class SkillOwner {
     try {
       await waitForBoundedOperation(operation, signal, timeoutMs, name);
     } catch (error) {
-      if (!settled) {
+      const settlementFailures: unknown[] = [];
+      let ownedOperation = operation;
+      let ownedOperationSettled = (): boolean => settled;
+      if (!settled && settleOnInterruption !== undefined) {
+        let jointSettled = false;
+        const drain = Promise.resolve().then(settleOnInterruption);
+        const watched = [drain, operation].map((pending) => pending.catch((failure: unknown) => {
+          if (!settlementFailures.includes(failure)) settlementFailures.push(failure);
+          throw failure;
+        }));
+        // One failure cannot release a second operation that is still applying effects.
+        ownedOperation = Promise.allSettled(watched).then(() => { jointSettled = true; });
+        ownedOperationSettled = () => jointSettled;
+        try {
+          await waitForBoundedOperation(
+            ownedOperation,
+            null,
+            Math.max(0, deadline - performance.now()),
+            `settle interrupted ${name}`,
+          );
+        } catch (failure) {
+          if (!settlementFailures.includes(failure)) settlementFailures.push(failure);
+        }
+      }
+      if (!ownedOperationSettled()) {
         const quarantineFailure = new Error(`Mineflayer operation "${name}" did not settle; this client is quarantined`);
-        this.#cleanupFailure ??= quarantineFailure;
-        this.#quarantinedOperation = operation;
-        void operation.then(
-          () => { if (this.#quarantinedOperation === operation) this.#quarantinedOperation = null; },
-          () => { if (this.#quarantinedOperation === operation) this.#quarantinedOperation = null; },
+        this.#cleanupFailure ??= settlementFailures.length === 0 ? quarantineFailure : new AggregateError(
+          [error, ...settlementFailures, quarantineFailure], quarantineFailure.message, { cause: error },
         );
+        this.#quarantinedOperation = ownedOperation;
+        void ownedOperation.then(
+          () => { if (this.#quarantinedOperation === ownedOperation) this.#quarantinedOperation = null; },
+          () => { if (this.#quarantinedOperation === ownedOperation) this.#quarantinedOperation = null; },
+        );
+      }
+      if (settlementFailures.length > 0) {
+        const failure = new AggregateError([error, ...settlementFailures], `interrupted ${name} and its settlement failed`, { cause: error });
+        this.#cleanupFailure ??= failure;
+        throw failure;
       }
       throw error;
     }
