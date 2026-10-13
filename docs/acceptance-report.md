@@ -154,6 +154,8 @@ At `b3f5e9d`, `make server` reserves one of the ordinary scenario's four spectat
 
 Independent civilization source preparation at `e6e27eb` (`campaign/civ-rules-prep`) ports only the pure Java tick controller and its tests to the current Hunger controller API. All seven named `CivilizationMatchControllerTest` cases passed with pinned Java and strict offline Gradle verification. The branch remains unmerged and has no plugin, scenario, or protocol wiring; M1 still gates civilization integration and live acceptance.
 
+Pure core preparation at `e2dd4bb` (`campaign/civ-core-prep`) adapts the archived civilization decision/context/observation contracts to current policy feedback. Its core compiler and 15 named cases passed. Removing only the feedback argument from the emitted wrapper made the new regression fail with empty failed-target memory; byte-exact restoration made it pass. The two archived civilization replay cases remain unported for the separate replay/schema work. This branch is also unmerged, with no bot, spec, runner, or server wiring; its worktree was retired after the check.
+
 The runtime exposes `run --scenario`, read-only `validate --scenario`, stopped-run inspection, and explicit selected-run `gc --dry-run` / `gc --apply`. Scripted acceptance cases select an evaluator driver; normal Hunger runs retain the baseline policy and configured strategy cadence. Conflict and cancellation errors use exits 4 and 130, including independent cleanup failures. Evaluators may finish their assertions after outcome before cancellation, and baseline policy actions stop on actual death or spectator mode. Configured reset and stopped inspection passed. No six-seat or performance gate measurements were collected.
 
 ## Compact retained evidence
