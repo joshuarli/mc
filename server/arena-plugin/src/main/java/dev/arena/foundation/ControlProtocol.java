@@ -29,7 +29,8 @@ final class ControlProtocol {
     static final int VERSION = 1;
     static final int MAX_FRAME_BYTES = 1_048_576;
     static final BigInteger MAX_U64 = new BigInteger("18446744073709551615");
-    private static final BigInteger MAX_SAFE_INTEGER = BigInteger.valueOf(9_007_199_254_740_991L);
+    private static final long MAX_SAFE_INTEGER_LONG = 9_007_199_254_740_991L;
+    private static final BigInteger MAX_SAFE_INTEGER = BigInteger.valueOf(MAX_SAFE_INTEGER_LONG);
     private static final String RUN_ID_PATTERN = "[A-Za-z0-9][A-Za-z0-9_-]{0,63}";
     private static final String SEMANTIC_ID_PATTERN = "[0-9a-f]{64}";
     private static final String PARTICIPANT_PATTERN = "[A-Za-z0-9][A-Za-z0-9._:-]{0,127}";
@@ -49,6 +50,7 @@ final class ControlProtocol {
         PUBLIC_CLOCK("public_clock"),
         PUBLIC_STATE("public_state"),
         ELIMINATION("elimination"),
+        CIVILIZATION_STATE("civilization_state"),
         OUTCOME("outcome"),
         METRICS("metrics"),
         ACK("ack"),
@@ -75,9 +77,10 @@ final class ControlProtocol {
     }
 
     enum Capability {
-        HUNGER_GAMES_V1("hunger_games_v1");
+        HUNGER_GAMES_V1("hunger_games_v1"),
+        CIVILIZATION_V1("civilization_v1");
 
-        static final List<Capability> SUPPORTED = List.of(HUNGER_GAMES_V1);
+        static final List<Capability> SUPPORTED = List.of(HUNGER_GAMES_V1, CIVILIZATION_V1);
 
         private final String wireName;
 
@@ -254,6 +257,66 @@ final class ControlProtocol {
         }
     }
 
+    enum FactionId {
+        EMBER("ember"),
+        TIDE("tide");
+
+        private final String wireName;
+
+        FactionId(String wireName) {
+            this.wireName = wireName;
+        }
+
+        String wireName() {
+            return wireName;
+        }
+
+        FactionId opponent() {
+            return this == EMBER ? TIDE : EMBER;
+        }
+
+        static FactionId forSeat(int seat) {
+            if (seat < 0 || seat >= 6) {
+                throw new IllegalArgumentException("civilization seat is out of range");
+            }
+            return seat < 3 ? EMBER : TIDE;
+        }
+
+        static FactionId fromWire(String value, String path) throws IOException {
+            for (FactionId faction : values()) {
+                if (faction.wireName.equals(value)) {
+                    return faction;
+                }
+            }
+            throw invalid(path, "unknown civilization faction id");
+        }
+    }
+
+    enum CivilizationRole {
+        GATHERER_CRAFTER("gatherer_crafter"),
+        BUILDER("builder"),
+        DEFENDER_SCOUT("defender_scout");
+
+        private final String wireName;
+
+        CivilizationRole(String wireName) {
+            this.wireName = wireName;
+        }
+
+        String wireName() {
+            return wireName;
+        }
+
+        static CivilizationRole fromWire(String value, String path) throws IOException {
+            for (CivilizationRole role : values()) {
+                if (role.wireName.equals(value)) {
+                    return role;
+                }
+            }
+            throw invalid(path, "unknown civilization role");
+        }
+    }
+
     record Header(String runId, BigInteger sequence, Optional<BigInteger> correlation) {
         Header {
             require(Objects.requireNonNull(runId, "run id").matches(RUN_ID_PATTERN), "invalid control run id");
@@ -265,7 +328,7 @@ final class ControlProtocol {
 
     sealed interface Payload permits EmptyPayload, HelloPayload, ReadyPayload, BuildProgressPayload,
             PreparePayload, AbortPayload, ClockPayload, PublicStatePayload, EliminationPayload,
-            Outcome, MetricsPayload, ErrorPayload {}
+            CivilizationStatePayload, Outcome, MetricsPayload, ErrorPayload {}
 
     record EmptyPayload() implements Payload {}
 
@@ -349,28 +412,205 @@ final class ControlProtocol {
         }
     }
 
+    record FixedBorderSettings(int diameterBlocks) {
+        FixedBorderSettings {
+            require(diameterBlocks == 192, "civilization requires a fixed 192-block border");
+        }
+    }
+
+    sealed interface PrepareSettings permits HungerGamesPrepareSettings, CivilizationPrepareSettings {
+        MatchSettings match();
+
+        double initialBorderDiameterBlocks();
+
+        String modeName();
+    }
+
+    record HungerGamesPrepareSettings(MatchSettings match, BorderSettings border) implements PrepareSettings {
+        HungerGamesPrepareSettings {
+            Objects.requireNonNull(match, "Hunger Games match settings");
+            Objects.requireNonNull(border, "Hunger Games border settings");
+            require(border.shrinkStartTick().compareTo(match.graceTicks()) >= 0,
+                    "border cannot shrink before grace ends");
+            require(border.shrinkEndTick().compareTo(match.authoritativeMaxTicks()) < 0,
+                    "border must finish before the tick limit");
+        }
+
+        @Override
+        public double initialBorderDiameterBlocks() {
+            return border.initialDiameterBlocks();
+        }
+
+        @Override
+        public String modeName() {
+            return "hunger_games";
+        }
+    }
+
+    record CivilizationPrepareSettings(
+            MatchSettings match,
+            FixedBorderSettings border,
+            CivilizationSettings civilization) implements PrepareSettings {
+        CivilizationPrepareSettings {
+            Objects.requireNonNull(match, "civilization match settings");
+            Objects.requireNonNull(border, "civilization border settings");
+            Objects.requireNonNull(civilization, "civilization scenario settings");
+            require(match.graceTicks().equals(BigInteger.valueOf(2_400))
+                            && match.authoritativeMaxTicks().equals(BigInteger.valueOf(18_000))
+                            && !match.respawn() && match.blockBreaking() && match.blockPlacing(),
+                    "civilization requires its fixed match rules");
+        }
+
+        @Override
+        public double initialBorderDiameterBlocks() {
+            return border.diameterBlocks();
+        }
+
+        @Override
+        public String modeName() {
+            return "civilization";
+        }
+    }
+
+    record BlockPosition(long x, long y, long z) {
+        BlockPosition {
+            require(x >= 0 && x <= MAX_SAFE_INTEGER_LONG
+                            && y >= -MAX_SAFE_INTEGER_LONG && y <= MAX_SAFE_INTEGER_LONG
+                            && z >= 0 && z <= MAX_SAFE_INTEGER_LONG,
+                    "civilization block position must use nonnegative X/Z and safe-integer coordinates");
+        }
+    }
+
+    record FactionMember(int seat, CivilizationRole role) {
+        FactionMember {
+            require(seat >= 0 && seat <= 5, "civilization faction seat is out of range");
+            Objects.requireNonNull(role, "civilization role");
+        }
+    }
+
+    record FactionDefinition(FactionId id, List<FactionMember> members) {
+        FactionDefinition {
+            Objects.requireNonNull(id, "civilization faction id");
+            members = List.copyOf(Objects.requireNonNull(members, "civilization faction members"));
+            List<FactionMember> expected = id == FactionId.EMBER
+                    ? List.of(new FactionMember(0, CivilizationRole.GATHERER_CRAFTER),
+                            new FactionMember(1, CivilizationRole.BUILDER),
+                            new FactionMember(2, CivilizationRole.DEFENDER_SCOUT))
+                    : List.of(new FactionMember(3, CivilizationRole.GATHERER_CRAFTER),
+                            new FactionMember(4, CivilizationRole.BUILDER),
+                            new FactionMember(5, CivilizationRole.DEFENDER_SCOUT));
+            require(members.equals(expected), "civilization faction membership must match the fixed six-seat roster");
+        }
+    }
+
+    enum StartingItem {
+        BREAD("minecraft:bread", 4),
+        WOODEN_AXE("minecraft:wooden_axe", 1),
+        WOODEN_PICKAXE("minecraft:wooden_pickaxe", 1),
+        WOODEN_SWORD("minecraft:wooden_sword", 1);
+
+        private final String resourceId;
+        private final int count;
+
+        StartingItem(String resourceId, int count) {
+            this.resourceId = resourceId;
+            this.count = count;
+        }
+
+        String resourceId() {
+            return resourceId;
+        }
+
+        int count() {
+            return count;
+        }
+
+        static StartingItem fromWire(String item, int count, String path) throws IOException {
+            for (StartingItem startingItem : values()) {
+                if (startingItem.resourceId.equals(item) && startingItem.count == count) {
+                    return startingItem;
+                }
+            }
+            throw invalid(path, "civilization starting kit differs from the canonical finite-food kit");
+        }
+    }
+
+    record CaptureZone(BlockPosition min, BlockPosition max, int uncontestedTicks, int scorePointsPerTick) {
+        CaptureZone {
+            Objects.requireNonNull(min, "capture-zone minimum");
+            Objects.requireNonNull(max, "capture-zone maximum");
+            require(min.x() <= max.x() && min.y() <= max.y() && min.z() <= max.z(),
+                    "capture-zone minimum must not exceed its maximum");
+            require(uncontestedTicks == 200 && scorePointsPerTick == 1,
+                    "civilization capture requires 200 uncontested ticks and one point per owned end tick");
+        }
+    }
+
+    record BlueprintAnchor(BlockPosition position, int rotationDegrees) {
+        BlueprintAnchor {
+            Objects.requireNonNull(position, "outpost blueprint anchor");
+            require(rotationDegrees == 0 || rotationDegrees == 180, "outpost anchor rotation must be 0 or 180 degrees");
+        }
+    }
+
+    record OutpostBlueprint(String id, Map<FactionId, BlueprintAnchor> anchors) {
+        OutpostBlueprint {
+            require("oak-outpost-v1".equals(id), "unsupported civilization outpost blueprint");
+            anchors = Map.copyOf(Objects.requireNonNull(anchors, "outpost blueprint anchors"));
+            require(anchors.size() == 2
+                            && anchors.get(FactionId.EMBER) != null && anchors.get(FactionId.EMBER).rotationDegrees() == 0
+                            && anchors.get(FactionId.TIDE) != null && anchors.get(FactionId.TIDE).rotationDegrees() == 180,
+                    "outpost anchors must match the faction rotations");
+        }
+    }
+
+    record CivilizationSettings(
+            List<FactionDefinition> factions,
+            List<StartingItem> startingKit,
+            CaptureZone captureZone,
+            OutpostBlueprint blueprint) {
+        CivilizationSettings {
+            factions = List.copyOf(Objects.requireNonNull(factions, "civilization factions"));
+            startingKit = List.copyOf(Objects.requireNonNull(startingKit, "civilization starting kit"));
+            require(factions.size() == 2 && factions.get(0).id() == FactionId.EMBER
+                            && factions.get(1).id() == FactionId.TIDE,
+                    "civilization factions must be ordered Ember then Tide with three fixed roles each");
+            require(startingKit.equals(List.of(StartingItem.BREAD, StartingItem.WOODEN_AXE,
+                            StartingItem.WOODEN_PICKAXE, StartingItem.WOODEN_SWORD)),
+                    "civilization starting kit differs from the canonical finite-food kit");
+            Objects.requireNonNull(captureZone, "civilization capture zone");
+            Objects.requireNonNull(blueprint, "civilization outpost blueprint");
+        }
+    }
+
     record PreparePayload(
             String mapSemanticId,
             String scenarioSemanticId,
             BigInteger seed,
-            String mode,
-            MatchSettings match,
-            BorderSettings border,
+            PrepareSettings settings,
             List<BotCompetitor> roster) implements Payload {
         PreparePayload {
             require(mapSemanticId != null && mapSemanticId.matches(SEMANTIC_ID_PATTERN), "invalid map semantic id");
             require(scenarioSemanticId != null && scenarioSemanticId.matches(SEMANTIC_ID_PATTERN),
                     "invalid scenario semantic id");
             require(isU64(seed), "invalid prepare seed");
-            require("hunger_games".equals(mode), "unsupported match mode");
-            Objects.requireNonNull(match, "match settings");
-            Objects.requireNonNull(border, "border settings");
-            require(border.shrinkStartTick().compareTo(match.graceTicks()) >= 0,
-                    "border cannot shrink before grace ends");
-            require(border.shrinkEndTick().compareTo(match.authoritativeMaxTicks()) < 0,
-                    "border must finish before the tick limit");
+            Objects.requireNonNull(settings, "prepare settings");
             roster = List.copyOf(Objects.requireNonNull(roster, "roster"));
             validateRoster(roster);
+            require(!(settings instanceof CivilizationPrepareSettings) || roster.size() == 6,
+                    "civilization requires exactly six bot competitors");
+        }
+
+        String mode() {
+            return settings.modeName();
+        }
+
+        MatchSettings match() {
+            return settings.match();
+        }
+
+        double initialBorderDiameterBlocks() {
+            return settings.initialBorderDiameterBlocks();
         }
     }
 
@@ -430,7 +670,63 @@ final class ControlProtocol {
         }
     }
 
-    sealed interface Outcome extends Payload permits WinnerOutcome, DrawOutcome, AbortOutcome {
+    record FactionScores(BigInteger emberPoints, BigInteger tidePoints) {
+        FactionScores {
+            require(isU64(emberPoints) && isU64(tidePoints), "civilization scores must be unsigned 64-bit values");
+        }
+
+        BigInteger points(FactionId faction) {
+            Objects.requireNonNull(faction, "score faction");
+            return faction == FactionId.EMBER ? emberPoints : tidePoints;
+        }
+    }
+
+    record CivilizationStatePayload(
+            Tick at,
+            List<Integer> occupants,
+            Optional<FactionId> ownerFaction,
+            Optional<FactionId> challengerFaction,
+            BigInteger captureProgressTicks,
+            FactionScores scores) implements Payload {
+        CivilizationStatePayload {
+            Objects.requireNonNull(at, "civilization-state tick");
+            require(at.domain() == TickDomain.MATCH, "civilization state requires a match tick");
+            occupants = orderedSeats(occupants, "capture-zone occupants");
+            ownerFaction = Objects.requireNonNull(ownerFaction, "capture owner");
+            challengerFaction = Objects.requireNonNull(challengerFaction, "capture challenger");
+            require(ownerFaction.isEmpty() || !ownerFaction.equals(challengerFaction),
+                    "capture challenger must differ from the current owner");
+            require(isU64(captureProgressTicks), "capture progress must be an unsigned 64-bit value");
+            Objects.requireNonNull(scores, "civilization scores");
+        }
+    }
+
+    enum FactionWinnerReason {
+        ELIMINATION("elimination"),
+        TICK_LIMIT("tick_limit");
+
+        private final String wireName;
+
+        FactionWinnerReason(String wireName) {
+            this.wireName = wireName;
+        }
+
+        String wireName() {
+            return wireName;
+        }
+
+        static FactionWinnerReason fromWire(String value, String path) throws IOException {
+            for (FactionWinnerReason reason : values()) {
+                if (reason.wireName.equals(value)) {
+                    return reason;
+                }
+            }
+            throw invalid(path, "faction winner reason must be elimination or tick_limit");
+        }
+    }
+
+    sealed interface Outcome extends Payload permits WinnerOutcome, FactionWinnerOutcome,
+            DrawOutcome, CivilizationDrawOutcome, AbortOutcome {
         List<Integer> survivors();
 
         Optional<Tick> at();
@@ -450,6 +746,36 @@ final class ControlProtocol {
         }
     }
 
+    record FactionWinnerOutcome(
+            FactionId winnerFaction,
+            FactionWinnerReason reason,
+            FactionScores scores,
+            List<Integer> survivors,
+            Tick tick) implements Outcome {
+        FactionWinnerOutcome {
+            Objects.requireNonNull(winnerFaction, "winning faction");
+            Objects.requireNonNull(reason, "faction winner reason");
+            Objects.requireNonNull(scores, "faction scores");
+            survivors = orderedSeats(survivors, "faction winner survivors");
+            Objects.requireNonNull(tick, "faction winner tick");
+            require(tick.domain() == TickDomain.MATCH, "faction winner requires an authoritative match tick");
+            boolean hasEmber = survivors.stream().anyMatch(seat -> FactionId.forSeat(seat) == FactionId.EMBER);
+            boolean hasTide = survivors.stream().anyMatch(seat -> FactionId.forSeat(seat) == FactionId.TIDE);
+            require(reason != FactionWinnerReason.ELIMINATION
+                            || (!survivors.isEmpty() && survivors.stream()
+                                    .allMatch(seat -> FactionId.forSeat(seat) == winnerFaction)),
+                    "elimination winner survivors must belong to the winning faction");
+            require(reason != FactionWinnerReason.TICK_LIMIT || (hasEmber && hasTide
+                            && scores.points(winnerFaction).compareTo(scores.points(winnerFaction.opponent())) > 0),
+                    "tick-limit winner requires both factions and a strictly higher score");
+        }
+
+        @Override
+        public Optional<Tick> at() {
+            return Optional.of(tick);
+        }
+    }
+
     record DrawOutcome(DrawReason reason, List<Integer> survivors, Tick tick) implements Outcome {
         DrawOutcome {
             Objects.requireNonNull(reason, "draw reason");
@@ -458,6 +784,31 @@ final class ControlProtocol {
             require((reason == DrawReason.NO_SURVIVORS && survivors.isEmpty())
                             || (reason == DrawReason.TICK_LIMIT && survivors.size() >= 2),
                     "draw survivors do not match reason");
+        }
+
+        @Override
+        public Optional<Tick> at() {
+            return Optional.of(tick);
+        }
+    }
+
+    record CivilizationDrawOutcome(
+            DrawReason reason,
+            FactionScores scores,
+            List<Integer> survivors,
+            Tick tick) implements Outcome {
+        CivilizationDrawOutcome {
+            Objects.requireNonNull(reason, "civilization draw reason");
+            Objects.requireNonNull(scores, "faction scores");
+            survivors = orderedSeats(survivors, "civilization draw survivors");
+            Objects.requireNonNull(tick, "civilization draw tick");
+            boolean hasEmber = survivors.stream().anyMatch(seat -> FactionId.forSeat(seat) == FactionId.EMBER);
+            boolean hasTide = survivors.stream().anyMatch(seat -> FactionId.forSeat(seat) == FactionId.TIDE);
+            require(tick.domain() == TickDomain.MATCH
+                            && ((reason == DrawReason.NO_SURVIVORS && survivors.isEmpty())
+                                    || (reason == DrawReason.TICK_LIMIT && survivors.size() >= 2 && hasEmber && hasTide
+                                            && scores.emberPoints().equals(scores.tidePoints()))),
+                    "civilization draw survivors, tick, and scores do not match its reason");
         }
 
         @Override
@@ -572,6 +923,7 @@ final class ControlProtocol {
             case PUBLIC_CLOCK -> readClock(payloadValue);
             case PUBLIC_STATE -> readPublicState(payloadValue);
             case ELIMINATION -> readElimination(payloadValue);
+            case CIVILIZATION_STATE -> readCivilizationState(payloadValue);
             case OUTCOME -> readOutcome(payloadValue);
             case METRICS -> readMetrics(payloadValue);
             case ERROR -> readError(payloadValue);
@@ -619,19 +971,37 @@ final class ControlProtocol {
                 Set.of("map_semantic_id", "scenario_semantic_id", "seed", "mode", "settings", "roster"),
                 Set.of("map_semantic_id", "scenario_semantic_id", "seed", "mode", "settings", "roster"));
         String mode = readString(payload.get("mode"), "payload.mode", 1, 64, null);
-        Map<String, Object> settings = object(payload.get("settings"), "payload.settings",
-                Set.of("match", "border"), Set.of("match", "border"));
-        MatchSettings match = readMatchSettings(settings.get("match"));
-        BorderSettings border = readBorderSettings(settings.get("border"));
         List<BotCompetitor> roster = readRoster(payload.get("roster"));
+        PrepareSettings settings = switch (mode) {
+            case "hunger_games" -> readHungerGamesPrepareSettings(payload.get("settings"));
+            case "civilization" -> {
+                if (roster.size() != 6) {
+                    throw invalid("payload.roster", "civilization requires exactly six bot competitors");
+                }
+                yield readCivilizationPrepareSettings(payload.get("settings"));
+            }
+            default -> throw invalid("payload.mode", "mode is unsupported by control-v1");
+        };
         return new PreparePayload(
                 readString(payload.get("map_semantic_id"), "payload.map_semantic_id", 64, 64, SEMANTIC_ID_PATTERN),
                 readString(payload.get("scenario_semantic_id"), "payload.scenario_semantic_id", 64, 64, SEMANTIC_ID_PATTERN),
                 readU64String(payload.get("seed"), "payload.seed", false),
-                mode,
-                match,
-                border,
+                settings,
                 roster);
+    }
+
+    private static HungerGamesPrepareSettings readHungerGamesPrepareSettings(Object value) throws IOException {
+        Map<String, Object> settings = object(value, "payload.settings",
+                Set.of("match", "border"), Set.of("match", "border"));
+        return new HungerGamesPrepareSettings(readMatchSettings(settings.get("match")),
+                readBorderSettings(settings.get("border")));
+    }
+
+    private static CivilizationPrepareSettings readCivilizationPrepareSettings(Object value) throws IOException {
+        Map<String, Object> settings = object(value, "payload.settings",
+                Set.of("match", "border", "civilization"), Set.of("match", "border", "civilization"));
+        return new CivilizationPrepareSettings(readMatchSettings(settings.get("match")),
+                readFixedBorderSettings(settings.get("border")), readCivilizationSettings(settings.get("civilization")));
     }
 
     private static MatchSettings readMatchSettings(Object value) throws IOException {
@@ -662,6 +1032,102 @@ final class ControlProtocol {
                 readU64String(border.get("shrink_start_tick"), path + ".shrink_start_tick", false),
                 readU64String(border.get("shrink_end_tick"), path + ".shrink_end_tick", false),
                 readFiniteNumber(border.get("final_diameter_blocks"), path + ".final_diameter_blocks"));
+    }
+
+    private static FixedBorderSettings readFixedBorderSettings(Object value) throws IOException {
+        String path = "payload.settings.border";
+        Map<String, Object> border = object(value, path, Set.of("kind", "diameter_blocks"),
+                Set.of("kind", "diameter_blocks"));
+        if (!"fixed".equals(readString(border.get("kind"), path + ".kind", 1, 16, null))) {
+            throw invalid(path + ".kind", "civilization requires a fixed border");
+        }
+        return new FixedBorderSettings(readInteger(border.get("diameter_blocks"), path + ".diameter_blocks", 192, 192));
+    }
+
+    private static CivilizationSettings readCivilizationSettings(Object value) throws IOException {
+        String path = "payload.settings.civilization";
+        Map<String, Object> civilization = object(value, path,
+                Set.of("factions", "starting_kit", "capture_zone", "blueprint"),
+                Set.of("factions", "starting_kit", "capture_zone", "blueprint"));
+        return new CivilizationSettings(readFactions(civilization.get("factions"), path + ".factions"),
+                readStartingKit(civilization.get("starting_kit"), path + ".starting_kit"),
+                readCaptureZone(civilization.get("capture_zone"), path + ".capture_zone"),
+                readOutpostBlueprint(civilization.get("blueprint"), path + ".blueprint"));
+    }
+
+    private static List<FactionDefinition> readFactions(Object value, String path) throws IOException {
+        List<Object> factions = array(value, path, 2, 2);
+        List<FactionDefinition> result = new ArrayList<>(factions.size());
+        for (int index = 0; index < factions.size(); index++) {
+            String factionPath = path + "[" + index + "]";
+            Map<String, Object> faction = object(factions.get(index), factionPath,
+                    Set.of("id", "members"), Set.of("id", "members"));
+            FactionId id = FactionId.fromWire(readString(faction.get("id"), factionPath + ".id", 1, 16, null),
+                    factionPath + ".id");
+            List<Object> members = array(faction.get("members"), factionPath + ".members", 3, 3);
+            List<FactionMember> parsedMembers = new ArrayList<>(members.size());
+            for (int memberIndex = 0; memberIndex < members.size(); memberIndex++) {
+                String memberPath = factionPath + ".members[" + memberIndex + "]";
+                Map<String, Object> member = object(members.get(memberIndex), memberPath,
+                        Set.of("seat", "role"), Set.of("seat", "role"));
+                parsedMembers.add(new FactionMember(
+                        readInteger(member.get("seat"), memberPath + ".seat", 0, 5),
+                        CivilizationRole.fromWire(readString(member.get("role"), memberPath + ".role", 1, 32, null),
+                                memberPath + ".role")));
+            }
+            result.add(new FactionDefinition(id, parsedMembers));
+        }
+        return List.copyOf(result);
+    }
+
+    private static List<StartingItem> readStartingKit(Object value, String path) throws IOException {
+        List<Object> entries = array(value, path, 4, 4);
+        List<StartingItem> kit = new ArrayList<>(entries.size());
+        for (int index = 0; index < entries.size(); index++) {
+            String itemPath = path + "[" + index + "]";
+            Map<String, Object> entry = object(entries.get(index), itemPath,
+                    Set.of("item", "count"), Set.of("item", "count"));
+            String item = readString(entry.get("item"), itemPath + ".item", 1, 128, null);
+            int count = readInteger(entry.get("count"), itemPath + ".count", 1, 64);
+            kit.add(StartingItem.fromWire(item, count, itemPath));
+        }
+        return List.copyOf(kit);
+    }
+
+    private static CaptureZone readCaptureZone(Object value, String path) throws IOException {
+        Map<String, Object> zone = object(value, path,
+                Set.of("min", "max", "uncontested_ticks", "score_points_per_tick"),
+                Set.of("min", "max", "uncontested_ticks", "score_points_per_tick"));
+        return new CaptureZone(readBlockPosition(zone.get("min"), path + ".min"),
+                readBlockPosition(zone.get("max"), path + ".max"),
+                readInteger(zone.get("uncontested_ticks"), path + ".uncontested_ticks", 200, 200),
+                readInteger(zone.get("score_points_per_tick"), path + ".score_points_per_tick", 1, 1));
+    }
+
+    private static OutpostBlueprint readOutpostBlueprint(Object value, String path) throws IOException {
+        Map<String, Object> blueprint = object(value, path, Set.of("id", "anchors"), Set.of("id", "anchors"));
+        String id = readString(blueprint.get("id"), path + ".id", 1, 64, null);
+        Map<String, Object> anchors = object(blueprint.get("anchors"), path + ".anchors",
+                Set.of("ember", "tide"), Set.of("ember", "tide"));
+        return new OutpostBlueprint(id, Map.of(
+                FactionId.EMBER, readBlueprintAnchor(anchors.get("ember"), path + ".anchors.ember", 0),
+                FactionId.TIDE, readBlueprintAnchor(anchors.get("tide"), path + ".anchors.tide", 180)));
+    }
+
+    private static BlueprintAnchor readBlueprintAnchor(Object value, String path, int expectedRotation)
+            throws IOException {
+        Map<String, Object> anchor = object(value, path,
+                Set.of("position", "rotation_degrees"), Set.of("position", "rotation_degrees"));
+        int rotation = readInteger(anchor.get("rotation_degrees"), path + ".rotation_degrees", expectedRotation,
+                expectedRotation);
+        return new BlueprintAnchor(readBlockPosition(anchor.get("position"), path + ".position"), rotation);
+    }
+
+    private static BlockPosition readBlockPosition(Object value, String path) throws IOException {
+        Map<String, Object> position = object(value, path, Set.of("x", "y", "z"), Set.of("x", "y", "z"));
+        return new BlockPosition(readIntegerLong(position.get("x"), path + ".x", 0, MAX_SAFE_INTEGER_LONG),
+                readIntegerLong(position.get("y"), path + ".y", -MAX_SAFE_INTEGER_LONG, MAX_SAFE_INTEGER_LONG),
+                readIntegerLong(position.get("z"), path + ".z", 0, MAX_SAFE_INTEGER_LONG));
     }
 
     private static List<BotCompetitor> readRoster(Object value) throws IOException {
@@ -734,34 +1200,94 @@ final class ControlProtocol {
         return new EliminationPayload(readTick(payload.get("at"), "payload.at"), eliminations);
     }
 
+    private static Payload readCivilizationState(Object value) throws IOException {
+        String path = "payload";
+        Map<String, Object> payload = object(value, path,
+                Set.of("at", "occupants", "owner_faction", "challenger_faction", "capture_progress_ticks", "scores"),
+                Set.of("at", "occupants", "owner_faction", "challenger_faction", "capture_progress_ticks", "scores"));
+        Optional<FactionId> owner = readNullableFaction(payload.get("owner_faction"), path + ".owner_faction");
+        Optional<FactionId> challenger = readNullableFaction(payload.get("challenger_faction"), path + ".challenger_faction");
+        return new CivilizationStatePayload(readTick(payload.get("at"), path + ".at"),
+                readSeatList(payload.get("occupants"), path + ".occupants"), owner, challenger,
+                readU64String(payload.get("capture_progress_ticks"), path + ".capture_progress_ticks", false),
+                readFactionScores(payload.get("scores"), path + ".scores"));
+    }
+
+    private static Optional<FactionId> readNullableFaction(Object value, String path) throws IOException {
+        return value == null ? Optional.empty()
+                : Optional.of(FactionId.fromWire(readString(value, path, 1, 16, null), path));
+    }
+
+    private static FactionScores readFactionScores(Object value, String path) throws IOException {
+        List<Object> scores = array(value, path, 2, 2);
+        String firstPath = path + "[0]";
+        String secondPath = path + "[1]";
+        Map<String, Object> ember = object(scores.get(0), firstPath,
+                Set.of("faction_id", "points"), Set.of("faction_id", "points"));
+        Map<String, Object> tide = object(scores.get(1), secondPath,
+                Set.of("faction_id", "points"), Set.of("faction_id", "points"));
+        if (FactionId.fromWire(readString(ember.get("faction_id"), firstPath + ".faction_id", 1, 16, null),
+                        firstPath + ".faction_id") != FactionId.EMBER
+                || FactionId.fromWire(readString(tide.get("faction_id"), secondPath + ".faction_id", 1, 16, null),
+                        secondPath + ".faction_id") != FactionId.TIDE) {
+            throw invalid(path, "faction scores must be ordered Ember then Tide");
+        }
+        return new FactionScores(readU64String(ember.get("points"), firstPath + ".points", false),
+                readU64String(tide.get("points"), secondPath + ".points", false));
+    }
+
     private static Payload readOutcome(Object value) throws IOException {
         Map<String, Object> payload = object(value, "payload",
-                Set.of("kind", "winner_seat", "reason", "survivors", "at"), Set.of("kind", "survivors", "at"));
+                Set.of("kind", "winner_seat", "winner_faction_id", "reason", "scores", "survivors", "at"),
+                Set.of("kind", "survivors", "at"));
         String kind = readString(payload.get("kind"), "payload.kind", 1, 16, null);
         List<Integer> survivors = readSeatList(payload.get("survivors"), "payload.survivors");
         Optional<Tick> tick = payload.get("at") == null ? Optional.empty() : Optional.of(readTick(payload.get("at"), "payload.at"));
         if ("winner".equals(kind)) {
-            if (!payload.containsKey("winner_seat") || payload.containsKey("reason") || tick.isEmpty()) {
+            if (!payload.keySet().equals(Set.of("kind", "winner_seat", "survivors", "at")) || tick.isEmpty()) {
                 throw invalid("payload", "winner outcome requires a winner seat and authoritative tick only");
             }
             return new WinnerOutcome(readInteger(payload.get("winner_seat"), "payload.winner_seat", 0, 5), survivors,
                     tick.orElseThrow());
         }
+        if ("faction_winner".equals(kind)) {
+            if (!payload.keySet().equals(Set.of("kind", "winner_faction_id", "reason", "scores", "survivors", "at"))
+                    || tick.isEmpty()) {
+                throw invalid("payload", "faction winner requires its faction, reason, scores, survivors, and tick");
+            }
+            return new FactionWinnerOutcome(
+                    FactionId.fromWire(readString(payload.get("winner_faction_id"),
+                            "payload.winner_faction_id", 1, 16, null), "payload.winner_faction_id"),
+                    FactionWinnerReason.fromWire(readString(payload.get("reason"), "payload.reason", 1, 32, null),
+                            "payload.reason"),
+                    readFactionScores(payload.get("scores"), "payload.scores"), survivors, tick.orElseThrow());
+        }
         if ("draw".equals(kind)) {
             if (!payload.containsKey("reason") || payload.containsKey("winner_seat") || tick.isEmpty()) {
                 throw invalid("payload", "draw outcome requires a reason and authoritative tick only");
             }
-            return new DrawOutcome(DrawReason.fromWire(readString(payload.get("reason"), "payload.reason", 1, 32, null),
-                    "payload.reason"), survivors, tick.orElseThrow());
+            DrawReason reason = DrawReason.fromWire(readString(payload.get("reason"), "payload.reason", 1, 32, null),
+                    "payload.reason");
+            if (payload.containsKey("scores")) {
+                if (!payload.keySet().equals(Set.of("kind", "reason", "scores", "survivors", "at"))) {
+                    throw invalid("payload", "civilization draw has an invalid field set");
+                }
+                return new CivilizationDrawOutcome(reason, readFactionScores(payload.get("scores"), "payload.scores"),
+                        survivors, tick.orElseThrow());
+            }
+            if (!payload.keySet().equals(Set.of("kind", "reason", "survivors", "at"))) {
+                throw invalid("payload", "Hunger Games draw has an invalid field set");
+            }
+            return new DrawOutcome(reason, survivors, tick.orElseThrow());
         }
         if ("abort".equals(kind)) {
-            if (!payload.containsKey("reason") || payload.containsKey("winner_seat")) {
+            if (!payload.keySet().equals(Set.of("kind", "reason", "survivors", "at"))) {
                 throw invalid("payload", "abort outcome requires a reason and no winner seat");
             }
             return new AbortOutcome(AbortReason.fromWire(readString(payload.get("reason"), "payload.reason", 1, 64, null),
                     "payload.reason"), survivors, tick);
         }
-        throw invalid("payload.kind", "outcome kind must be winner, draw, or abort");
+        throw invalid("payload.kind", "outcome kind must be winner, faction_winner, draw, or abort");
     }
 
     private static Payload readMetrics(Object value) throws IOException {
@@ -833,26 +1359,22 @@ final class ControlProtocol {
             return object("stage", progress.stage(), "completed", progress.completed(), "total", progress.total());
         }
         if (payload instanceof PreparePayload prepare) {
+            Object modeSettings;
+            if (prepare.settings() instanceof HungerGamesPrepareSettings hungerGames) {
+                modeSettings = object("match", matchSettingsValue(hungerGames.match()),
+                        "border", borderSettingsValue(hungerGames.border()));
+            } else {
+                CivilizationPrepareSettings civilization = (CivilizationPrepareSettings) prepare.settings();
+                modeSettings = object("match", matchSettingsValue(civilization.match()),
+                        "border", object("kind", "fixed", "diameter_blocks", civilization.border().diameterBlocks()),
+                        "civilization", civilizationSettingsValue(civilization.civilization()));
+            }
             return object(
                     "map_semantic_id", prepare.mapSemanticId(),
                     "scenario_semantic_id", prepare.scenarioSemanticId(),
                     "seed", prepare.seed().toString(),
                     "mode", prepare.mode(),
-                    "settings", object(
-                            "match", object(
-                                    "countdown_ticks", prepare.match().countdownTicks().toString(),
-                                    "grace_ticks", prepare.match().graceTicks().toString(),
-                                    "authoritative_max_ticks", prepare.match().authoritativeMaxTicks().toString(),
-                                    "respawn", prepare.match().respawn(),
-                                    "block_breaking", prepare.match().blockBreaking(),
-                                    "block_placing", prepare.match().blockPlacing(),
-                                    "natural_mobs", prepare.match().naturalMobs(),
-                                    "natural_random_ticks", prepare.match().naturalRandomTicks()),
-                            "border", object(
-                                    "initial_diameter_blocks", prepare.border().initialDiameterBlocks(),
-                                    "shrink_start_tick", prepare.border().shrinkStartTick().toString(),
-                                    "shrink_end_tick", prepare.border().shrinkEndTick().toString(),
-                                    "final_diameter_blocks", prepare.border().finalDiameterBlocks())),
+                    "settings", modeSettings,
                     "roster", prepare.roster().stream().map(ControlProtocol::competitorValue).toList());
         }
         if (payload instanceof AbortPayload abort) {
@@ -869,13 +1391,29 @@ final class ControlProtocol {
             return object("at", tickValue(elimination.at()), "eliminations", elimination.eliminations().stream()
                     .map(item -> object("seat", item.seat(), "cause", item.cause().wireName())).toList());
         }
+        if (payload instanceof CivilizationStatePayload state) {
+            return object("at", tickValue(state.at()), "occupants", state.occupants(),
+                    "owner_faction", state.ownerFaction().map(FactionId::wireName).orElse(null),
+                    "challenger_faction", state.challengerFaction().map(FactionId::wireName).orElse(null),
+                    "capture_progress_ticks", state.captureProgressTicks().toString(),
+                    "scores", factionScoresValue(state.scores()));
+        }
         if (payload instanceof WinnerOutcome winner) {
             return object("kind", "winner", "winner_seat", winner.winnerSeat(), "survivors", winner.survivors(),
                     "at", tickValue(winner.tick()));
         }
+        if (payload instanceof FactionWinnerOutcome winner) {
+            return object("kind", "faction_winner", "winner_faction_id", winner.winnerFaction().wireName(),
+                    "reason", winner.reason().wireName(), "scores", factionScoresValue(winner.scores()),
+                    "survivors", winner.survivors(), "at", tickValue(winner.tick()));
+        }
         if (payload instanceof DrawOutcome draw) {
             return object("kind", "draw", "reason", draw.reason().wireName(), "survivors", draw.survivors(),
                     "at", tickValue(draw.tick()));
+        }
+        if (payload instanceof CivilizationDrawOutcome draw) {
+            return object("kind", "draw", "reason", draw.reason().wireName(), "scores",
+                    factionScoresValue(draw.scores()), "survivors", draw.survivors(), "at", tickValue(draw.tick()));
         }
         if (payload instanceof AbortOutcome abort) {
             return object("kind", "abort", "reason", abort.reason().wireName(), "survivors", abort.survivors(),
@@ -890,6 +1428,53 @@ final class ControlProtocol {
             return object("code", error.code().wireName(), "message", error.message());
         }
         throw new IllegalArgumentException("unknown control payload type");
+    }
+
+    private static Object matchSettingsValue(MatchSettings match) {
+        return object("countdown_ticks", match.countdownTicks().toString(),
+                "grace_ticks", match.graceTicks().toString(),
+                "authoritative_max_ticks", match.authoritativeMaxTicks().toString(),
+                "respawn", match.respawn(),
+                "block_breaking", match.blockBreaking(),
+                "block_placing", match.blockPlacing(),
+                "natural_mobs", match.naturalMobs(),
+                "natural_random_ticks", match.naturalRandomTicks());
+    }
+
+    private static Object borderSettingsValue(BorderSettings border) {
+        return object("initial_diameter_blocks", border.initialDiameterBlocks(),
+                "shrink_start_tick", border.shrinkStartTick().toString(),
+                "shrink_end_tick", border.shrinkEndTick().toString(),
+                "final_diameter_blocks", border.finalDiameterBlocks());
+    }
+
+    private static Object civilizationSettingsValue(CivilizationSettings civilization) {
+        return object("factions", civilization.factions().stream().map(faction -> object(
+                        "id", faction.id().wireName(),
+                        "members", faction.members().stream().map(member -> object(
+                                "seat", member.seat(), "role", member.role().wireName())).toList())).toList(),
+                "starting_kit", civilization.startingKit().stream().map(item -> object(
+                        "item", item.resourceId(), "count", item.count())).toList(),
+                "capture_zone", object("min", blockPositionValue(civilization.captureZone().min()),
+                        "max", blockPositionValue(civilization.captureZone().max()),
+                        "uncontested_ticks", civilization.captureZone().uncontestedTicks(),
+                        "score_points_per_tick", civilization.captureZone().scorePointsPerTick()),
+                "blueprint", object("id", civilization.blueprint().id(), "anchors", object(
+                        "ember", blueprintAnchorValue(civilization.blueprint().anchors().get(FactionId.EMBER)),
+                        "tide", blueprintAnchorValue(civilization.blueprint().anchors().get(FactionId.TIDE)))));
+    }
+
+    private static Object blockPositionValue(BlockPosition position) {
+        return object("x", position.x(), "y", position.y(), "z", position.z());
+    }
+
+    private static Object blueprintAnchorValue(BlueprintAnchor anchor) {
+        return object("position", blockPositionValue(anchor.position()), "rotation_degrees", anchor.rotationDegrees());
+    }
+
+    private static List<Object> factionScoresValue(FactionScores scores) {
+        return List.of(object("faction_id", FactionId.EMBER.wireName(), "points", scores.emberPoints().toString()),
+                object("faction_id", FactionId.TIDE.wireName(), "points", scores.tidePoints().toString()));
     }
 
     private static Object competitorValue(BotCompetitor bot) {
@@ -1110,6 +1695,7 @@ final class ControlProtocol {
             case PUBLIC_CLOCK -> payload instanceof ClockPayload;
             case PUBLIC_STATE -> payload instanceof PublicStatePayload;
             case ELIMINATION -> payload instanceof EliminationPayload;
+            case CIVILIZATION_STATE -> payload instanceof CivilizationStatePayload;
             case OUTCOME -> payload instanceof Outcome;
             case METRICS -> payload instanceof MetricsPayload;
             case ERROR -> payload instanceof ErrorPayload;

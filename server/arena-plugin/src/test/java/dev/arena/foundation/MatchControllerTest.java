@@ -10,6 +10,8 @@ import dev.arena.foundation.MatchController.Aborted;
 import dev.arena.foundation.MatchController.BorderSchedule;
 import dev.arena.foundation.MatchController.Draw;
 import dev.arena.foundation.MatchController.DrawReason;
+import dev.arena.foundation.MatchController.FixedBorder;
+import dev.arena.foundation.MatchController.OutcomeAuthority;
 import dev.arena.foundation.MatchController.Elimination;
 import dev.arena.foundation.MatchController.EliminationCause;
 import dev.arena.foundation.MatchController.CountdownTick;
@@ -108,6 +110,44 @@ final class MatchControllerTest {
         assertEquals(6.0, match.borderDiameterBlocks());
         match.endServerTick(List.of());
         assertEquals(4.0, match.borderDiameterBlocks());
+    }
+
+    @Test
+    void externalFactionOutcomeKeepsTheMatchActiveAfterOneSeatRemains() {
+        MatchController match = new MatchController(new Settings(BigInteger.ZERO, BigInteger.ZERO,
+                BigInteger.valueOf(2), new FixedBorder(192)), 6, OutcomeAuthority.EXTERNAL);
+        match.startCountdown();
+
+        match.endServerTick(List.of(
+                new Elimination(1, EliminationCause.DEATH),
+                new Elimination(2, EliminationCause.DEATH),
+                new Elimination(3, EliminationCause.DEATH),
+                new Elimination(4, EliminationCause.DEATH),
+                new Elimination(5, EliminationCause.DEATH)));
+
+        assertEquals(Phase.ACTIVE, match.phase());
+        assertEquals(List.of(0), match.aliveSeats());
+        assertTrue(match.outcome().isEmpty());
+        assertEquals(192.0, match.borderDiameterBlocks());
+
+        match.finishExternally(new MatchTick(BigInteger.ZERO));
+
+        assertEquals(Phase.FINISHED, match.phase());
+        assertEquals(Optional.of(BigInteger.ZERO), match.matchTick());
+        assertTrue(match.outcome().isEmpty());
+    }
+
+    @Test
+    void externalFactionOutcomeOwnsTheInclusiveTickLimitDecision() {
+        MatchController match = new MatchController(new Settings(BigInteger.ZERO, BigInteger.ZERO,
+                BigInteger.ONE, new FixedBorder(192)), 6, OutcomeAuthority.EXTERNAL);
+        match.startCountdown();
+        match.endServerTick(List.of());
+        match.endServerTick(List.of());
+
+        assertEquals(Phase.ACTIVE, match.phase());
+        assertEquals(Optional.of(BigInteger.ONE), match.matchTick());
+        assertTrue(match.outcome().isEmpty());
     }
 
     @Test

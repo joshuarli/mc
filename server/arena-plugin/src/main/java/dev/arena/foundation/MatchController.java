@@ -51,6 +51,11 @@ final class MatchController {
         RUNTIME_TIMEOUT
     }
 
+    enum OutcomeAuthority {
+        LAST_SURVIVOR,
+        EXTERNAL
+    }
+
     sealed interface ResolutionTick permits CountdownTick, MatchTick {}
 
     record CountdownTick(BigInteger value) implements ResolutionTick {
@@ -126,11 +131,17 @@ final class MatchController {
 
     record ResolvedElimination(int seat, EliminationCause cause, ResolutionTick at) {}
 
+    sealed interface BorderPolicy permits BorderSchedule, FixedBorder {
+        double diameterAt(BigInteger matchTick);
+
+        double initialDiameterBlocks();
+    }
+
     record BorderSchedule(
             double initialDiameterBlocks,
             BigInteger shrinkStartTick,
             BigInteger shrinkEndTick,
-            double finalDiameterBlocks) {
+            double finalDiameterBlocks) implements BorderPolicy {
         BorderSchedule {
             if (!Double.isFinite(initialDiameterBlocks) || !Double.isFinite(finalDiameterBlocks)
                     || initialDiameterBlocks <= 0 || finalDiameterBlocks <= 0
@@ -140,19 +151,51 @@ final class MatchController {
                 throw new IllegalArgumentException("invalid world-border schedule");
             }
         }
+
+        @Override
+        public double diameterAt(BigInteger matchTick) {
+            if (matchTick == null || matchTick.compareTo(shrinkStartTick) < 0) {
+                return initialDiameterBlocks;
+            }
+            if (matchTick.compareTo(shrinkEndTick) >= 0) {
+                return finalDiameterBlocks;
+            }
+            double progress = matchTick.subtract(shrinkStartTick).doubleValue()
+                    / shrinkEndTick.subtract(shrinkStartTick).doubleValue();
+            return initialDiameterBlocks + progress * (finalDiameterBlocks - initialDiameterBlocks);
+        }
+    }
+
+    record FixedBorder(double diameterBlocks) implements BorderPolicy {
+        FixedBorder {
+            if (!Double.isFinite(diameterBlocks) || diameterBlocks <= 0) {
+                throw new IllegalArgumentException("fixed world-border diameter must be positive and finite");
+            }
+        }
+
+        @Override
+        public double initialDiameterBlocks() {
+            return diameterBlocks;
+        }
+
+        @Override
+        public double diameterAt(BigInteger matchTick) {
+            return diameterBlocks;
+        }
     }
 
     record Settings(
             BigInteger countdownTicks,
             BigInteger graceTicks,
             BigInteger authoritativeMaxTicks,
-            BorderSchedule border) {
+            BorderPolicy border) {
         Settings {
             if (countdownTicks == null || graceTicks == null || authoritativeMaxTicks == null
                     || countdownTicks.signum() < 0 || graceTicks.signum() < 0 || authoritativeMaxTicks.signum() <= 0
                     || graceTicks.compareTo(authoritativeMaxTicks) >= 0 || border == null
-                    || border.shrinkStartTick().compareTo(graceTicks) < 0
-                    || border.shrinkEndTick().compareTo(authoritativeMaxTicks) >= 0) {
+                    || (border instanceof BorderSchedule schedule
+                            && (schedule.shrinkStartTick().compareTo(graceTicks) < 0
+                                    || schedule.shrinkEndTick().compareTo(authoritativeMaxTicks) >= 0))) {
                 throw new IllegalArgumentException("invalid match tick or border settings");
             }
         }
@@ -160,6 +203,7 @@ final class MatchController {
 
     private final Settings settings;
     private final int competitorCount;
+    private final OutcomeAuthority outcomeAuthority;
     private final NavigableSet<Integer> aliveSeats = new TreeSet<>();
     private Phase phase = Phase.WAITING;
     private BigInteger countdownRemaining = BigInteger.ZERO;
@@ -167,11 +211,19 @@ final class MatchController {
     private Outcome outcome;
 
     MatchController(Settings settings, int competitorCount) {
+        this(settings, competitorCount, OutcomeAuthority.LAST_SURVIVOR);
+    }
+
+    MatchController(Settings settings, int competitorCount, OutcomeAuthority outcomeAuthority) {
         if (settings == null || competitorCount < 1 || competitorCount > 6) {
             throw new IllegalArgumentException("competitor count must be between one and six");
         }
+        if (outcomeAuthority == null || (outcomeAuthority == OutcomeAuthority.EXTERNAL && competitorCount != 6)) {
+            throw new IllegalArgumentException("external outcome resolution requires six configured competitors");
+        }
         this.settings = settings;
         this.competitorCount = competitorCount;
+        this.outcomeAuthority = outcomeAuthority;
         for (int seat = 0; seat < competitorCount; seat++) {
             aliveSeats.add(seat);
         }
@@ -198,16 +250,7 @@ final class MatchController {
     }
 
     double borderDiameterBlocks() {
-        if (matchTick == null || matchTick.compareTo(settings.border().shrinkStartTick()) < 0) {
-            return settings.border().initialDiameterBlocks();
-        }
-        if (matchTick.compareTo(settings.border().shrinkEndTick()) >= 0) {
-            return settings.border().finalDiameterBlocks();
-        }
-        double progress = matchTick.subtract(settings.border().shrinkStartTick()).doubleValue()
-                / settings.border().shrinkEndTick().subtract(settings.border().shrinkStartTick()).doubleValue();
-        return settings.border().initialDiameterBlocks()
-                + progress * (settings.border().finalDiameterBlocks() - settings.border().initialDiameterBlocks());
+        return settings.border().diameterAt(matchTick);
     }
 
     void startCountdown() {
@@ -231,7 +274,7 @@ final class MatchController {
             BigInteger countdownTick = settings.countdownTicks().subtract(countdownRemaining);
             CountdownTick at = new CountdownTick(countdownTick);
             List<ResolvedElimination> resolved = resolveEliminations(eliminations, at);
-            if (!resolved.isEmpty()) {
+            if (outcomeAuthority == OutcomeAuthority.LAST_SURVIVOR && !resolved.isEmpty()) {
                 finishSurvivorOutcome(at);
                 if (outcome != null) {
                     return resolved;
@@ -245,11 +288,13 @@ final class MatchController {
         }
 
         List<ResolvedElimination> resolved = resolveEliminations(eliminations, new MatchTick(matchTick));
-        if (!resolved.isEmpty()) {
+        if (outcomeAuthority == OutcomeAuthority.LAST_SURVIVOR && !resolved.isEmpty()) {
             finishSurvivorOutcome(new MatchTick(matchTick));
         }
         if (outcome == null && matchTick.equals(settings.authoritativeMaxTicks())) {
-            finish(new Draw(DrawReason.TICK_LIMIT, aliveSeats(), new MatchTick(matchTick)));
+            if (outcomeAuthority == OutcomeAuthority.LAST_SURVIVOR) {
+                finish(new Draw(DrawReason.TICK_LIMIT, aliveSeats(), new MatchTick(matchTick)));
+            }
         } else if (outcome == null) {
             matchTick = matchTick.add(BigInteger.ONE);
             phase = matchTick.compareTo(settings.graceTicks()) < 0 ? Phase.GRACE : Phase.ACTIVE;
@@ -271,6 +316,16 @@ final class MatchController {
             case FINISHED, ABORTED -> throw new IllegalStateException("terminal match cannot be aborted again");
         };
         finish(new Aborted(reason, aliveSeats(), at));
+    }
+
+    void finishExternally(MatchTick at) {
+        if (outcomeAuthority != OutcomeAuthority.EXTERNAL || outcome != null
+                || (phase != Phase.GRACE && phase != Phase.ACTIVE) || at == null || matchTick == null
+                || at.value().compareTo(matchTick) > 0) {
+            throw new IllegalStateException("external outcome can finish only an active externally resolved match");
+        }
+        matchTick = at.value();
+        phase = Phase.FINISHED;
     }
 
     private List<ResolvedElimination> resolveEliminations(
@@ -311,7 +366,9 @@ final class MatchController {
     private void release() {
         matchTick = BigInteger.ZERO;
         phase = settings.graceTicks().signum() == 0 ? Phase.ACTIVE : Phase.GRACE;
-        finishSurvivorOutcome(new MatchTick(matchTick));
+        if (outcomeAuthority == OutcomeAuthority.LAST_SURVIVOR) {
+            finishSurvivorOutcome(new MatchTick(matchTick));
+        }
     }
 
     private void finish(Outcome result) {

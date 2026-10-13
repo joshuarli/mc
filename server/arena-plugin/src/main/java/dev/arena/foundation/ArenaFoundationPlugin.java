@@ -3,6 +3,7 @@ package dev.arena.foundation;
 import java.io.IOException;
 import java.math.BigInteger;
 import java.util.ArrayList;
+import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -67,11 +68,21 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
             super(message);
             this.code = code;
         }
+
+        CommandFailure(ControlProtocol.ErrorCode code, String message, Throwable cause) {
+            super(message, cause);
+            this.code = code;
+        }
     }
 
     private enum StartupMode {
         PLAN,
         TEST_FIXTURE
+    }
+
+    enum BlockAction {
+        BREAK,
+        PLACE
     }
 
     // Paper 26.1.2's default flat world surface is at Y -60.
@@ -89,6 +100,8 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
     private final Map<Integer, UUID> playersBySeat = new HashMap<>();
     private final Map<UUID, Integer> seatsByPlayer = new HashMap<>();
     private final List<MatchController.Elimination> pendingEliminations = new ArrayList<>();
+    private final List<MatchController.ResolvedElimination> civilizationCountdownEliminations = new ArrayList<>();
+    private final Map<ControlProtocol.FactionId, Boolean> outpostCompletion = new EnumMap<>(ControlProtocol.FactionId.class);
     private StartupMode startupMode;
     private MapPlan generationPlan;
     private ArenaChunkGenerator chunkGenerator;
@@ -98,6 +111,7 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
     private String controlToken;
     private ControlProtocol.PreparePayload preparedMatch;
     private MatchController matchController;
+    private CivilizationMatchController civilizationMatchController;
     private MovementFailureDiagnostics movementFailureDiagnostics;
     private boolean skipMatchAdvanceThisTick;
     private boolean outcomeEmitted;
@@ -226,7 +240,7 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onBlockBreak(BlockBreakEvent event) {
         if (startupMode == StartupMode.PLAN && isArenaWorld(event.getBlock().getWorld())
-                && !isMatchRuleEnabled(true)) {
+                && !isMatchRuleEnabled(BlockAction.BREAK)) {
             event.setCancelled(true);
         }
     }
@@ -234,7 +248,7 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onBlockPlace(BlockPlaceEvent event) {
         if (startupMode == StartupMode.PLAN && isArenaWorld(event.getBlock().getWorld())
-                && !isMatchRuleEnabled(false)) {
+                && !isMatchRuleEnabled(BlockAction.PLACE)) {
             event.setCancelled(true);
         }
     }
@@ -330,13 +344,32 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
         }
 
         ControlProtocol.MatchSettings settings = prepare.match();
-        ControlProtocol.BorderSettings border = prepare.border();
-        MatchController.BorderSchedule schedule = new MatchController.BorderSchedule(
-                border.initialDiameterBlocks(), border.shrinkStartTick(), border.shrinkEndTick(),
-                border.finalDiameterBlocks());
+        MatchController.BorderPolicy borderPolicy;
+        MatchController.OutcomeAuthority outcomeAuthority;
+        CivilizationMatchController nextCivilizationController = null;
+        if (prepare.settings() instanceof ControlProtocol.HungerGamesPrepareSettings hungerGames) {
+            ControlProtocol.BorderSettings border = hungerGames.border();
+            borderPolicy = new MatchController.BorderSchedule(
+                    border.initialDiameterBlocks(), border.shrinkStartTick(), border.shrinkEndTick(),
+                    border.finalDiameterBlocks());
+            outcomeAuthority = MatchController.OutcomeAuthority.LAST_SURVIVOR;
+        } else {
+            ControlProtocol.CivilizationPrepareSettings civilization =
+                    (ControlProtocol.CivilizationPrepareSettings) prepare.settings();
+            try {
+                CivilizationWorldRules.validateGeometry(civilization.civilization(), generationPlan.dimensions(),
+                        generationPlan.spawns());
+            } catch (IllegalArgumentException invalidObjectives) {
+                throw new CommandFailure(ControlProtocol.ErrorCode.INVALID_WORLD,
+                        "civilization objectives do not fit the staged map", invalidObjectives);
+            }
+            borderPolicy = new MatchController.FixedBorder(civilization.border().diameterBlocks());
+            outcomeAuthority = MatchController.OutcomeAuthority.EXTERNAL;
+            nextCivilizationController = new CivilizationMatchController();
+        }
         MatchController.Settings matchSettings = new MatchController.Settings(settings.countdownTicks(),
-                settings.graceTicks(), settings.authoritativeMaxTicks(), schedule);
-        MatchController controller = new MatchController(matchSettings, prepare.roster().size());
+                settings.graceTicks(), settings.authoritativeMaxTicks(), borderPolicy);
+        MatchController controller = new MatchController(matchSettings, prepare.roster().size(), outcomeAuthority);
 
         World world = Bukkit.getWorld(ARENA_WORLD);
         if (world == null) {
@@ -348,7 +381,7 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
             WorldBorder worldBorder = world.getWorldBorder();
             MapPlan.Dimensions dimensions = generationPlan.dimensions();
             worldBorder.setCenter(dimensions.width() / 2.0, dimensions.depth() / 2.0);
-            worldBorder.setSize(border.initialDiameterBlocks());
+            worldBorder.setSize(prepare.initialBorderDiameterBlocks());
         } catch (IllegalArgumentException invalidWorldSetting) {
             throw new CommandFailure(ControlProtocol.ErrorCode.INVALID_WORLD,
                     "the staged arena world cannot apply the resolved match settings");
@@ -356,8 +389,15 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
 
         preparedMatch = prepare;
         matchController = controller;
+        civilizationMatchController = nextCivilizationController;
+        outpostCompletion.clear();
+        if (nextCivilizationController != null) {
+            outpostCompletion.put(ControlProtocol.FactionId.EMBER, false);
+            outpostCompletion.put(ControlProtocol.FactionId.TIDE, false);
+        }
         outcomeEmitted = false;
         pendingEliminations.clear();
+        civilizationCountdownEliminations.clear();
         playersBySeat.clear();
         seatsByPlayer.clear();
         for (Player player : Bukkit.getOnlinePlayers()) {
@@ -432,8 +472,21 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
             throw new IllegalStateException("could not place a competitive bot at its assigned spawn");
         }
         player.setGameMode(GameMode.SURVIVAL);
+        applyCompiledStartingKit(player);
         playersBySeat.put(seat, player.getUniqueId());
         seatsByPlayer.put(player.getUniqueId(), seat);
+    }
+
+    private void applyCompiledStartingKit(Player player) {
+        if (!(preparedMatch.settings() instanceof ControlProtocol.CivilizationPrepareSettings civilization)) {
+            return;
+        }
+        List<ControlProtocol.StartingItem> startingKit = civilization.civilization().startingKit();
+        for (int slot = 0; slot < startingKit.size(); slot++) {
+            ControlProtocol.StartingItem item = startingKit.get(slot);
+            Material material = ArenaChunkGenerator.requireItemMaterial(item.resourceId());
+            player.getInventory().setItem(slot, new ItemStack(material, item.count()));
+        }
     }
 
     private static void resetInitialSeatState(Player player) {
@@ -496,8 +549,12 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
             return;
         }
         boolean countdownWasRunning = matchController.phase() == MatchController.Phase.COUNTDOWN;
+        BigInteger civilizationTick = countdownWasRunning ? null : matchController.matchTick().orElse(null);
         List<MatchController.ResolvedElimination> resolved = matchController.endServerTick(pendingEliminations);
         pendingEliminations.clear();
+        if (civilizationMatchController != null && countdownWasRunning) {
+            civilizationCountdownEliminations.addAll(resolved);
+        }
         if (!resolved.isEmpty()) {
             ControlProtocol.Tick at = controlTick(resolved.getFirst().at());
             List<ControlProtocol.Elimination> eliminations = resolved.stream()
@@ -507,6 +564,28 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
             controlSession.sendEvent(ControlProtocol.Type.ELIMINATION,
                     new ControlProtocol.EliminationPayload(at, eliminations));
             publishPublicState(at);
+        }
+
+        if (civilizationMatchController != null && civilizationTick != null) {
+            MatchController.MatchTick at = new MatchController.MatchTick(civilizationTick);
+            List<MatchController.ResolvedElimination> resolvedForCivilization = civilizationEliminationBatch(
+                    civilizationCountdownEliminations, resolved);
+            civilizationCountdownEliminations.clear();
+            List<MatchController.Elimination> civilizationEliminations = civilizationEliminationsSinceLastTick(
+                    matchController.aliveSeats(), civilizationMatchController.aliveSeats(), resolvedForCivilization);
+            ControlProtocol.CivilizationSettings settings = civilizationSettings();
+            World world = Bukkit.getWorld(ARENA_WORLD);
+            Optional<CivilizationMatchController.Outcome> civilizationOutcome = civilizationMatchController.endServerTick(
+                    at, civilizationZoneOccupants(world, settings.captureZone()), civilizationEliminations);
+            updateCivilizationOutposts(world, settings, at);
+            publishCivilizationState(at);
+            if (civilizationOutcome.isPresent()) {
+                matchController.finishExternally(at);
+                applyCurrentBorder();
+                publishClock();
+                emitCivilizationOutcome(civilizationOutcome.orElseThrow());
+                return;
+            }
         }
 
         if (matchController.outcome().isPresent()) {
@@ -542,7 +621,11 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
                     preparedMatch.match().countdownTicks().subtract(matchController.countdownRemaining())));
             case GRACE, ACTIVE -> matchController.matchTick().map(value ->
                     new ControlProtocol.Tick(ControlProtocol.TickDomain.MATCH, value));
-            case FINISHED, ABORTED -> matchController.outcome().orElseThrow().resolutionTick()
+            case FINISHED -> matchController.outcome().flatMap(MatchController.Outcome::resolutionTick)
+                    .map(ArenaFoundationPlugin::controlTick)
+                    .or(() -> matchController.matchTick().map(value ->
+                            new ControlProtocol.Tick(ControlProtocol.TickDomain.MATCH, value)));
+            case ABORTED -> matchController.outcome().orElseThrow().resolutionTick()
                     .map(ArenaFoundationPlugin::controlTick);
         };
     }
@@ -553,7 +636,7 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
             return matchController.borderDiameterBlocks();
         }
         if (preparedMatch != null) {
-            return preparedMatch.border().initialDiameterBlocks();
+            return preparedMatch.initialBorderDiameterBlocks();
         }
         return world.getWorldBorder().getSize();
     }
@@ -593,6 +676,119 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
         outcomeEmitted = true;
     }
 
+    /** Retains countdown causes until civilization applies those eliminated seats at match tick zero. */
+    static List<MatchController.ResolvedElimination> civilizationEliminationBatch(
+            List<MatchController.ResolvedElimination> countdown,
+            List<MatchController.ResolvedElimination> matchTick) {
+        List<MatchController.ResolvedElimination> result = new ArrayList<>(countdown);
+        result.addAll(matchTick);
+        return List.copyOf(result);
+    }
+
+    static List<MatchController.Elimination> civilizationEliminationsSinceLastTick(
+            List<Integer> matchAliveSeats,
+            List<Integer> civilizationAliveSeats,
+            List<MatchController.ResolvedElimination> resolved) {
+        Set<Integer> alive = new HashSet<>(matchAliveSeats);
+        List<MatchController.Elimination> eliminations = new ArrayList<>();
+        for (int seat : civilizationAliveSeats) {
+            if (alive.contains(seat)) {
+                continue;
+            }
+            MatchController.EliminationCause cause = resolved.stream()
+                    .filter(item -> item.seat() == seat)
+                    .map(MatchController.ResolvedElimination::cause)
+                    .findFirst()
+                    .orElse(MatchController.EliminationCause.DISCONNECT);
+            eliminations.add(new MatchController.Elimination(seat, cause));
+        }
+        return List.copyOf(eliminations);
+    }
+
+    private ControlProtocol.CivilizationSettings civilizationSettings() {
+        if (!(preparedMatch.settings() instanceof ControlProtocol.CivilizationPrepareSettings civilization)) {
+            throw new IllegalStateException("civilization controller requires civilization prepare settings");
+        }
+        return civilization.civilization();
+    }
+
+    private Set<Integer> civilizationZoneOccupants(World world, ControlProtocol.CaptureZone zone) {
+        Set<Integer> occupants = new java.util.TreeSet<>();
+        Set<Integer> alive = new HashSet<>(matchController.aliveSeats());
+        for (Map.Entry<Integer, UUID> seatPlayer : playersBySeat.entrySet()) {
+            int seat = seatPlayer.getKey();
+            if (!alive.contains(seat)) {
+                continue;
+            }
+            Player player = Bukkit.getPlayer(seatPlayer.getValue());
+            if (player == null || !player.isOnline() || player.isDead() || player.getGameMode() != GameMode.SURVIVAL
+                    || player.getWorld() != world) {
+                continue;
+            }
+            Location location = player.getLocation();
+            if (CivilizationWorldRules.contains(zone,
+                    new MapPlan.Position(location.getBlockX(), location.getBlockY(), location.getBlockZ()))) {
+                occupants.add(seat);
+            }
+        }
+        return Set.copyOf(occupants);
+    }
+
+    private void publishCivilizationState(ControlProtocol.Tick at) {
+        if (civilizationMatchController == null) {
+            return;
+        }
+        CivilizationMatchController.FactionScores scores = civilizationMatchController.scores();
+        ControlProtocol.CivilizationStatePayload state = new ControlProtocol.CivilizationStatePayload(
+                at,
+                civilizationMatchController.zoneOccupants(),
+                civilizationMatchController.ownerFaction().map(faction -> ControlProtocol.FactionId.valueOf(faction.name())),
+                civilizationMatchController.challengerFaction()
+                        .map(faction -> ControlProtocol.FactionId.valueOf(faction.name())),
+                civilizationMatchController.captureProgressTicks(),
+                new ControlProtocol.FactionScores(scores.emberPoints(), scores.tidePoints()));
+        controlSession.sendEvent(ControlProtocol.Type.CIVILIZATION_STATE, state);
+    }
+
+    private void updateCivilizationOutposts(
+            World world,
+            ControlProtocol.CivilizationSettings settings,
+            MatchController.MatchTick at) {
+        for (ControlProtocol.FactionId faction : ControlProtocol.FactionId.values()) {
+            ControlProtocol.BlueprintAnchor anchor = settings.blueprint().anchors().get(faction);
+            boolean complete = CivilizationWorldRules.hasCompleteOutpost(anchor, position ->
+                    world.getBlockAt(position.x(), position.y(), position.z()).getType() == Material.OAK_PLANKS);
+            boolean previous = outpostCompletion.getOrDefault(faction, false);
+            if (complete != previous) {
+                outpostCompletion.put(faction, complete);
+                getLogger().info("ARENA_CIVILIZATION_OUTPOST|faction=" + faction.wireName()
+                        + "|complete=" + complete + "|tick=" + at.value());
+            }
+        }
+    }
+
+    private void emitCivilizationOutcome(CivilizationMatchController.Outcome outcome) {
+        ControlProtocol.Outcome controlOutcome;
+        if (outcome instanceof CivilizationMatchController.FactionWinner winner) {
+            CivilizationMatchController.FactionScores scores = winner.scores();
+            controlOutcome = new ControlProtocol.FactionWinnerOutcome(
+                    ControlProtocol.FactionId.valueOf(winner.winner().name()),
+                    ControlProtocol.FactionWinnerReason.valueOf(winner.reason().name()),
+                    new ControlProtocol.FactionScores(scores.emberPoints(), scores.tidePoints()),
+                    winner.survivors(), new ControlProtocol.Tick(ControlProtocol.TickDomain.MATCH, winner.at().value()));
+        } else if (outcome instanceof CivilizationMatchController.Draw draw) {
+            CivilizationMatchController.FactionScores scores = draw.scores();
+            controlOutcome = new ControlProtocol.CivilizationDrawOutcome(
+                    ControlProtocol.DrawReason.valueOf(draw.reason().name()),
+                    new ControlProtocol.FactionScores(scores.emberPoints(), scores.tidePoints()),
+                    draw.survivors(), new ControlProtocol.Tick(ControlProtocol.TickDomain.MATCH, draw.at().value()));
+        } else {
+            throw new IllegalStateException("civilization controller returned an unknown outcome");
+        }
+        controlSession.sendEvent(ControlProtocol.Type.OUTCOME, controlOutcome);
+        outcomeEmitted = true;
+    }
+
     private static ControlProtocol.Tick controlTick(MatchController.ResolutionTick tick) {
         if (tick instanceof MatchController.CountdownTick countdown) {
             return new ControlProtocol.Tick(ControlProtocol.TickDomain.COUNTDOWN, countdown.value());
@@ -623,12 +819,23 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
                 || matchController.phase() == MatchController.Phase.ACTIVE;
     }
 
-    private boolean isMatchRuleEnabled(boolean breaking) {
+    private boolean isMatchRuleEnabled(BlockAction action) {
         if (startupMode != StartupMode.PLAN || preparedMatch == null || matchController == null
                 || !matchController.phase().allowsCompetitiveActions()) {
             return false;
         }
-        return breaking ? preparedMatch.match().blockBreaking() : preparedMatch.match().blockPlacing();
+        return matchRulesAllowBlockEdit(preparedMatch.match(), matchController.phase(), action);
+    }
+
+    static boolean matchRulesAllowBlockEdit(
+            ControlProtocol.MatchSettings settings,
+            MatchController.Phase phase,
+            BlockAction action) {
+        Objects.requireNonNull(settings, "match settings");
+        Objects.requireNonNull(phase, "match phase");
+        Objects.requireNonNull(action, "block action");
+        return phase.allowsCompetitiveActions()
+                && (action == BlockAction.BREAK ? settings.blockBreaking() : settings.blockPlacing());
     }
 
     private boolean isPreReleaseCompetitor(Player player) {

@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.google.gson.JsonParser;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
@@ -18,15 +19,19 @@ final class ControlProtocolTest {
             "control-abort.json",
             "control-ack.json",
             "control-build-progress.json",
+            "control-civilization-state.json",
             "control-elimination.json",
             "control-error.json",
             "control-heartbeat.json",
             "control-hello.json",
             "control-metrics.json",
             "control-outcome-draw.json",
+            "control-outcome-civilization-draw.json",
+            "control-outcome-faction-winner.json",
             "control-outcome-runtime-timeout.json",
             "control-outcome-winner.json",
             "control-prepare-bots.json",
+            "control-prepare-civilization.json",
             "control-public-clock.json",
             "control-public-state.json",
             "control-ready.json",
@@ -51,8 +56,11 @@ final class ControlProtocolTest {
             ControlProtocol.Envelope decoded = ControlProtocol.decodeBody(Files.readAllBytes(fixturePath(fixture)));
             byte[] frame = ControlProtocol.encodeFrame(decoded);
             assertEquals(frame.length - Integer.BYTES, ByteBuffer.wrap(frame).getInt(), fixture);
+            byte[] encodedBody = Arrays.copyOfRange(frame, Integer.BYTES, frame.length);
+            assertEquals(JsonParser.parseString(Files.readString(fixturePath(fixture))),
+                    JsonParser.parseString(new String(encodedBody, StandardCharsets.UTF_8)), fixture);
             assertEquals(decoded,
-                    ControlProtocol.decodeBody(Arrays.copyOfRange(frame, Integer.BYTES, frame.length)), fixture);
+                    ControlProtocol.decodeBody(encodedBody), fixture);
         }
     }
 
@@ -65,13 +73,67 @@ final class ControlProtocolTest {
     }
 
     @Test
+    void civilizationPrepareDecodesOnlyIntoItsSixSeatSettingsVariant() throws IOException {
+        ControlProtocol.Envelope envelope = ControlProtocol.decodeBody(
+                Files.readAllBytes(fixturePath("control-prepare-civilization.json")));
+        ControlProtocol.PreparePayload prepare = (ControlProtocol.PreparePayload) envelope.payload();
+
+        assertEquals("civilization", prepare.mode());
+        assertTrue(prepare.settings() instanceof ControlProtocol.CivilizationPrepareSettings);
+        ControlProtocol.CivilizationPrepareSettings settings =
+                (ControlProtocol.CivilizationPrepareSettings) prepare.settings();
+        assertEquals(6, prepare.roster().size());
+        assertEquals(192, settings.border().diameterBlocks());
+        assertEquals(200, settings.civilization().captureZone().uncontestedTicks());
+        assertEquals(List.of(0, 1, 2), settings.civilization().factions().getFirst().members().stream()
+                .map(ControlProtocol.FactionMember::seat).toList());
+    }
+
+    @Test
+    void rejectsCivilizationSettingsWhenTheDiscriminantNamesHungerGames() throws IOException {
+        String fixture = Files.readString(fixturePath("control-prepare-civilization.json"));
+        String mismatchedMode = fixture.replace("\"mode\":\"civilization\"", "\"mode\":\"hunger_games\"");
+
+        assertThrows(IOException.class,
+                () -> ControlProtocol.decodeBody(mismatchedMode.getBytes(StandardCharsets.UTF_8)));
+    }
+
+    @Test
+    void civilizationPositionsAllowSignedSafeHeightButKeepHorizontalCoordinatesNonnegative() throws IOException {
+        String fixture = Files.readString(fixturePath("control-prepare-civilization.json"));
+        String negativeHeight = fixture.replace("\"y\":60", "\"y\":-35");
+        ControlProtocol.PreparePayload decoded = (ControlProtocol.PreparePayload) ControlProtocol.decodeBody(
+                negativeHeight.getBytes(StandardCharsets.UTF_8)).payload();
+
+        ControlProtocol.CivilizationPrepareSettings settings =
+                (ControlProtocol.CivilizationPrepareSettings) decoded.settings();
+        assertEquals(-35, settings.civilization().captureZone().min().y());
+
+        String minimumSafeHeight = fixture.replace("\"y\":60", "\"y\":-9007199254740991");
+        ControlProtocol.PreparePayload minimumSafeHeightDecoded = (ControlProtocol.PreparePayload)
+                ControlProtocol.decodeBody(minimumSafeHeight.getBytes(StandardCharsets.UTF_8)).payload();
+        ControlProtocol.CivilizationPrepareSettings minimumSafeHeightSettings =
+                (ControlProtocol.CivilizationPrepareSettings) minimumSafeHeightDecoded.settings();
+        assertEquals(-9_007_199_254_740_991L,
+                minimumSafeHeightSettings.civilization().captureZone().min().y());
+
+        String negativeX = fixture.replace("\"x\":80", "\"x\":-1");
+        assertThrows(IOException.class,
+                () -> ControlProtocol.decodeBody(negativeX.getBytes(StandardCharsets.UTF_8)));
+
+        String unsafeHeight = fixture.replace("\"y\":60", "\"y\":-9007199254740992");
+        assertThrows(IOException.class,
+                () -> ControlProtocol.decodeBody(unsafeHeight.getBytes(StandardCharsets.UTF_8)));
+    }
+
+    @Test
     void retainsTheFullUnsigned64SeedForBotRosters() throws IOException {
         ControlProtocol.Envelope botPrepare = ControlProtocol.decodeBody(
                 Files.readAllBytes(fixturePath("control-prepare-bots.json")));
         ControlProtocol.PreparePayload original = (ControlProtocol.PreparePayload) botPrepare.payload();
         ControlProtocol.PreparePayload maxSeed = new ControlProtocol.PreparePayload(
                 original.mapSemanticId(), original.scenarioSemanticId(), ControlProtocol.MAX_U64,
-                original.mode(), original.match(), original.border(), original.roster());
+                original.settings(), original.roster());
         byte[] frame = ControlProtocol.encodeFrame(new ControlProtocol.Envelope(
                 botPrepare.header(), ControlProtocol.Type.PREPARE, maxSeed));
         byte[] body = Arrays.copyOfRange(frame, Integer.BYTES, frame.length);

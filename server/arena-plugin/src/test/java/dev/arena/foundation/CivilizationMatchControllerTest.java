@@ -127,6 +127,23 @@ final class CivilizationMatchControllerTest {
     }
 
     @Test
+    void countdownFactionWipeResolvesAtMatchTickZeroWithoutScoringTheDeadFaction() {
+        CivilizationMatchController match = new CivilizationMatchController();
+        MatchController.MatchTick tickZero = new MatchController.MatchTick(BigInteger.ZERO);
+
+        Optional<CivilizationMatchController.Outcome> outcome = match.endServerTick(tickZero, Set.of(0), List.of(
+                new MatchController.Elimination(0, MatchController.EliminationCause.DISCONNECT),
+                new MatchController.Elimination(1, MatchController.EliminationCause.DEATH),
+                new MatchController.Elimination(2, MatchController.EliminationCause.DEATH)));
+
+        assertEquals(new FactionWinner(Faction.TIDE, WinnerReason.ELIMINATION,
+                new FactionScores(BigInteger.ZERO, BigInteger.ZERO), List.of(3, 4, 5), tickZero), outcome.orElseThrow());
+        assertEquals(List.of(), match.zoneOccupants());
+        assertEquals(BigInteger.ZERO, match.scores().emberPoints());
+        assertEquals(BigInteger.ZERO, match.scores().tidePoints());
+    }
+
+    @Test
     void simultaneousFactionWipeDrawsEvenWhenTheOwnerHasMorePoints() {
         CivilizationMatchController match = new CivilizationMatchController();
         captureEmber(match);

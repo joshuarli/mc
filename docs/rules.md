@@ -53,9 +53,10 @@ plan. The plugin connects once to `127.0.0.1`, sends authenticated control-v1
 map setup. It never reconnects. Socket I/O runs off the Paper thread; commands,
 world mutation, elimination resolution, and outcomes run at server tick end.
 
-`prepare` must carry the staged `map_semantic_id`, resolved Hunger Games
-settings, and one to six ordered bot competitors. Each bot binds only when both
-its offline UUID and username match. Noncompetitor joins are spectators.
+`prepare` must carry the staged `map_semantic_id`, settings for one supported
+mode, and ordered bot competitors. Hunger Games accepts one to six seats;
+civilization requires all six. Each bot binds only when both its offline UUID
+and username match. Noncompetitor joins are spectators.
 `start` requires every configured bot to be online before the countdown begins;
 competitive reconnects after countdown are spectators. Match configuration
 controls respawn, block breaking and placing, natural mob spawning, random
@@ -83,14 +84,15 @@ mode does not apply these plan-mode player guards.
 The match starts in `WAITING` without a match tick. Countdown ticks are
 zero-based. Once countdown completes, match tick zero begins; grace occupies
 ticks `0..grace_ticks-1`, and active play starts at `grace_ticks`. With a zero
-countdown, release occurs immediately. A one-seat roster wins at release.
+countdown, release occurs immediately. In Hunger Games, a one-seat roster wins
+at release.
 
 `authoritative_max_ticks` is the inclusive final match tick. Elimination events
 observed during a server tick are resolved in stable seat order before checking
-the tick limit. One remaining seat wins, and zero remaining seats draw on that
-tick. If multiple seats remain at the inclusive limit, the result is a tick
-limit draw. A death takes precedence over a disconnect for a seat eliminated
-on the same tick.
+the tick limit. In Hunger Games, one remaining seat wins and zero remaining
+seats draw on that tick. If multiple seats remain at the inclusive limit, the
+result is a tick limit draw. A death takes precedence over a disconnect for a
+seat eliminated on the same tick.
 
 An abort while waiting has no phase tick. An abort during countdown carries the
 zero-based countdown tick; after release it carries the current match tick.
@@ -98,6 +100,41 @@ World-border interpolation uses match ticks and reaches its configured final
 diameter at `shrink_end_tick`.
 
 The runner may abort with `runtime_timeout` when the operational deadline expires.
+
+## Civilization
+
+Civilization `prepare` carries six bot seats: Ember seats 0–2 and Tide seats
+3–5, each with a gatherer/crafter, builder, and defender/scout role. The mode
+uses a fixed 192-block border, a 2,400-tick grace period, no respawn, enabled
+survival block breaking and placing, and an inclusive 18,000-tick limit. The
+compiled starting kit gives every seat four bread, a wooden axe, pickaxe, and
+sword. Food is finite; the kit does not imply a renewable food economy.
+
+The resolved scenario supplies the neutral capture zone and both oak-outpost
+anchors. At the end of each match tick, the plugin derives occupants from the
+currently bound, living bot players inside the inclusive zone bounds. After
+grace, a sole present faction advances capture by one uncontested tick. A
+contest pauses progress, and a challenger leaving resets its unfinished
+progress. A new challenger starts from zero; capture completes at 200
+increments. Ownership remains unchanged until completion, and the owner scores
+one point at each end-of-tick boundary, including the completion tick, even if
+the owner has no surviving seats. The plugin advertises `civilization_v1` and
+publishes the actual occupants, owner, challenger, progress, and both scores as
+`civilization_state`.
+
+Each outpost is a survival-placed 3×3 oak-plank platform with two opposing
+three-block corner pillars rising above opposite platform corners, for 15
+required blocks. Four oak logs craft 16
+planks through ordinary recipe and inventory mechanics; the extra plank is not
+placed as part of the blueprint. The server checks the actual world blocks at
+the declared anchor. It does not grant materials or place structure blocks.
+
+If one faction is eliminated, the other faction wins regardless of score. A
+same-tick wipe draws. If both factions still have survivors at tick 18,000,
+their scores decide the winner; equal scores draw. Civilization outcomes carry
+both faction scores and the authoritative match tick. The match controller
+leaves these decisions to the civilization rules after resolving the same-tick
+elimination batch.
 
 The control protocol's versioned payload schema and cross-language fixtures are
 the wire contract. `ARENA_DAMAGE_ATTEMPT` includes cancelled attacks, while
