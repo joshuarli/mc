@@ -16,6 +16,13 @@ import {
   type TraceRecord,
 } from '../trace.js';
 import { isAuthenticatedControlMessage, type RunnerCommandEnvelope } from './session.js';
+import {
+  OPERATIONAL_FAILURE_SCHEMA_VERSION,
+  writeOperationalFailureArtifact,
+  type OperationalFailureArtifactV1,
+  type OperationalFailureCleanupV1,
+  type OperationalFailurePrimaryV1,
+} from './failure-artifact.js';
 
 const MAX_RUNTIME_TRACE_RECORDS = 100_000;
 const CHECKPOINT_OBSERVATION_INTERVAL = 200;
@@ -30,6 +37,13 @@ export interface RuntimeTraceSegment {
 export interface RuntimeTraceResult {
   readonly segments: readonly RuntimeTraceSegment[];
   readonly totalByteLength: number;
+}
+
+export interface RuntimeFailureTraceResult {
+  readonly artifact: OperationalFailureArtifactV1;
+  readonly artifactPath: Buffer;
+  readonly artifactIdentity: FileIdentity;
+  readonly artifactByteLength: number;
 }
 
 export interface RuntimeTraceOptions {
@@ -63,9 +77,11 @@ export class RuntimeTraceBuilder {
   #lastAcknowledgedRunnerSequence = 0n;
   #lastPolicyDecisionSequence = 0n;
   #lastCheckpointObservation = 0;
+  #checkpointSegmentCount = 0;
   #tail: Promise<void> = Promise.resolve();
   #failure: unknown;
   #finalized: RuntimeTraceResult | undefined;
+  #failureArtifact: RuntimeFailureTraceResult | undefined;
 
   constructor(options: RuntimeTraceOptions) {
     if (options.runId.length === 0 || options.preparedRun.runId !== options.runId) {
@@ -270,12 +286,51 @@ export class RuntimeTraceBuilder {
       if (this.#records.length === 0) {
         throw new RunnerError('runtime_failure', 'run trace', { kind: 'outcome_segment_missing' });
       }
-      await this.#stagePendingSegment(true);
+      await this.#stagePendingSegment('complete');
       this.#finalized = Object.freeze({
         segments: Object.freeze(this.#segments.map(copySegment)),
         totalByteLength: this.#stagedByteLength,
       });
       return copyTraceResult(this.#finalized);
+    });
+  }
+
+  /** Persists actual pending records after Paper has been reaped, without asserting a valid match. */
+  persistFailurePartial(
+    primary: OperationalFailurePrimaryV1,
+    cleanup: OperationalFailureCleanupV1,
+  ): Promise<RuntimeFailureTraceResult> {
+    if (this.#failureArtifact !== undefined) {
+      return Promise.resolve(copyFailureTraceResult(this.#failureArtifact));
+    }
+    return this.#enqueueRecovery(async () => {
+      if (this.#failureArtifact !== undefined) return copyFailureTraceResult(this.#failureArtifact);
+      if (this.#records.length > 0) await this.#stagePendingSegment('failure');
+
+      const artifact: OperationalFailureArtifactV1 = Object.freeze({
+        schema: OPERATIONAL_FAILURE_SCHEMA_VERSION,
+        run_id: this.#runId,
+        primary,
+        cleanup,
+        trace_checkpoint_segments: Object.freeze(this.#segments.slice(0, this.#checkpointSegmentCount).map((segment) =>
+          Object.freeze({
+            path: segment.relativePath.toString('ascii'),
+            identity: Object.freeze({ ...segment.identity }),
+            byte_length: segment.byteLength,
+          }))),
+      });
+      const staged = await writeOperationalFailureArtifact({
+        helperPath: this.#helperPath,
+        ownedRoot: this.#ownedRoot,
+        artifact,
+      });
+      this.#failureArtifact = Object.freeze({
+        artifact,
+        artifactPath: Buffer.from(staged.path),
+        artifactIdentity: Object.freeze({ ...staged.identity }),
+        artifactByteLength: staged.byteLength,
+      });
+      return copyFailureTraceResult(this.#failureArtifact);
     });
   }
 
@@ -318,9 +373,9 @@ export class RuntimeTraceBuilder {
     return envelopeBytes + this.#recordBytes + existingSeparators + extraSeparator + extraRecordBytes;
   }
 
-  async #stagePendingSegment(final = false): Promise<void> {
+  async #stagePendingSegment(purpose: 'checkpoint' | 'complete' | 'failure' = 'checkpoint'): Promise<void> {
     if (this.#records.length === 0) return;
-    if (this.#hasOutcome && !final) {
+    if (this.#hasOutcome && purpose === 'checkpoint') {
       throw new RunnerError('runtime_failure', 'run trace', { kind: 'outcome_staged_before_jvm_stop' });
     }
     const firstSequence = this.#totalRecordCount - this.#records.length + 1;
@@ -351,13 +406,14 @@ export class RuntimeTraceBuilder {
       maxBytes: MAX_TRACE_SEGMENT_BYTES,
     });
     this.#segments.push(Object.freeze({ relativePath, identity, byteLength: contents.byteLength }));
+    if (purpose !== 'complete') this.#checkpointSegmentCount += 1;
     this.#stagedByteLength += contents.byteLength;
     this.#records.length = 0;
     this.#recordBytes = 0;
   }
 
   #assertMutable(): void {
-    if (this.#finalized !== undefined) {
+    if (this.#finalized !== undefined || this.#failureArtifact !== undefined) {
       throw new RunnerError('runtime_failure', 'run trace', { kind: 'trace_finalized' });
     }
   }
@@ -372,6 +428,12 @@ export class RuntimeTraceBuilder {
         throw error;
       }
     });
+    this.#tail = result.then(() => undefined, () => undefined);
+    return result;
+  }
+
+  #enqueueRecovery<T>(operation: () => Promise<T> | T): Promise<T> {
+    const result = this.#tail.then(operation);
     this.#tail = result.then(() => undefined, () => undefined);
     return result;
   }
@@ -421,6 +483,15 @@ function copyTraceResult(result: RuntimeTraceResult): RuntimeTraceResult {
   return Object.freeze({
     segments: Object.freeze(result.segments.map(copySegment)),
     totalByteLength: result.totalByteLength,
+  });
+}
+
+function copyFailureTraceResult(result: RuntimeFailureTraceResult): RuntimeFailureTraceResult {
+  return Object.freeze({
+    artifact: result.artifact,
+    artifactPath: Buffer.from(result.artifactPath),
+    artifactIdentity: Object.freeze({ ...result.artifactIdentity }),
+    artifactByteLength: result.artifactByteLength,
   });
 }
 
