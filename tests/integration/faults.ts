@@ -132,15 +132,20 @@ test("fault trace checkpoint waits for the writer's 200 policy observations", as
   };
   const checkpointTrace = {
     runId: run.runId,
-    records: Array.from({ length: TRACE_CHECKPOINT_POLICY_OBSERVATIONS }, () => ({ schema: "policy-replay-v1" })),
+    records: Array.from({ length: TRACE_CHECKPOINT_POLICY_OBSERVATIONS }, () => ({ schema: "policy-replay-v2" })),
+  };
+  const unknownSchemaTrace = {
+    runId: run.runId,
+    records: Array.from({ length: TRACE_CHECKPOINT_POLICY_OBSERVATIONS }, () => ({ schema: "policy-replay-v3" })),
   };
 
   let checkpointReadCount = 0;
   await waitForTraceCheckpoint(run, new AbortController().signal, 1_000, undefined, async () => {
     checkpointReadCount += 1;
-    return checkpointReadCount === 1 ? partialFinalTrace : checkpointTrace;
+    if (checkpointReadCount === 1) return partialFinalTrace;
+    return checkpointReadCount === 2 ? unknownSchemaTrace : checkpointTrace;
   });
-  assert.equal(checkpointReadCount, 2, "a final partial trace must not satisfy the checkpoint wait");
+  assert.equal(checkpointReadCount, 3, "partial and unknown-schema traces must not satisfy the checkpoint wait");
 
   let statusCheckCount = 0;
   await assert.rejects(waitForTraceCheckpoint(
@@ -495,7 +500,8 @@ const TRACE_CHECKPOINT_POLICY_OBSERVATIONS = 200;
 
 function hasTraceCheckpointWatermark(records: readonly TraceRecord[]): boolean {
   return records.reduce((count, record) =>
-    count + (record.schema === "policy-replay-v1" ? 1 : 0), 0) >= TRACE_CHECKPOINT_POLICY_OBSERVATIONS;
+    count + (record.schema === "policy-replay-v1" || record.schema === "policy-replay-v2" ? 1 : 0), 0)
+    >= TRACE_CHECKPOINT_POLICY_OBSERVATIONS;
 }
 
 async function waitForOwnedJavaProcess(
