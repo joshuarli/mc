@@ -489,12 +489,12 @@ launch_runner() {
         runtime_plugin_jar="$root/.work/arena/gradle-build/libs/arena-plugin-0.1.0.jar"
         [ -f "$runtime_plugin_jar" ] && [ ! -L "$runtime_plugin_jar" ] || fail "locked Paper plugin JAR is unavailable: $runtime_plugin_jar"
         (cd "$root" && ARENA_FS_HELPER="$fs_helper" ARENA_JAVA_HOME="$runtime_java_home" \
-            ARENA_PAPER_JAR="$runtime_paper_jar" ARENA_PLUGIN_JAR="$runtime_plugin_jar" \
+            ARENA_JAVA_TMPDIR="$root/.work/tmp" ARENA_PAPER_JAR="$runtime_paper_jar" ARENA_PLUGIN_JAR="$runtime_plugin_jar" \
             "$fs_helper" launch-node "$NODE_HOME/bin/node" "$cli" "$cli_command" "$@")
     else
         (
             cd "$root"
-            unset ARENA_JAVA_HOME ARENA_PAPER_JAR ARENA_PLUGIN_JAR
+            unset ARENA_JAVA_HOME ARENA_JAVA_TMPDIR ARENA_PAPER_JAR ARENA_PLUGIN_JAR
             ARENA_FS_HELPER="$fs_helper" \
                 "$fs_helper" launch-node "$NODE_HOME/bin/node" "$cli" "$cli_command" "$@"
         )

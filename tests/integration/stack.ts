@@ -125,12 +125,13 @@ class PaperServer {
   private stopped = false;
   private processClosed = false;
 
-  constructor(java: string, paperJar: string, runDirectory: string, logPath: string) {
+  constructor(java: string, paperJar: string, runDirectory: string, logPath: string, javaTmpDir: string) {
     this.log = createWriteStream(logPath, { flags: "wx" });
     this.log.on("error", (error) => { this.logError = error; });
     this.child = spawn(java, [
       "-Xms512m",
       "-Xmx2g",
+      `-Djava.io.tmpdir=${javaTmpDir}`,
       "-Darena.test-fixture=true",
       "-Dterminal.jline=false",
       "-Dterminal.ansi=false",
@@ -520,7 +521,6 @@ function writeServerFiles(runDirectory: string, port: number, pluginJar: string)
     "gamemode=survival",
     "difficulty=easy",
     "spawn-protection=0",
-    "spawn-radius=0",
     "max-players=4",
     "view-distance=2",
     "simulation-distance=2",
@@ -550,14 +550,18 @@ async function runStack(): Promise<void> {
     const javaHome = process.env.JAVA_HOME;
     if (!javaHome) fail("pinned JDK is unavailable; run the arena test selector so prepare_jdk can configure JAVA_HOME");
     const java = join(javaHome, "bin", "java");
-    for (const path of [paperJar, pluginJar, java]) {
+    const javaTmpDir = join(root, ".work", "tmp");
+    ensureRealDirectory(javaTmpDir);
+    for (const path of [paperJar, pluginJar, java, javaTmpDir]) {
       const stat = lstatSync(path);
-      if (!stat.isFile() || stat.isSymbolicLink()) fail(`required stack file is unavailable or linked: ${path}`);
+      if (stat.isSymbolicLink() || (path === javaTmpDir ? !stat.isDirectory() : !stat.isFile())) {
+        fail(`required stack path is unavailable or linked: ${path}`);
+      }
     }
 
     const port = await freeLoopbackPort();
     writeServerFiles(runDirectory, port, pluginJar);
-    server = new PaperServer(java, paperJar, runDirectory, join(runDirectory, "paper.log"));
+    server = new PaperServer(java, paperJar, runDirectory, join(runDirectory, "paper.log"), javaTmpDir);
     await server.waitReady(port, protocol);
     await rejectWrongProtocol(port, protocol + 1);
 
