@@ -66,7 +66,6 @@ const SERVER_DIRECTORY = Buffer.from('/server', 'ascii');
 const CLIENT_HOST = '127.0.0.1' as const;
 const GAME_PORT = 25565;
 const STARTUP_TIMEOUT_MS = 60_000;
-const WALL_CLOCK_TIMEOUT_MS = 600_000;
 const EVALUATOR_JOIN_TIMEOUT_MS = 5_000;
 // Retained events feed both outcome reconstruction and the returned run result.
 const MAX_RETAINED_AUTHORITY_EVENTS = 100_000;
@@ -108,7 +107,8 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
   const runSignal = controller.signal;
   const coldStartDeadline = options.coldStartDeadline
     ?? armRuntimeDeadline(controller, 'cold_start', COLD_START_TIMEOUT_MS);
-  const wallClockDeadline = armRuntimeDeadline(controller, 'wall_clock', WALL_CLOCK_TIMEOUT_MS);
+  const wallClockDeadline = armRuntimeDeadline(controller, 'wall_clock',
+    options.preparedRun.scenario.mode === 'civilization' ? 1_200_000 : 600_000);
   const abortPromise = Promise.race([
     abortSignalPromise(runSignal),
     coldStartDeadline.failure,

@@ -83,7 +83,7 @@ under `fixtures/protocol/control-*.json`.
 
 The command acknowledgment marks processing on the plugin's server thread. It
 precedes the authority effects caused by that command. While an `abort` awaits
-its matching acknowledgment, nonterminal clocks, alive-seat states, and
+its matching acknowledgment, nonterminal clocks, alive-seat states, faction capture/score states, and
 eliminations from the running match may already be in flight and remain valid
 in their plugin sequence order. An aborted or finished clock and every outcome
 still require the outstanding acknowledgment first. `prepare` and `start`
