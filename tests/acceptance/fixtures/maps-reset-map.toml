@@ -1,0 +1,29 @@
+schema = 1
+name = "maps-reset"
+
+[dimensions]
+width = 64
+depth = 64
+min_y = 0
+max_y = 128
+
+[[operations]]
+kind = "cuboid"
+from = { x = 10, y = 120, z = 12 }
+to = { x = 22, y = 120, z = 18 }
+block = "minecraft:stone"
+
+[[operations]]
+kind = "spawn"
+seat = 0
+position = { x = 12, y = 121, z = 15 }
+
+[[operations]]
+kind = "spawn"
+seat = 1
+position = { x = 20, y = 121, z = 15 }
+
+[[operations]]
+kind = "loot_container"
+position = { x = 13, y = 121, z = 15 }
+inventory = ["minecraft:bread", "minecraft:stone_sword"]

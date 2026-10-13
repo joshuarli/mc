@@ -1,17 +1,21 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { lstatSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
+import { runCli } from "../../../packages/arena-runner/src/cli.js";
 import { prepareRun } from "../../../packages/arena-runner/src/prepare.js";
 import { runPreparedRun } from "../../../packages/arena-runner/src/runtime/run.js";
+import type { StoppedPlayerStats } from "../../../packages/arena-runner/src/runtime/observations.js";
 
-type EvaluateRun = NonNullable<Parameters<typeof runPreparedRun>[0]["evaluate"]>;
+export type AcceptanceEvaluator = NonNullable<Parameters<typeof runPreparedRun>[0]["evaluate"]>;
+export type AcceptanceRunContext = Parameters<AcceptanceEvaluator>[0];
 
 /** Prepares one fresh run and delegates its world clone, server, and bot cleanup to the runtime. */
 export async function runOwnedAcceptanceScenario(
   scenarioPath: string,
   runId: string,
-  evaluate: EvaluateRun,
+  evaluate: AcceptanceEvaluator,
   signal: AbortSignal,
 ) {
   const repositoryRoot = process.cwd();
@@ -27,14 +31,15 @@ export async function runOwnedAcceptanceScenario(
   }
 
   const ownedRoot = Buffer.from(repositoryRoot, "utf8");
+  const ownedRunId = `${runId.slice(0, 20)}-${randomUUID()}`;
   const preparedRun = await prepareRun(
     helperPath,
     ownedRoot,
     Buffer.from(scenarioPath, "utf8"),
-    runId,
+    ownedRunId,
     signal,
   );
-  return await runPreparedRun({
+  const completed = await runPreparedRun({
     preparedRun,
     helperPath,
     ownedRoot,
@@ -44,6 +49,39 @@ export async function runOwnedAcceptanceScenario(
     signal,
     evaluate,
   });
+  const inspection = await inspectCompletedRun(helperPath, completed.runId);
+  return { ...completed, inspection };
+}
+
+async function inspectCompletedRun(helperPath: string, runId: string): Promise<{
+  readonly schema: 1;
+  readonly run_id: string;
+  readonly report: unknown;
+  readonly stats: readonly StoppedPlayerStats[];
+}> {
+  const previousHelperPath = process.env.ARENA_FS_HELPER;
+  process.env.ARENA_FS_HELPER = helperPath;
+  let result: Awaited<ReturnType<typeof runCli>>;
+  try {
+    result = await runCli(["inspect", "--run-id", runId]);
+  } finally {
+    if (previousHelperPath === undefined) delete process.env.ARENA_FS_HELPER;
+    else process.env.ARENA_FS_HELPER = previousHelperPath;
+  }
+  if (result.kind !== "success") throw new Error(`arena inspect failed: ${result.stderr}`);
+  const parsed: unknown = JSON.parse(result.stdout);
+  assert.ok(parsed !== null && typeof parsed === "object", "arena inspect must return a JSON object");
+  const document = parsed as Record<string, unknown>;
+  assert.equal(document.schema, 1, "arena inspect schema must be supported by the acceptance harness");
+  assert.equal(document.run_id, runId, "arena inspect must return the requested stopped run");
+  assert.ok(document.report !== null && typeof document.report === "object", "arena inspect must include its report");
+  assert.ok(Array.isArray(document.stats), "arena inspect must return stopped player stats");
+  return parsed as {
+    readonly schema: 1;
+    readonly run_id: string;
+    readonly report: unknown;
+    readonly stats: readonly StoppedPlayerStats[];
+  };
 }
 
 function lockedString(section: string, key: string): string {

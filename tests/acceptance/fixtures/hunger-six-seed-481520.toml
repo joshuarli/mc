@@ -1,0 +1,45 @@
+schema = 1
+name = "hunger-six-seed-481520"
+mode = "hunger_games"
+seed = 481520
+map = "../../../maps/hunger-six.toml"
+policy = "../../../policies/baseline.toml"
+
+[roster]
+competitors = 6
+spectator_capacity = 4
+
+[server]
+minecraft = "26.1.2"
+view_distance_chunks = 6
+simulation_distance_chunks = 5
+max_tick_rate = 20
+
+[match]
+countdown_ticks = 100
+grace_ticks = 200
+authoritative_max_ticks = 7200
+respawn = false
+block_breaking = false
+block_placing = false
+natural_mobs = false
+natural_random_ticks = false
+
+[border]
+initial_diameter_blocks = 126
+shrink_start_tick = 1200
+shrink_end_tick = 6000
+final_diameter_blocks = 16
+
+[bots]
+strategy_interval_ticks = 4
+path_expansions_per_slice = 2048
+max_pending_paths_per_bot = 1
+perception = "competitive-v1"
+
+[record]
+mode = "evaluation"
+policy_replay = true
+world_outcomes = true
+schema = 1
+name = "hunger-six-seed-481520"
