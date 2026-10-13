@@ -10,6 +10,7 @@ import {
   type SkillOutcome,
 } from '@arena/core';
 import type { Bot, BotEvents } from 'mineflayer';
+import type { PartiallyComputedPath } from 'mineflayer-pathfinder';
 import { classifyItem, mineflayerEquipmentDestination } from './items.js';
 import { MineflayerObserver } from './observer.js';
 import { recordPathDiagnostic } from './path-diagnostics.js';
@@ -18,6 +19,8 @@ import type { ArenaSkillIntent } from './skill-intent.js';
 import { hasLocalVoxelLineOfSight } from './visibility.js';
 
 const { Movements, goals, pathfinder } = createRequire(import.meta.url)('mineflayer-pathfinder') as typeof import('mineflayer-pathfinder');
+const AStar = createRequire(import.meta.url)('mineflayer-pathfinder/lib/astar') as AStarConstructor;
+const { version: PATHFINDER_VERSION } = createRequire(import.meta.url)('mineflayer-pathfinder/package.json') as { version: string };
 
 const MAX_PATH_SEARCH_RADIUS_BLOCKS = 16;
 /** Keep long routes inside the pathfinder's fixed search horizon. */
@@ -26,7 +29,7 @@ const MAX_NAVIGATION_LEGS = 128;
 const MAX_PATH_THINK_MS = 1_000;
 const MAX_PATH_SLICE_PER_CLIENT_MS = 3;
 const MAX_WORKER_PATH_SLICE_MS = 10;
-const MAX_ACTIVE_PATH_SEARCHES = Math.floor(MAX_WORKER_PATH_SLICE_MS / MAX_PATH_SLICE_PER_CLIENT_MS);
+const PINNED_PATHFINDER_VERSION = '2.4.5';
 const PATH_TIMEOUT_MS = 20_000;
 const ACTION_TIMEOUT_MS = 5_000;
 const PICKUP_RANGE_BLOCKS = 1.25;
@@ -75,16 +78,38 @@ interface SkillResources {
   quickBarSlotToRestore: number | null;
 }
 
-interface PathSearchWaiter {
+interface AStarContext {
+  readonly movements: InstanceType<typeof Movements>;
+  readonly bestNode: unknown;
+  tickTimeout: number;
+  makeResult(status: 'partial', node: unknown): PartiallyComputedPath;
+}
+
+type AStarCompute = (this: AStarContext) => PartiallyComputedPath;
+
+interface AStarConstructor {
+  new (...args: unknown[]): AStarContext;
+  readonly prototype: AStarContext & { compute: AStarCompute };
+}
+
+type PathSearchTransition = 'queued' | 'acquired' | 'released' | 'cancelled' | 'timedOut';
+type PathSearchCompletion = Extract<PathSearchTransition, 'released' | 'cancelled' | 'timedOut'>;
+
+interface PathSearchOwner {
   readonly bot: Bot;
-  readonly pathfinder: Bot['pathfinder'];
-  readonly signal: AbortSignal;
-  readonly deadline: number;
-  readonly resolve: (release: () => void) => void;
-  readonly reject: (error: Error) => void;
-  timeout: NodeJS.Timeout | null;
+  readonly movements: InstanceType<typeof Movements>;
+  readonly onGoalUpdated: (goal: PathfinderGoal | null) => void;
+  readonly onPathStop: () => void;
+  closed: boolean;
+  queued: boolean;
+  signal: AbortSignal | null;
+  deadline: number | null;
   onAbort: (() => void) | null;
-  settled: boolean;
+}
+
+interface PathSearchRegistration {
+  beginNavigation(signal: AbortSignal, deadline: number): (completion: PathSearchCompletion) => void;
+  close(): void;
 }
 
 class SkillFault extends Error {
@@ -104,125 +129,321 @@ class SkillInterrupted extends Error {
   }
 }
 
-const activePathfinders = new Set<Bot['pathfinder']>();
-const queuedPathfinders: PathSearchWaiter[] = [];
+/**
+ * Mineflayer pathfinder 2.4.5 hides AStar contexts inside getPathTo and advances
+ * partial contexts from physicsTick, so both routes must share the same owner queue.
+ */
+class PathSearchWorker {
+  readonly #ownersByBot = new WeakMap<Bot, PathSearchOwner>();
+  readonly #arenaBots = new WeakSet<Bot>();
+  readonly #owners = new Set<PathSearchOwner>();
+  readonly #queuedOwners: PathSearchOwner[] = [];
+  readonly #clientSpentMs = new Map<PathSearchOwner, number>();
+  readonly #computeHook: AStarCompute;
+  #originalCompute: AStarCompute | null = null;
+  #windowStartedAt: number | null = null;
+  #workerSpentMs = 0;
+  #activeSearches = 0;
 
-/** Reserves only as many concurrent contexts as fit inside the worker path-search budget. */
-function acquirePathSearchShare(
-  bot: Bot,
-  signal: AbortSignal,
-  deadline: number,
-): Promise<() => void> {
-  if (signal.aborted) return Promise.reject(new SkillInterrupted());
-  if (performance.now() >= deadline) {
-    recordPathSearchEvent(bot, 'timedOut');
-    return Promise.reject(new SkillFault('timedOut', 'bounded navigation exceeded its deadline while waiting for a path search'));
+  constructor() {
+    const worker = this;
+    this.#computeHook = function (this: AStarContext): PartiallyComputedPath {
+      return worker.#compute(this);
+    };
   }
 
-  return new Promise<() => void>((resolve, reject) => {
-    const waiter: PathSearchWaiter = {
+  register(bot: Bot, movements: InstanceType<typeof Movements>): PathSearchRegistration {
+    if (PATHFINDER_VERSION !== PINNED_PATHFINDER_VERSION) {
+      throw new Error(`Path search scheduling requires mineflayer-pathfinder ${PINNED_PATHFINDER_VERSION}; found ${PATHFINDER_VERSION}`);
+    }
+    if (this.#ownersByBot.has(bot)) throw new Error('a path search worker owner is already registered for this bot');
+    this.#installHook();
+
+    const owner: PathSearchOwner = {
       bot,
-      pathfinder: bot.pathfinder,
-      signal,
-      deadline,
-      resolve,
-      reject,
-      timeout: null,
+      movements,
+      closed: false,
+      queued: false,
+      signal: null,
+      deadline: null,
       onAbort: null,
-      settled: false,
+      onGoalUpdated: (goal) => {
+        if (goal === null) this.#removeQueuedOwner(owner, 'cancelled');
+      },
+      onPathStop: () => this.#removeQueuedOwner(owner, 'cancelled'),
     };
-    if (activePathfinders.size < MAX_ACTIVE_PATH_SEARCHES && queuedPathfinders.length === 0) {
-      grantPathSearchShare(waiter);
-      return;
+    this.#ownersByBot.set(bot, owner);
+    this.#arenaBots.add(bot);
+    this.#owners.add(owner);
+    try {
+      bot.on('goal_updated', owner.onGoalUpdated as BotEvents['goal_updated']);
+      bot.on('path_stop', owner.onPathStop);
+    } catch (error) {
+      this.#ownersByBot.delete(bot);
+      this.#owners.delete(owner);
+      owner.closed = true;
+      bot.removeListener('goal_updated', owner.onGoalUpdated as BotEvents['goal_updated']);
+      bot.removeListener('path_stop', owner.onPathStop);
+      try {
+        this.#restoreHookWhenUnused();
+      } catch (cleanupError) {
+        throw new AggregateError([error, cleanupError], 'path search registration and cleanup both failed');
+      }
+      throw error;
     }
 
-    waiter.onAbort = () => removePathSearchWaiter(waiter, new SkillInterrupted());
-    waiter.timeout = setTimeout(
-      () => removePathSearchWaiter(waiter, new SkillFault('timedOut', 'bounded navigation expired while waiting for a path search')),
-      Math.max(0, deadline - performance.now()),
+    return {
+      beginNavigation: (signal, deadline) => this.#beginNavigation(owner, signal, deadline),
+      close: () => this.#unregister(owner),
+    };
+  }
+
+  #installHook(): void {
+    if (this.#owners.size > 0) return;
+    const original = AStar.prototype.compute;
+    if (original === this.#computeHook) throw new Error('path search worker hook is installed without an owner');
+    if (typeof original !== 'function') throw new Error('pinned pathfinder AStar.compute is unavailable');
+    this.#originalCompute = original;
+    AStar.prototype.compute = this.#computeHook;
+  }
+
+  #beginNavigation(
+    owner: PathSearchOwner,
+    signal: AbortSignal,
+    deadline: number,
+  ): (completion: PathSearchCompletion) => void {
+    if (owner.closed) throw new Error('cannot navigate with a closed path search owner');
+    if (owner.signal !== null) throw new Error('path search owner already has an active navigation');
+    owner.signal = signal;
+    owner.deadline = deadline;
+    owner.onAbort = () => this.#removeQueuedOwner(owner, 'cancelled');
+    signal.addEventListener('abort', owner.onAbort, { once: true });
+    if (signal.aborted) owner.onAbort();
+
+    let ended = false;
+    return (completion) => {
+      if (ended) return;
+      ended = true;
+      if (owner.onAbort !== null) signal.removeEventListener('abort', owner.onAbort);
+      owner.onAbort = null;
+      owner.signal = null;
+      owner.deadline = null;
+      this.#removeQueuedOwner(owner, completion);
+    };
+  }
+
+  #unregister(owner: PathSearchOwner): void {
+    if (owner.closed) return;
+    owner.closed = true;
+    const failures: unknown[] = [];
+    if (owner.signal !== null && owner.onAbort !== null) {
+      try {
+        owner.signal.removeEventListener('abort', owner.onAbort);
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    owner.onAbort = null;
+    owner.signal = null;
+    owner.deadline = null;
+    try {
+      this.#removeQueuedOwner(owner, 'cancelled');
+    } catch (error) {
+      failures.push(error);
+    }
+    try {
+      owner.bot.removeListener('goal_updated', owner.onGoalUpdated as BotEvents['goal_updated']);
+      owner.bot.removeListener('path_stop', owner.onPathStop);
+    } catch (error) {
+      failures.push(error);
+    }
+    this.#ownersByBot.delete(owner.bot);
+    this.#owners.delete(owner);
+    this.#clientSpentMs.delete(owner);
+    try {
+      this.#restoreHookWhenUnused();
+    } catch (error) {
+      failures.push(error);
+    }
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1) throw new AggregateError(failures, 'path search owner cleanup failed');
+  }
+
+  #restoreHookWhenUnused(): void {
+    if (this.#owners.size > 0) return;
+    const original = this.#originalCompute;
+    if (original === null) return;
+    if (AStar.prototype.compute !== this.#computeHook) {
+      this.#originalCompute = null;
+      throw new Error('mineflayer-pathfinder AStar.compute changed while the Arena worker hook was active');
+    }
+    AStar.prototype.compute = original;
+    this.#originalCompute = null;
+    this.#windowStartedAt = null;
+    this.#workerSpentMs = 0;
+    this.#clientSpentMs.clear();
+  }
+
+  #compute(context: AStarContext): PartiallyComputedPath {
+    const original = this.#originalCompute;
+    if (original === null) throw new Error('path search worker has no original AStar.compute method');
+    const bot = (context as { readonly movements?: { readonly bot?: unknown } }).movements?.bot;
+    const owner = typeof bot === 'object' && bot !== null
+      ? this.#ownersByBot.get(bot as Bot)
+      : undefined;
+    if (owner === undefined) {
+      if (typeof bot === 'object' && bot !== null && this.#arenaBots.has(bot as Bot)) {
+        throw new Error('Arena-owned pathfinding context uses unregistered Movements');
+      }
+      return original.call(context);
+    }
+    if (owner.closed || owner.movements !== context.movements) {
+      throw new Error('Arena-owned pathfinding context uses unregistered Movements');
+    }
+    if (!(context instanceof AStar) || context.constructor !== AStar) {
+      throw new Error('Arena path search encountered an unsupported AStar context');
+    }
+    if (!Number.isFinite(context.tickTimeout) || context.tickTimeout < 0
+      || typeof context.makeResult !== 'function' || context.bestNode === null) {
+      throw new Error('Arena path search encountered an unsupported AStar context shape');
+    }
+
+    const now = performance.now();
+    if (!Number.isFinite(now)) throw new Error('monotonic path search clock returned a non-finite value');
+    this.#rollWindow(now);
+    if (owner.signal?.aborted) {
+      this.#removeQueuedOwner(owner, 'cancelled');
+      return context.makeResult('partial', context.bestNode);
+    }
+    if (owner.deadline !== null && now >= owner.deadline) {
+      this.#removeQueuedOwner(owner, 'timedOut');
+      return context.makeResult('partial', context.bestNode);
+    }
+
+    const workerRemainingMs = MAX_WORKER_PATH_SLICE_MS - this.#workerSpentMs;
+    const clientRemainingMs = MAX_PATH_SLICE_PER_CLIENT_MS - (this.#clientSpentMs.get(owner) ?? 0);
+    const queueHead = this.#queuedOwners[0];
+    const sliceMs = Math.min(
+      context.tickTimeout,
+      MAX_PATH_SLICE_PER_CLIENT_MS,
+      workerRemainingMs,
+      clientRemainingMs,
     );
-    signal.addEventListener('abort', waiter.onAbort, { once: true });
-    queuedPathfinders.push(waiter);
-    recordPathSearchEvent(bot, 'queued');
-    if (signal.aborted) waiter.onAbort();
-  });
-}
+    if ((queueHead !== undefined && queueHead !== owner) || sliceMs <= 0) {
+      this.#queueOwner(owner);
+      return context.makeResult('partial', context.bestNode);
+    }
 
-function grantPathSearchShare(waiter: PathSearchWaiter): void {
-  if (waiter.settled) return;
-  if (waiter.signal.aborted) {
-    recordPathSearchEvent(waiter.bot, 'cancelled');
-    rejectPathSearchWaiter(waiter, new SkillInterrupted());
-    return;
+    const computeStartedAt = now;
+    if (owner.queued) this.#dequeueOwner(owner);
+    this.#activeSearches += 1;
+    this.#record(owner.bot, 'acquired');
+    const originalTimeout = context.tickTimeout;
+    context.tickTimeout = sliceMs;
+    let result: PartiallyComputedPath | undefined;
+    let computeError: unknown;
+    let computeFailed = false;
+    try {
+      result = original.call(context);
+    } catch (error) {
+      computeFailed = true;
+      computeError = error;
+    } finally {
+      let computeFinishedAt: number | null = null;
+      try {
+        computeFinishedAt = performance.now();
+      } catch (error) {
+        if (!computeFailed) {
+          computeFailed = true;
+          computeError = error;
+        }
+      }
+      context.tickTimeout = originalTimeout;
+      this.#activeSearches -= 1;
+      this.#record(owner.bot, 'released');
+      if (computeFinishedAt !== null) {
+        const durationMs = computeFinishedAt - computeStartedAt;
+        if (!Number.isFinite(durationMs) || durationMs < 0) {
+          computeFailed = true;
+          computeError = new Error('monotonic path search clock moved backwards during AStar.compute');
+        } else {
+          this.#workerSpentMs += durationMs;
+          this.#clientSpentMs.set(owner, (this.#clientSpentMs.get(owner) ?? 0) + durationMs);
+        }
+      }
+    }
+    if (computeFailed) {
+      this.#removeQueuedOwner(owner, 'cancelled');
+      throw computeError;
+    }
+    if (result === undefined) throw new Error('AStar.compute completed without a result');
+
+    if (result.status === 'partial') {
+      if (owner.signal?.aborted) this.#removeQueuedOwner(owner, 'cancelled');
+      else if (owner.deadline !== null && performance.now() >= owner.deadline) this.#removeQueuedOwner(owner, 'timedOut');
+      else this.#queueOwner(owner);
+    } else if (result.status === 'timeout') {
+      this.#removeQueuedOwner(owner, 'timedOut');
+    } else {
+      this.#removeQueuedOwner(owner, 'released');
+    }
+    return result;
   }
-  if (performance.now() >= waiter.deadline) {
-    recordPathSearchEvent(waiter.bot, 'timedOut');
-    rejectPathSearchWaiter(waiter, new SkillFault('timedOut', 'bounded navigation expired while waiting for a path search'));
-    return;
+
+  #rollWindow(now: number): void {
+    if (!Number.isFinite(now)) throw new Error('monotonic path search clock returned a non-finite value');
+    const startedAt = this.#windowStartedAt;
+    if (startedAt === null || now - startedAt >= MAX_WORKER_PATH_SLICE_MS) {
+      this.#windowStartedAt = now;
+      this.#workerSpentMs = 0;
+      this.#clientSpentMs.clear();
+      return;
+    }
+    if (now < startedAt) throw new Error('monotonic path search clock moved backwards');
   }
-  waiter.settled = true;
-  clearPathSearchWaiter(waiter);
-  activePathfinders.add(waiter.pathfinder);
-  recordPathSearchEvent(waiter.bot, 'acquired');
-  let released = false;
-  waiter.resolve(() => {
-    if (released) return;
-    released = true;
-    activePathfinders.delete(waiter.pathfinder);
-    recordPathSearchEvent(waiter.bot, 'released');
-    grantQueuedPathSearches();
-  });
-}
 
-function removePathSearchWaiter(waiter: PathSearchWaiter, error: Error): void {
-  if (waiter.settled) return;
-  waiter.settled = true;
-  const index = queuedPathfinders.indexOf(waiter);
-  if (index >= 0) queuedPathfinders.splice(index, 1);
-  clearPathSearchWaiter(waiter);
-  recordPathSearchEvent(waiter.bot, error instanceof SkillInterrupted ? 'cancelled' : 'timedOut');
-  waiter.reject(error);
-  grantQueuedPathSearches();
-}
+  #queueOwner(owner: PathSearchOwner): void {
+    if (owner.closed || owner.queued) return;
+    if (this.#queuedOwners.length >= this.#owners.size) throw new Error('path search owner queue exceeded its registered capacity');
+    owner.queued = true;
+    this.#queuedOwners.push(owner);
+    this.#record(owner.bot, 'queued');
+  }
 
-function rejectPathSearchWaiter(waiter: PathSearchWaiter, error: Error): void {
-  if (waiter.settled) return;
-  waiter.settled = true;
-  clearPathSearchWaiter(waiter);
-  waiter.reject(error);
-}
+  #dequeueOwner(owner: PathSearchOwner): void {
+    const index = this.#queuedOwners.indexOf(owner);
+    if (index < 0) throw new Error('queued path search owner is missing from the worker queue');
+    this.#queuedOwners.splice(index, 1);
+    owner.queued = false;
+  }
 
-function clearPathSearchWaiter(waiter: PathSearchWaiter): void {
-  if (waiter.timeout !== null) clearTimeout(waiter.timeout);
-  if (waiter.onAbort !== null) waiter.signal.removeEventListener('abort', waiter.onAbort);
-  waiter.timeout = null;
-  waiter.onAbort = null;
-}
+  #removeQueuedOwner(owner: PathSearchOwner, transition: PathSearchCompletion): void {
+    if (!owner.queued) return;
+    const index = this.#queuedOwners.indexOf(owner);
+    if (index < 0) throw new Error('queued path search owner is missing from the worker queue');
+    this.#queuedOwners.splice(index, 1);
+    owner.queued = false;
+    this.#record(owner.bot, transition);
+  }
 
-function grantQueuedPathSearches(): void {
-  while (activePathfinders.size < MAX_ACTIVE_PATH_SEARCHES && queuedPathfinders.length > 0) {
-    const waiter = queuedPathfinders.shift();
-    if (waiter !== undefined) grantPathSearchShare(waiter);
+  #record(bot: Bot, transition: PathSearchTransition): void {
+    recordPathDiagnostic(bot, {
+      kind: 'pathSearch',
+      transition,
+      activeSearches: this.#activeSearches,
+      queuedSearches: this.#queuedOwners.length,
+    });
   }
 }
 
-function recordPathSearchEvent(
-  bot: Bot,
-  transition: 'queued' | 'acquired' | 'released' | 'cancelled' | 'timedOut',
-): void {
-  recordPathDiagnostic(bot, {
-    kind: 'pathSearch',
-    transition,
-    activeSearches: activePathfinders.size,
-    queuedSearches: queuedPathfinders.length,
-  });
-}
+const pathSearchWorker = new PathSearchWorker();
 
 /** Serializes skill intents and quarantines Mineflayer operations that outlive cancellation. */
 export class SkillOwner {
   readonly #bot: Bot;
   readonly #observer: MineflayerObserver;
   readonly #onHealth: () => void;
+  readonly #pathSearchRegistration: PathSearchRegistration;
   #active: ActiveSkill | null = null;
   #transition: Promise<void> = Promise.resolve();
   #cleanupFailure: Error | null = null;
@@ -232,14 +453,23 @@ export class SkillOwner {
   constructor(bot: Bot, observer: MineflayerObserver) {
     this.#bot = bot;
     this.#observer = observer;
-    configurePathfinder(bot);
     this.#onHealth = () => {
       if (this.#bot.health !== 0) return;
       void this.cancel('agentEliminated').catch((error: unknown) => {
         this.#bot.emit('error', error instanceof Error ? error : new Error(String(error)));
       });
     };
-    this.#bot.on('health', this.#onHealth);
+    this.#pathSearchRegistration = configurePathfinder(bot);
+    try {
+      this.#bot.on('health', this.#onHealth);
+    } catch (error) {
+      try {
+        this.#pathSearchRegistration.close();
+      } catch (cleanupError) {
+        throw new AggregateError([error, cleanupError], 'skill owner setup and path search cleanup both failed');
+      }
+      throw error;
+    }
   }
 
   run(intent: ArenaSkillIntent): Promise<SkillOutcome> {
@@ -278,11 +508,23 @@ export class SkillOwner {
     return this.#enqueue(async () => {
       if (this.#closed) return;
       this.#closed = true;
+      let cancellationError: unknown;
       try {
         await this.#cancelActive('shutdown');
+      } catch (error) {
+        cancellationError = error;
       } finally {
         this.#bot.removeListener('health', this.#onHealth);
       }
+      try {
+        this.#pathSearchRegistration.close();
+      } catch (cleanupError) {
+        if (cancellationError !== undefined) {
+          throw new AggregateError([cancellationError, cleanupError], 'skill shutdown and path search cleanup both failed');
+        }
+        throw cleanupError;
+      }
+      if (cancellationError !== undefined) throw cancellationError;
     });
   }
 
@@ -411,17 +653,12 @@ export class SkillOwner {
           waypoint.z,
           waypoint === position && arrival.kind === 'withinRange' ? arrival.range : 2,
         );
-      const releaseBudget = await acquirePathSearchShare(this.#bot, active.controller.signal, deadline);
-      const searchRemainingMs = deadline - performance.now();
-      if (searchRemainingMs <= 0) {
-        releaseBudget();
-        throw new SkillFault('timedOut', 'bounded navigation exceeded its deadline while waiting for a path search');
-      }
       const stopWaits = new AbortController();
       const relayAbort = () => stopWaits.abort();
+      const endSearchOwner = this.#pathSearchRegistration.beginNavigation(active.controller.signal, deadline);
       active.controller.signal.addEventListener('abort', relayAbort, { once: true });
-      const reached = waitForGoal(this.#bot, goal, stopWaits.signal, searchRemainingMs);
-      const pathFailure = waitForPathFailure(this.#bot, stopWaits.signal, searchRemainingMs);
+      const reached = waitForGoal(this.#bot, goal, stopWaits.signal, remainingMs);
+      const pathFailure = waitForPathFailure(this.#bot, stopWaits.signal, remainingMs);
       active.resources.navigationActive = true;
       recordPathDiagnostic(this.#bot, { kind: 'navigation', active: true });
       try {
@@ -434,14 +671,14 @@ export class SkillOwner {
         }
       } finally {
         active.controller.signal.removeEventListener('abort', relayAbort);
+        const completion: PathSearchCompletion = active.controller.signal.aborted
+          ? 'cancelled'
+          : performance.now() >= deadline ? 'timedOut' : 'released';
+        endSearchOwner(completion);
         stopWaits.abort();
-        try {
-          await waitForPathStop(this.#bot, ACTION_TIMEOUT_MS);
-          active.resources.navigationActive = false;
-          recordPathDiagnostic(this.#bot, { kind: 'navigation', active: false });
-        } finally {
-          releaseBudget();
-        }
+        await waitForPathStop(this.#bot, ACTION_TIMEOUT_MS);
+        active.resources.navigationActive = false;
+        recordPathDiagnostic(this.#bot, { kind: 'navigation', active: false });
       }
     }
     throw new Error('bounded navigation loop exited unexpectedly');
@@ -858,7 +1095,7 @@ export class SkillOwner {
   }
 }
 
-function configurePathfinder(bot: Bot): void {
+function configurePathfinder(bot: Bot): PathSearchRegistration {
   if (!bot.hasPlugin(pathfinder)) bot.loadPlugin(pathfinder);
   bot.pathfinder.thinkTimeout = MAX_PATH_THINK_MS;
   bot.pathfinder.tickTimeout = MAX_PATH_SLICE_PER_CLIENT_MS;
@@ -868,7 +1105,18 @@ function configurePathfinder(bot: Bot): void {
   movements.allowParkour = false;
   movements.allow1by1towers = false;
   movements.scafoldingBlocks = [];
-  bot.pathfinder.setMovements(movements);
+  const registration = pathSearchWorker.register(bot, movements);
+  try {
+    bot.pathfinder.setMovements(movements);
+  } catch (error) {
+    try {
+      registration.close();
+    } catch (cleanupError) {
+      throw new AggregateError([error, cleanupError], 'pathfinder movement setup and worker cleanup both failed');
+    }
+    throw error;
+  }
+  return registration;
 }
 
 async function waitForGoal(

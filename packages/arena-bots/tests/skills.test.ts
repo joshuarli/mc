@@ -2,13 +2,34 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { createRequire } from 'node:module';
 import test from 'node:test';
+import { performance } from 'node:perf_hooks';
 import { blockPosition, entityId, inventorySlot } from '@arena/core';
 import type { Bot } from 'mineflayer';
 import { PathDiagnosticRing } from '../src/index.js';
 import { MineflayerObserver } from '../src/observer.js';
 import { SkillOwner } from '../src/skills.js';
 
-const { goals } = createRequire(import.meta.url)('mineflayer-pathfinder') as typeof import('mineflayer-pathfinder');
+const { goals, Movements } = createRequire(import.meta.url)('mineflayer-pathfinder') as typeof import('mineflayer-pathfinder');
+const AStar = createRequire(import.meta.url)('mineflayer-pathfinder/lib/astar') as {
+  new (...args: unknown[]): { compute(): unknown };
+  prototype: {
+    compute: (this: { readonly movements: { readonly bot: Bot } }) => unknown;
+  };
+};
+const PathMove = createRequire(import.meta.url)('mineflayer-pathfinder/lib/move') as new (
+  x: number,
+  y: number,
+  z: number,
+  remainingBlocks: number,
+  cost: number,
+) => Bot['entity']['position'] & {
+  remainingBlocks: number;
+  cost: number;
+  toBreak: never[];
+  toPlace: never[];
+  parkour: boolean;
+  hash: string;
+};
 
 test('cancellation stops the owned path and clears client controls before settling', async () => {
   const harness = makeHarness();
@@ -70,53 +91,277 @@ test('navigateToBlock requires the ramp top and the owned skill checks the obser
   }
 });
 
-test('worker caps active A-star searches and removes cancelled path waiters', async () => {
-  let activeSearches = 0;
-  let maximumActiveSearches = 0;
-  let startedSearches = 0;
-  const harnesses = Array.from({ length: 5 }, () => makeHarness(
-    () => {
-      activeSearches += 1;
-      startedSearches += 1;
-      maximumActiveSearches = Math.max(maximumActiveSearches, activeSearches);
-    },
-    () => { activeSearches -= 1; },
-  ));
+test('worker admits a fourth search while three valid paths are still being followed', async () => {
+  const labels = ['seat-0', 'seat-1', 'seat-2', 'seat-3'] as const;
+  const searchAggregates = new Map<string, {
+    queued: number;
+    acquired: number;
+    released: number;
+    cancelled: number;
+    timedOut: number;
+  }>(labels.map((label) => [label, {
+    queued: 0,
+    acquired: 0,
+    released: 0,
+    cancelled: 0,
+    timedOut: 0,
+  }]));
+  const successfulPathUpdates = new Map<string, number>(labels.map((label) => [label, 0]));
+  const originalCompute = AStar.prototype.compute;
+  const computeCalls = [0, 0, 0, 0];
+  let harnesses: ReturnType<typeof makeHarness>[] = [];
+  const computeStub = function (this: { readonly movements: { readonly bot: Bot } }): unknown {
+    const index = harnesses.findIndex((harness) => harness.bot === this.movements.bot);
+    assert.notEqual(index, -1);
+    computeCalls[index] = (computeCalls[index] ?? 0) + 1;
+    return {
+      status: 'success',
+      cost: 1,
+      time: 0.5,
+      visitedNodes: 2,
+      generatedNodes: 2,
+      path: [new PathMove(8, 64, 0, 0, 1)],
+    };
+  };
+  AStar.prototype.compute = computeStub;
+  let rings: PathDiagnosticRing[] = [];
+  let runs: Promise<unknown>[] = [];
 
   try {
-    const runs = harnesses.map((harness) => harness.owner.run({
+    harnesses = labels.map(() => makeHarness(() => undefined, () => undefined, true));
+    rings = harnesses.map((harness, index) => {
+      let clientMs = 0;
+      const clientLabel = labels[index];
+      assert.ok(clientLabel);
+      return new PathDiagnosticRing(harness.bot, {
+        clientLabel,
+        clock: () => ({ clientMs: clientMs++, authorityTick: null }),
+        onRecord: (record) => {
+          if (record.kind === 'pathSearch') {
+            const aggregate = searchAggregates.get(record.clientLabel);
+            if (aggregate !== undefined) aggregate[record.transition] += 1;
+          } else if (record.kind === 'pathUpdate' && record.path.status === 'success') {
+            const count = successfulPathUpdates.get(record.clientLabel);
+            if (count !== undefined) successfulPathUpdates.set(record.clientLabel, count + 1);
+          }
+        },
+      });
+    });
+    runs = harnesses.map((harness) => harness.owner.run({
       kind: 'navigate',
       target: blockPosition(20, 64, 0),
     }));
-    await waitUntil(() => startedSearches === 3);
-    assert.equal(maximumActiveSearches, 3);
-    assert.equal(harnesses[3]?.pathfinder.goal, null);
-    assert.equal(harnesses[4]?.pathfinder.goal, null);
 
-    const queued = harnesses[3];
-    assert.ok(queued);
-    const queuedCancellation = queued.owner.cancel('shutdown');
-    assert.deepEqual(await runs[3], { kind: 'cancelled', reason: 'shutdown' });
-    await queuedCancellation;
-    assert.equal(startedSearches, 3);
+    await waitUntil(() => harnesses.every((harness) => harness.pathfinder.goal !== null));
+    for (const harness of harnesses.slice(0, 3)) harness.bot.emit('physicsTick');
+    await waitUntil(() => computeCalls.slice(0, 3).every((count) => count === 1));
+    assert.deepEqual(labels.slice(0, 3).map((label) => successfulPathUpdates.get(label)), [1, 1, 1]);
+    assert.deepEqual(harnesses.slice(0, 3).map((harness) => harness.pathfinder.isMoving()), [true, true, true]);
 
-    const first = harnesses[0];
-    assert.ok(first);
-    const firstCancellation = first.owner.cancel('shutdown');
-    assert.deepEqual(await runs[0], { kind: 'cancelled', reason: 'shutdown' });
-    await firstCancellation;
-    await waitUntil(() => startedSearches === 4);
-    assert.equal(maximumActiveSearches, 3);
-    assert.notEqual(harnesses[4]?.pathfinder.goal, null);
-
-    await Promise.all([harnesses[1], harnesses[2], harnesses[4]].map((harness) => harness?.owner.cancel('shutdown')));
-    for (const run of [runs[1], runs[2], runs[4]]) {
-      assert.ok(run);
-      assert.deepEqual(await run, { kind: 'cancelled', reason: 'shutdown' });
-    }
+    harnesses[3]?.bot.emit('physicsTick');
+    await waitUntil(() => computeCalls[3] === 1);
+    assert.equal(successfulPathUpdates.get('seat-3'), 1);
+    assert.deepEqual(labels.map((label) => searchAggregates.get(label)?.acquired), [1, 1, 1, 1]);
+    assert.deepEqual(labels.map((label) => searchAggregates.get(label)?.released), [1, 1, 1, 1]);
+    assert.deepEqual(harnesses.slice(0, 3).map((harness) => harness.pathfinder.isMoving()), [true, true, true]);
   } finally {
+    await Promise.all(harnesses.map((harness) => harness.owner.cancel('shutdown')));
+    await Promise.all(runs);
+    for (const ring of rings) {
+      ring.snapshot();
+      ring.close();
+    }
     await Promise.all(harnesses.map((harness) => harness.owner.close()));
     for (const harness of harnesses) harness.observer.close();
+    assert.equal(AStar.prototype.compute, computeStub, 'the final owner restores the pathfinder compute method');
+    AStar.prototype.compute = originalCompute;
+  }
+});
+
+test('path worker preserves AStar frontiers and rotates registered owners fairly', async () => {
+  const clockDescriptor = Object.getOwnPropertyDescriptor(performance, 'now');
+  let nowMs = 0;
+  Object.defineProperty(performance, 'now', { configurable: true, value: () => nowMs });
+  const labels = ['seat-0', 'seat-1', 'seat-2', 'seat-3', 'seat-4'] as const;
+  const acquiredOrder: string[] = [];
+  const transitions = new Map<string, Record<'queued' | 'acquired' | 'released' | 'cancelled' | 'timedOut', number>>(labels.map((label) => [label, {
+    queued: 0,
+    acquired: 0,
+    released: 0,
+    cancelled: 0,
+    timedOut: 0,
+  }]));
+  const pathUpdates = new Map<string, Array<{
+    status: string;
+    visitedNodes: number;
+    generatedNodes: number;
+  }>>(labels.map((label) => [label, []]));
+  const capturedContexts = new Map<string, Array<{ tickTimeout: number }>>(labels.map((label) => [label, []]));
+  const expansions = [0, 0, 0, 0, 0];
+  let harnesses: ReturnType<typeof makeHarness>[] = [];
+  let rings: PathDiagnosticRing[] = [];
+  let runs: Promise<unknown>[] = [];
+
+  try {
+    harnesses = labels.map(() => makeHarness(() => undefined, () => undefined, true));
+    for (const [index, harness] of harnesses.entries()) {
+      const movements = harness.pathfinder.movements;
+      movements.getNeighbors = (node) => {
+        expansions[index] = (expansions[index] ?? 0) + 1;
+        if (index === 0 && expansions[index] === 1) nowMs += 4;
+        if (node.x >= 8) return [];
+        return [new PathMove(node.x + 1, node.y, node.z, 0, 1)];
+      };
+      const runtimePathfinder = harness.pathfinder as unknown as {
+        getPathTo: (...args: unknown[]) => unknown;
+      };
+      const originalGetPathTo = runtimePathfinder.getPathTo;
+      runtimePathfinder.getPathTo = (...args) => {
+        const result = originalGetPathTo(...args) as {
+          readonly context?: { readonly tickTimeout: number };
+        };
+        if (result.context !== undefined) capturedContexts.get(labels[index] as string)?.push(result.context);
+        return result;
+      };
+    }
+    rings = harnesses.map((harness, index) => {
+      let clientMs = 0;
+      const clientLabel = labels[index];
+      assert.ok(clientLabel);
+      return new PathDiagnosticRing(harness.bot, {
+        clientLabel,
+        clock: () => ({ clientMs: clientMs++, authorityTick: null }),
+        onRecord: (record) => {
+          if (record.kind === 'pathSearch') {
+            const aggregate = transitions.get(record.clientLabel);
+            if (aggregate === undefined) throw new Error(`missing path-search aggregate for ${record.clientLabel}`);
+            aggregate[record.transition] = (aggregate[record.transition] ?? 0) + 1;
+            if (record.transition === 'acquired') acquiredOrder.push(record.clientLabel);
+          } else if (record.kind === 'pathUpdate') {
+            const records = pathUpdates.get(record.clientLabel);
+            if (records === undefined) throw new Error(`missing path-update aggregate for ${record.clientLabel}`);
+            records.push({
+              status: record.path.status,
+              visitedNodes: record.path.visitedNodes,
+              generatedNodes: record.path.generatedNodes,
+            });
+          }
+        },
+      });
+    });
+    runs = harnesses.map((harness) => harness.owner.run({
+      kind: 'navigateToBlock',
+      target: blockPosition(8, 64, 0),
+    }));
+    await waitUntil(() => harnesses.every((harness) => harness.pathfinder.goal !== null));
+
+    for (const harness of harnesses) harness.bot.emit('physicsTick');
+    await waitUntil(() => labels.every((label) => (pathUpdates.get(label)?.length ?? 0) > 0));
+    assert.deepEqual(acquiredOrder, ['seat-0']);
+    assert.deepEqual(expansions, [1, 0, 0, 0, 0]);
+    assert.deepEqual(labels.map((label) => capturedContexts.get(label)?.[0]?.tickTimeout), [3, 3, 3, 3, 3]);
+    assert.deepEqual(pathUpdates.get('seat-0')?.[0], {
+      status: 'partial',
+      visitedNodes: 1,
+      generatedNodes: 2,
+    });
+    for (const label of labels.slice(1)) {
+      assert.deepEqual(pathUpdates.get(label)?.[0], {
+        status: 'partial',
+        visitedNodes: 0,
+        generatedNodes: 1,
+      });
+    }
+
+    const ordinaryMovements = {
+      bot: {} as Bot,
+      getNeighbors: () => [],
+    };
+    const ordinaryContext = new AStar(
+      new PathMove(0, 64, 0, 0, 0),
+      ordinaryMovements,
+      new goals.GoalBlock(8, 64, 0),
+      1_000,
+      3,
+      -1,
+    );
+    assert.equal((ordinaryContext.compute() as { readonly status: string }).status, 'noPath');
+
+    const firstHarness = harnesses[0];
+    const secondHarness = harnesses[1];
+    const clearHarness = harnesses[3];
+    const lastHarness = harnesses[4];
+    assert.ok(firstHarness);
+    assert.ok(secondHarness);
+    assert.ok(clearHarness);
+    assert.ok(lastHarness);
+    const unsupportedMovements = new Movements(firstHarness.bot);
+    const unsupportedContext = new AStar(
+      new PathMove(0, 64, 0, 0, 0),
+      unsupportedMovements,
+      new goals.GoalBlock(8, 64, 0),
+      1_000,
+      3,
+      -1,
+    );
+    assert.throws(() => unsupportedContext.compute(), /unregistered Movements/);
+    class UnsupportedAStar extends AStar {}
+    const unsupportedClassContext = new UnsupportedAStar(
+      new PathMove(0, 64, 0, 0, 0),
+      firstHarness.pathfinder.movements,
+      new goals.GoalBlock(8, 64, 0),
+      1_000,
+      3,
+      -1,
+    );
+    assert.throws(() => unsupportedClassContext.compute(), /unsupported AStar context/);
+
+    const queuedCancellation = secondHarness.owner.cancel('shutdown');
+    assert.deepEqual(await runs[1], { kind: 'cancelled', reason: 'shutdown' });
+    await queuedCancellation;
+    assert.equal(transitions.get('seat-1')?.cancelled, 1);
+
+    clearHarness.pathfinder.setGoal(null, false);
+    assert.equal(transitions.get('seat-3')?.cancelled, 1);
+    const clearedGoalCancellation = clearHarness.owner.cancel('shutdown');
+    assert.deepEqual(await runs[3], { kind: 'cancelled', reason: 'shutdown' });
+    await clearedGoalCancellation;
+
+    firstHarness.pathfinder.setGoal(new goals.GoalBlock(8, 64, 0), false);
+    firstHarness.bot.emit('physicsTick');
+    await waitUntil(() => (pathUpdates.get('seat-0')?.length ?? 0) >= 2);
+    assert.equal(expansions[0], 1, 'a reset context remains queued behind the same owner and keeps its frontier');
+    assert.equal(capturedContexts.get('seat-0')?.length, 2);
+    assert.notEqual(capturedContexts.get('seat-0')?.[0], capturedContexts.get('seat-0')?.[1]);
+    assert.deepEqual(capturedContexts.get('seat-0')?.map((context) => context.tickTimeout), [3, 3]);
+    const thirdHarness = harnesses[2];
+    assert.ok(thirdHarness);
+    thirdHarness.bot.emit('physicsTick');
+    assert.equal(expansions[2], 0, 'later owners cannot pass the reset owner at the FIFO head');
+
+    nowMs = 10;
+    firstHarness.bot.emit('physicsTick');
+    await waitUntil(() => pathUpdates.get('seat-0')?.some((record) => record.status === 'success') === true);
+    thirdHarness.bot.emit('physicsTick');
+    await waitUntil(() => pathUpdates.get('seat-2')?.some((record) => record.status === 'success') === true);
+    assert.deepEqual(acquiredOrder, ['seat-0', 'seat-0', 'seat-2']);
+    assert.deepEqual(labels.slice(0, 3).map((label) => capturedContexts.get(label)?.every((context) => context.tickTimeout === 3)), [true, true, true]);
+
+    nowMs = 20_000;
+    lastHarness.bot.emit('physicsTick');
+    await waitUntil(() => transitions.get('seat-4')?.timedOut === 1);
+    assert.equal(transitions.get('seat-4')?.acquired, 0);
+  } finally {
+    await Promise.all(harnesses.map((harness) => harness.owner.cancel('shutdown')));
+    await Promise.all(runs);
+    for (const ring of rings) {
+      ring.snapshot();
+      ring.close();
+    }
+    await Promise.all(harnesses.map((harness) => harness.owner.close()));
+    for (const harness of harnesses) harness.observer.close();
+    if (clockDescriptor === undefined) Reflect.deleteProperty(performance, 'now');
+    else Object.defineProperty(performance, 'now', clockDescriptor);
   }
 });
 
@@ -228,7 +473,6 @@ test('opt-in path diagnostics capture bounded local movement evidence and detach
         shapesTruncated: false,
       },
     );
-    assert.ok(records.some((record) => record.kind === 'pathSearch' && record.transition === 'acquired'));
     assert.ok(records.some((record) => record.kind === 'pathUpdate' && record.path.status === 'partial'));
     const correction = records.find((record) => record.kind === 'positionCorrection');
     assert.ok(correction);
@@ -268,7 +512,6 @@ test('opt-in path diagnostics capture bounded local movement evidence and detach
       ring.snapshot().filter((record) => record.kind === 'externalMovementOwner').map((record) => record.owner),
       ['sprintCourse', null],
     );
-    assert.ok(ring.snapshot().some((record) => record.kind === 'pathSearch' && record.transition === 'released'));
   } finally {
     ring.close();
     const countAfterClose = ring.snapshot().length;
@@ -782,7 +1025,11 @@ function prepareContainerTransfer(
   return { window, clicks: () => clicks, syncs: () => syncs, snapshots: () => snapshots };
 }
 
-function makeHarness(onPathStarted: () => void = () => undefined, onPathStopped: () => void = () => undefined) {
+function makeHarness(
+  onPathStarted: () => void = () => undefined,
+  onPathStopped: () => void = () => undefined,
+  useRealPathfinder = false,
+) {
   const botEmitter = new EventEmitter();
   const client = new EventEmitter();
   let moving = false;
@@ -810,7 +1057,7 @@ function makeHarness(onPathStarted: () => void = () => undefined, onPathStopped:
       botEmitter.emit('path_stop');
     },
   };
-  const names = ['chest', 'fire', 'cobweb', 'web', 'lava', 'water', 'sand', 'gravel', 'ladder', 'air'];
+  const names = ['chest', 'fire', 'cobweb', 'web', 'lava', 'water', 'sand', 'gravel', 'ladder', 'vine', 'air'];
   // These tests stop searches before node expansion, so movement setup needs only named block entries.
   const registry = {
     version: { type: 'pc', minecraftVersion: '26.1.2', '>=': () => true },
@@ -847,7 +1094,17 @@ function makeHarness(onPathStarted: () => void = () => undefined, onPathStopped:
     currentWindow: null,
     heldItem: null,
     usingHeldItem: false,
-    hasPlugin: () => true,
+    hasPlugin: () => !useRealPathfinder,
+    loadPlugin: (plugin: unknown) => {
+      if (!useRealPathfinder || typeof plugin !== 'function') throw new Error('unexpected plugin load in fake pathfinder harness');
+      (plugin as (bot: Bot) => void)(botEmitter as unknown as Bot);
+    },
+    blockAt: () => null,
+    look: () => undefined,
+    setControlState: (control: keyof Bot['controlState'], state: boolean) => {
+      const controlState = (botEmitter as unknown as { controlState?: Bot['controlState'] }).controlState;
+      if (controlState !== undefined) controlState[control] = state;
+    },
     setQuickBarSlot: (slot: number) => Object.assign(botEmitter, { quickBarSlot: slot }),
     clearControlStates: () => {
       controlsCleared += 1;
@@ -859,6 +1116,33 @@ function makeHarness(onPathStarted: () => void = () => undefined, onPathStopped:
     deactivateItem: () => Object.assign(botEmitter, { usingHeldItem: false }),
   });
   const bot = botEmitter as unknown as Bot;
+  if (useRealPathfinder) {
+    Object.assign(bot, {
+      version: '26.1.2',
+      entity: {
+        id: 1,
+        position: new PathMove(0, 64, 0, 0, 0),
+        velocity: new PathMove(0, 0, 0, 0, 0),
+        onGround: true,
+        isInWater: false,
+        isInLava: false,
+        isInWeb: false,
+        isCollidedHorizontally: false,
+        isCollidedVertically: false,
+        elytraFlying: false,
+        effects: {},
+        attributes: {},
+        yaw: 0,
+        pitch: 0,
+      },
+      controlState: { forward: false, back: false, left: false, right: false, jump: false, sprint: false, sneak: false },
+      entities: {},
+      jumpTicks: 0,
+      jumpQueued: false,
+      fireworkRocketDuration: 0,
+      physics: { simulatePlayer: (state: unknown) => state },
+    });
+  }
   const observer = new MineflayerObserver(bot);
   client.emit('initialize_world_border', {
     x: 0,
@@ -868,7 +1152,7 @@ function makeHarness(onPathStarted: () => void = () => undefined, onPathStopped:
     speed: 0,
   });
   const owner = new SkillOwner(bot, observer);
-  return { bot, observer, owner, pathfinder, controlsCleared: () => controlsCleared };
+  return { bot, observer, owner, pathfinder: bot.pathfinder, controlsCleared: () => controlsCleared };
 }
 
 function prepareChest(bot: Bot): void {
