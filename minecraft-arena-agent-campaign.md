@@ -53,7 +53,7 @@ An item ends on a named test/compiler check; a phase ends on touched-area suites
 | One TypeScript workspace (`core`, `spec`, `bots`, `runner`) and one Java project | Keep policy pure and separate from client effects; retain only package boundaries used by real dependency and test boundaries. |
 | Complete Hunger Games and civilization before stronger policy/scaling/LTO/allocator tuning | All required behavior must exist before performance work; only loop repair or egregious/safety fixes move earlier. |
 | `versions.lock.toml` is tool/artifact identity authority; `arena-spec` owns defaults and resolves them once into canonical IR | Prevent drift; TypeScript/Java duplicates are intentional and checked by golden fixtures, not independently defaulted. |
-| Schema/control/trace versions begin at **1**; unknown fields, enum values, and unsupported versions fail | No historical consumers exist; no migration or compatibility shim is needed. Revisit only with proven persisted consumers. |
+| Scenario/map/world-plan/control remain version **1**; revised TypeScript traces use version **2**; unknown fields, enum values, and unsupported versions fail | Historical Rust readers and fixtures still consume numeric trace-v1. Preserve their format and reject it explicitly in the revised runner; no migration or compatibility shim is needed. |
 | Plugin is sole match/outcome authority; runner supervises and reconstructs reports | Two authorities can disagree; change only with a replacement design and mechanics proof. |
 | Disconnect after countdown starts eliminates immediately at that tick's terminal-resolution boundary; no replacement/competitive reconnect | Bounded, testable roster contract. Before countdown, fail preparation if the declared bot roster cannot become ready. |
 | All declared competitors are bots; extra joins are noncompetitive spectators | Keep unattended runs independent of user participation and enforce spectator isolation. |
@@ -330,6 +330,9 @@ Decisions dated 2026-10-12 are historical and are superseded where they select R
 - 2026-10-13 — compatibility: target Paper 26.1.2 with Mineflayer's advertised 26.1 protocol support and Node 24 LTS; test ViaVersion only for the optional 26.2 GUI client because protocol translation alone does not prove movement, inventory, and combat behavior.
 
 - 2026-10-13 — scope: complete unattended bot-only runs and automated spectators; remove human play, GUI/Metal, and ViaVersion work because no owner participation is available.
+
+- 2026-10-13 — trace version: retain historical trace-v1 for its existing Rust readers and use trace-v2 for the revised decimal-string sequences and JavaScript checksum rules; sharing a version would change saved-data semantics.
+- 2026-10-13 — scheduling: prepare pure civilization domain and capture-rule modules on isolated branches while the Hunger Games supervisor is assembled; their merge and live acceptance remain gated on the six-seat MVP.
 
 ## 9. Campaign log
 
