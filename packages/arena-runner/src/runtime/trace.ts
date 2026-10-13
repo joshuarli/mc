@@ -1,24 +1,54 @@
 import { canonicalJson, sha256Json } from '../canonical.js';
 import type { ControlMessage } from '../control/index.js';
 import type { StrictJsonValue } from '../control/strict-json.js';
-import { MAX_OWNED_FILE_BYTES, stageOwnedFile, type FileIdentity } from '../owned-files/index.js';
+import {
+  MAX_OWNED_FILE_BYTES,
+  stageOwnedFile,
+  type FileIdentity,
+} from '../owned-files/index.js';
 import { RunnerError } from '../errors.js';
+import type { PolicyEffectRecordV1, PolicyReplayRecordV1 } from '../policy-replay.js';
 import type { PreparedRun } from '../prepare.js';
-import type { TraceRecord } from '../trace.js';
+import {
+  MAX_EVIDENCE_BYTES,
+  MAX_TRACE_SEGMENT_BYTES,
+  TRACE_SCHEMA_VERSION,
+  type TraceRecord,
+} from '../trace.js';
 import { isAuthenticatedControlMessage, type RunnerCommandEnvelope } from './session.js';
 
-const TRACE_SCHEMA_VERSION = 1;
-const MAX_RUNTIME_TRACE_BYTES = 4 * 1024 * 1024;
 const MAX_RUNTIME_TRACE_RECORDS = 100_000;
-const MAX_U64 = (1n << 64n) - 1n;
-const TRACE_FILE_NAME = Buffer.from('/trace-v1.json', 'ascii');
+const CHECKPOINT_OBSERVATION_INTERVAL = 200;
 
-/** Collects bounded lifecycle evidence while excluding credentials and optional telemetry. */
+export interface RuntimeTraceSegment {
+  readonly relativePath: Buffer;
+  readonly identity: FileIdentity;
+  readonly byteLength: number;
+}
+
+export interface RuntimeTraceResult {
+  readonly segments: readonly RuntimeTraceSegment[];
+  readonly totalByteLength: number;
+}
+
+export interface RuntimeTraceOptions {
+  readonly runId: string;
+  readonly helperPath: string;
+  readonly ownedRoot: Buffer;
+  readonly preparedRun: Pick<PreparedRun, 'runId' | 'runDirectoryPath'>;
+}
+
+/** Stages ordered trace segments and keeps the outcome segment private until the JVM stops. */
 export class RuntimeTraceBuilder {
   readonly #runId: string;
-  readonly #baseByteLength: number;
+  readonly #helperPath: string;
+  readonly #ownedRoot: Buffer;
+  readonly #runDirectoryPath: Buffer;
+  readonly #segments: RuntimeTraceSegment[] = [];
   readonly #records: TraceRecord[] = [];
   #recordBytes = 0;
+  #totalRecordCount = 0;
+  #stagedByteLength = 0;
   #hasReady = false;
   #hasPrepare = false;
   #hasStart = false;
@@ -26,167 +56,271 @@ export class RuntimeTraceBuilder {
   #lastPluginSequence = 0n;
   #lastRunnerSequence = 0n;
   #lastAcknowledgedRunnerSequence = 0n;
-  #finalized: Buffer | undefined;
+  #lastCheckpointObservation = 0;
+  #tail: Promise<void> = Promise.resolve();
+  #failure: unknown;
+  #finalized: RuntimeTraceResult | undefined;
 
-  constructor(runId: string) {
-    if (runId.length === 0) throw new RunnerError('runtime_failure', 'run trace', { kind: 'invalid_run_id' });
-    this.#runId = runId;
-    this.#baseByteLength = Buffer.byteLength(canonicalJson({
+  constructor(options: RuntimeTraceOptions) {
+    if (options.runId.length === 0 || options.preparedRun.runId !== options.runId) {
+      throw new RunnerError('runtime_failure', 'run trace', { kind: 'invalid_run_id' });
+    }
+    this.#runId = options.runId;
+    this.#helperPath = options.helperPath;
+    this.#ownedRoot = Buffer.from(options.ownedRoot);
+    this.#runDirectoryPath = Buffer.from(options.preparedRun.runDirectoryPath);
+  }
+
+  /** Records the authenticated ready envelope while excluding the hello token. */
+  recordReady(ready: Extract<ControlMessage, { readonly type: 'ready' }>): Promise<void> {
+    return this.#enqueue(async () => {
+      if (this.#hasReady || this.#totalRecordCount !== 0) {
+        throw new RunnerError('runtime_failure', 'run trace', { kind: 'readiness_out_of_order' });
+      }
+      if (!isAuthenticatedControlMessage(ready)) {
+        throw new RunnerError('runtime_failure', 'run trace', { kind: 'unauthenticated_readiness_envelope' });
+      }
+      if (ready.protocol !== 1 || ready.run_id !== this.#runId || ready.sequence <= 0n
+          || ready.correlation === undefined || ready.correlation <= 0n) {
+        throw new RunnerError('runtime_failure', 'run trace', { kind: 'invalid_readiness_envelope' });
+      }
+      await this.#append(toTraceRecord('plugin', ready));
+      this.#hasReady = true;
+      this.#lastPluginSequence = ready.sequence;
+      this.#lastRunnerSequence = ready.correlation;
+      this.#lastAcknowledgedRunnerSequence = ready.correlation;
+    });
+  }
+
+  /** Records non-secret runner commands so evidence retains the configured match roster. */
+  recordRunnerCommand(message: RunnerCommandEnvelope): Promise<void> {
+    return this.#enqueue(async () => {
+      this.#assertMutable();
+      if (!this.#hasReady) {
+        throw new RunnerError('runtime_failure', 'run trace', { kind: 'readiness_missing' });
+      }
+      if (!isAuthenticatedControlMessage(message)) {
+        throw new RunnerError('runtime_failure', 'run trace', { kind: 'unauthenticated_runner_command' });
+      }
+      if (message.protocol !== 1 || message.run_id !== this.#runId || message.sequence <= this.#lastRunnerSequence
+          || message.correlation !== undefined) {
+        throw new RunnerError('runtime_failure', 'run trace', { kind: 'invalid_runner_command_envelope' });
+      }
+      if (this.#hasOutcome) {
+        throw new RunnerError('runtime_failure', 'run trace', { kind: 'command_after_outcome' });
+      }
+      if (message.type === 'prepare') {
+        if (this.#hasPrepare) {
+          throw new RunnerError('runtime_failure', 'run trace', { kind: 'duplicate_prepare_command' });
+        }
+        this.#hasPrepare = true;
+      } else if (message.type === 'start') {
+        if (!this.#hasPrepare || this.#hasStart) {
+          throw new RunnerError('runtime_failure', 'run trace', { kind: 'invalid_start_command' });
+        }
+        this.#hasStart = true;
+      } else if (!this.#hasPrepare) {
+        throw new RunnerError('runtime_failure', 'run trace', { kind: 'abort_before_prepare' });
+      }
+      await this.#append(toTraceRecord('runner', message));
+      this.#lastRunnerSequence = message.sequence;
+    });
+  }
+
+  /** Records authenticated plugin events, omitting non-semantic heartbeat and metrics frames. */
+  recordControlMessage(message: ControlMessage): Promise<void> {
+    return this.#enqueue(async () => {
+      this.#assertMutable();
+      if (message.type === 'hello' || message.type === 'ready') {
+        throw new RunnerError('runtime_failure', 'run trace', { kind: 'unexpected_handshake' });
+      }
+      if (!isAuthenticatedControlMessage(message)) {
+        throw new RunnerError('runtime_failure', 'run trace', { kind: 'unauthenticated_plugin_message' });
+      }
+      if (!this.#hasReady) {
+        throw new RunnerError('runtime_failure', 'run trace', { kind: 'readiness_missing' });
+      }
+      if (message.run_id !== this.#runId) {
+        throw new RunnerError('runtime_failure', 'run trace', { kind: 'run_id_mismatch' });
+      }
+      if (message.sequence <= this.#lastPluginSequence) {
+        throw new RunnerError('runtime_failure', 'run trace', { kind: 'non_monotonic_control_sequence' });
+      }
+      if (this.#hasOutcome) {
+        throw new RunnerError('runtime_failure', 'run trace', { kind: 'event_after_outcome' });
+      }
+
+      switch (message.type) {
+        case 'heartbeat':
+        case 'metrics':
+          this.#lastPluginSequence = message.sequence;
+          return;
+        case 'prepare':
+        case 'start':
+        case 'abort':
+          throw new RunnerError('runtime_failure', 'run trace', { kind: 'unexpected_runner_command' });
+        case 'ack':
+        case 'error':
+          if (message.correlation === undefined || message.correlation <= this.#lastAcknowledgedRunnerSequence
+              || message.correlation > this.#lastRunnerSequence) {
+            throw new RunnerError('runtime_failure', 'run trace', { kind: 'invalid_command_acknowledgment' });
+          }
+          this.#lastAcknowledgedRunnerSequence = message.correlation;
+          break;
+        default:
+          break;
+      }
+
+      if (!this.#hasPrepare) {
+        throw new RunnerError('runtime_failure', 'run trace', { kind: 'prepare_missing' });
+      }
+      await this.#append(toTraceRecord('plugin', message));
+      this.#lastPluginSequence = message.sequence;
+      if (message.type === 'outcome') this.#hasOutcome = true;
+    });
+  }
+
+  /** Records the exact core policy input, decision, and resulting random state. */
+  recordPolicyDecision(record: PolicyReplayRecordV1): Promise<void> {
+    return this.#enqueue(async () => {
+      this.#assertMutable();
+      if (!this.#hasReady || !this.#hasPrepare || this.#hasOutcome) {
+        throw new RunnerError('runtime_failure', 'run trace', { kind: 'policy_decision_out_of_order' });
+      }
+      if (record.schema !== 'policy-replay-v1') {
+        throw new RunnerError('runtime_failure', 'run trace', { kind: 'invalid_policy_decision' });
+      }
+      await this.#append(toTraceRecord(undefined, record));
+    });
+  }
+
+  /** Records completed skill and actual path effects associated with a policy decision. */
+  recordPolicyEffect(record: PolicyEffectRecordV1): Promise<void> {
+    return this.#enqueue(async () => {
+      this.#assertMutable();
+      if (!this.#hasReady || !this.#hasPrepare || this.#hasOutcome) {
+        throw new RunnerError('runtime_failure', 'run trace', { kind: 'policy_effect_out_of_order' });
+      }
+      if (record.schema !== 'policy-effect-v1') {
+        throw new RunnerError('runtime_failure', 'run trace', { kind: 'invalid_policy_effect' });
+      }
+      await this.#append(toTraceRecord(undefined, record));
+    });
+  }
+
+  /** Persists each nonterminal checkpoint at global observation counts 200, 400, and onward. */
+  checkpoint(globalObservationCount: number): Promise<void> {
+    return this.#enqueue(async () => {
+      this.#assertMutable();
+      if (!Number.isSafeInteger(globalObservationCount)
+          || globalObservationCount !== this.#lastCheckpointObservation + CHECKPOINT_OBSERVATION_INTERVAL) {
+        throw new RunnerError('runtime_failure', 'run trace', { kind: 'invalid_trace_checkpoint' });
+      }
+      this.#lastCheckpointObservation = globalObservationCount;
+      if (this.#hasOutcome || this.#records.length === 0) return;
+      await this.#stagePendingSegment();
+    });
+  }
+
+  /** Stages the outcome segment after the JVM stops and returns every staged segment identity. */
+  finalize(): Promise<RuntimeTraceResult> {
+    if (this.#finalized !== undefined) return Promise.resolve(copyTraceResult(this.#finalized));
+    return this.#enqueue(async () => {
+      if (this.#finalized !== undefined) return copyTraceResult(this.#finalized);
+      this.#assertMutable();
+      if (!this.#hasReady) {
+        throw new RunnerError('runtime_failure', 'run trace', { kind: 'readiness_missing' });
+      }
+      if (!this.#hasOutcome) {
+        throw new RunnerError('runtime_failure', 'run trace', { kind: 'outcome_missing' });
+      }
+      if (this.#records.length === 0) {
+        throw new RunnerError('runtime_failure', 'run trace', { kind: 'outcome_segment_missing' });
+      }
+      await this.#stagePendingSegment(true);
+      this.#finalized = Object.freeze({
+        segments: Object.freeze(this.#segments.map(copySegment)),
+        totalByteLength: this.#stagedByteLength,
+      });
+      return copyTraceResult(this.#finalized);
+    });
+  }
+
+  async #append(record: TraceRecord): Promise<void> {
+    if (this.#totalRecordCount >= MAX_RUNTIME_TRACE_RECORDS) {
+      throw new RunnerError('runtime_failure', 'run trace', { kind: 'trace_record_limit_exceeded' });
+    }
+    const recordBytes = Buffer.byteLength(canonicalJson(record), 'utf8');
+    if (this.#records.length > 0 && this.#estimatedPendingBytes(recordBytes) > MAX_TRACE_SEGMENT_BYTES) {
+      if (this.#hasOutcome) {
+        throw new RunnerError('runtime_failure', 'run trace', { kind: 'trace_limit_exceeded' });
+      }
+      await this.#stagePendingSegment();
+    }
+    if (this.#estimatedPendingBytes(recordBytes) > MAX_TRACE_SEGMENT_BYTES) {
+      throw new RunnerError('runtime_failure', 'run trace', { kind: 'trace_limit_exceeded' });
+    }
+    if (this.#stagedByteLength + this.#estimatedPendingBytes(recordBytes) > MAX_EVIDENCE_BYTES) {
+      throw new RunnerError('runtime_failure', 'run trace', { kind: 'evidence_limit_exceeded' });
+    }
+    this.#records.push(record);
+    this.#recordBytes += recordBytes;
+    this.#totalRecordCount += 1;
+  }
+
+  #estimatedPendingBytes(extraRecordBytes = 0): number {
+    const firstSequence = this.#totalRecordCount - this.#records.length + 1;
+    const lastSequence = this.#totalRecordCount + (extraRecordBytes === 0 ? 0 : 1);
+    const envelopeBytes = Buffer.byteLength(canonicalJson({
       schema: TRACE_SCHEMA_VERSION,
-      run_id: runId,
-      first_sequence: '1',
-      last_sequence: MAX_U64.toString(),
+      run_id: this.#runId,
+      first_sequence: String(firstSequence),
+      last_sequence: String(lastSequence),
       records: [],
       sha256: '0'.repeat(64),
       trailer: { complete: true },
     }), 'utf8');
+    const existingSeparators = Math.max(0, this.#records.length - 1);
+    const extraSeparator = this.#records.length === 0 ? 0 : extraRecordBytes === 0 ? 0 : 1;
+    return envelopeBytes + this.#recordBytes + existingSeparators + extraSeparator + extraRecordBytes;
   }
 
-  /** Records readiness without accepting the hello payload that carries the control token. */
-  recordReady(ready: Extract<ControlMessage, { readonly type: 'ready' }>): void {
-    if (this.#hasReady || this.#records.length !== 0) {
-      throw new RunnerError('runtime_failure', 'run trace', { kind: 'readiness_out_of_order' });
+  async #stagePendingSegment(final = false): Promise<void> {
+    if (this.#records.length === 0) return;
+    if (this.#hasOutcome && !final) {
+      throw new RunnerError('runtime_failure', 'run trace', { kind: 'outcome_staged_before_jvm_stop' });
     }
-    if (!isAuthenticatedControlMessage(ready)) {
-      throw new RunnerError('runtime_failure', 'run trace', { kind: 'unauthenticated_readiness_envelope' });
-    }
-    if (ready.protocol !== 1 || ready.run_id !== this.#runId || ready.sequence <= 0n
-        || ready.correlation === undefined || ready.correlation <= 0n) {
-      throw new RunnerError('runtime_failure', 'run trace', { kind: 'invalid_readiness_envelope' });
-    }
-    this.#append(toTraceRecord('plugin', ready));
-    this.#hasReady = true;
-    this.#lastPluginSequence = ready.sequence;
-    this.#lastRunnerSequence = ready.correlation;
-    this.#lastAcknowledgedRunnerSequence = ready.correlation;
-  }
-
-  /** Records non-secret runner commands so evidence retains the configured match roster. */
-  recordRunnerCommand(message: RunnerCommandEnvelope): void {
-    this.#assertMutable();
-    if (!this.#hasReady) {
-      throw new RunnerError('runtime_failure', 'run trace', { kind: 'readiness_missing' });
-    }
-    if (!isAuthenticatedControlMessage(message)) {
-      throw new RunnerError('runtime_failure', 'run trace', { kind: 'unauthenticated_runner_command' });
-    }
-    if (message.protocol !== 1 || message.run_id !== this.#runId || message.sequence <= this.#lastRunnerSequence
-        || message.correlation !== undefined) {
-      throw new RunnerError('runtime_failure', 'run trace', { kind: 'invalid_runner_command_envelope' });
-    }
-    if (this.#hasOutcome) {
-      throw new RunnerError('runtime_failure', 'run trace', { kind: 'command_after_outcome' });
-    }
-    if (message.type === 'prepare') {
-      if (this.#hasPrepare) {
-        throw new RunnerError('runtime_failure', 'run trace', { kind: 'duplicate_prepare_command' });
-      }
-      this.#hasPrepare = true;
-    } else if (message.type === 'start') {
-      if (!this.#hasPrepare || this.#hasStart) {
-        throw new RunnerError('runtime_failure', 'run trace', { kind: 'invalid_start_command' });
-      }
-      this.#hasStart = true;
-    } else if (!this.#hasPrepare) {
-      throw new RunnerError('runtime_failure', 'run trace', { kind: 'abort_before_prepare' });
-    }
-    this.#append(toTraceRecord('runner', message));
-    this.#lastRunnerSequence = message.sequence;
-  }
-
-  /** Records each semantic event; a size limit failure invalidates the run instead of dropping it. */
-  record(message: ControlMessage): void {
-    this.#assertMutable();
-    if (message.type === 'hello' || message.type === 'ready') {
-      throw new RunnerError('runtime_failure', 'run trace', { kind: 'unexpected_handshake' });
-    }
-    if (!isAuthenticatedControlMessage(message)) {
-      throw new RunnerError('runtime_failure', 'run trace', { kind: 'unauthenticated_plugin_message' });
-    }
-    if (!this.#hasReady) {
-      throw new RunnerError('runtime_failure', 'run trace', { kind: 'readiness_missing' });
-    }
-    if (message.run_id !== this.#runId) {
-      throw new RunnerError('runtime_failure', 'run trace', { kind: 'run_id_mismatch' });
-    }
-    if (message.sequence <= this.#lastPluginSequence) {
-      throw new RunnerError('runtime_failure', 'run trace', { kind: 'non_monotonic_control_sequence' });
-    }
-    if (this.#hasOutcome) {
-      throw new RunnerError('runtime_failure', 'run trace', { kind: 'event_after_outcome' });
-    }
-
-    switch (message.type) {
-      case 'heartbeat':
-      case 'metrics':
-        this.#lastPluginSequence = message.sequence;
-        return;
-      case 'prepare':
-      case 'start':
-      case 'abort':
-        throw new RunnerError('runtime_failure', 'run trace', { kind: 'unexpected_runner_command' });
-      case 'ack':
-      case 'error':
-        if (message.correlation === undefined || message.correlation <= this.#lastAcknowledgedRunnerSequence
-            || message.correlation > this.#lastRunnerSequence) {
-          throw new RunnerError('runtime_failure', 'run trace', { kind: 'invalid_command_acknowledgment' });
-        }
-        this.#lastAcknowledgedRunnerSequence = message.correlation;
-        break;
-      default:
-        break;
-    }
-
-    if (!this.#hasPrepare) {
-      throw new RunnerError('runtime_failure', 'run trace', { kind: 'prepare_missing' });
-    }
-    this.#append(toTraceRecord('plugin', message));
-    this.#lastPluginSequence = message.sequence;
-    if (message.type === 'outcome') this.#hasOutcome = true;
-  }
-
-  /** Produces one complete trace segment only after the authoritative outcome was recorded. */
-  finalize(): Buffer {
-    if (this.#finalized !== undefined) return Buffer.from(this.#finalized);
-    if (!this.#hasReady) {
-      throw new RunnerError('runtime_failure', 'run trace', { kind: 'readiness_missing' });
-    }
-    if (!this.#hasOutcome) {
-      throw new RunnerError('runtime_failure', 'run trace', { kind: 'outcome_missing' });
-    }
-    const lastSequence = BigInt(this.#records.length);
-    if (lastSequence === 0n || lastSequence > MAX_U64) {
-      throw new RunnerError('runtime_failure', 'run trace', { kind: 'sequence_exhausted' });
-    }
+    const firstSequence = this.#totalRecordCount - this.#records.length + 1;
+    const lastSequence = this.#totalRecordCount;
     const segment = {
       schema: TRACE_SCHEMA_VERSION,
       run_id: this.#runId,
-      first_sequence: '1',
-      last_sequence: lastSequence.toString(),
+      first_sequence: String(firstSequence),
+      last_sequence: String(lastSequence),
       records: this.#records,
       sha256: sha256Json(this.#records),
       trailer: { complete: true },
     };
-    const bytes = Buffer.from(canonicalJson(segment), 'utf8');
-    if (bytes.byteLength > MAX_RUNTIME_TRACE_BYTES) {
-      throw new RunnerError('runtime_failure', 'run trace', { kind: 'trace_limit_exceeded' });
+    const contents = Buffer.from(canonicalJson(segment), 'utf8');
+    if (contents.byteLength > MAX_TRACE_SEGMENT_BYTES
+        || contents.byteLength > MAX_OWNED_FILE_BYTES
+        || this.#stagedByteLength + contents.byteLength > MAX_EVIDENCE_BYTES) {
+      throw new RunnerError('runtime_failure', 'run trace', { kind: 'evidence_limit_exceeded' });
     }
-    this.#finalized = bytes;
-    return Buffer.from(bytes);
-  }
-
-  #append(record: TraceRecord): void {
-    this.#assertMutable();
-    if (this.#records.length >= MAX_RUNTIME_TRACE_RECORDS) {
-      throw new RunnerError('runtime_failure', 'run trace', { kind: 'trace_record_limit_exceeded' });
-    }
-    const recordBytes = Buffer.byteLength(canonicalJson(record), 'utf8');
-    const separatorBytes = this.#records.length === 0 ? 0 : 1;
-    if (this.#baseByteLength + this.#recordBytes + separatorBytes + recordBytes > MAX_RUNTIME_TRACE_BYTES) {
-      throw new RunnerError('runtime_failure', 'run trace', { kind: 'trace_limit_exceeded' });
-    }
-    this.#records.push(record);
-    this.#recordBytes += separatorBytes + recordBytes;
+    const segmentNumber = this.#segments.length + 1;
+    const filename = `/trace-v2-${String(segmentNumber).padStart(6, '0')}.json`;
+    const relativePath = Buffer.concat([this.#runDirectoryPath, Buffer.from(filename, 'ascii')]);
+    const identity = await stageOwnedFile({
+      helperPath: this.#helperPath,
+      ownedRoot: this.#ownedRoot,
+      relativePath,
+      contents,
+      maxBytes: MAX_TRACE_SEGMENT_BYTES,
+    });
+    this.#segments.push(Object.freeze({ relativePath, identity, byteLength: contents.byteLength }));
+    this.#stagedByteLength += contents.byteLength;
+    this.#records.length = 0;
+    this.#recordBytes = 0;
   }
 
   #assertMutable(): void {
@@ -194,29 +328,25 @@ export class RuntimeTraceBuilder {
       throw new RunnerError('runtime_failure', 'run trace', { kind: 'trace_finalized' });
     }
   }
+
+  #enqueue<T>(operation: () => Promise<T> | T): Promise<T> {
+    const result = this.#tail.then(async () => {
+      if (this.#failure !== undefined) throw this.#failure;
+      try {
+        return await operation();
+      } catch (error) {
+        this.#failure = error;
+        throw error;
+      }
+    });
+    this.#tail = result.then(() => undefined, () => undefined);
+    return result;
+  }
 }
 
-/** Stages finalized evidence inside the prepared run after the server has stopped. */
-export async function stageRuntimeTrace(options: Readonly<{
-  helperPath: string;
-  ownedRoot: Buffer;
-  preparedRun: PreparedRun;
-  trace: RuntimeTraceBuilder;
-}>): Promise<Readonly<{ relativePath: Buffer; identity: FileIdentity; byteLength: number }>> {
-  const contents = options.trace.finalize();
-  const relativePath = Buffer.concat([options.preparedRun.runDirectoryPath, TRACE_FILE_NAME]);
-  const identity = await stageOwnedFile({
-    helperPath: options.helperPath,
-    ownedRoot: options.ownedRoot,
-    relativePath,
-    contents,
-    maxBytes: Math.min(MAX_RUNTIME_TRACE_BYTES, MAX_OWNED_FILE_BYTES),
-  });
-  return Object.freeze({ relativePath, identity, byteLength: contents.byteLength });
-}
-
-function toTraceRecord(direction: 'runner' | 'plugin', value: unknown): TraceRecord {
-  const converted = toTraceValue({ direction, ...asRecord(value) });
+function toTraceRecord(direction: 'runner' | 'plugin' | undefined, value: unknown): TraceRecord {
+  const source = asRecord(value);
+  const converted = toTraceValue(direction === undefined ? source : { direction, ...source });
   if (converted === null || typeof converted !== 'object' || Array.isArray(converted)) {
     throw new RunnerError('runtime_failure', 'run trace', { kind: 'invalid_record' });
   }
@@ -244,4 +374,19 @@ function toTraceValue(value: unknown): StrictJsonValue {
     return result;
   }
   throw new RunnerError('runtime_failure', 'run trace', { kind: 'invalid_record_value' });
+}
+
+function copySegment(segment: RuntimeTraceSegment): RuntimeTraceSegment {
+  return Object.freeze({
+    relativePath: Buffer.from(segment.relativePath),
+    identity: Object.freeze({ device: segment.identity.device, inode: segment.identity.inode }),
+    byteLength: segment.byteLength,
+  });
+}
+
+function copyTraceResult(result: RuntimeTraceResult): RuntimeTraceResult {
+  return Object.freeze({
+    segments: Object.freeze(result.segments.map(copySegment)),
+    totalByteLength: result.totalByteLength,
+  });
 }

@@ -8,6 +8,7 @@ import { RunnerError } from './errors.js';
 import { prepareRun } from './prepare.js';
 import { replayPolicyJson } from './policy-replay.js';
 import { isValidRunId } from './run-id.js';
+import { inspectStoppedRun } from './runtime/inspect.js';
 import { readSegment, TraceError, type TraceSegment } from './trace.js';
 
 export type CliResult =
@@ -31,6 +32,9 @@ async function runCliBytes(args: readonly Buffer[]): Promise<CliResult> {
       if (rest.length !== 0) throw invalidInput('unexpected_argument');
       return success(doctorJson());
     }
+    if (command === 'inspect' && rest.length > 0 && argumentText(rest[0]!, 1) === '--run-id') {
+      return await inspectRunCommand(rest);
+    }
     if (command === 'inspect' || command === 'report') {
       const evidence = await loadEvidence(rest);
       return success(command === 'inspect' ? inspectJson(evidence) : reportJson(evidence));
@@ -46,6 +50,7 @@ async function runCliBytes(args: readonly Buffer[]): Promise<CliResult> {
       return success(comparisonJson(left, right));
     }
     if (command === 'prepare') return await prepareCommand(rest);
+    if (command === 'run') throw invalidInput('run_requires_scenario');
     throw invalidInput('unknown_command');
   } catch (error) {
     return failure(error);
@@ -145,6 +150,29 @@ async function prepareCommand(args: readonly Buffer[]): Promise<CliResult> {
   });
 }
 
+async function inspectRunCommand(args: readonly Buffer[]): Promise<CliResult> {
+  if (args.length !== 2 || argumentText(args[0]!, 2) !== '--run-id') {
+    throw invalidInput('inspect_requires_run_id');
+  }
+  const runId = argumentText(args[1]!, 3);
+  if (!isValidRunId(runId)) {
+    throw new RunnerError('invalid_input', 'run id', { kind: 'invalid_run_id' });
+  }
+  const helperPath = process.env.ARENA_FS_HELPER;
+  if (helperPath === undefined || helperPath.length === 0) {
+    throw new RunnerError('missing_prerequisite', 'filesystem helper', { kind: 'helper_not_configured' });
+  }
+  if (!isAbsolute(helperPath)) {
+    throw new RunnerError('invalid_input', 'filesystem helper', { kind: 'helper_path_not_absolute' });
+  }
+  const inspection = await inspectStoppedRun({
+    helperPath,
+    ownedRoot: Buffer.from(process.cwd(), 'utf8'),
+    runId,
+  });
+  return success(inspection);
+}
+
 function normalizeScenarioPath(path: Buffer): Buffer {
   if (path.length === 0 || path.includes(0) || path[0] === 0x2f || path.includes(0x5c)) {
     throw new RunnerError('invalid_input', 'scenario path', { kind: 'invalid_repository_path' });
@@ -182,6 +210,7 @@ function helpJson(): object {
     commands: {
       doctor: 'Report offline evidence capabilities and parked integrations.',
       'inspect <segment>...': 'Validate and display ordered records from completed trace segments.',
+      'inspect --run-id <id>': 'Reconstruct a stopped run result and read its player statistics.',
       'report <segment>...': 'Reconstruct the terminal result from prepared-roster and authoritative event records.',
       'compare <left-segment> <right-segment>': 'Compare two single-segment record streams exactly.',
       'prepare --scenario <path> --run-id <id>': 'Compile a scenario and stage its world plan in a new run directory.',

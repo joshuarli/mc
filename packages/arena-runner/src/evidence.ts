@@ -1,7 +1,7 @@
 import { canonicalJson } from './canonical.js';
 import { ControlCodecError, decodeControlEnvelope } from './control/index.js';
 import type { ControlMessage, PreparePayload } from './control/types.js';
-import { reconstructEventResult } from './event-report.js';
+import { reconstructEventResult, type EventDerivedResult } from './event-report.js';
 import { MAX_EVIDENCE_BYTES, TraceError, type TraceRecord, type TraceSegment } from './trace.js';
 
 const MAX_SEQUENCE = (1n << 64n) - 1n;
@@ -19,6 +19,14 @@ export interface Evidence {
   readonly last_sequence: string;
   readonly segments: readonly SegmentSummary[];
   readonly records: readonly TraceRecord[];
+}
+
+export interface ReconstructedRunEvidence {
+  readonly report: EventDerivedResult;
+  readonly players: readonly {
+    readonly username: string;
+    readonly offlineUuid: string;
+  }[];
 }
 
 export function reconstruct(segments: readonly TraceSegment[]): Evidence {
@@ -70,7 +78,7 @@ export function inspectJson(evidence: Evidence): object {
 }
 
 export function reportJson(evidence: Evidence): object {
-  const eventResult = reconstructRecordedEvents(evidence);
+  const { report } = reconstructRunEvidence(evidence);
   return {
     schema: 1,
     run_id: evidence.run_id,
@@ -78,11 +86,11 @@ export function reportJson(evidence: Evidence): object {
     segment_count: evidence.segments.length,
     record_count: evidence.records.length,
     records: evidence.records,
-    ...eventResult,
+    ...report,
   };
 }
 
-function reconstructRecordedEvents(evidence: Evidence): ReturnType<typeof reconstructEventResult> {
+export function reconstructRunEvidence(evidence: Evidence): ReconstructedRunEvidence {
   let readySeen = false;
   let prepare: PreparePayload | undefined;
   let outcomeSeen = false;
@@ -200,7 +208,14 @@ function reconstructRecordedEvents(evidence: Evidence): ReturnType<typeof recons
   if (prepare === undefined) throw eventRecordFailure('prepare_context_missing');
   if (pendingRunnerSequence !== undefined) throw eventRecordFailure('unacknowledged_runner_command');
   if (!outcomeSeen) throw eventRecordFailure('missing_terminal_outcome');
-  return reconstructEventResult(evidence.run_id, prepare, events);
+  const report = reconstructEventResult(evidence.run_id, prepare, events);
+  return {
+    report,
+    players: prepare.roster.map((competitor) => ({
+      username: competitor.username,
+      offlineUuid: competitor.offline_uuid,
+    })),
+  };
 }
 
 function eventRecordFailure(kind: string, record?: number, field?: string): TraceError {

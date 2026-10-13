@@ -7,7 +7,7 @@ import { parseStrictJson, StrictJsonError, type StrictJsonValue } from './contro
 import { RunnerError } from './errors.js';
 
 export const TRACE_SCHEMA_VERSION = 2;
-const MAX_TRACE_BYTES = 8 * 1024 * 1024;
+export const MAX_TRACE_SEGMENT_BYTES = 8 * 1024 * 1024;
 export const MAX_EVIDENCE_BYTES = 256 * 1024 * 1024;
 const MAX_SEQUENCE = (1n << 64n) - 1n;
 const TRACE_FIELDS = new Set([
@@ -53,19 +53,19 @@ export async function readSegment(path: PathLike, argument: number): Promise<Tra
     if (!metadata.isFile()) {
       throw corrupt(resource, 'not_a_regular_file', argument);
     }
-    if (metadata.size > MAX_TRACE_BYTES) {
+    if (metadata.size > MAX_TRACE_SEGMENT_BYTES) {
       throw corrupt(resource, 'segment_too_large', argument);
     }
 
-    const bytes = Buffer.allocUnsafe(MAX_TRACE_BYTES + 1);
+    const bytes = Buffer.allocUnsafe(MAX_TRACE_SEGMENT_BYTES + 1);
     let length = 0;
-    while (length <= MAX_TRACE_BYTES) {
+    while (length <= MAX_TRACE_SEGMENT_BYTES) {
       const requested = Math.min(64 * 1024, bytes.length - length);
       const { bytesRead } = await file.read(bytes, length, requested, null);
       if (bytesRead === 0) break;
       length += bytesRead;
     }
-    if (length > MAX_TRACE_BYTES) {
+    if (length > MAX_TRACE_SEGMENT_BYTES) {
       throw corrupt(resource, 'segment_too_large', argument);
     }
 

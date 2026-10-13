@@ -1,7 +1,6 @@
 import { OwnedFilesError, readOwnedFile } from '../owned-files/index.js';
 import { RunnerError } from '../errors.js';
 import { parseStrictJson, strictJsonNumberToken, type StrictJsonValue } from '../control/strict-json.js';
-import type { PreparedRun } from '../prepare.js';
 
 const MAX_STATS_BYTES = 16 * 1024 * 1024;
 const STATS_DIRECTORY = Buffer.from('/server/world/stats/', 'ascii');
@@ -22,7 +21,7 @@ export interface StoppedPlayerStats extends PlayerIdentity {
 export async function readStoppedPlayerStats(options: Readonly<{
   helperPath: string;
   ownedRoot: Buffer;
-  preparedRun: PreparedRun;
+  runDirectoryPath: Buffer;
   players: readonly PlayerIdentity[];
 }>): Promise<readonly StoppedPlayerStats[]> {
   const results: StoppedPlayerStats[] = [];
@@ -31,7 +30,7 @@ export async function readStoppedPlayerStats(options: Readonly<{
       throw new RunnerError('runtime_failure', 'player statistics', { kind: 'invalid_offline_uuid' });
     }
     const relativePath = Buffer.concat([
-      options.preparedRun.runDirectoryPath,
+      options.runDirectoryPath,
       STATS_DIRECTORY,
       Buffer.from(player.offlineUuid, 'ascii'),
       STATS_SUFFIX,

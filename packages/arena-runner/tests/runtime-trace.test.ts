@@ -1,17 +1,18 @@
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { createConnection, type Socket } from 'node:net';
+import { basename, join, resolve } from 'node:path';
 import test, { type TestContext } from 'node:test';
 import {
   decodeControlFrame,
   encodeControlFrame,
   type ControlMessage,
 } from '../src/control/index.js';
-import { parseSegment } from '../src/trace.js';
 import { RunnerError } from '../src/errors.js';
-import {
-  RuntimeTraceBuilder,
-} from '../src/runtime/trace.js';
+import { createRunDirectory, readOwnedFile } from '../src/owned-files/index.js';
+import { parseSegment } from '../src/trace.js';
+import { RuntimeTraceBuilder } from '../src/runtime/trace.js';
 import {
   bindControlListener,
   createControlToken,
@@ -20,13 +21,15 @@ import {
 
 const RUN_ID = 'runtime-trace-test';
 const CAPABILITIES = ['hunger_games_v1'] as const;
+const repositoryRoot = basename(process.cwd()) === 'arena-runner' ? resolve(process.cwd(), '../..') : process.cwd();
+const helperPath = process.env.ARENA_FS_HELPER ?? resolve(repositoryRoot, '.work/arena-fs/arena-fs');
 
-test('runtime trace retains authenticated lifecycle events and terminal outcome', async (t) => {
-  const { session, client } = await authenticatedSession(t);
-  const trace = new RuntimeTraceBuilder(RUN_ID);
-  trace.recordReady(session.ready);
+test('runtime trace retains authenticated lifecycle events and stages schema-2 evidence', async (t) => {
+  const { session, client, token } = await authenticatedSession(t);
+  const { trace, ownedRoot } = await createTrace(t);
+  await trace.recordReady(session.ready);
   const prepare = await session.send({ type: 'prepare', payload: preparePayload() });
-  trace.recordRunnerCommand(prepare);
+  await trace.recordRunnerCommand(prepare);
 
   client.write(Buffer.concat([
     frame({
@@ -37,40 +40,39 @@ test('runtime trace retains authenticated lifecycle events and terminal outcome'
       type: 'ack',
       payload: {},
     }),
-    frame(clockMessage(4n, 'waiting')),
-    frame({ protocol: 1, run_id: RUN_ID, sequence: 5n, type: 'heartbeat', payload: {} }),
-    frame(clockMessage(6n, 'waiting')),
     frame({
       protocol: 1,
       run_id: RUN_ID,
-      sequence: 7n,
+      sequence: 4n,
       type: 'outcome',
-      payload: {
-        kind: 'abort',
-        reason: 'operator',
-        survivors: [],
-        at: null,
-      },
+      payload: { kind: 'abort', reason: 'operator', survivors: [0], at: null },
     }),
   ]));
   const messages = session.messages();
-  for (let count = 0; count < 5; count += 1) {
+  for (let count = 0; count < 2; count += 1) {
     const message = await messages.next();
     assert.equal(message.done, false);
-    trace.record(message.value!);
+    await trace.recordControlMessage(message.value!);
   }
 
-  const bytes = trace.finalize();
+  const finalized = await trace.finalize();
+  assert.equal(finalized.segments.length, 1);
+  assert.equal(finalized.totalByteLength, finalized.segments[0]!.byteLength);
+  assert.equal(finalized.segments[0]!.relativePath.toString('utf8'), 'run/trace-v2-000001.json');
+  const bytes = await readOwnedFile({
+    helperPath,
+    ownedRoot,
+    relativePath: finalized.segments[0]!.relativePath,
+    maxBytes: finalized.segments[0]!.byteLength,
+  });
   const segment = parseSegment(bytes);
   assert.equal(segment.runId, RUN_ID);
   assert.equal(segment.firstSequence, 1n);
-  assert.equal(segment.lastSequence, 6n);
+  assert.equal(segment.lastSequence, 4n);
   assert.deepEqual(segment.records.map((record) => [record.direction, record.type]), [
     ['plugin', 'ready'],
     ['runner', 'prepare'],
     ['plugin', 'ack'],
-    ['plugin', 'public_clock'],
-    ['plugin', 'public_clock'],
     ['plugin', 'outcome'],
   ]);
   assert.deepEqual(JSON.parse(JSON.stringify(segment.records[0])), {
@@ -91,39 +93,26 @@ test('runtime trace retains authenticated lifecycle events and terminal outcome'
     payload: JSON.parse(JSON.stringify(preparePayload(), (_key: string, value: unknown) =>
       typeof value === 'bigint' ? value.toString() : value)),
   });
-  assert.equal(trace.finalize().equals(bytes), true);
-  assert.throws(() => trace.record(clockMessage(8n, 'aborted')), (error: unknown) =>
+  assert.equal(bytes.toString('utf8').includes(token), false);
+  assert.equal(bytes.toString('utf8').includes('hello'), false);
+  assert.deepEqual(await trace.finalize(), finalized);
+  await assert.rejects(trace.recordControlMessage(clockMessage(5n, 'aborted')), (error: unknown) =>
     error instanceof RunnerError && error.source.kind === 'trace_finalized');
 });
 
-test('runtime trace requires an authenticated authoritative outcome', async (t) => {
-  const { session } = await authenticatedSession(t);
-  const trace = new RuntimeTraceBuilder(RUN_ID);
-  trace.recordReady(session.ready);
-
-  assert.throws(() => trace.finalize(), (error: unknown) =>
-    error instanceof RunnerError && error.source.kind === 'outcome_missing');
-});
-
-test('runtime trace rejects fabricated readiness, commands, and plugin events', async (t) => {
-  const { session } = await authenticatedSession(t);
-  const trace = new RuntimeTraceBuilder(RUN_ID);
-
-  assert.throws(() => trace.recordReady(readyEnvelope()), (error: unknown) =>
-    error instanceof RunnerError && error.source.kind === 'unauthenticated_readiness_envelope');
-  trace.recordReady(session.ready);
-  assert.throws(() => trace.recordRunnerCommand(prepareEnvelope()), (error: unknown) =>
-    error instanceof RunnerError && error.source.kind === 'unauthenticated_runner_command');
-  assert.throws(() => trace.record(clockMessage(3n, 'waiting')), (error: unknown) =>
-    error instanceof RunnerError && error.source.kind === 'unauthenticated_plugin_message');
-});
-
-test('runtime trace excludes handshake credentials', async (t) => {
-  const { session, client, token } = await authenticatedSession(t);
-  const trace = new RuntimeTraceBuilder(RUN_ID);
-  trace.recordReady(session.ready);
+test('runtime trace checkpoints persist earlier segments and hold the outcome until finalize', async (t) => {
+  const { session, client } = await authenticatedSession(t);
+  const { trace, ownedRoot } = await createTrace(t);
+  await trace.recordReady(session.ready);
   const prepare = await session.send({ type: 'prepare', payload: preparePayload() });
-  trace.recordRunnerCommand(prepare);
+  await trace.recordRunnerCommand(prepare);
+
+  await trace.checkpoint(200);
+  const firstPath = Buffer.from('run/trace-v2-000001.json', 'ascii');
+  const firstBytes = await readOwnedFile({ helperPath, ownedRoot, relativePath: firstPath, maxBytes: 1024 * 1024 });
+  const first = parseSegment(firstBytes);
+  assert.deepEqual(first.records.map((record) => record.type), ['ready', 'prepare']);
+
   client.write(Buffer.concat([
     frame({
       protocol: 1,
@@ -138,65 +127,82 @@ test('runtime trace excludes handshake credentials', async (t) => {
       run_id: RUN_ID,
       sequence: 4n,
       type: 'outcome',
-      payload: { kind: 'abort', reason: 'operator', survivors: [], at: null },
+      payload: { kind: 'abort', reason: 'operator', survivors: [0], at: null },
     }),
   ]));
   const messages = session.messages();
-  trace.record((await messages.next()).value!);
-  trace.record((await messages.next()).value!);
+  await trace.recordControlMessage((await messages.next()).value!);
+  await trace.recordControlMessage((await messages.next()).value!);
 
-  const bytes = trace.finalize();
-  assert.equal(bytes.toString('utf8').includes(token), false);
-  assert.equal(bytes.toString('utf8').includes('hello'), false);
+  const result = await trace.finalize();
+  assert.equal(result.segments.length, 2);
+  assert.deepEqual(result.segments.map((segment) => segment.relativePath.toString('utf8')), [
+    'run/trace-v2-000001.json',
+    'run/trace-v2-000002.json',
+  ]);
+  const finalBytes = await readOwnedFile({
+    helperPath,
+    ownedRoot,
+    relativePath: result.segments[1]!.relativePath,
+    maxBytes: 1024 * 1024,
+  });
+  assert.deepEqual(parseSegment(finalBytes).records.map((record) => record.type), ['ack', 'outcome']);
 });
 
-test('runtime trace stops at its bounded record limit', async (t) => {
-  const { session, client } = await authenticatedSession(t);
-  const trace = new RuntimeTraceBuilder(RUN_ID);
-  trace.recordReady(session.ready);
-  const prepare = await session.send({ type: 'prepare', payload: preparePayload() });
-  trace.recordRunnerCommand(prepare);
-  const messages = session.messages();
-  client.write(frame({
-    protocol: 1,
-    run_id: RUN_ID,
-    sequence: 3n,
-    correlation: prepare.sequence,
-    type: 'ack',
-    payload: {},
-  }));
-  trace.record((await messages.next()).value!);
+test('runtime trace requires authenticated readiness and an authoritative outcome', async (t) => {
+  const { session } = await authenticatedSession(t);
+  const { trace } = await createTrace(t);
+  await assert.rejects(trace.recordReady(readyEnvelope()), (error: unknown) =>
+    error instanceof RunnerError && error.source.kind === 'unauthenticated_readiness_envelope');
 
-  let failure: unknown;
-  let sequence = 4n;
-  for (let batch = 0; batch < 120 && failure === undefined; batch += 1) {
-    const frames: Buffer[] = [];
-    for (let item = 0; item < 500; item += 1) {
-      frames.push(frame({
-        protocol: 1,
-        run_id: RUN_ID,
-        sequence,
-        type: 'public_state',
-        payload: { at: { domain: 'match', value: sequence }, alive_seats: [0, 1] },
-      }));
-      sequence += 1n;
-    }
-    client.write(Buffer.concat(frames));
-    for (let item = 0; item < frames.length; item += 1) {
-      const next = await messages.next();
-      assert.equal(next.done, false);
-      try {
-        trace.record(next.value!);
-      } catch (error) {
-        failure = error;
-        break;
-      }
-    }
-  }
-
-  assert.ok(failure instanceof RunnerError);
-  assert.equal(failure.source.kind, 'trace_limit_exceeded');
+  const { trace: validTrace } = await createTrace(t);
+  await validTrace.recordReady(session.ready);
+  await assert.rejects(validTrace.finalize(), (error: unknown) =>
+    error instanceof RunnerError && error.source.kind === 'outcome_missing');
 });
+
+test('runtime trace rejects fabricated commands and plugin events', async (t) => {
+  const { session } = await authenticatedSession(t);
+  const { trace: unauthenticatedCommandTrace } = await createTrace(t);
+  await unauthenticatedCommandTrace.recordReady(session.ready);
+  await assert.rejects(unauthenticatedCommandTrace.recordRunnerCommand(prepareEnvelope()), (error: unknown) =>
+    error instanceof RunnerError && error.source.kind === 'unauthenticated_runner_command');
+
+  const { trace: unauthenticatedEventTrace } = await createTrace(t);
+  await unauthenticatedEventTrace.recordReady(session.ready);
+  await assert.rejects(unauthenticatedEventTrace.recordControlMessage(clockMessage(3n, 'waiting')), (error: unknown) =>
+    error instanceof RunnerError && error.source.kind === 'unauthenticated_plugin_message');
+});
+
+test('runtime trace rejects checkpoints outside the 200-observation cadence', async (t) => {
+  const { trace } = await createTrace(t);
+  await assert.rejects(trace.checkpoint(400), (error: unknown) =>
+    error instanceof RunnerError && error.source.kind === 'invalid_trace_checkpoint');
+});
+
+async function createTrace(t: TestContext): Promise<Readonly<{
+  trace: RuntimeTraceBuilder;
+  ownedRoot: Buffer;
+}>> {
+  const ownedRoot = await readTestRootForTrace(t);
+  const runDirectoryPath = Buffer.from('run', 'ascii');
+  await createRunDirectory({ helperPath, ownedRoot, relativePath: runDirectoryPath });
+  return Object.freeze({
+    trace: new RuntimeTraceBuilder({
+      runId: RUN_ID,
+      helperPath,
+      ownedRoot,
+      preparedRun: { runId: RUN_ID, runDirectoryPath },
+    }),
+    ownedRoot,
+  });
+}
+
+async function readTestRootForTrace(t: TestContext): Promise<Buffer> {
+  const root = await mkdtemp(join(repositoryRoot, '.work/tmp/runtime-trace-'));
+  t.after(async () => await rm(root, { recursive: true, force: true }));
+  return Buffer.from(root, 'utf8');
+}
 
 async function authenticatedSession(t: TestContext): Promise<Readonly<{
   session: ControlSession;
