@@ -23,6 +23,9 @@ import {
 } from './observation.js';
 import {
   decide,
+  emptyPolicyMemory,
+  policyFeedbackBatch,
+  policyMemory,
   type Decision,
   type Goal,
   type Intent,
@@ -30,6 +33,7 @@ import {
   type PolicyFeedbackBatch,
   type PolicyParams,
 } from './policy.js';
+import { skillProgress, type SkillFailure, type SkillOutcome } from './outcome.js';
 import { DeterministicRandom } from './random.js';
 
 export const CIVILIZATION_FACTION_IDS = Object.freeze(['ember', 'tide'] as const);
@@ -50,6 +54,9 @@ export const CIVILIZATION_TEAM_MESSAGE_QUEUE_LIMIT = 16;
 const OAK_PLANKS_PER_LOG = OUTPOST_PLANKS_REQUIRED / OUTPOST_LOGS_REQUIRED;
 const CONTAINER_INTERACTION_DISTANCE_BLOCKS = 3n;
 const BLOCK_INTERACTION_DISTANCE_SQUARED = 25n;
+const MAX_CIVILIZATION_FEEDBACKS = 2;
+const MAX_FAILED_MATERIAL_TARGETS = 16;
+const MATERIAL_TARGET_RETRY_TICKS = 20;
 
 export type CivilizationFactionId = typeof CIVILIZATION_FACTION_IDS[number];
 export type CivilizationRole = typeof CIVILIZATION_ROLES[number];
@@ -361,7 +368,8 @@ export type CivilizationHoldReason =
   | 'blueprintObstructed'
   | 'blueprintComplete'
   | 'materialsUnavailable'
-  | 'captureZoneOccupied';
+  | 'captureZoneOccupied'
+  | 'materialTargetCoolingDown';
 
 export type CivIntent =
   | { readonly kind: 'mineBlock'; readonly position: BlockPosition; readonly expectedBlock: 'oak_log' }
@@ -403,10 +411,117 @@ export type CivilizationGoal =
   | { readonly kind: 'outpostComplete' }
   | { readonly kind: 'wait'; readonly reason: CivilizationHoldReason };
 
+export type CivilizationMaterialTarget =
+  | { readonly kind: 'gather'; readonly item: MaterialItem; readonly target: BlockPosition }
+  | {
+    readonly kind: 'transfer';
+    readonly item: MaterialItem;
+    readonly direction: 'deposit' | 'withdraw';
+    readonly container: BlockPosition;
+  }
+  | {
+    readonly kind: 'build';
+    readonly blueprintId: OutpostBlueprintId;
+    readonly cellIndex: number;
+    readonly target: BlockPosition;
+  }
+  | { readonly kind: 'craft'; readonly item: 'oak_planks' };
+
+type CivilizationMaterialTargetTemplate =
+  | { readonly kind: 'gather'; readonly item: MaterialItem }
+  | { readonly kind: 'transfer'; readonly item: MaterialItem; readonly direction: 'deposit' | 'withdraw' };
+
+export interface CivilizationFailedMaterialTarget {
+  readonly target: CivilizationMaterialTarget;
+  readonly retryAt: Tick;
+}
+
+export interface CivilizationPolicyMemory {
+  readonly policy: PolicyMemory;
+  readonly failedMaterialTargets: readonly CivilizationFailedMaterialTarget[];
+}
+
+export type CivilizationActionIntent = CivIntent
+  | Extract<Intent, { readonly kind: 'navigate' | 'dropCollect' | 'containerOpen' }>;
+
+export type CivilizationActionFeedbackOutcome = Exclude<SkillOutcome, { readonly kind: 'pending' | 'cancelled' }>;
+
+export interface CivilizationActionFeedbackSource {
+  readonly goal: CivilizationGoal;
+  readonly intent: CivilizationActionIntent;
+  readonly outcome: CivilizationActionFeedbackOutcome;
+  readonly startedAt: Tick | number;
+  readonly completedAt: Tick | number;
+}
+
+export interface CivilizationActionFeedback extends CivilizationActionFeedbackSource {
+  readonly startedAt: Tick;
+  readonly completedAt: Tick;
+}
+
+export interface CivilizationPolicyFeedbackBatchInput {
+  readonly shared: PolicyFeedbackBatch;
+  readonly actions: readonly CivilizationActionFeedbackSource[];
+}
+
+export interface CivilizationPolicyFeedbackBatch {
+  readonly shared: PolicyFeedbackBatch;
+  readonly actions: readonly CivilizationActionFeedback[];
+}
+
 export interface CivilizationDecision {
   readonly goal: Goal | CivilizationGoal;
   readonly intent: Intent | CivIntent;
-  readonly memory: PolicyMemory;
+  readonly memory: CivilizationPolicyMemory;
+}
+
+export function emptyCivilizationPolicyMemory(): CivilizationPolicyMemory {
+  return Object.freeze({
+    policy: emptyPolicyMemory(),
+    failedMaterialTargets: Object.freeze([]),
+  });
+}
+
+export function civilizationPolicyMemory(input: CivilizationPolicyMemory): CivilizationPolicyMemory {
+  assertExactKeys(input, ['policy', 'failedMaterialTargets'], 'civilization policy memory');
+  if (!Array.isArray(input.failedMaterialTargets) || input.failedMaterialTargets.length > MAX_FAILED_MATERIAL_TARGETS) {
+    throw new RangeError(`civilization policy memory can hold at most ${MAX_FAILED_MATERIAL_TARGETS} failed material targets`);
+  }
+  assertDenseArray(input.failedMaterialTargets, 'civilization policy memory failedMaterialTargets');
+  const failedMaterialTargets = input.failedMaterialTargets.map(cloneFailedMaterialTarget);
+  for (let index = 0; index < failedMaterialTargets.length; index += 1) {
+    const candidate = failedMaterialTargets[index]!;
+    if (failedMaterialTargets.slice(0, index).some((existing) => (
+      sameCivilizationMaterialTarget(existing.target, candidate.target)
+    ))) {
+      throw new TypeError('civilization policy memory cannot contain duplicate failed material targets');
+    }
+  }
+  return Object.freeze({
+    policy: policyMemory(input.policy),
+    failedMaterialTargets: Object.freeze(failedMaterialTargets),
+  });
+}
+
+export function civilizationPolicyFeedbackBatch(
+  input: CivilizationPolicyFeedbackBatchInput,
+): CivilizationPolicyFeedbackBatch {
+  assertExactKeys(input, ['shared', 'actions'], 'civilization policy feedback batch');
+  const shared = policyFeedbackBatch(input.shared);
+  if (!Array.isArray(input.actions) || shared.length + input.actions.length > MAX_CIVILIZATION_FEEDBACKS) {
+    throw new RangeError(`civilization feedback can contain at most ${MAX_CIVILIZATION_FEEDBACKS} completed outcomes`);
+  }
+  assertDenseArray(input.actions, 'civilization action feedback');
+  let previousCompletedAt: Tick | null = null;
+  const actions = input.actions.map((source) => {
+    const feedback = cloneCivilizationActionFeedback(source);
+    if (previousCompletedAt !== null && feedback.completedAt < previousCompletedAt) {
+      throw new RangeError('civilization action feedback must be in completion order');
+    }
+    previousCompletedAt = feedback.completedAt;
+    return feedback;
+  });
+  return Object.freeze({ shared, actions: Object.freeze(actions) });
 }
 
 interface ResourceHint {
@@ -421,30 +536,34 @@ interface ResourceHint {
 export function decideCivilization(
   context: CivilizationPolicyContext,
   observation: CivilizationObservation,
-  memory: PolicyMemory,
+  memory: CivilizationPolicyMemory,
   params: PolicyParams,
   random: DeterministicRandom,
-  feedback: PolicyFeedbackBatch = [],
+  feedback: CivilizationPolicyFeedbackBatch,
 ): CivilizationDecision {
   assertValidatedCivilizationContext(context);
   assertValidatedCivilizationObservation(observation);
 
-  const baseline = decide(observation.base, memory, params, random, feedback);
+  const civilizationMemory = civilizationPolicyMemory(memory);
+  const policyFeedback = civilizationPolicyFeedbackBatch(feedback);
+  const baseline = decide(observation.base, civilizationMemory.policy, params, random, policyFeedback.shared);
+  const nextMemory = applyCivilizationActionFeedback(civilizationMemory, policyFeedback.actions, observation);
+  const resultMemory = civilizationPolicyMemory({ ...nextMemory, policy: baseline.memory });
   if (isSharedPriorityGoal(baseline.goal)) {
-    return baseline;
+    return civilizationDecision(baseline.goal, baseline.intent, resultMemory);
   }
   const agent = observation.base.agent.kind === 'current' ? observation.base.agent.value : null;
   if (agent === null) {
-    return baseline;
+    return civilizationDecision(baseline.goal, baseline.intent, resultMemory);
   }
 
   switch (context.role) {
     case 'gatherer_crafter':
-      return decideGatherer(observation, baseline, agent.position);
+      return decideGatherer(observation, baseline, resultMemory, agent.position);
     case 'builder':
-      return decideBuilder(context, observation, baseline, agent.position);
+      return decideBuilder(context, observation, baseline, resultMemory, agent.position);
     case 'defender_scout':
-      return decideDefender(context, observation, baseline, agent.position);
+      return decideDefender(context, observation, baseline, resultMemory, agent.position);
   }
 }
 
@@ -459,65 +578,480 @@ function isSharedPriorityGoal(goal: Goal): boolean {
   return true;
 }
 
+function cloneCivilizationActionFeedback(source: CivilizationActionFeedbackSource): CivilizationActionFeedback {
+  assertExactKeys(source, ['goal', 'intent', 'outcome', 'startedAt', 'completedAt'], 'civilization action feedback');
+  const goal = cloneCivilizationGoal(source.goal);
+  const intent = cloneCivilizationIntent(source.intent);
+  validateCivilizationGoalIntent(goal, intent);
+  const outcome = cloneCivilizationActionOutcome(source.outcome);
+  const startedAt = tick(source.startedAt);
+  const completedAt = tick(source.completedAt);
+  if (startedAt > completedAt) {
+    throw new RangeError('civilization action feedback must start no later than completion');
+  }
+  return Object.freeze({ goal, intent, outcome, startedAt, completedAt });
+}
+
+function cloneCivilizationGoal(goal: CivilizationGoal): CivilizationGoal {
+  switch (goal.kind) {
+    case 'gatherMaterial':
+      assertExactKeys(goal, ['kind', 'item', 'target'], 'civilization gather goal');
+      assertMaterialItem(goal.item);
+      return Object.freeze({ kind: goal.kind, item: goal.item, target: clonePosition(goal.target) });
+    case 'craftMaterial':
+      assertExactKeys(goal, ['kind', 'item', 'resultCount'], 'civilization craft goal');
+      if (goal.item !== 'oak_planks') throw new TypeError('civilization craft goal must produce oak_planks');
+      assertStackCount(goal.resultCount, 'craft result count');
+      return Object.freeze({ kind: goal.kind, item: goal.item, resultCount: goal.resultCount });
+    case 'transferMaterial':
+      assertExactKeys(goal, ['kind', 'item', 'count', 'direction', 'container'], 'civilization transfer goal');
+      assertMaterialItem(goal.item);
+      assertStackCount(goal.count, 'transfer count');
+      if (goal.direction !== 'deposit' && goal.direction !== 'withdraw') {
+        throw new TypeError(`unknown transfer direction: ${String(goal.direction)}`);
+      }
+      return Object.freeze({
+        kind: goal.kind,
+        item: goal.item,
+        count: goal.count,
+        direction: goal.direction,
+        container: clonePosition(goal.container),
+      });
+    case 'buildOutpost':
+      assertExactKeys(goal, ['kind', 'blueprintId', 'cellIndex', 'target'], 'civilization build goal');
+      if (goal.blueprintId !== OUTPOST_BLUEPRINT_ID) throw new TypeError('unknown outpost blueprint');
+      if (!Number.isSafeInteger(goal.cellIndex) || goal.cellIndex < 0 || goal.cellIndex >= OUTPOST_BLOCK_COUNT) {
+        throw new RangeError('outpost cell index is out of range');
+      }
+      return Object.freeze({
+        kind: goal.kind, blueprintId: goal.blueprintId, cellIndex: goal.cellIndex, target: clonePosition(goal.target),
+      });
+    case 'captureZone':
+      assertExactKeys(goal, ['kind', 'target'], 'civilization capture goal');
+      return Object.freeze({ kind: goal.kind, target: clonePosition(goal.target) });
+    case 'holdCaptureZone':
+    case 'outpostComplete':
+      assertExactKeys(goal, ['kind'], 'civilization completed goal');
+      return Object.freeze({ kind: goal.kind });
+    case 'wait':
+      assertExactKeys(goal, ['kind', 'reason'], 'civilization wait goal');
+      assertCivilizationHoldReason(goal.reason);
+      return Object.freeze({ kind: goal.kind, reason: goal.reason });
+    default:
+      throw new TypeError(`unknown civilization goal: ${String((goal as { kind?: unknown }).kind)}`);
+  }
+}
+
+function cloneCivilizationIntent(intent: CivilizationActionIntent): CivilizationActionIntent {
+  switch (intent.kind) {
+    case 'mineBlock':
+      assertExactKeys(intent, ['kind', 'position', 'expectedBlock'], 'civilization mining intent');
+      if (intent.expectedBlock !== 'oak_log') throw new TypeError('civilization mining intent must target oak_log');
+      return Object.freeze({ kind: intent.kind, position: clonePosition(intent.position), expectedBlock: intent.expectedBlock });
+    case 'craft':
+      assertExactKeys(intent, ['kind', 'output', 'resultCount', 'table'], 'civilization craft intent');
+      if (intent.output !== 'oak_planks' || intent.table !== null) {
+        throw new TypeError('civilization craft intent must craft oak_planks without a table');
+      }
+      assertStackCount(intent.resultCount, 'craft result count');
+      return Object.freeze({ kind: intent.kind, output: intent.output, resultCount: intent.resultCount, table: null });
+    case 'containerTransfer':
+      assertExactKeys(intent, ['kind', 'position', 'direction', 'item', 'count'], 'civilization container transfer intent');
+      if (intent.direction !== 'deposit' && intent.direction !== 'withdraw') {
+        throw new TypeError(`unknown transfer direction: ${String(intent.direction)}`);
+      }
+      assertMaterialItem(intent.item);
+      assertStackCount(intent.count, 'transfer count');
+      return Object.freeze({
+        kind: intent.kind,
+        position: clonePosition(intent.position),
+        direction: intent.direction,
+        item: intent.item,
+        count: intent.count,
+      });
+    case 'placeBlock':
+      assertExactKeys(intent, ['kind', 'target', 'referencePosition', 'face', 'item'], 'civilization placement intent');
+      if (intent.face !== 'up' || intent.item !== 'oak_planks') {
+        throw new TypeError('civilization placement must place oak_planks on the upper face');
+      }
+      return Object.freeze({
+        kind: intent.kind,
+        target: clonePosition(intent.target),
+        referencePosition: clonePosition(intent.referencePosition),
+        face: intent.face,
+        item: intent.item,
+      });
+    case 'navigate':
+      assertExactKeys(intent, ['kind', 'target'], 'civilization navigation intent');
+      return Object.freeze({ kind: intent.kind, target: clonePosition(intent.target) });
+    case 'dropCollect':
+      assertExactKeys(intent, ['kind', 'entityId'], 'civilization collection intent');
+      return Object.freeze({ kind: intent.kind, entityId: entityId(intent.entityId) });
+    case 'containerOpen':
+      assertExactKeys(intent, ['kind', 'position'], 'civilization container open intent');
+      return Object.freeze({ kind: intent.kind, position: clonePosition(intent.position) });
+    case 'hold':
+      assertExactKeys(intent, ['kind', 'reason'], 'civilization hold intent');
+      assertCivilizationHoldReason(intent.reason);
+      return Object.freeze({ kind: intent.kind, reason: intent.reason });
+    default:
+      throw new TypeError(`unknown civilization intent: ${String((intent as { kind?: unknown }).kind)}`);
+  }
+}
+
+function cloneCivilizationActionOutcome(outcome: CivilizationActionFeedbackOutcome): CivilizationActionFeedbackOutcome {
+  switch (outcome.kind) {
+    case 'succeeded':
+      assertExactKeys(outcome, ['kind'], 'civilization successful action outcome');
+      return Object.freeze({ kind: 'succeeded' });
+    case 'failed':
+      assertExactKeys(outcome, ['kind', 'cause'], 'civilization failed action outcome');
+      assertSkillFailure(outcome.cause);
+      return Object.freeze({ kind: 'failed', cause: outcome.cause });
+    case 'progress':
+      assertExactKeys(outcome, ['kind', 'progress'], 'civilization progress outcome');
+      assertExactKeys(outcome.progress, ['completedSteps', 'totalSteps'], 'civilization skill progress');
+      return Object.freeze({
+        kind: 'progress',
+        progress: skillProgress(outcome.progress.completedSteps, outcome.progress.totalSteps),
+      });
+    default:
+      throw new TypeError('civilization feedback accepts only progress or completed action outcomes');
+  }
+}
+
+function validateCivilizationGoalIntent(goal: CivilizationGoal, intent: CivilizationActionIntent): void {
+  const matchesPosition = (first: BlockPosition, second: BlockPosition): boolean => compareBlockPositions(first, second) === 0;
+  switch (goal.kind) {
+    case 'gatherMaterial':
+      if (intent.kind === 'navigate') {
+        if (matchesPosition(intent.target, goal.target)) return;
+      } else if (intent.kind === 'mineBlock') {
+        if (goal.item === 'oak_log' && matchesPosition(intent.position, goal.target)) return;
+      } else if (intent.kind === 'dropCollect') {
+        return;
+      }
+      break;
+    case 'craftMaterial':
+      if (intent.kind === 'craft'
+          && intent.output === goal.item
+          && intent.resultCount === goal.resultCount) return;
+      break;
+    case 'transferMaterial':
+      if ((intent.kind === 'navigate' && matchesPosition(intent.target, goal.container))
+          || (intent.kind === 'containerOpen' && matchesPosition(intent.position, goal.container))) return;
+      if (intent.kind === 'containerTransfer'
+          && matchesPosition(intent.position, goal.container)
+          && intent.direction === goal.direction
+          && intent.item === goal.item
+          && intent.count <= goal.count) return;
+      break;
+    case 'buildOutpost':
+      if (intent.kind === 'navigate' && matchesPosition(intent.target, goal.target)) return;
+      if (intent.kind === 'placeBlock' && matchesPosition(intent.target, goal.target)) return;
+      break;
+    case 'captureZone':
+      if (intent.kind === 'navigate' && matchesPosition(intent.target, goal.target)) return;
+      break;
+    case 'holdCaptureZone':
+      if (intent.kind === 'hold' && intent.reason === 'captureZoneOccupied') return;
+      break;
+    case 'outpostComplete':
+      if (intent.kind === 'hold' && intent.reason === 'blueprintComplete') return;
+      break;
+    case 'wait':
+      if (intent.kind === 'hold' && intent.reason === goal.reason) return;
+      break;
+  }
+  throw new TypeError('civilization feedback goal and intent do not match');
+}
+
+function assertCivilizationHoldReason(value: string): asserts value is CivilizationHoldReason {
+  if (value !== 'materialsUnknown'
+      && value !== 'resourcesUnknown'
+      && value !== 'blueprintObstructed'
+      && value !== 'blueprintComplete'
+      && value !== 'materialsUnavailable'
+      && value !== 'captureZoneOccupied'
+      && value !== 'materialTargetCoolingDown') {
+    throw new TypeError(`unknown civilization hold reason: ${value}`);
+  }
+}
+
+function assertSkillFailure(value: SkillFailure): void {
+  if (value !== 'preconditionsNotMet' && value !== 'noProgress' && value !== 'serverRejected' && value !== 'timedOut') {
+    throw new TypeError(`unknown skill failure cause: ${String(value)}`);
+  }
+}
+
+function cloneFailedMaterialTarget(input: CivilizationFailedMaterialTarget): CivilizationFailedMaterialTarget {
+  assertExactKeys(input, ['target', 'retryAt'], 'failed civilization material target');
+  return Object.freeze({ target: cloneCivilizationMaterialTarget(input.target), retryAt: tick(input.retryAt) });
+}
+
+function cloneCivilizationMaterialTarget(target: CivilizationMaterialTarget): CivilizationMaterialTarget {
+  switch (target.kind) {
+    case 'gather':
+      assertExactKeys(target, ['kind', 'item', 'target'], 'civilization gather target');
+      assertMaterialItem(target.item);
+      return Object.freeze({ kind: target.kind, item: target.item, target: clonePosition(target.target) });
+    case 'transfer':
+      assertExactKeys(target, ['kind', 'item', 'direction', 'container'], 'civilization transfer target');
+      assertMaterialItem(target.item);
+      if (target.direction !== 'deposit' && target.direction !== 'withdraw') {
+        throw new TypeError(`unknown transfer direction: ${String(target.direction)}`);
+      }
+      return Object.freeze({
+        kind: target.kind, item: target.item, direction: target.direction, container: clonePosition(target.container),
+      });
+    case 'build':
+      assertExactKeys(target, ['kind', 'blueprintId', 'cellIndex', 'target'], 'civilization build target');
+      if (target.blueprintId !== OUTPOST_BLUEPRINT_ID) throw new TypeError('unknown outpost blueprint');
+      if (!Number.isSafeInteger(target.cellIndex) || target.cellIndex < 0 || target.cellIndex >= OUTPOST_BLOCK_COUNT) {
+        throw new RangeError('outpost cell index is out of range');
+      }
+      return Object.freeze({
+        kind: target.kind,
+        blueprintId: target.blueprintId,
+        cellIndex: target.cellIndex,
+        target: clonePosition(target.target),
+      });
+    case 'craft':
+      assertExactKeys(target, ['kind', 'item'], 'civilization craft target');
+      if (target.item !== 'oak_planks') throw new TypeError('unknown civilization craft target item');
+      return Object.freeze({ kind: target.kind, item: target.item });
+    default:
+      throw new TypeError(`unknown civilization material target: ${String((target as { kind?: unknown }).kind)}`);
+  }
+}
+
+function sameCivilizationMaterialTarget(first: CivilizationMaterialTarget, second: CivilizationMaterialTarget): boolean {
+  if (first.kind !== second.kind) return false;
+  switch (first.kind) {
+    case 'gather':
+      return second.kind === 'gather' && first.item === second.item && compareBlockPositions(first.target, second.target) === 0;
+    case 'transfer':
+      return second.kind === 'transfer'
+        && first.item === second.item
+        && first.direction === second.direction
+        && compareBlockPositions(first.container, second.container) === 0;
+    case 'build':
+      return second.kind === 'build'
+        && first.blueprintId === second.blueprintId
+        && first.cellIndex === second.cellIndex
+        && compareBlockPositions(first.target, second.target) === 0;
+    case 'craft':
+      return second.kind === 'craft' && first.item === second.item;
+  }
+}
+
+function isCivilizationMaterialTargetCoolingDown(
+  memory: CivilizationPolicyMemory,
+  target: CivilizationMaterialTarget,
+): boolean {
+  return memory.failedMaterialTargets.some((failed) => sameCivilizationMaterialTarget(failed.target, target));
+}
+
+function applyCivilizationActionFeedback(
+  memory: CivilizationPolicyMemory,
+  feedback: readonly CivilizationActionFeedback[],
+  observation: CivilizationObservation,
+): CivilizationPolicyMemory {
+  const currentTick = observation.base.tick;
+  let failedMaterialTargets = [...memory.failedMaterialTargets];
+  for (const event of feedback) {
+    if (event.startedAt > currentTick || event.completedAt > currentTick) {
+      throw new RangeError('civilization action feedback cannot follow its current observation');
+    }
+    const target = civilizationMaterialTargetFromAction(event.goal, event.intent);
+    if (target === null) continue;
+    failedMaterialTargets = failedMaterialTargets.filter((entry) => (
+      !sameCivilizationMaterialTarget(entry.target, target)
+    ));
+    if (event.outcome.kind === 'failed') {
+      const retryAt = tick(event.completedAt + MATERIAL_TARGET_RETRY_TICKS);
+      if (retryAt > currentTick) {
+        failedMaterialTargets.push(Object.freeze({ target, retryAt }));
+        if (failedMaterialTargets.length > MAX_FAILED_MATERIAL_TARGETS) failedMaterialTargets.shift();
+      }
+    }
+  }
+  failedMaterialTargets = failedMaterialTargets.filter((entry) => (
+    entry.retryAt > currentTick
+      && entry.retryAt - currentTick <= MATERIAL_TARGET_RETRY_TICKS
+      && !civilizationMaterialTargetChanged(observation, entry.target)
+  ));
+  return civilizationPolicyMemory({ policy: memory.policy, failedMaterialTargets });
+}
+
+function civilizationMaterialTargetFromAction(
+  goal: CivilizationGoal,
+  _intent: CivilizationActionIntent,
+): CivilizationMaterialTarget | null {
+  switch (goal.kind) {
+    case 'gatherMaterial':
+      return Object.freeze({ kind: 'gather', item: goal.item, target: goal.target });
+    case 'craftMaterial':
+      return Object.freeze({ kind: 'craft', item: goal.item });
+    case 'transferMaterial':
+      return Object.freeze({
+        kind: 'transfer', item: goal.item, direction: goal.direction, container: goal.container,
+      });
+    case 'buildOutpost':
+      return Object.freeze({
+        kind: 'build', blueprintId: goal.blueprintId, cellIndex: goal.cellIndex, target: goal.target,
+      });
+    case 'captureZone':
+    case 'holdCaptureZone':
+    case 'outpostComplete':
+    case 'wait':
+      return null;
+  }
+}
+
+function civilizationMaterialTargetChanged(
+  observation: CivilizationObservation,
+  target: CivilizationMaterialTarget,
+): boolean {
+  switch (target.kind) {
+    case 'gather': {
+      if (observation.ownMaterials.kind === 'current') {
+        const logs = totalMaterial(observation.ownMaterials.value, 'oak_log');
+        const planks = totalMaterial(observation.ownMaterials.value, 'oak_planks');
+        if (target.item === 'oak_planks' && planks >= OUTPOST_PLANKS_REQUIRED) return true;
+        if (target.item === 'oak_log') {
+          const requiredLogs = Math.ceil((OUTPOST_PLANKS_REQUIRED - planks) / OAK_PLANKS_PER_LOG);
+          if (planks >= OUTPOST_PLANKS_REQUIRED || logs >= requiredLogs) return true;
+        }
+      }
+      if (observation.observedResources.kind !== 'current') return false;
+      const locallyVisible = observation.observedResources.value.some((resource) => (
+        compareBlockPositions(resource.position, target.target) === 0
+        && ((target.item === 'oak_log' && resource.kind === 'logBlock')
+          || (resource.kind === 'materialDrop' && resource.item === target.item))
+      ));
+      const reported = observation.teamMessages.some((message) => (
+        message.kind === 'resourceSighting'
+        && compareBlockPositions(message.position, target.target) === 0
+        && (target.item === 'oak_log'
+          ? message.resource === 'oakLogBlock' || message.resource === 'oakLogDrop'
+          : message.resource === 'oakPlankDrop')
+      ));
+      return !locallyVisible && !reported;
+    }
+    case 'transfer': {
+      if (observation.ownMaterials.kind === 'current') {
+        const ownCount = totalMaterial(observation.ownMaterials.value, target.item);
+        if (target.direction === 'deposit' && ownCount === 0) return true;
+        if (target.direction === 'withdraw' && ownCount > 0) return true;
+      }
+      if (observation.observedResources.kind !== 'current') return false;
+      const locallyVisible = observation.observedResources.value.some((resource) => (
+        resource.kind === 'container' && compareBlockPositions(resource.position, target.container) === 0
+      ));
+      const reported = observation.teamMessages.some((message) => (
+        message.kind === 'resourceSighting'
+        && message.resource === 'container'
+        && compareBlockPositions(message.position, target.container) === 0
+      ));
+      return !locallyVisible && !reported;
+    }
+    case 'build': {
+      if (observation.observedResources.kind !== 'current') return false;
+      const cell = observation.observedResources.value.find((resource) => (
+        resource.kind === 'outpostCell' && compareBlockPositions(resource.position, target.target) === 0
+      ));
+      return cell?.kind === 'outpostCell' && (cell.state !== 'air' || cell.support !== 'solid');
+    }
+    case 'craft': {
+      if (observation.ownMaterials.kind !== 'current') return false;
+      const logs = totalMaterial(observation.ownMaterials.value, 'oak_log');
+      const planks = totalMaterial(observation.ownMaterials.value, 'oak_planks');
+      return planks >= OUTPOST_PLANKS_REQUIRED || logs < Math.ceil((OUTPOST_PLANKS_REQUIRED - planks) / OAK_PLANKS_PER_LOG);
+    }
+  }
+}
+
 function decideGatherer(
   observation: CivilizationObservation,
   baseline: Decision,
+  memory: CivilizationPolicyMemory,
   position: BlockPosition,
 ): CivilizationDecision {
   if (observation.ownMaterials.kind !== 'current') {
-    return civHold(baseline, 'materialsUnknown');
+    return civHold(baseline, memory, 'materialsUnknown');
   }
   const logs = totalMaterial(observation.ownMaterials.value, 'oak_log');
   const planks = totalMaterial(observation.ownMaterials.value, 'oak_planks');
   if (planks < OUTPOST_PLANKS_REQUIRED) {
     const resultCount = Math.ceil((OUTPOST_PLANKS_REQUIRED - planks) / OAK_PLANKS_PER_LOG) * OAK_PLANKS_PER_LOG;
     const logsRequired = resultCount / OAK_PLANKS_PER_LOG;
-    const localPlanks = selectLocalMaterial(observation.observedResources, 'oak_planks', position);
+    const localPlanks = selectLocalMaterial(observation.observedResources, 'oak_planks', position, memory);
     if (localPlanks !== null) {
-      return collectMaterial(baseline, localPlanks, position, 'oak_planks');
+      return collectMaterial(baseline, memory, localPlanks, position, 'oak_planks');
     }
-    const reportedPlanks = selectReportedResource(observation.teamMessages, ['oakPlankDrop'], position);
+    if (hasCoolingDownLocalMaterial(observation.observedResources, 'oak_planks', memory)) {
+      return civHold(baseline, memory, 'materialTargetCoolingDown');
+    }
+    const reportedPlanks = selectReportedResource(observation.teamMessages, ['oakPlankDrop'], position, memory, {
+      kind: 'gather', item: 'oak_planks',
+    });
     if (reportedPlanks !== null) {
       const goal: CivilizationGoal = {
         kind: 'gatherMaterial', item: 'oak_planks', target: reportedPlanks.position,
       };
-      return civDecision(baseline, goal, { kind: 'navigate', target: reportedPlanks.position });
+      return civDecision(baseline, memory, goal, { kind: 'navigate', target: reportedPlanks.position });
+    }
+    if (hasCoolingDownReportedMaterial(observation.teamMessages, ['oakPlankDrop'], memory, 'oak_planks')) {
+      return civHold(baseline, memory, 'materialTargetCoolingDown');
     }
     if (logs >= logsRequired) {
       const goal: CivilizationGoal = { kind: 'craftMaterial', item: 'oak_planks', resultCount };
-      return civDecision(baseline, goal, {
+      if (isCivilizationMaterialTargetCoolingDown(memory, { kind: 'craft', item: 'oak_planks' })) {
+        return civHold(baseline, memory, 'materialTargetCoolingDown', goal);
+      }
+      return civDecision(baseline, memory, goal, {
         kind: 'craft', output: 'oak_planks', resultCount, table: null,
       });
     }
 
-    const local = selectLocalMaterial(observation.observedResources, 'oak_log', position);
+    const local = selectLocalMaterial(observation.observedResources, 'oak_log', position, memory);
     if (local !== null) {
-      return collectMaterial(baseline, local, position, 'oak_log');
+      return collectMaterial(baseline, memory, local, position, 'oak_log');
+    }
+    if (hasCoolingDownLocalMaterial(observation.observedResources, 'oak_log', memory)) {
+      return civHold(baseline, memory, 'materialTargetCoolingDown');
     }
 
-    const reported = selectReportedResource(observation.teamMessages, ['oakLogBlock', 'oakLogDrop'], position);
+    const reported = selectReportedResource(observation.teamMessages, ['oakLogBlock', 'oakLogDrop'], position, memory, {
+      kind: 'gather', item: 'oak_log',
+    });
     if (reported !== null) {
       const goal: CivilizationGoal = { kind: 'gatherMaterial', item: 'oak_log', target: reported.position };
-      return civDecision(baseline, goal, { kind: 'navigate', target: reported.position });
+      return civDecision(baseline, memory, goal, { kind: 'navigate', target: reported.position });
+    }
+    if (hasCoolingDownReportedMaterial(observation.teamMessages, ['oakLogBlock', 'oakLogDrop'], memory, 'oak_log')) {
+      return civHold(baseline, memory, 'materialTargetCoolingDown');
     }
     if (observation.observedResources.kind !== 'current') {
-      return civHold(baseline, 'resourcesUnknown');
+      return civHold(baseline, memory, 'resourcesUnknown');
     }
-    return baseline;
+    return civilizationDecision(baseline.goal, baseline.intent, memory);
   }
 
-  return transferFromContainer(observation, baseline, position, 'deposit', 'oak_planks', OUTPOST_PLANKS_REQUIRED)
-    ?? baseline;
+  return transferFromContainer(observation, baseline, memory, position, 'deposit', 'oak_planks', OUTPOST_PLANKS_REQUIRED)
+    ?? civilizationDecision(baseline.goal, baseline.intent, memory);
 }
 
 function decideBuilder(
   context: CivilizationPolicyContext,
   observation: CivilizationObservation,
   baseline: Decision,
+  memory: CivilizationPolicyMemory,
   position: BlockPosition,
 ): CivilizationDecision {
   if (observation.ownMaterials.kind !== 'current') {
-    return civHold(baseline, 'materialsUnknown');
+    return civHold(baseline, memory, 'materialsUnknown');
   }
   const planks = totalMaterial(observation.ownMaterials.value, 'oak_planks');
   const cells = civilizationOutpostCells(context.objective.outpost.anchor, context.objective.outpost.rotationDegrees);
@@ -531,38 +1065,48 @@ function decideBuilder(
       target: cell.position,
     };
     if (observed === null) {
-      return civDecision(baseline, goal, { kind: 'navigate', target: cell.position });
+      return civDecision(baseline, memory, goal, { kind: 'navigate', target: cell.position });
     }
     if (observed.state === 'unloaded' || observed.support === 'unknown') {
-      return civDecision(baseline, goal, { kind: 'navigate', target: cell.position });
+      return civDecision(baseline, memory, goal, { kind: 'navigate', target: cell.position });
     }
     if (observed.state === 'oak_planks') {
       continue;
     }
     if (observed.state !== 'air' || observed.support !== 'solid') {
-      return civHold(baseline, 'blueprintObstructed', goal);
+      return civHold(baseline, memory, 'blueprintObstructed', goal);
+    }
+    if (isCivilizationMaterialTargetCoolingDown(memory, {
+      kind: 'build', blueprintId: OUTPOST_BLUEPRINT_ID, cellIndex: cell.index, target: cell.position,
+    })) {
+      return civHold(baseline, memory, 'materialTargetCoolingDown', goal);
     }
     if (planks < 1) {
       const transfer = transferFromContainer(
-        observation, baseline, position, 'withdraw', 'oak_planks', OUTPOST_PLANKS_REQUIRED,
+        observation, baseline, memory, position, 'withdraw', 'oak_planks', OUTPOST_PLANKS_REQUIRED,
       );
       if (transfer !== null) {
         return transfer;
       }
-      const reported = selectReportedResource(observation.teamMessages, ['container'], position);
+      const reported = selectReportedResource(observation.teamMessages, ['container'], position, memory, {
+        kind: 'transfer', item: 'oak_planks', direction: 'withdraw',
+      });
       if (reported !== null) {
         const storageGoal: CivilizationGoal = {
           kind: 'transferMaterial', item: 'oak_planks', count: 1,
           direction: 'withdraw', container: reported.position,
         };
-        return civDecision(baseline, storageGoal, { kind: 'navigate', target: reported.position });
+        return civDecision(baseline, memory, storageGoal, { kind: 'navigate', target: reported.position });
       }
-      return civHold(baseline, 'materialsUnavailable', goal);
+      if (hasCoolingDownReportedTransfer(observation.teamMessages, memory, 'oak_planks', 'withdraw')) {
+        return civHold(baseline, memory, 'materialTargetCoolingDown', goal);
+      }
+      return civHold(baseline, memory, 'materialsUnavailable', goal);
     }
     if (squaredDistance(position, cell.position) > BLOCK_INTERACTION_DISTANCE_SQUARED) {
-      return civDecision(baseline, goal, { kind: 'navigate', target: cell.position });
+      return civDecision(baseline, memory, goal, { kind: 'navigate', target: cell.position });
     }
-    return civDecision(baseline, goal, {
+    return civDecision(baseline, memory, goal, {
       kind: 'placeBlock',
       target: cell.position,
       referencePosition: cell.supportPosition,
@@ -571,26 +1115,28 @@ function decideBuilder(
     });
   }
 
-  return civDecision(baseline, { kind: 'outpostComplete' }, { kind: 'hold', reason: 'blueprintComplete' });
+  return civDecision(baseline, memory, { kind: 'outpostComplete' }, { kind: 'hold', reason: 'blueprintComplete' });
 }
 
 function decideDefender(
   context: CivilizationPolicyContext,
   observation: CivilizationObservation,
   baseline: Decision,
+  memory: CivilizationPolicyMemory,
   position: BlockPosition,
 ): CivilizationDecision {
   const captureBox = context.objective.captureBox;
   if (isInsideCaptureBox(position, captureBox)) {
-    return civDecision(baseline, { kind: 'holdCaptureZone' }, { kind: 'hold', reason: 'captureZoneOccupied' });
+    return civDecision(baseline, memory, { kind: 'holdCaptureZone' }, { kind: 'hold', reason: 'captureZoneOccupied' });
   }
   const target = boxCenter(captureBox);
-  return civDecision(baseline, { kind: 'captureZone', target }, { kind: 'navigate', target });
+  return civDecision(baseline, memory, { kind: 'captureZone', target }, { kind: 'navigate', target });
 }
 
 function transferFromContainer(
   observation: CivilizationObservation,
   baseline: Decision,
+  memory: CivilizationPolicyMemory,
   position: BlockPosition,
   direction: 'deposit' | 'withdraw',
   item: MaterialItem,
@@ -608,14 +1154,18 @@ function transferFromContainer(
       return compareBlockPositions(first.position, second.position);
     });
   for (const container of containers) {
+    const materialTarget: CivilizationMaterialTarget = { kind: 'transfer', item, direction, container: container.position };
+    if (isCivilizationMaterialTargetCoolingDown(memory, materialTarget)) {
+      continue;
+    }
     const goalBase = { item, direction, container: container.position } as const;
     if (squaredDistance(position, container.position) > CONTAINER_INTERACTION_DISTANCE_BLOCKS ** 2n) {
       const goal: CivilizationGoal = { kind: 'transferMaterial', ...goalBase, count: desiredCount };
-      return civDecision(baseline, goal, { kind: 'navigate', target: container.position });
+      return civDecision(baseline, memory, goal, { kind: 'navigate', target: container.position });
     }
     if (container.contents.kind !== 'current') {
       const goal: CivilizationGoal = { kind: 'transferMaterial', ...goalBase, count: desiredCount };
-      return civDecision(baseline, goal, { kind: 'containerOpen', position: container.position });
+      return civDecision(baseline, memory, goal, { kind: 'containerOpen', position: container.position });
     }
     const available = direction === 'deposit'
       ? observation.ownMaterials.kind === 'current'
@@ -627,9 +1177,14 @@ function transferFromContainer(
       continue;
     }
     const goal: CivilizationGoal = { kind: 'transferMaterial', ...goalBase, count };
-    return civDecision(baseline, goal, {
+    return civDecision(baseline, memory, goal, {
       kind: 'containerTransfer', position: container.position, direction, item, count,
     });
+  }
+  if (containers.some((container) => isCivilizationMaterialTargetCoolingDown(memory, {
+    kind: 'transfer', item, direction, container: container.position,
+  }))) {
+    return civHold(baseline, memory, 'materialTargetCoolingDown');
   }
   return null;
 }
@@ -638,6 +1193,7 @@ function selectLocalMaterial(
   resources: Knowledge<readonly CivilizationResourceObservation[]>,
   item: MaterialItem,
   position: BlockPosition,
+  memory: CivilizationPolicyMemory,
 ): Extract<CivilizationResourceObservation, { kind: 'logBlock' | 'materialDrop' }> | null {
   if (resources.kind !== 'current') {
     return null;
@@ -655,11 +1211,26 @@ function selectLocalMaterial(
     if (first.kind === 'materialDrop' && second.kind === 'materialDrop') return first.entityId - second.entityId;
     return compareBlockPositions(first.position, second.position);
   });
-  return candidates[0] ?? null;
+  return candidates.find((candidate) => !isCivilizationMaterialTargetCoolingDown(memory, {
+    kind: 'gather', item, target: candidate.position,
+  })) ?? null;
+}
+
+function hasCoolingDownLocalMaterial(
+  resources: Knowledge<readonly CivilizationResourceObservation[]>,
+  item: MaterialItem,
+  memory: CivilizationPolicyMemory,
+): boolean {
+  return resources.kind === 'current' && resources.value.some((resource) => (
+    ((item === 'oak_log' && resource.kind === 'logBlock')
+      || (resource.kind === 'materialDrop' && resource.item === item))
+      && isCivilizationMaterialTargetCoolingDown(memory, { kind: 'gather', item, target: resource.position })
+  ));
 }
 
 function collectMaterial(
   baseline: Decision,
+  memory: CivilizationPolicyMemory,
   resource: Extract<CivilizationResourceObservation, { kind: 'logBlock' | 'materialDrop' }>,
   position: BlockPosition,
   item: MaterialItem,
@@ -669,20 +1240,22 @@ function collectMaterial(
     const intent: Intent = squaredDistance(position, resource.position) <= CONTAINER_INTERACTION_DISTANCE_BLOCKS ** 2n
       ? { kind: 'dropCollect', entityId: resource.entityId }
       : { kind: 'navigate', target: resource.position };
-    return civDecision(baseline, goal, intent);
+    return civDecision(baseline, memory, goal, intent);
   }
   if (squaredDistance(position, resource.position) <= BLOCK_INTERACTION_DISTANCE_SQUARED) {
-    return civDecision(baseline, goal, {
+    return civDecision(baseline, memory, goal, {
       kind: 'mineBlock', position: resource.position, expectedBlock: 'oak_log',
     });
   }
-  return civDecision(baseline, goal, { kind: 'navigate', target: resource.position });
+  return civDecision(baseline, memory, goal, { kind: 'navigate', target: resource.position });
 }
 
 function selectReportedResource(
   messages: readonly CivilizationTeamMessage[],
   resources: readonly ReportedResource[],
   position: BlockPosition,
+  memory: CivilizationPolicyMemory,
+  target: CivilizationMaterialTargetTemplate,
 ): ResourceHint | null {
   const candidates = messages.flatMap((message, receiveOrder): ResourceHint[] => (
     message.kind === 'resourceSighting' && resources.includes(message.resource)
@@ -703,7 +1276,33 @@ function selectReportedResource(
     if (firstDistance !== secondDistance) return firstDistance < secondDistance ? -1 : 1;
     return first.receiveOrder - second.receiveOrder;
   });
-  return candidates[0] ?? null;
+  return candidates.find((candidate) => !isCivilizationMaterialTargetCoolingDown(memory, target.kind === 'gather'
+    ? { kind: 'gather', item: target.item, target: candidate.position }
+    : { kind: 'transfer', item: target.item, direction: target.direction, container: candidate.position })) ?? null;
+}
+
+function hasCoolingDownReportedMaterial(
+  messages: readonly CivilizationTeamMessage[],
+  resources: readonly ReportedResource[],
+  memory: CivilizationPolicyMemory,
+  item: MaterialItem,
+): boolean {
+  return messages.some((message) => message.kind === 'resourceSighting'
+    && resources.includes(message.resource)
+    && isCivilizationMaterialTargetCoolingDown(memory, { kind: 'gather', item, target: message.position }));
+}
+
+function hasCoolingDownReportedTransfer(
+  messages: readonly CivilizationTeamMessage[],
+  memory: CivilizationPolicyMemory,
+  item: MaterialItem,
+  direction: 'deposit' | 'withdraw',
+): boolean {
+  return messages.some((message) => message.kind === 'resourceSighting'
+    && message.resource === 'container'
+    && isCivilizationMaterialTargetCoolingDown(memory, {
+      kind: 'transfer', item, direction, container: message.position,
+    }));
 }
 
 function findOutpostCell(
@@ -725,18 +1324,32 @@ function totalMaterial(stacks: readonly { readonly item: MaterialItem; readonly 
 
 function civDecision(
   baseline: Decision,
+  memory: CivilizationPolicyMemory,
   goal: Goal | CivilizationGoal,
   intent: Intent | CivIntent,
 ): CivilizationDecision {
-  return Object.freeze({ goal: Object.freeze(goal), intent: Object.freeze(intent), memory: baseline.memory });
+  return Object.freeze({
+    goal: Object.freeze(goal),
+    intent: Object.freeze(intent),
+    memory: civilizationPolicyMemory({ ...memory, policy: baseline.memory }),
+  });
 }
 
 function civHold(
   baseline: Decision,
+  memory: CivilizationPolicyMemory,
   reason: CivilizationHoldReason,
   goal: Goal | CivilizationGoal = { kind: 'wait', reason },
 ): CivilizationDecision {
-  return civDecision(baseline, goal, { kind: 'hold', reason });
+  return civDecision(baseline, memory, goal, { kind: 'hold', reason });
+}
+
+function civilizationDecision(
+  goal: Goal | CivilizationGoal,
+  intent: Intent | CivIntent,
+  memory: CivilizationPolicyMemory,
+): CivilizationDecision {
+  return Object.freeze({ goal, intent, memory });
 }
 
 function isInsideCaptureBox(position: BlockPosition, box: CaptureBox): boolean {
@@ -896,6 +1509,7 @@ function cloneResources(
 }
 
 function clonePosition(value: BlockPosition): BlockPosition {
+  assertExactKeys(value, ['x', 'y', 'z'], 'block position');
   return blockPosition(value.x, value.y, value.z);
 }
 
@@ -957,11 +1571,23 @@ function assertRotation(value: number): asserts value is OutpostRotationDegrees 
 }
 
 function assertExactKeys(value: object, expected: readonly string[], label: string): void {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+  if (value === null
+      || typeof value !== 'object'
+      || Array.isArray(value)
+      || (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null)) {
     throw new TypeError(`${label} must be an object`);
   }
-  const actual = Object.keys(value);
-  if (actual.length !== expected.length || actual.some((key) => !expected.includes(key))) {
+  const actual = Reflect.ownKeys(value);
+  if (actual.length !== expected.length
+      || actual.some((key) => typeof key !== 'string' || !expected.includes(key))) {
     throw new TypeError(`${label} has missing or unknown fields`);
+  }
+}
+
+function assertDenseArray(value: readonly unknown[], label: string): void {
+  for (let index = 0; index < value.length; index += 1) {
+    if (!Object.hasOwn(value, index)) {
+      throw new TypeError(`${label} must not contain array holes`);
+    }
   }
 }

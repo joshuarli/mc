@@ -11,11 +11,12 @@ import {
   civilizationProfileForSeat,
   CivilizationObservationError,
   currentKnowledge,
+  civilizationPolicyFeedbackBatch,
+  emptyCivilizationPolicyMemory,
   createPolicyFeedback,
-  decideCivilization,
+  decideCivilization as decideCivilizationWithFeedback,
   civilizationTeamMessage,
   emptyEquipment,
-  emptyPolicyMemory,
   entityId,
   materialStack,
   observationSequence,
@@ -25,6 +26,7 @@ import {
   RandomStream,
   DeterministicRandom,
   seatId,
+  skillProgress,
   storedMaterialStack,
   tick,
   unknownKnowledge,
@@ -33,6 +35,9 @@ import {
   visibleOpponent,
   type AgentObservationInput,
   type CivilizationPolicyContext,
+  type CivilizationActionFeedbackOutcome,
+  type CivilizationActionIntent,
+  type CivilizationGoal,
   type CivilizationResourceObservation,
   type CivilizationTeamMessage,
   type MaterialStack,
@@ -102,6 +107,26 @@ const makeObservation = (
   teamMessages: options.teamMessages ?? [],
 }, context);
 
+const decideCivilization = (
+  context: CivilizationPolicyContext,
+  observation: ReturnType<typeof makeObservation>,
+  memory: ReturnType<typeof emptyCivilizationPolicyMemory>,
+  policyParams: PolicyParams,
+  stream: ReturnType<typeof random>,
+  feedback = civilizationPolicyFeedbackBatch({ shared: [], actions: [] }),
+) => decideCivilizationWithFeedback(context, observation, memory, policyParams, stream, feedback);
+
+const makeCivilizationFeedback = (
+  goal: CivilizationGoal,
+  intent: CivilizationActionIntent,
+  outcome: CivilizationActionFeedbackOutcome,
+  startedAt: number,
+  completedAt: number,
+) => civilizationPolicyFeedbackBatch({
+  shared: [],
+  actions: [{ goal, intent, outcome, startedAt: tick(startedAt), completedAt: tick(completedAt) }],
+});
+
 test('civilization seat profiles use the closed role and faction mapping', () => {
   deepStrictEqual(civilizationProfileForSeat(0), { seat: 0, faction: 'ember', role: 'gatherer_crafter' });
   deepStrictEqual(civilizationProfileForSeat(1), { seat: 1, faction: 'ember', role: 'builder' });
@@ -139,7 +164,7 @@ test('gatherer mines only a current, locally observed oak log block', () => {
       ownMaterials: currentKnowledge([]),
       observedResources: currentKnowledge([{ kind: 'logBlock', position: target }]),
     }),
-    emptyPolicyMemory(),
+    emptyCivilizationPolicyMemory(),
     params,
     random(),
   );
@@ -164,7 +189,7 @@ test('same-faction sightings only steer navigation until the resource is locally
         position: target,
       })],
     }),
-    emptyPolicyMemory(),
+    emptyCivilizationPolicyMemory(),
     params,
     random(),
   );
@@ -208,7 +233,7 @@ test('gatherer crafts exactly sixteen planks from four current oak logs', () => 
   const decision = decideCivilization(
     context,
     makeObservation(context, { ownMaterials: currentKnowledge(logs) }),
-    emptyPolicyMemory(),
+    emptyCivilizationPolicyMemory(),
     params,
     random(),
   );
@@ -231,7 +256,7 @@ test('unknown inventory does not become an empty inventory or trigger mining', (
       ownMaterials: unknownKnowledge(),
       observedResources: currentKnowledge([{ kind: 'logBlock', position: target }]),
     }),
-    emptyPolicyMemory(),
+    emptyCivilizationPolicyMemory(),
     params,
     random(),
   );
@@ -250,7 +275,7 @@ test('builder places one supported, currently observed missing outpost cell', ()
       ownMaterials: currentKnowledge([materialStack(5, 'oak_planks', 16)]),
       observedResources: currentKnowledge(resources),
     }),
-    emptyPolicyMemory(),
+    emptyCivilizationPolicyMemory(),
     params,
     random(),
   );
@@ -286,7 +311,7 @@ test('builder never places into an unknown or obstructed blueprint cell', () => 
       ownMaterials: currentKnowledge([materialStack(5, 'oak_planks', 16)]),
       observedResources: currentKnowledge(resources),
     }),
-    emptyPolicyMemory(),
+    emptyCivilizationPolicyMemory(),
     params,
     random(),
   );
@@ -305,7 +330,7 @@ test('gatherer and builder transfer exact observed plank counts through a local 
         kind: 'container', position: chest, contents: currentKnowledge([]),
       }]),
     }),
-    emptyPolicyMemory(),
+    emptyCivilizationPolicyMemory(),
     params,
     random(),
   );
@@ -331,7 +356,7 @@ test('gatherer and builder transfer exact observed plank counts through a local 
       ownMaterials: currentKnowledge([]),
       observedResources: currentKnowledge(resources),
     }),
-    emptyPolicyMemory(),
+    emptyCivilizationPolicyMemory(),
     params,
     random(),
   );
@@ -348,14 +373,14 @@ test('defender navigates to and holds the neutral capture box', () => {
   const outside = decideCivilization(
     context,
     makeObservation(context, { position: blockPosition(0, 64, 0) }),
-    emptyPolicyMemory(),
+    emptyCivilizationPolicyMemory(),
     params,
     random(),
   );
   const inside = decideCivilization(
     context,
     makeObservation(context, { position: center }),
-    emptyPolicyMemory(),
+    emptyCivilizationPolicyMemory(),
     params,
     random(),
   );
@@ -380,7 +405,7 @@ test('visible combat still takes priority over a civilization role task', () => 
       observedResources: currentKnowledge([{ kind: 'logBlock', position: blockPosition(2, 64, 0) }]),
       ownMaterials: currentKnowledge([]),
     }),
-    emptyPolicyMemory(),
+    emptyCivilizationPolicyMemory(),
     params,
     random(),
   );
@@ -397,12 +422,300 @@ test('civilization resource tasks can use a locally observed resource before gen
       loot: currentKnowledge([{ kind: 'unopenedContainer', position: blockPosition(1, 64, 0) }]),
       observedResources: currentKnowledge([{ kind: 'logBlock', position: target }]),
     }),
-    emptyPolicyMemory(),
+    emptyCivilizationPolicyMemory(),
     params,
     random(),
   );
 
   deepStrictEqual(decision.intent, { kind: 'mineBlock', position: target, expectedBlock: 'oak_log' });
+});
+
+test('a failed visible mining target is skipped while an alternative remains available', () => {
+  const context = makeContext();
+  const firstTarget = blockPosition(2, 64, 0);
+  const alternative = blockPosition(3, 64, 0);
+  const firstObservation = makeObservation(context, {
+    observedResources: currentKnowledge([
+      { kind: 'logBlock', position: firstTarget },
+      { kind: 'logBlock', position: alternative },
+    ]),
+  });
+  const first = decideCivilization(context, firstObservation, emptyCivilizationPolicyMemory(), params, random());
+  if (first.goal.kind !== 'gatherMaterial' || first.intent.kind !== 'mineBlock') {
+    throw new TypeError('the first visible log should produce a mining action');
+  }
+
+  const next = decideCivilization(
+    context,
+    makeObservation(context, {
+      at: 22,
+      observedResources: currentKnowledge([
+        { kind: 'logBlock', position: firstTarget },
+        { kind: 'logBlock', position: alternative },
+      ]),
+    }),
+    first.memory,
+    params,
+    random(),
+    makeCivilizationFeedback(
+      first.goal,
+      first.intent,
+      { kind: 'failed', cause: 'noProgress' },
+      20,
+      21,
+    ),
+  );
+
+  deepStrictEqual(next.goal, { kind: 'gatherMaterial', item: 'oak_log', target: alternative });
+  deepStrictEqual(next.intent, { kind: 'mineBlock', position: alternative, expectedBlock: 'oak_log' });
+});
+
+test('failed material approach, drop collection, and chest opening are not replayed immediately', () => {
+  const gatherer = makeContext();
+  const logTarget = blockPosition(6, 64, 0);
+  const approach = decideCivilization(
+    gatherer,
+    makeObservation(gatherer, {
+      observedResources: currentKnowledge([{ kind: 'logBlock', position: logTarget }]),
+    }),
+    emptyCivilizationPolicyMemory(),
+    params,
+    random(),
+  );
+  if (approach.goal.kind !== 'gatherMaterial' || approach.intent.kind !== 'navigate') {
+    throw new TypeError('a distant log should produce an approach action');
+  }
+  const failedApproach = decideCivilization(
+    gatherer,
+    makeObservation(gatherer, {
+      at: 22,
+      observedResources: currentKnowledge([{ kind: 'logBlock', position: logTarget }]),
+    }),
+    approach.memory,
+    params,
+    random(),
+    makeCivilizationFeedback(approach.goal, approach.intent, { kind: 'failed', cause: 'noProgress' }, 20, 21),
+  );
+  deepStrictEqual(failedApproach.intent, { kind: 'hold', reason: 'materialTargetCoolingDown' });
+
+  const dropPosition = blockPosition(1, 64, 0);
+  const collection = decideCivilization(
+    gatherer,
+    makeObservation(gatherer, {
+      loot: currentKnowledge([]),
+      observedResources: currentKnowledge([{ kind: 'materialDrop', entityId: entityId(42), position: dropPosition, item: 'oak_log' }]),
+    }),
+    emptyCivilizationPolicyMemory(),
+    params,
+    random(),
+  );
+  if (collection.goal.kind !== 'gatherMaterial' || collection.intent.kind !== 'dropCollect') {
+    throw new TypeError('a nearby material drop should produce a collection action');
+  }
+  const failedCollection = decideCivilization(
+    gatherer,
+    makeObservation(gatherer, {
+      at: 22,
+      loot: currentKnowledge([]),
+      observedResources: currentKnowledge([{ kind: 'materialDrop', entityId: entityId(42), position: dropPosition, item: 'oak_log' }]),
+    }),
+    collection.memory,
+    params,
+    random(),
+    makeCivilizationFeedback(collection.goal, collection.intent, { kind: 'failed', cause: 'serverRejected' }, 20, 21),
+  );
+  deepStrictEqual(failedCollection.intent, { kind: 'hold', reason: 'materialTargetCoolingDown' });
+
+  const builder = makeContext(1);
+  const anchor = builder.objective.outpost.anchor;
+  const chest = blockPosition(31, 64, 30);
+  const chestObservation = (at: number) => makeObservation(builder, {
+    at,
+    position: anchor,
+    ownMaterials: currentKnowledge([]),
+    observedResources: currentKnowledge([
+      outpostCell(anchor, 'air', 'solid'),
+      { kind: 'container', position: chest, contents: unknownKnowledge() },
+    ]),
+  });
+  const open = decideCivilization(builder, chestObservation(20), emptyCivilizationPolicyMemory(), params, random());
+  if (open.goal.kind !== 'transferMaterial' || open.intent.kind !== 'containerOpen') {
+    throw new TypeError('an unknown chest snapshot should produce a chest-open action');
+  }
+  const failedOpen = decideCivilization(
+    builder,
+    chestObservation(22),
+    open.memory,
+    params,
+    random(),
+    makeCivilizationFeedback(open.goal, open.intent, { kind: 'failed', cause: 'timedOut' }, 20, 21),
+  );
+  deepStrictEqual(failedOpen.intent, { kind: 'hold', reason: 'materialTargetCoolingDown' });
+});
+
+test('a failed placement waits, and reported progress makes the same cell eligible again', () => {
+  const context = makeContext(1);
+  const cells = civilizationOutpostCells(context.objective.outpost.anchor, 0);
+  const observedResources = currentKnowledge(cells.map((cell) => outpostCell(cell.position, 'air', 'solid')));
+  const first = decideCivilization(
+    context,
+    makeObservation(context, {
+      position: context.objective.outpost.anchor,
+      ownMaterials: currentKnowledge([materialStack(5, 'oak_planks', 16)]),
+      observedResources,
+    }),
+    emptyCivilizationPolicyMemory(),
+    params,
+    random(),
+  );
+  if (first.goal.kind !== 'buildOutpost' || first.intent.kind !== 'placeBlock') {
+    throw new TypeError('a supported empty cell should produce a placement action');
+  }
+
+  const failed = decideCivilization(
+    context,
+    makeObservation(context, {
+      at: 22,
+      position: context.objective.outpost.anchor,
+      ownMaterials: currentKnowledge([materialStack(5, 'oak_planks', 16)]),
+      observedResources,
+    }),
+    first.memory,
+    params,
+    random(),
+    makeCivilizationFeedback(first.goal, first.intent, { kind: 'failed', cause: 'serverRejected' }, 20, 21),
+  );
+  deepStrictEqual(failed.intent, { kind: 'hold', reason: 'materialTargetCoolingDown' });
+
+  const progress = decideCivilization(
+    context,
+    makeObservation(context, {
+      at: 23,
+      position: context.objective.outpost.anchor,
+      ownMaterials: currentKnowledge([materialStack(5, 'oak_planks', 16)]),
+      observedResources,
+    }),
+    failed.memory,
+    params,
+    random(),
+    makeCivilizationFeedback(
+      first.goal,
+      first.intent,
+      { kind: 'progress', progress: skillProgress(1, 2) },
+      20,
+      23,
+    ),
+  );
+  deepStrictEqual(progress.goal, first.goal);
+  deepStrictEqual(progress.intent, first.intent);
+});
+
+test('failed container transfers and crafts wait only until their retry tick', () => {
+  const builder = makeContext(1);
+  const anchor = builder.objective.outpost.anchor;
+  const chest = blockPosition(31, 64, 30);
+  const withdrawObservation = (at: number) => makeObservation(builder, {
+    at,
+    position: anchor,
+    ownMaterials: currentKnowledge([]),
+    observedResources: currentKnowledge([
+      outpostCell(anchor, 'air', 'solid'),
+      { kind: 'container', position: chest, contents: currentKnowledge([storedMaterialStack(0, 'oak_planks', 16)]) },
+    ]),
+  });
+  const withdraw = decideCivilization(
+    builder,
+    withdrawObservation(20),
+    emptyCivilizationPolicyMemory(),
+    params,
+    random(),
+  );
+  if (withdraw.goal.kind !== 'transferMaterial' || withdraw.intent.kind !== 'containerTransfer') {
+    throw new TypeError('the observed chest should produce a plank transfer');
+  }
+  const blockedTransfer = decideCivilization(
+    builder,
+    withdrawObservation(22),
+    withdraw.memory,
+    params,
+    random(),
+    makeCivilizationFeedback(
+      withdraw.goal,
+      withdraw.intent,
+      { kind: 'failed', cause: 'noProgress' },
+      20,
+      21,
+    ),
+  );
+  deepStrictEqual(blockedTransfer.intent, { kind: 'hold', reason: 'materialTargetCoolingDown' });
+
+  const gatherer = makeContext();
+  const craftObservation = (at: number) => makeObservation(gatherer, {
+    at,
+    ownMaterials: currentKnowledge([0, 1, 2, 3].map((slot) => materialStack(slot, 'oak_log', 1))),
+  });
+  const craft = decideCivilization(
+    gatherer,
+    craftObservation(20),
+    emptyCivilizationPolicyMemory(),
+    params,
+    random(),
+  );
+  if (craft.goal.kind !== 'craftMaterial' || craft.intent.kind !== 'craft') {
+    throw new TypeError('four observed logs should produce a crafting action');
+  }
+  const craftFailure = makeCivilizationFeedback(
+    craft.goal,
+    craft.intent,
+    { kind: 'failed', cause: 'timedOut' },
+    20,
+    21,
+  );
+  const coolingDown = decideCivilization(
+    gatherer,
+    craftObservation(40),
+    craft.memory,
+    params,
+    random(),
+    craftFailure,
+  );
+  deepStrictEqual(coolingDown.intent, { kind: 'hold', reason: 'materialTargetCoolingDown' });
+  const retried = decideCivilization(
+    gatherer,
+    craftObservation(41),
+    coolingDown.memory,
+    params,
+    random(),
+  );
+  deepStrictEqual(retried.goal, craft.goal);
+  deepStrictEqual(retried.intent, craft.intent);
+});
+
+test('civilization feedback rejects malformed action and shared feedback records', () => {
+  throws(() => civilizationPolicyFeedbackBatch({
+    shared: [],
+    actions: [{
+      goal: { kind: 'gatherMaterial', item: 'stone', target: blockPosition(1, 64, 0) },
+      intent: { kind: 'mineBlock', position: blockPosition(1, 64, 0), expectedBlock: 'oak_log' },
+      outcome: { kind: 'failed', cause: 'noProgress' },
+      startedAt: tick(20),
+      completedAt: tick(21),
+    }],
+  } as never));
+  throws(() => civilizationPolicyFeedbackBatch({
+    shared: [],
+    actions: [{
+      goal: { kind: 'gatherMaterial', item: 'oak_log', target: blockPosition(1, 64, 0) },
+      intent: { kind: 'navigate', target: blockPosition(2, 64, 0) },
+      outcome: { kind: 'failed', cause: 'noProgress' },
+      startedAt: tick(20),
+      completedAt: tick(21),
+    }],
+  } as never));
+  throws(() => civilizationPolicyFeedbackBatch({
+    shared: [{ kind: 'failed', target: { kind: 'loot', target: { kind: 'drop', entityId: entityId(1) } } }],
+    actions: [],
+  } as never));
 });
 
 test('civilization context rejects noncanonical role, faction, and leaked scenario fields', () => {
@@ -430,7 +743,7 @@ test('civilization forwards current policy feedback while preserving combat prio
   const first = decideCivilization(
     context,
     initiatingObservation,
-    emptyPolicyMemory(),
+    emptyCivilizationPolicyMemory(),
     params,
     random(),
   );
@@ -460,10 +773,10 @@ test('civilization forwards current policy feedback while preserving combat prio
     first.memory,
     params,
     random(),
-    policyFeedbackBatch([feedback]),
+    civilizationPolicyFeedbackBatch({ shared: policyFeedbackBatch([feedback]), actions: [] }),
   );
 
   deepStrictEqual(combat.goal, { kind: 'engageVisibleOpponent', target: entityId(9) });
   deepStrictEqual(combat.intent, { kind: 'attack', target: entityId(9) });
-  deepStrictEqual(combat.memory.failedTargets, [feedback.target]);
+  deepStrictEqual(combat.memory.policy.failedTargets, [feedback.target]);
 });
