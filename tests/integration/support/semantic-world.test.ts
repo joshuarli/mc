@@ -157,6 +157,17 @@ test("reset player inventory must contain no items", () => {
 test("death reset requires a recorded prior death and a zero stopped-run count", () => {
   assertPlayerDeathWasRecorded({ deaths: 1 });
   assertPlayerDeathStatsReset({ deaths: 0 });
-  assert.throws(() => assertPlayerDeathWasRecorded({ deaths: 0 }), /must persist at least one/);
+  assert.throws(
+    () => assertPlayerDeathWasRecorded({ deaths: 0 }),
+    /must persist a positive whole-number/,
+  );
+  assert.throws(
+    () => assertPlayerDeathWasRecorded({ deaths: Number.POSITIVE_INFINITY }),
+    /must persist a positive whole-number/,
+  );
+  assert.throws(
+    () => assertPlayerDeathWasRecorded({ deaths: -1 }),
+    /must persist a positive whole-number/,
+  );
   assert.throws(() => assertPlayerDeathStatsReset({ deaths: 1 }), /must start with zero/);
 });

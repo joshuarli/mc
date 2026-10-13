@@ -32,6 +32,7 @@ export interface SemanticWorldObservation {
 }
 
 export interface PlayerInventoryObservation {
+  /** Every occupied slot in the client's player inventory, in slot order. */
   readonly items: readonly ObservedPlayerItem[];
 }
 
@@ -132,7 +133,10 @@ export function assertPlayerInventoryEmpty(observed: PlayerInventoryObservation)
 
 /** A reset proves the death counter was cleared only after the prior run recorded a death. */
 export function assertPlayerDeathWasRecorded(observed: PlayerDeathStatsObservation): void {
-  assert.ok(observed.deaths > 0, "the completed run must persist at least one player death");
+  assert.ok(
+    Number.isSafeInteger(observed.deaths) && observed.deaths > 0,
+    "the completed run must persist a positive whole-number death count",
+  );
 }
 
 /** Player statistics are part of the reset; a completed fresh run must start with zero deaths. */
