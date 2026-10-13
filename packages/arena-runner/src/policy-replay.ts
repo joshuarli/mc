@@ -1,4 +1,10 @@
 import {
+  civilizationPolicyMemory,
+  civilizationPolicyFeedbackBatch,
+  type CivilizationPolicyMemory,
+  type CivilizationPolicyFeedbackBatch,
+  type PolicyParamValues,
+  type AgentObservationInput,
   civilizationObservation,
   civilizationPolicyContext,
   decideCivilization,
@@ -60,8 +66,11 @@ export interface PolicyReplayRecordV2 extends Omit<PolicyReplayRecordV1, 'schema
 export interface CivilizationPolicyReplayInputV1 {
   readonly schema: 'civilization-policy-input-v1';
   readonly context: CivilizationPolicyContextInput;
-  readonly base: PolicyReplayInputV2;
-  readonly observation: Omit<CivilizationObservationInput, 'base'>;
+  readonly observation: Omit<CivilizationObservationInput, 'base'> & { readonly base: AgentObservationInput };
+  readonly memory: CivilizationPolicyMemory;
+  readonly feedback: CivilizationPolicyFeedbackBatch;
+  readonly params: PolicyParamValues;
+  readonly rng_state: string;
 }
 
 export interface CivilizationPolicyReplayRecordV1 extends Omit<PolicyReplayRecordV2, 'schema' | 'input' | 'decision'> {
@@ -97,9 +106,11 @@ export interface CivilizationPolicyEffectRecordV1 extends Omit<PolicyEffectRecor
 
 export type PolicyEffectRecord = PolicyEffectRecordV1 | CivilizationPolicyEffectRecordV1;
 
-/** Civilization observations extend a validated survival replay input without changing its format. */
+/** Captures complete civilization state while retaining the survival policy validation rules. */
 export function normalizeCivilizationPolicyReplayInput(source: Readonly<
-  Omit<PolicyReplayInputSource, 'observation'> & {
+  Omit<PolicyReplayInputSource, 'observation' | 'memory' | 'feedback'> & {
+    memory: CivilizationPolicyMemory;
+    feedback: CivilizationPolicyFeedbackBatch;
     context: CivilizationPolicyContext;
     observation: CivilizationObservation;
   }
@@ -109,12 +120,16 @@ export function normalizeCivilizationPolicyReplayInput(source: Readonly<
   const observation = civilizationObservation({ base: source.observation.base,
     ownMaterials: source.observation.ownMaterials, observedResources: source.observation.observedResources,
     teamMessages: source.observation.teamMessages }, context);
+  const memory = civilizationPolicyMemory(source.memory);
+  const feedback = civilizationPolicyFeedbackBatch(source.feedback);
+  const base = normalizePolicyReplayInput({ observation: observation.base, memory: memory.policy,
+    feedback: feedback.shared, params: source.params, random: source.random });
   return Object.freeze({
     schema: 'civilization-policy-input-v1',
     context: Object.freeze({ seat: context.seat, faction: context.faction, role: context.role, objective: context.objective }),
-    base: normalizePolicyReplayInput({ ...source, observation: observation.base }),
-    observation: Object.freeze({ ownMaterials: observation.ownMaterials,
+    observation: Object.freeze({ base: base.observation, ownMaterials: observation.ownMaterials,
       observedResources: observation.observedResources, teamMessages: observation.teamMessages }),
+    memory, feedback, params: base.params, rng_state: base.rng_state,
   });
 }
 
@@ -319,24 +334,27 @@ function replayDecision(record: PolicyReplayRecord, recordNumber: number): void 
     if (input === undefined || input.schema !== 'civilization-policy-input-v1') {
       throw replayFailure('invalid_policy_input_schema', recordNumber, 'input.schema');
     }
-    assertExactFields(input, ['schema', 'context', 'base', 'observation'], recordNumber, 'input');
+    assertExactFields(input, ['schema', 'context', 'observation', 'memory', 'feedback', 'params', 'rng_state'], recordNumber, 'input');
     let actual: CivilizationDecision;
     let state: bigint;
     try {
-      const base = rehydratePolicyReplayInput(input.base);
-      if (base.schema !== 'policy-input-v2') throw replayFailure('invalid_policy_input_schema', recordNumber, 'input.base.schema');
-      const context = civilizationPolicyContext(input.context as CivilizationPolicyContextInput);
-      if (context.seat !== record.seat) throw replayFailure('policy_context_seat_mismatch', recordNumber, 'input.context.seat');
+      const memory = civilizationPolicyMemory(input.memory as CivilizationPolicyMemory);
+      const feedback = civilizationPolicyFeedbackBatch(input.feedback as CivilizationPolicyFeedbackBatch);
       const extension = strictObject(input.observation);
       if (extension === undefined) throw replayFailure('invalid_policy_input', recordNumber, 'input.observation');
-      assertExactFields(extension, ['ownMaterials', 'observedResources', 'teamMessages'], recordNumber, 'input.observation');
+      assertExactFields(extension, ['base', 'ownMaterials', 'observedResources', 'teamMessages'], recordNumber, 'input.observation');
+      const base = rehydratePolicyReplayInput({ schema: 'policy-input-v2', observation: extension.base,
+        memory: memory.policy, feedback: feedback.shared, params: input.params, rng_state: input.rng_state });
+      if (base.schema !== 'policy-input-v2') throw replayFailure('invalid_policy_input_schema', recordNumber, 'input.schema');
+      const context = civilizationPolicyContext(input.context as CivilizationPolicyContextInput);
+      if (context.seat !== record.seat) throw replayFailure('policy_context_seat_mismatch', recordNumber, 'input.context.seat');
       const observation = civilizationObservation({
         base: base.observation,
         ownMaterials: extension.ownMaterials as CivilizationObservationInput['ownMaterials'],
         observedResources: extension.observedResources as CivilizationObservationInput['observedResources'],
         teamMessages: extension.teamMessages as CivilizationObservationInput['teamMessages'],
       }, context);
-      actual = decideCivilization(context, observation, base.memory, base.params, base.random, base.feedback);
+      actual = decideCivilization(context, observation, memory, base.params, base.random, feedback);
       state = base.random.snapshotState();
     } catch (error) {
       if (error instanceof TraceError) throw error;

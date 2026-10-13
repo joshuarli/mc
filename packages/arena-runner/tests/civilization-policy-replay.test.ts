@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   agentObservation, agentState, blockPosition, civilizationObservation, civilizationPolicyContext,
-  civilizationOutpostCells, outpostCell, type CivilizationObservationInput,
-  createPolicyFeedback, currentKnowledge, decideCivilization, DeterministicRandom, emptyEquipment, emptyPolicyMemory,
+  civilizationPolicyFeedbackBatch, civilizationOutpostCells, outpostCell, type CivilizationObservationInput,
+  createPolicyFeedback, currentKnowledge, decideCivilization, DeterministicRandom, emptyEquipment, emptyCivilizationPolicyMemory,
   materialStack, observationSequence, PolicyParams, tick, worldBorder,
 } from '@arena/core';
 import {
@@ -14,7 +14,7 @@ import {
 import type { Evidence } from '../src/evidence.js';
 import type { TraceRecord } from '../src/trace.js';
 
-function sample(kind: 'mineBlock' | 'craft' | 'containerTransfer' | 'placeBlock' | 'navigate' = 'craft', withFeedback = false) {
+function sample(kind: 'mineBlock' | 'craft' | 'containerTransfer' | 'placeBlock' | 'navigate' = 'craft', withFeedback = false, withActionFeedback = false) {
   const seat = kind === 'placeBlock' ? 1 : kind === 'navigate' ? 2 : 0;
   const context = civilizationPolicyContext({ seat, faction: 'ember', role: seat === 1 ? 'builder' : seat === 2 ? 'defender_scout' : 'gatherer_crafter', objective: {
     captureBox: { min: blockPosition(10, 64, 10), max: blockPosition(12, 66, 12) },
@@ -36,17 +36,21 @@ function sample(kind: 'mineBlock' | 'craft' | 'containerTransfer' | 'placeBlock'
         : currentKnowledge([]);
   const observation = civilizationObservation({ base, ownMaterials: currentKnowledge(materials),
     observedResources: resources, teamMessages: [] }, context);
-  const memory = emptyPolicyMemory();
+  const memory = emptyCivilizationPolicyMemory();
   const params = PolicyParams.baseline();
   const random = DeterministicRandom.fromState(123n);
   const completed = createPolicyFeedback({ initiatingObservation: base, goal: { kind: 'explore' },
     intent: { kind: 'navigate', target: blockPosition(7, 64, 0) }, outcome: { kind: 'failed', cause: 'noProgress' } });
   if (completed === null) throw new Error('exploration must produce target feedback');
-  const feedback = withFeedback ? [completed] : [];
+  const feedback = civilizationPolicyFeedbackBatch({ shared: withFeedback ? [completed] : [], actions: withActionFeedback ? [{
+    goal: { kind: 'craftMaterial', item: 'oak_planks', resultCount: 16 },
+    intent: { kind: 'craft', output: 'oak_planks', resultCount: 16, table: null },
+    outcome: { kind: 'failed', cause: 'noProgress' }, startedAt: tick(20), completedAt: tick(20),
+  }] : [] });
   const input = normalizeCivilizationPolicyReplayInput({ context, observation, memory, feedback, params, random });
   const decision = decideCivilization(context, observation, memory, params, random, feedback);
   return makeCivilizationPolicyReplayRecord({ sequence: 1n, seat, input, decision,
-    rngStateAfter: random.snapshotState(), disposition: { kind: 'start', action_sequence: '1' } });
+    rngStateAfter: random.snapshotState(), disposition: decision.intent.kind === 'hold' ? { kind: 'hold' } : { kind: 'start', action_sequence: '1' } });
 }
 
 function evidence(records: readonly object[]): Evidence {
@@ -114,12 +118,22 @@ test('civilization replay rejects nonterminal effects', () => {
 
 test('civilization replay preserves current feedback and its resulting memory', () => {
   const record = sample('craft', true);
-  assert.equal(record.input.base.feedback.length, 1);
-  assert.equal(record.decision.memory.failedTargets.length, 1);
+  assert.equal(record.input.feedback.shared.length, 1);
+  assert.equal(record.decision.memory.policy.failedTargets.length, 1);
   assert.equal(replayPolicyJson(evidence([record])).verified, true);
 });
 
 test('civilization replay refuses decisions after the terminal control outcome', () => {
   assert.throws(() => replayPolicyJson(evidence([{ direction: 'plugin', type: 'outcome' }, sample()])),
     (error: unknown) => error instanceof TraceError && error.source.kind === 'policy_decision_after_outcome');
+});
+
+test('civilization replay preserves material action feedback and failed-target memory', () => {
+  const record = sample('craft', false, true);
+  assert.equal(record.input.feedback.actions.length, 1);
+  assert.equal(record.decision.memory.failedMaterialTargets.length, 1);
+  assert.equal(replayPolicyJson(evidence([record])).verified, true);
+  const modified = { ...record, input: { ...record.input, feedback: { ...record.input.feedback, actions: [] } } };
+  assert.throws(() => replayPolicyJson(evidence([modified])),
+    (error: unknown) => error instanceof TraceError && error.source.kind === 'policy_decision_mismatch');
 });

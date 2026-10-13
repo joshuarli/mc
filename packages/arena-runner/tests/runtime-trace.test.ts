@@ -23,6 +23,7 @@ import {
   DeterministicRandom,
   emptyEquipment,
   emptyPolicyMemory,
+  emptyCivilizationPolicyMemory,
   normalizePolicyReplayInput,
   observationSequence,
   PolicyParams,
@@ -742,10 +743,10 @@ test('civilization trace checkpoints pending effects and joins cancellation afte
   const observation = civilizationObservation({ base: restored.observation,
     ownMaterials: currentKnowledge([materialStack(9, 'oak_log', 4)]), observedResources: currentKnowledge([]), teamMessages: [] }, context);
   const params = PolicyParams.baseline();
-  const memory = emptyPolicyMemory();
+  const memory = emptyCivilizationPolicyMemory();
   const random = DeterministicRandom.fromState(123n);
-  const input = normalizeCivilizationPolicyReplayInput({ context, observation, memory, feedback: [], params, random });
-  const decision = decideCivilization(context, observation, memory, params, random, []);
+  const input = normalizeCivilizationPolicyReplayInput({ context, observation, memory, feedback: { shared: [], actions: [] }, params, random });
+  const decision = decideCivilization(context, observation, memory, params, random, { shared: [], actions: [] });
   const record = makeCivilizationPolicyReplayRecord({ sequence: 1n, seat: 0, input, decision,
     rngStateAfter: random.snapshotState(), disposition: { kind: 'start', action_sequence: '1' } });
   await trace.recordPolicyDecision(record);
