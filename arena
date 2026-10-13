@@ -29,17 +29,15 @@ ensure_work_directory "$root/.work"
 ensure_work_directory "$root/.work/tmp"
 ensure_work_directory "$root/.work/arena"
 export TMPDIR="$root/.work/tmp"
-export CARGO_HOME="$root/.work/arena/cargo"
-export CARGO_TARGET_DIR="$root/.work/arena/target"
-export RUSTUP_HOME="$root/.work/arena/rustup"
 export GRADLE_USER_HOME="$root/.work/arena/gradle"
 ensure_work_directory "$GRADLE_USER_HOME"
 download_tmp=
 jdk_stage=
-
+node_stage=
 cleanup_work_files() {
     [ -z "$download_tmp" ] || rm -f -- "$download_tmp"
     [ -z "$jdk_stage" ] || rm -rf -- "$jdk_stage"
+    [ -z "$node_stage" ] || rm -rf -- "$node_stage"
 }
 trap cleanup_work_files EXIT
 
@@ -87,6 +85,161 @@ locked_section_number() {
         ''|0*|*[!0-9]*) fail "versions.lock.toml $section.$key must be a positive decimal integer" ;;
     esac
     printf '%s\n' "$value"
+}
+
+verify_node() {
+    node=$1
+    version=$2
+    npm_version=$3
+    [ -x "$node/bin/node" ] || fail "pinned Node executable is unavailable: $node/bin/node"
+    actual_node=$("$node/bin/node" --version) || fail "pinned Node does not start"
+    [ "$actual_node" = "v$version" ] || fail "Node version mismatch: expected v$version, got $actual_node"
+    actual_npm=$(PATH="$node/bin:$PATH" "$node/bin/npm" --version) || fail "pinned npm does not start"
+    [ "$actual_npm" = "$npm_version" ] || fail "npm version mismatch: expected $npm_version, got $actual_npm"
+}
+
+prepare_node() {
+    node_version=$(locked_section_value node version)
+    npm_version=$(locked_section_value node npm_version)
+    download_limit=$(locked_section_number limits max_download_bytes)
+    case "$(uname -s):$(uname -m)" in
+        Darwin:arm64) platform=macos_arm64 ;;
+        Linux:x86_64) platform=linux_x86_64 ;;
+        *) fail "locked Node supports macOS arm64 and Linux x86_64" ;;
+    esac
+
+    archive_file=$(locked_section_value "node.$platform" archive_file)
+    archive_root=$(locked_section_value "node.$platform" archive_root)
+    archive_url=$(locked_section_value "node.$platform" archive_url)
+    archive_size=$(locked_section_number "node.$platform" archive_size_bytes)
+    archive_sha=$(locked_section_value "node.$platform" archive_sha256)
+    case "$archive_file" in
+        /*|*/*|*".."*) fail "unsafe Node archive filename in versions.lock.toml" ;;
+    esac
+    case "$archive_root" in
+        /*|*/*|*".."*) fail "unsafe Node archive root in versions.lock.toml" ;;
+    esac
+    case "$archive_url" in
+        "https://nodejs.org/dist/v$node_version/"*) ;;
+        *) fail "Node URL is not under its official pinned release directory" ;;
+    esac
+    [ "$archive_size" -le "$download_limit" ] || fail "locked Node archive exceeds the download limit in versions.lock.toml"
+
+    download_root="$root/.work/arena/downloads"
+    ensure_work_directory "$download_root"
+    archive_path="$download_root/$archive_file"
+    [ ! -L "$archive_path" ] || fail "locked Node archive path must not be a symlink"
+    if [ -e "$archive_path" ] && [ ! -f "$archive_path" ]; then
+        fail "locked Node archive path must be a regular file"
+    fi
+    if [ ! -f "$archive_path" ]; then
+        download_tmp=$(mktemp "$download_root/.node.XXXXXXXX") || fail "create Node download staging file"
+        curl --fail --location --proto '=https' --tlsv1.2 --max-filesize "$download_limit" \
+            --output "$download_tmp" "$archive_url" || fail "download locked Node archive"
+        actual_size=$(wc -c < "$download_tmp" | awk '{ print $1 }')
+        [ "$actual_size" = "$archive_size" ] || fail "Node archive size mismatch: expected $archive_size bytes, got $actual_size"
+        actual_sha=$(sha256_file "$download_tmp")
+        [ "$actual_sha" = "$archive_sha" ] || fail "Node archive SHA-256 mismatch: expected $archive_sha, got $actual_sha"
+        mv "$download_tmp" "$archive_path" || fail "install verified Node archive"
+        download_tmp=
+    fi
+    actual_size=$(wc -c < "$archive_path" | awk '{ print $1 }')
+    [ "$actual_size" = "$archive_size" ] || fail "cached Node size mismatch: expected $archive_size bytes, got $actual_size"
+    actual_sha=$(sha256_file "$archive_path")
+    [ "$actual_sha" = "$archive_sha" ] || fail "cached Node SHA-256 mismatch: expected $archive_sha, got $actual_sha"
+
+    toolchains="$root/.work/arena/toolchains"
+    ensure_work_directory "$toolchains"
+    toolchain_root="$toolchains/$archive_root"
+    if [ ! -e "$toolchain_root" ]; then
+        node_stage=$(mktemp -d "$toolchains/.node.XXXXXXXX") || fail "create Node extraction directory"
+        entries="$node_stage/archive.entries"
+        tar -tf "$archive_path" > "$entries" || fail "list locked Node archive contents"
+        while IFS= read -r entry; do
+            entry_path=${entry%/}
+            case "$entry_path" in
+                "$archive_root"|"$archive_root"/*) ;;
+                *) fail "Node archive entry escaped its locked root: $entry" ;;
+            esac
+            case "/$entry_path/" in
+                *"/../"*|*"/./"*|*"//"*) fail "unsafe path in Node archive: $entry" ;;
+            esac
+        done < "$entries"
+        tar -xf "$archive_path" -C "$node_stage" || fail "extract locked Node archive"
+        staged_root="$node_stage/$archive_root"
+        verify_node "$staged_root" "$node_version" "$npm_version"
+        [ ! -L "$toolchain_root" ] || fail "project-local Node path must not be a symlink"
+        mv -n "$staged_root" "$toolchain_root" || fail "install verified project-local Node"
+        [ -d "$toolchain_root" ] && [ ! -L "$toolchain_root" ] || fail "project-local Node was not installed"
+        rm -rf -- "$node_stage"
+        node_stage=
+    elif [ ! -d "$toolchain_root" ] || [ -L "$toolchain_root" ]; then
+        fail "project-local Node path must be a real directory"
+    fi
+    verify_node "$toolchain_root" "$node_version" "$npm_version"
+    NODE_HOME="$toolchain_root"
+    export NODE_HOME
+    export PATH="$NODE_HOME/bin:$PATH"
+}
+
+prepare_npm_workspace() {
+    npm_workspace="$root/.work/arena/npm-workspace"
+    ensure_work_directory "$npm_workspace"
+    ensure_work_directory "$npm_workspace/packages"
+
+    for file in package.json package-lock.json tsconfig.json; do
+        [ -f "$root/$file" ] || fail "required workspace file is missing: $root/$file"
+        cp "$root/$file" "$npm_workspace/$file"
+    done
+
+    for name in arena-core arena-spec arena-bots arena-runner; do
+        link="$npm_workspace/packages/$name"
+        if [ -L "$link" ]; then
+            [ "$(readlink "$link")" = "../../../../packages/$name" ] || fail "workspace package link has an unexpected target: $link"
+        elif [ -e "$link" ]; then
+            fail "workspace package path already exists and is not a symlink: $link"
+        else
+            ln -s "../../../../packages/$name" "$link" || fail "link workspace package $name"
+        fi
+    done
+
+    for name in scripts tests; do
+        link="$npm_workspace/$name"
+        if [ -L "$link" ]; then
+            [ "$(readlink "$link")" = "../../../$name" ] || fail "workspace support link has an unexpected target: $link"
+        elif [ -e "$link" ]; then
+            fail "workspace support path already exists and is not a symlink: $link"
+        else
+            ln -s "../../../$name" "$link" || fail "link workspace support directory $name"
+        fi
+    done
+}
+
+install_npm_workspace() {
+    prepare_npm_workspace
+    npm_workspace="$root/.work/arena/npm-workspace"
+    npm_cache="$root/.work/arena/npm-cache"
+    ensure_work_directory "$npm_cache"
+    (cd "$npm_workspace" && npm ci --cache "$npm_cache" --ignore-scripts --no-audit --no-fund)
+}
+
+ensure_workspace_dependencies() {
+    npm_workspace="$root/.work/arena/npm-workspace"
+    [ -x "$npm_workspace/node_modules/typescript/bin/tsc" ] || fail "pinned npm workspace is not installed; run ./arena bootstrap"
+}
+
+build_typescript() {
+    target=$1
+    ensure_workspace_dependencies
+    npm_workspace="$root/.work/arena/npm-workspace"
+    PATH="$npm_workspace/node_modules/.bin:$PATH" \
+        "$NODE_HOME/bin/node" "$root/scripts/typescript-build.mjs" "$target"
+}
+
+run_named_tests() {
+    suite=$1
+    test_name=$2
+    "$NODE_HOME/bin/node" "$root/scripts/run-named-tests.mjs" "$suite" "$test_name"
 }
 
 prepare_jdk() {
@@ -271,44 +424,124 @@ ensure_paper_artifact() {
     [ "$actual_sha" = "$expected_sha" ] || fail "cached Paper SHA-256 mismatch: expected $expected_sha, got $actual_sha"
 }
 
-if [ "${1-}" != test ]; then
-    fail "usage: ./arena test --suite integration --case stack | ./arena test --suite java --case plugin"
-fi
-shift
+usage() {
+    cat <<'EOF'
+usage:
+  ./arena bootstrap
+  ./arena build [--package core|spec|bots|runner|all]
+  ./arena test --suite <core|spec|bots|runner|integration|java> --case <name>
+  ./arena run <runner arguments...>
+EOF
+}
 
-suite=
-case_name=
-while [ "$#" -gt 0 ]; do
-    case "$1" in
-        --suite)
-            [ -z "$suite" ] || fail "--suite may be specified once"
-            [ "$#" -ge 2 ] || fail "--suite requires a value"
-            suite=$2
-            shift 2
-            ;;
-        --case)
-            [ -z "$case_name" ] || fail "--case may be specified once"
-            [ "$#" -ge 2 ] || fail "--case requires a value"
-            case_name=$2
-            shift 2
-            ;;
-        *) fail "unknown test selector argument: $1" ;;
+verify_typescript() {
+    npm_workspace="$root/.work/arena/npm-workspace"
+    compiler_output=$("$NODE_HOME/bin/node" "$npm_workspace/node_modules/typescript/bin/tsc" --version) || fail "pinned TypeScript compiler does not start"
+    [ "$compiler_output" = "Version 5.9.3" ] || fail "TypeScript compiler mismatch: expected Version 5.9.3, got $compiler_output"
+}
+
+bootstrap() {
+    [ "$#" -eq 0 ] || fail "bootstrap accepts no arguments"
+    prepare_node
+    install_npm_workspace
+    verify_typescript
+    printf '%s\n' "Node $(locked_section_value node version) and npm $(locked_section_value node npm_version) are installed under .work/arena/toolchains." \
+        "The locked TypeScript workspace is installed under .work/arena/npm-workspace."
+}
+
+build_command() {
+    target=all
+    if [ "$#" -gt 0 ]; then
+        [ "$#" -eq 2 ] && [ "$1" = --package ] || fail "usage: ./arena build [--package core|spec|bots|runner|all]"
+        target=$2
+    fi
+    case "$target" in
+        core|spec|bots|runner|all) ;;
+        *) fail "unknown TypeScript package: $target" ;;
     esac
-done
+    prepare_node
+    ensure_workspace_dependencies
+    verify_typescript
+    build_typescript "$target"
+}
 
-case "$suite:$case_name" in
-    java:plugin)
-        prepare_jdk
-        build_plugin
+run_command() {
+    [ "$#" -gt 0 ] || fail "usage: ./arena run <runner arguments...>"
+    prepare_node
+    ensure_workspace_dependencies
+    verify_typescript
+    build_typescript runner
+    cli="$root/.work/build/packages/arena-runner/src/cli.js"
+    [ -f "$cli" ] || fail "runner CLI is not built at $cli"
+    "$NODE_HOME/bin/node" "$cli" "$@"
+}
+
+test_command() {
+    suite=
+    case_name=
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --suite)
+                [ -z "$suite" ] || fail "--suite may be specified once"
+                [ "$#" -ge 2 ] || fail "--suite requires a value"
+                suite=$2
+                shift 2
+                ;;
+            --case)
+                [ -z "$case_name" ] || fail "--case may be specified once"
+                [ "$#" -ge 2 ] || fail "--case requires a value"
+                case_name=$2
+                shift 2
+                ;;
+            *) fail "unknown test selector argument: $1" ;;
+        esac
+    done
+    [ -n "$suite" ] || fail "--suite is required"
+    [ -n "$case_name" ] || fail "--case is required"
+
+    case "$suite:$case_name" in
+        java:plugin)
+            prepare_jdk
+            build_plugin
+            ;;
+        core:*|spec:*|bots:*|runner:*)
+            prepare_node
+            ensure_workspace_dependencies
+            verify_typescript
+            build_typescript "$suite"
+            run_named_tests "$suite" "$case_name"
+            ;;
+        integration:stack)
+            [ -f "$root/tests/integration/stack.ts" ] || fail "blocked: Mineflayer stack smoke harness is not ready"
+            prepare_node
+            ensure_workspace_dependencies
+            verify_typescript
+            prepare_jdk
+            build_plugin
+            ensure_paper_artifact
+            build_typescript stack
+            run_named_tests integration stack
+            ;;
+        *)
+            fail "unknown or blocked test selector: $suite / $case_name"
+            ;;
+    esac
+}
+
+command=${1-}
+[ -n "$command" ] || {
+    usage >&2
+    exit 2
+}
+shift
+case "$command" in
+    bootstrap) bootstrap "$@" ;;
+    build) build_command "$@" ;;
+    test) test_command "$@" ;;
+    run) run_command "$@" ;;
+    help|-h|--help)
+        [ "$#" -eq 0 ] || fail "help accepts no arguments"
+        usage
         ;;
-    integration:stack)
-        [ -f "$root/tests/integration/stack.rs" ] || fail "blocked: stack smoke harness is not ready"
-        prepare_jdk
-        build_plugin
-        ensure_paper_artifact
-        exec cargo test --locked --offline --package arena-bots --test stack -- --exact stack --nocapture
-        ;;
-    *)
-        fail "unknown or blocked test selector: ${suite:-<missing>} / ${case_name:-<missing>}"
-        ;;
+    *) fail "unknown command: $command" ;;
 esac

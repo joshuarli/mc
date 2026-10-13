@@ -1,0 +1,36 @@
+{
+  "compilerOptions": {
+    "target": "ES2024",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "noEmitOnError": true,
+    "declaration": true,
+    "declarationMap": false,
+    "sourceMap": false,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "esModuleInterop": true,
+    "types": ["node"],
+    "typeRoots": [".work/arena/npm-workspace/node_modules/@types"],
+    "baseUrl": ".",
+    "paths": {
+      "@arena/core": ["packages/arena-core/src/index.ts"],
+      "@arena/spec": ["packages/arena-spec/src/index.ts"],
+      "@arena/bots": ["packages/arena-bots/src/index.ts"],
+      "@arena/runner": ["packages/arena-runner/src/index.ts"],
+      "mineflayer": [".work/arena/npm-workspace/node_modules/mineflayer"],
+      "mineflayer-pathfinder": [".work/arena/npm-workspace/node_modules/mineflayer-pathfinder"],
+      "toml-eslint-parser": [".work/arena/npm-workspace/node_modules/toml-eslint-parser"]
+    }
+  },
+  "files": [],
+  "include": [],
+  "exclude": [".work"]
+}

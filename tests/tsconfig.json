@@ -1,0 +1,10 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "incremental": true,
+    "rootDir": "..",
+    "outDir": "../.work/build",
+    "tsBuildInfoFile": "../.work/build/tsbuildinfo/integration.tsbuildinfo"
+  },
+  "include": ["integration/stack.ts"]
+}

@@ -1,0 +1,43 @@
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { join } from "node:path";
+
+const root = fileURLToPath(new URL("../", import.meta.url));
+const suites = new Map([
+  ["core", join(root, ".work", "build", "packages", "arena-core", "tests")],
+  ["spec", join(root, ".work", "build", "packages", "arena-spec", "tests")],
+  ["bots", join(root, ".work", "build", "packages", "arena-bots", "tests")],
+  ["runner", join(root, ".work", "build", "packages", "arena-runner", "tests")],
+  ["integration", join(root, ".work", "build", "tests", "integration", "stack.js")]
+]);
+
+function fail(message) {
+  process.stderr.write(`arena tests: ${message}\n`);
+  process.exit(2);
+}
+
+const suite = process.argv[2];
+const name = process.argv[3];
+const target = suites.get(suite);
+if (!target) fail("unknown package suite");
+if (!name) fail("test name is required");
+
+const exactName = `^${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`;
+const result = spawnSync(process.execPath, [
+  "--test",
+  "--test-reporter=tap",
+  `--test-name-pattern=${exactName}`,
+  target
+], { cwd: root, encoding: "utf8" });
+
+if (result.error) fail(`could not start the Node test runner: ${result.error.message}`);
+process.stdout.write(result.stdout ?? "");
+process.stderr.write(result.stderr ?? "");
+if (result.status !== 0) process.exit(result.status ?? 1);
+
+const summary = result.stdout?.match(/\n# tests (\d+)\n# pass (\d+)\n# fail (\d+)\n# cancelled (\d+)\n/);
+if (!summary) fail("Node did not emit the expected TAP summary");
+const [, , passed, failed, cancelled] = summary;
+if (passed !== "1" || failed !== "0" || cancelled !== "0") {
+  fail(`expected exactly one passing named test; TAP reported ${passed} pass, ${failed} fail, ${cancelled} cancelled`);
+}

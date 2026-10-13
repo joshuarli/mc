@@ -1,0 +1,29 @@
+{
+  "name": "arena",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "npm@11.19.0",
+  "engines": {
+    "node": "24.x",
+    "npm": "11.19.0"
+  },
+  "workspaces": [
+    "packages/arena-core",
+    "packages/arena-spec",
+    "packages/arena-bots",
+    "packages/arena-runner"
+  ],
+  "scripts": {
+    "build": "node scripts/typescript-build.mjs all",
+    "check:core": "node scripts/typescript-build.mjs core",
+    "check:spec": "node scripts/typescript-build.mjs spec",
+    "check:bots": "node scripts/typescript-build.mjs bots",
+    "check:runner": "node scripts/typescript-build.mjs runner",
+    "test:stack": "node scripts/typescript-build.mjs stack && node --test --test-reporter=tap .work/build/tests/integration/stack.js"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "typescript": "5.9.3"
+  }
+}
