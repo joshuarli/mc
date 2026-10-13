@@ -34,8 +34,8 @@ test('control listener authenticates one loopback plugin and sequences commands'
   const client = connectTo(port);
   const reader = new TestFrameReader(client);
   t.after(async () => {
-    await listener.close();
     client.destroy();
+    await listener.close();
   });
 
   const accepting = listener.accept();
@@ -126,8 +126,8 @@ test('control listener snapshots the supported capabilities at bind time', async
   const client = connectTo(listener.address.port);
   const reader = new TestFrameReader(client);
   t.after(async () => {
-    await listener.close();
     client.destroy();
+    await listener.close();
   });
 
   const accepting = listener.accept();
@@ -167,8 +167,8 @@ test('control listener rejects a plugin with the wrong token and closes its sock
   const client = connectTo(listener.address.port);
   const clientClosed = once(client, 'close');
   t.after(async () => {
-    await listener.close();
     client.destroy();
+    await listener.close();
   });
 
   const accepting = listener.accept();
@@ -184,6 +184,66 @@ test('control listener rejects a plugin with the wrong token and closes its sock
   await assert.rejects(accepting, (error: unknown) =>
     isRuntimeSessionError(error) && error.code === 'authentication_failed');
   await clientClosed;
+});
+
+test('control session closes the connection on an uncorrelated acknowledgment', async (t) => {
+  const listener = await bindControlListener({
+    runId: RUN_ID,
+    token: TOKEN,
+    capabilities: CAPABILITIES,
+  });
+  const client = connectTo(listener.address.port);
+  const reader = new TestFrameReader(client);
+  t.after(async () => {
+    client.destroy();
+    await listener.close();
+  });
+
+  const accepting = listener.accept();
+  await once(client, 'connect');
+  client.write(encodeControlFrame({
+    protocol: 1,
+    run_id: RUN_ID,
+    sequence: 1n,
+    type: 'hello',
+    payload: { token: TOKEN, capabilities: CAPABILITIES },
+  }));
+  const helloAck = decodeControlFrame(await reader.readFrame());
+  if (helloAck.type !== 'ack') throw new Error('expected hello acknowledgment');
+  client.write(encodeControlFrame({
+    protocol: 1,
+    run_id: RUN_ID,
+    sequence: 2n,
+    correlation: helloAck.sequence,
+    type: 'ready',
+    payload: {
+      server: { name: 'Paper', version: 'test', minecraft_version: 'test', protocol_version: 1 },
+      plugin: { name: 'Arena', version: 'test' },
+      capabilities: CAPABILITIES,
+    },
+  }));
+
+  const session = await accepting;
+  t.after(async () => {
+    await session.close();
+  });
+  const sequence = await session.send({ type: 'start', payload: {} });
+  await reader.readFrame();
+  const messages = session.messages();
+  client.write(encodeControlFrame({
+    protocol: 1,
+    run_id: RUN_ID,
+    sequence: 3n,
+    correlation: sequence + 1n,
+    type: 'ack',
+    payload: {},
+  }));
+
+  await assert.rejects(messages.next(), (error: unknown) =>
+    isRuntimeSessionError(error) && error.code === 'invalid_acknowledgment');
+  if (!client.closed) await once(client, 'close');
+  await assert.rejects(session.send({ type: 'start', payload: {} }), (error: unknown) =>
+    isRuntimeSessionError(error) && error.code === 'control_closed');
 });
 
 test('canceling plugin acceptance releases the loopback listener', async () => {

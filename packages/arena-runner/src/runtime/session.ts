@@ -310,12 +310,20 @@ class AuthenticatedControlSession implements ControlSession {
       : command.type === 'start'
         ? { ...envelope, type: 'start', payload: command.payload }
         : { ...envelope, type: 'abort', payload: command.payload };
+    let frame: Uint8Array;
+    try {
+      frame = encodeControlFrame(message);
+    } catch (error) {
+      throw mapControlFailure(error);
+    }
     this.#pendingAcknowledgment = sequence;
     try {
-      await writeFrame(this.#socket, encodeControlFrame(message));
+      await writeFrame(this.#socket, frame);
       return sequence;
     } catch (error) {
       this.#pendingAcknowledgment = undefined;
+      this.#terminal = true;
+      this.#socket.destroy();
       throw new ControlSessionError('control_write_failed', error);
     }
   }
@@ -330,10 +338,13 @@ class AuthenticatedControlSession implements ControlSession {
       try {
         message = this.#receiver.acceptFrame(await this.#reader.readFrame());
       } catch (error) {
-        throw mapControlFailure(this.#socketFailure ?? error);
+        const failure = mapControlFailure(this.#socketFailure ?? error);
+        this.#terminateAfterProtocolFailure();
+        throw failure;
       }
       if (message.type === 'ack') {
         if (this.#pendingAcknowledgment === undefined || message.correlation !== this.#pendingAcknowledgment) {
+          this.#terminateAfterProtocolFailure();
           throw new ControlSessionError('invalid_acknowledgment');
         }
         this.#pendingAcknowledgment = undefined;
@@ -366,6 +377,11 @@ class AuthenticatedControlSession implements ControlSession {
   #assertOpen(): void {
     if (this.#socketFailure !== undefined) throw new ControlSessionError('control_disconnected', this.#socketFailure);
     if (this.#socket.destroyed) throw new ControlSessionError('control_closed');
+  }
+
+  #terminateAfterProtocolFailure(): void {
+    this.#terminal = true;
+    this.#socket.destroy();
   }
 }
 
