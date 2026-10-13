@@ -8,7 +8,7 @@ const ENTITY_ACTION_STRING_MAPPER_PROTOCOL = 775;
  * reports entityActionUsesStringMapper for protocol 775.
  */
 export function bindEntityActionStringMapperFeature(bot: Bot): void {
-  if (bot.protocolVersion !== String(ENTITY_ACTION_STRING_MAPPER_PROTOCOL)) return;
+  if (String(bot.protocolVersion) !== String(ENTITY_ACTION_STRING_MAPPER_PROTOCOL)) return;
   if (bot.registry.version.version !== ENTITY_ACTION_STRING_MAPPER_PROTOCOL) {
     throw new Error('Mineflayer protocol version does not match its registry');
   }

@@ -71,6 +71,15 @@ test('the entity action string mapper correction is limited to protocol 775', ()
   assert.equal(bot.bot.supportFeature, nativeSupportFeature);
 });
 
+test('the entity action string mapper accepts Mineflayer declaration string versions', () => {
+  const bot = makeBot();
+  bot.bot.protocolVersion = '775';
+
+  bindEntityActionStringMapperFeature(bot.bot);
+
+  assert.equal(supports(bot.bot, 'entityActionUsesStringMapper'), true);
+});
+
 test('rejects protocol 775 when the Mineflayer registry disagrees', () => {
   const bot = makeBot();
   const registry = bot.bot.registry;
@@ -94,7 +103,7 @@ function makeBot(): { readonly bot: Bot; readonly actions: { readonly entityId: 
     if (name === 'entity_action') actions.push(packet);
   };
   const bot = new EventEmitter() as EventEmitter & Pick<Bot, 'registry' | 'supportFeature' | 'setControlState'> & {
-    protocolVersion: string;
+    protocolVersion: number;
     version: string;
     _client: typeof client;
     entity: { id: number };
@@ -103,7 +112,7 @@ function makeBot(): { readonly bot: Bot; readonly actions: { readonly entityId: 
   Object.assign(bot, {
     registry,
     supportFeature: registry.supportFeature,
-    protocolVersion: '775',
+    protocolVersion: 775,
     version: '26.1',
     _client: client,
     entity: { id: 7 },
