@@ -584,7 +584,7 @@ test_command() {
             build_fs_helper
             run_named_tests runtime "$case_name"
             ;;
-        integration:stack|integration:maps-reset|integration:match-rules|integration:legal-player|integration:fairness)
+        integration:stack|integration:maps-reset|integration:match-rules|integration:legal-player|integration:fairness|integration:replay-report)
             [ -f "$root/tests/integration/$case_name.ts" ] || fail "blocked: integration case is not ready: $case_name"
             prepare_node
             ensure_workspace_dependencies

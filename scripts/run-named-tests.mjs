@@ -18,7 +18,8 @@ const integrationCases = new Map([
   ["maps-reset", "maps-reset.js"],
   ["match-rules", "match-rules.js"],
   ["legal-player", "legal-player.js"],
-  ["fairness", "fairness.js"]
+  ["fairness", "fairness.js"],
+  ["replay-report", "replay-report.js"]
 ]);
 const acceptanceCases = new Map([
   ["hunger-six", "hunger.js"]
