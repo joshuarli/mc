@@ -235,44 +235,81 @@ test("match-rules-duplicate-identity", { timeout: 240_000 }, async (t) => {
       await active.start();
       await waitForActivePhase(active, signal);
 
-      const originalEnded = waitForBotEnd(original.bot, signal);
-      const replacement = createBot({
-        host: active.gameAddress.host,
-        port: active.gameAddress.port,
-        username: original.identity.username,
-        auth: "offline",
-        version: active.preparedRun.scenario.server.minecraft,
-        viewDistance: active.preparedRun.scenario.server.viewDistanceChunks,
-        logErrors: false,
+      assert.equal(active.spectators.length, 1, "the fixture must provide one expendable noncompetitor spectator");
+      const disconnectedSeats = new Set<number>();
+      const competitorEndListeners = active.competitors.map((competitor) => {
+        const onEnd = (): void => { disconnectedSeats.add(competitor.seat); };
+        competitor.bot.on("end", onEnd);
+        return { bot: competitor.bot, onEnd };
       });
-      let replacementEnded = false;
-      const replacementErrors: Error[] = [];
-      replacement.on("error", (error) => { replacementErrors.push(error); });
-      replacement.once("end", () => { replacementEnded = true; });
       try {
-        await Promise.all([originalEnded, waitForBotSpawn(replacement, signal)]);
-        assert.equal(replacement.player.uuid, original.identity.offlineUuid);
-        await waitForGameMode(replacement, signal);
-        assert.equal(replacement.game.gameMode, "spectator");
-        const disconnect = active.events().findLast((event) => event.type === "elimination"
-          && event.payload.eliminations.some(({ seat, cause }) => seat === 0 && cause === "disconnect"));
-        assert.ok(disconnect?.type === "elimination", "the original seat must be eliminated by duplicate login");
-        assert.deepStrictEqual(disconnect.payload.eliminations, [{ seat: 0, cause: "disconnect" }]);
-        await waitForCondition(
-          () => latestAliveSeats(active).length === 2 && !latestAliveSeats(active).includes(0),
-          "duplicate identity replacement must stay outside the active competitor roster",
-          ELIMINATION_TIMEOUT_MS,
+        const spectator = active.spectators[0]!;
+        assert.equal(spectator.bot.game.gameMode, "spectator");
+        const spectatorEnded = waitForBotEvent(
+          spectator.bot,
+          "end",
+          10_000,
           signal,
+          "the ordinary spectator quit did not close its client connection",
         );
-        assert.deepStrictEqual(latestAliveSeats(active), [1, 2]);
-        assert.deepStrictEqual(replacementErrors, [], "the replacement spectator connection must remain healthy");
-        await active.waitForOutcome();
+        spectator.bot.quit("free one connection for the duplicate identity check");
+        await spectatorEnded;
+        assert.deepStrictEqual(latestAliveSeats(active), [0, 1, 2], "spectator disconnect must not eliminate a competitor");
+        assert.deepStrictEqual([...disconnectedSeats], [], "all original competitor clients must remain connected after spectator quit");
+        for (const competitor of active.competitors) {
+          assert.equal(competitor.bot.username, competitor.identity.username);
+          assert.equal(competitor.bot.player.uuid, competitor.identity.offlineUuid);
+        }
+
+        const originalEnded = waitForBotEnd(original.bot, signal);
+        const replacement = createBot({
+          host: active.gameAddress.host,
+          port: active.gameAddress.port,
+          username: original.identity.username,
+          auth: "offline",
+          version: active.preparedRun.scenario.server.minecraft,
+          viewDistance: active.preparedRun.scenario.server.viewDistanceChunks,
+          logErrors: false,
+        });
+        let replacementEnded = false;
+        const replacementErrors: Error[] = [];
+        replacement.on("error", (error) => { replacementErrors.push(error); });
+        replacement.once("end", () => { replacementEnded = true; });
+        try {
+          await Promise.all([originalEnded, waitForBotSpawn(replacement, signal)]);
+          assert.equal(replacement.player.uuid, original.identity.offlineUuid);
+          await waitForGameMode(replacement, signal);
+          assert.equal(replacement.game.gameMode, "spectator");
+          const disconnect = active.events().findLast((event) => event.type === "elimination"
+            && event.payload.eliminations.some(({ seat, cause }) => seat === 0 && cause === "disconnect"));
+          assert.ok(disconnect?.type === "elimination", "the original seat must be eliminated by duplicate login");
+          assert.deepStrictEqual(disconnect.payload.eliminations, [{ seat: 0, cause: "disconnect" }]);
+          await waitForCondition(
+            () => latestAliveSeats(active).length === 2 && !latestAliveSeats(active).includes(0),
+            "duplicate identity replacement must stay outside the active competitor roster",
+            ELIMINATION_TIMEOUT_MS,
+            signal,
+          );
+          assert.deepStrictEqual(latestAliveSeats(active), [1, 2]);
+          assert.deepStrictEqual([...disconnectedSeats], [0], "only the replaced competitor may disconnect");
+          for (const competitor of active.competitors.filter(({ seat }) => seat !== original.seat)) {
+            assert.ok(!disconnectedSeats.has(competitor.seat), `seat ${competitor.seat} must remain connected`);
+            assert.equal(competitor.bot.username, competitor.identity.username);
+            assert.equal(competitor.bot.player.uuid, competitor.identity.offlineUuid);
+          }
+          assert.deepStrictEqual(replacementErrors, [], "the replacement spectator connection must remain healthy");
+          await active.waitForOutcome();
+        } finally {
+          if (!replacementEnded) {
+            const replacementClosed = waitForBotEnd(replacement, new AbortController().signal);
+            replacement.end("duplicate identity acceptance cleanup");
+            replacement._client.socket.destroy();
+            await replacementClosed;
+          }
+        }
       } finally {
-        if (!replacementEnded) {
-          const replacementClosed = waitForBotEnd(replacement, new AbortController().signal);
-          replacement.end("duplicate identity acceptance cleanup");
-          replacement._client.socket.destroy();
-          await replacementClosed;
+        for (const { bot, onEnd } of competitorEndListeners) {
+          bot.removeListener("end", onEnd);
         }
       }
     },
