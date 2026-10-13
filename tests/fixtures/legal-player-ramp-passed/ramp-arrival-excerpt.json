@@ -1,0 +1,601 @@
+{
+  "target": {
+    "x": 31,
+    "y": 66,
+    "z": 21
+  },
+  "ownArrivalReceipt": {
+    "clientMs": 32705.421416,
+    "authorityTick": 292,
+    "position": {
+      "x": 31.03932010517517,
+      "y": 66.17675927506424,
+      "z": 21.497633762783565
+    }
+  },
+  "observerArrivalReceipt": {
+    "clientMs": 32736.998625,
+    "authorityTick": 293,
+    "position": {
+      "x": 31.50004881620407,
+      "y": 66.02449217438698,
+      "z": 21.49783253431052
+    }
+  },
+  "recordCount": 202,
+  "selectedRecords": [
+    {
+      "index": 197,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 32705.829333,
+        "authorityTick": 292,
+        "kind": "goalReached",
+        "goal": {
+          "type": "GoalBlock",
+          "x": 31,
+          "y": 66,
+          "z": 21,
+          "rangeSq": null,
+          "entityId": null
+        }
+      }
+    },
+    {
+      "index": 199,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 32706.206833,
+        "authorityTick": 292,
+        "kind": "navigation",
+        "active": false
+      }
+    },
+    {
+      "index": 200,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 32706.222208,
+        "authorityTick": 292,
+        "kind": "skillOwner",
+        "owner": null
+      }
+    },
+    {
+      "index": 201,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 32757.73725,
+        "authorityTick": 294,
+        "kind": "physicsTick",
+        "owner": null,
+        "navigationActive": false,
+        "position": {
+          "x": 31.5,
+          "y": 66,
+          "z": 21.49776717514198
+        },
+        "velocity": {
+          "x": 0,
+          "y": -0.0784000015258789,
+          "z": 0
+        },
+        "onGround": true,
+        "collidedHorizontally": false,
+        "collidedVertically": true,
+        "control": {
+          "forward": false,
+          "back": false,
+          "left": false,
+          "right": false,
+          "jump": false,
+          "sprint": false,
+          "sneak": false
+        },
+        "goal": null,
+        "moving": false,
+        "path": {
+          "status": "success",
+          "cost": 2,
+          "contextTimeMs": 1.8337500000016007,
+          "visitedNodes": 1,
+          "generatedNodes": 8,
+          "nodeCount": 1,
+          "nodes": [
+            {
+              "x": 31.5,
+              "y": 66,
+              "z": 21.5,
+              "cost": 2,
+              "remainingBlocks": 0,
+              "toBreakCount": 0,
+              "toPlaceCount": 0
+            }
+          ],
+          "nodesTruncated": false
+        },
+        "blocks": [
+          {
+            "position": {
+              "x": 30,
+              "y": 65,
+              "z": 20
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 30,
+              "y": 65,
+              "z": 21
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 30,
+              "y": 65,
+              "z": 22
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 31,
+              "y": 65,
+              "z": 20
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 31,
+              "y": 65,
+              "z": 21
+            },
+            "loaded": true,
+            "name": "cobblestone",
+            "type": 12,
+            "stateId": 14,
+            "shapes": [
+              {
+                "values": [
+                  0,
+                  0,
+                  0,
+                  1,
+                  1,
+                  1
+                ]
+              }
+            ],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 31,
+              "y": 65,
+              "z": 22
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 32,
+              "y": 65,
+              "z": 20
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 32,
+              "y": 65,
+              "z": 21
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 32,
+              "y": 65,
+              "z": 22
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 30,
+              "y": 66,
+              "z": 20
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 30,
+              "y": 66,
+              "z": 21
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 30,
+              "y": 66,
+              "z": 22
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 31,
+              "y": 66,
+              "z": 20
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 31,
+              "y": 66,
+              "z": 21
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 31,
+              "y": 66,
+              "z": 22
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 32,
+              "y": 66,
+              "z": 20
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 32,
+              "y": 66,
+              "z": 21
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 32,
+              "y": 66,
+              "z": 22
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 30,
+              "y": 67,
+              "z": 20
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 30,
+              "y": 67,
+              "z": 21
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 30,
+              "y": 67,
+              "z": 22
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 31,
+              "y": 67,
+              "z": 20
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 31,
+              "y": 67,
+              "z": 21
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 31,
+              "y": 67,
+              "z": 22
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 32,
+              "y": 67,
+              "z": 20
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 32,
+              "y": 67,
+              "z": 21
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 32,
+              "y": 67,
+              "z": 22
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 30,
+              "y": 68,
+              "z": 20
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 30,
+              "y": 68,
+              "z": 21
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 30,
+              "y": 68,
+              "z": 22
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 31,
+              "y": 68,
+              "z": 20
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 31,
+              "y": 68,
+              "z": 21
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 31,
+              "y": 68,
+              "z": 22
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 32,
+              "y": 68,
+              "z": 20
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 32,
+              "y": 68,
+              "z": 21
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 32,
+              "y": 68,
+              "z": 22
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          }
+        ]
+      }
+    }
+  ]
+}
