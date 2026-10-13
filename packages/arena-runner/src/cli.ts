@@ -13,6 +13,7 @@ import { replayPolicyJson } from './policy-replay.js';
 import { isValidRunId } from './run-id.js';
 import { inspectStoppedRun } from './runtime/inspect.js';
 import { runPreparedRun } from './runtime/run.js';
+import { armRuntimeDeadline, COLD_START_TIMEOUT_MS } from './runtime/deadline.js';
 import { readSegment, TraceError, type TraceSegment } from './trace.js';
 
 export type CliResult =
@@ -234,47 +235,71 @@ async function runCommand(args: readonly Buffer[]): Promise<CliResult> {
   const paperJarPath = configuredAbsolutePath('ARENA_PAPER_JAR', 'Paper server JAR');
   const pluginJarPath = configuredAbsolutePath('ARENA_PLUGIN_JAR', 'Arena plugin JAR');
   const ownedRoot = Buffer.from(process.cwd(), 'utf8');
-  return await withProcessAbortSignal(async (signal) => {
-    await compileScenarioAndPolicy(helperPath, ownedRoot, scenarioPath, signal);
-    const preparedRun = await prepareRun(helperPath, ownedRoot, scenarioPath, runId!, signal);
-    const completed = await runPreparedRun({
-      preparedRun,
-      helperPath,
-      ownedRoot,
-      javaExecutable: resolve(javaHome, 'bin', 'java'),
-      paperJarPath,
-      pluginJarPath,
-      signal,
-    });
-    if (completed.outcome.kind === 'abort') {
-      const finalTrace = completed.trace.segments.at(-1);
-      throw new RunnerError('runtime_failure', 'completed run', {
-        kind: 'operational_abort',
-        reason: completed.outcome.reason,
-        run_id: completed.runId,
-        ...(finalTrace === undefined ? {} : { relative_artifact: finalTrace.relativePath.toString('utf8') }),
-      });
-    }
+  return await withProcessAbortSignal(async (signal, controller) => {
+    const coldStartDeadline = armRuntimeDeadline(controller, 'cold_start', COLD_START_TIMEOUT_MS);
+    try {
+      await compileScenarioAndPolicy(helperPath, ownedRoot, scenarioPath, signal);
+      const preparedRun = await prepareRun(helperPath, ownedRoot, scenarioPath, runId!, signal);
+      try {
+        const completed = await runPreparedRun({
+          preparedRun,
+          helperPath,
+          ownedRoot,
+          javaExecutable: resolve(javaHome, 'bin', 'java'),
+          paperJarPath,
+          pluginJarPath,
+          signal,
+          coldStartDeadline,
+        });
+        if (completed.outcome.kind === 'abort') {
+          const finalTrace = completed.trace.segments.at(-1);
+          throw new RunnerError('runtime_failure', 'completed run', {
+            kind: 'operational_abort',
+            reason: completed.outcome.reason,
+            run_id: completed.runId,
+            ...(finalTrace === undefined ? {} : { relative_artifact: finalTrace.relativePath.toString('utf8') }),
+          });
+        }
 
-    const inspection = await inspectStoppedRun({ helperPath, ownedRoot, runId: completed.runId });
-    return success({
-      schema: 1,
-      run_id: completed.runId,
-      created_paths: {
-        run_directory: preparedRun.runDirectoryPath.toString('utf8'),
-        world_plan: preparedRun.worldPlanPath.toString('utf8'),
-        server_directory: Buffer.concat([preparedRun.runDirectoryPath, Buffer.from('/server', 'ascii')]).toString('utf8'),
-      },
-      trace: {
-        segments: completed.trace.segments.map((segment) => ({
-          path: segment.relativePath.toString('utf8'),
-          byte_length: segment.byteLength,
-        })),
-        total_byte_length: completed.trace.totalByteLength,
-      },
-      report: inspection.report,
-      stats: inspection.stats,
-    });
+        const inspection = await inspectStoppedRun({ helperPath, ownedRoot, runId: completed.runId });
+        return success({
+          schema: 1,
+          run_id: completed.runId,
+          created_paths: {
+            run_directory: preparedRun.runDirectoryPath.toString('utf8'),
+            world_plan: preparedRun.worldPlanPath.toString('utf8'),
+            server_directory: Buffer.concat([preparedRun.runDirectoryPath, Buffer.from('/server', 'ascii')]).toString('utf8'),
+          },
+          trace: {
+            segments: completed.trace.segments.map((segment) => ({
+              path: segment.relativePath.toString('utf8'),
+              byte_length: segment.byteLength,
+            })),
+            total_byte_length: completed.trace.totalByteLength,
+          },
+          report: inspection.report,
+          stats: inspection.stats,
+        });
+      } catch (error) {
+        throw includePreparedRunReference(error, runId!, preparedRun.worldPlanPath);
+      }
+    } catch (error) {
+      if (signal.reason instanceof RunnerError && error === signal.reason) throw signal.reason;
+      throw error;
+    } finally {
+      coldStartDeadline.clear();
+    }
+  });
+}
+
+function includePreparedRunReference(error: unknown, runId: string, fallbackPath: Buffer): RunnerError {
+  const failure = error instanceof RunnerError
+    ? error
+    : new RunnerError('runtime_failure', 'arena run', { kind: 'runtime' });
+  return new RunnerError(failure.category, failure.resource, {
+    ...failure.source,
+    run_id: failure.source.run_id ?? runId,
+    relative_artifact: failure.source.relative_artifact ?? fallbackPath.toString('utf8'),
   });
 }
 
@@ -330,6 +355,7 @@ async function readSource(
     });
   } catch (error) {
     if (!(error instanceof OwnedFilesError)) throw error;
+    if (error.category === 'cancelled' && signal?.reason instanceof RunnerError) throw signal.reason;
     const category = error.category === 'cancelled'
       ? 'cancelled'
       : error.category === 'not_found' || error.category === 'helper_start'
@@ -385,13 +411,15 @@ function configuredAbsolutePath(name: string, resource: string): string {
   return value;
 }
 
-async function withProcessAbortSignal<T>(operation: (signal: AbortSignal) => Promise<T>): Promise<T> {
+async function withProcessAbortSignal<T>(
+  operation: (signal: AbortSignal, controller: AbortController) => Promise<T>,
+): Promise<T> {
   const controller = new AbortController();
-  const abort = (): void => controller.abort(new Error('runner process interrupted'));
+  const abort = (): void => controller.abort(new RunnerError('cancelled', 'arena run', { kind: 'cancelled' }));
   process.once('SIGINT', abort);
   process.once('SIGTERM', abort);
   try {
-    return await operation(controller.signal);
+    return await operation(controller.signal, controller);
   } finally {
     process.removeListener('SIGINT', abort);
     process.removeListener('SIGTERM', abort);

@@ -305,7 +305,8 @@ export class RuntimeTraceBuilder {
     }
     return this.#enqueueRecovery(async () => {
       if (this.#failureArtifact !== undefined) return copyFailureTraceResult(this.#failureArtifact);
-      if (this.#records.length > 0) await this.#stagePendingSegment('failure');
+      const persistenceSignal = new AbortController().signal;
+      if (this.#records.length > 0) await this.#stagePendingSegment('failure', persistenceSignal);
 
       const artifact: OperationalFailureArtifactV1 = Object.freeze({
         schema: OPERATIONAL_FAILURE_SCHEMA_VERSION,
@@ -323,6 +324,7 @@ export class RuntimeTraceBuilder {
         helperPath: this.#helperPath,
         ownedRoot: this.#ownedRoot,
         artifact,
+        signal: persistenceSignal,
       });
       this.#failureArtifact = Object.freeze({
         artifact,
@@ -373,7 +375,10 @@ export class RuntimeTraceBuilder {
     return envelopeBytes + this.#recordBytes + existingSeparators + extraSeparator + extraRecordBytes;
   }
 
-  async #stagePendingSegment(purpose: 'checkpoint' | 'complete' | 'failure' = 'checkpoint'): Promise<void> {
+  async #stagePendingSegment(
+    purpose: 'checkpoint' | 'complete' | 'failure' = 'checkpoint',
+    signal?: AbortSignal,
+  ): Promise<void> {
     if (this.#records.length === 0) return;
     if (this.#hasOutcome && purpose === 'checkpoint') {
       throw new RunnerError('runtime_failure', 'run trace', { kind: 'outcome_staged_before_jvm_stop' });
@@ -404,6 +409,7 @@ export class RuntimeTraceBuilder {
       relativePath,
       contents,
       maxBytes: MAX_TRACE_SEGMENT_BYTES,
+      ...(signal === undefined ? {} : { signal }),
     });
     this.#segments.push(Object.freeze({ relativePath, identity, byteLength: contents.byteLength }));
     if (purpose !== 'complete') this.#checkpointSegmentCount += 1;

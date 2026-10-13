@@ -30,6 +30,7 @@ import { RunnerError } from '../src/errors.js';
 import { createRunDirectory, readOwnedFile } from '../src/owned-files/index.js';
 import { makePolicyEffectRecord, makePolicyReplayRecord } from '../src/policy-replay.js';
 import { parseSegment } from '../src/trace.js';
+import { failureArtifactPath, parseOperationalFailureArtifact, readOperationalFailureArtifact } from '../src/runtime/failure-artifact.js';
 import { RuntimeTraceBuilder } from '../src/runtime/trace.js';
 import {
   bindControlListener,
@@ -167,6 +168,96 @@ test('runtime trace checkpoints persist earlier segments and hold the outcome un
   assert.deepEqual(parseSegment(finalBytes).records.map((record) => record.type), ['ack', 'outcome']);
 });
 
+test('runtime trace persists actual pending records in a strict operational failure artifact', async (t) => {
+  const { session, client } = await authenticatedSession(t);
+  const runDirectoryPath = Buffer.from(`.work/arena/runs/${RUN_ID}`, 'ascii');
+  const { trace, ownedRoot } = await createTrace(t, runDirectoryPath);
+  await trace.recordReady(session.ready);
+  const prepare = await session.send({ type: 'prepare', payload: preparePayload() });
+  await trace.recordRunnerCommand(prepare);
+  await trace.checkpoint(200);
+
+  client.write(frame({
+    protocol: 1,
+    run_id: RUN_ID,
+    sequence: 3n,
+    type: 'public_clock',
+    payload: { phase: 'waiting', tick: null, border_diameter_blocks: 100 },
+  }));
+  const clock = (await session.messages().next()).value!;
+  await trace.recordControlMessage(clock);
+  const persisted = await trace.persistFailurePartial(
+    {
+      category: 'runtime_failure',
+      resource: 'Paper server',
+      source: { kind: 'control_ready_timeout' },
+    },
+    { status: 'succeeded', source: null },
+  );
+
+  const failurePath = failureArtifactPath(RUN_ID);
+  assert.deepEqual(persisted.artifactPath, failurePath);
+  const artifact = await readOperationalFailureArtifact({ helperPath, ownedRoot, runId: RUN_ID });
+  assert.deepEqual(artifact, {
+    schema: 1,
+    run_id: RUN_ID,
+    primary: {
+      category: 'runtime_failure',
+      resource: 'Paper server',
+      source: { kind: 'control_ready_timeout' },
+    },
+    cleanup: { status: 'succeeded', source: null },
+    trace_checkpoint_segments: [
+      {
+        path: Buffer.concat([runDirectoryPath, Buffer.from('/trace-v2-000001.json', 'ascii')]).toString('ascii'),
+        identity: persisted.artifact.trace_checkpoint_segments[0]!.identity,
+        byte_length: persisted.artifact.trace_checkpoint_segments[0]!.byte_length,
+      },
+      {
+        path: Buffer.concat([runDirectoryPath, Buffer.from('/trace-v2-000002.json', 'ascii')]).toString('ascii'),
+        identity: persisted.artifact.trace_checkpoint_segments[1]!.identity,
+        byte_length: persisted.artifact.trace_checkpoint_segments[1]!.byte_length,
+      },
+    ],
+  });
+  const pendingPath = Buffer.concat([runDirectoryPath, Buffer.from('/trace-v2-000002.json', 'ascii')]);
+  const pendingBytes = await readOwnedFile({ helperPath, ownedRoot, relativePath: pendingPath, maxBytes: 1024 * 1024 });
+  assert.deepEqual(parseSegment(pendingBytes).records.map((record) => record.type), ['public_clock']);
+  assert.equal(persisted.artifact.trace_checkpoint_segments.length, 2);
+});
+
+test('operational failure artifact reader rejects unknown fields with its strict invalid label', () => {
+  const artifact = {
+    schema: 1,
+    run_id: RUN_ID,
+    primary: { category: 'runtime_failure', resource: 'Paper server', source: { kind: 'timeout' } },
+    cleanup: { status: 'succeeded', source: null },
+    trace_checkpoint_segments: [],
+    unexpected: true,
+  };
+  assert.throws(() => parseOperationalFailureArtifact(JSON.stringify(artifact), RUN_ID), (error: unknown) =>
+    error instanceof RunnerError
+      && error.category === 'corrupt_evidence'
+      && error.source.kind === 'invalid_operational_failure_artifact');
+});
+
+test('operational failure artifact reader rejects rounded fractional integers and oversized identities', () => {
+  const artifact = (schema: string, byteLength: string, device = '1') =>
+    `{"schema":${schema},"run_id":"${RUN_ID}","primary":{"category":"runtime_failure","resource":"Paper server","source":{"kind":"timeout"}},"cleanup":{"status":"succeeded","source":null},"trace_checkpoint_segments":[{"path":".work/arena/runs/${RUN_ID}/trace-v2-000001.json","identity":{"device":"${device}","inode":"2"},"byte_length":${byteLength}}]}`;
+
+  for (const [json, field] of [
+    [artifact('1.00000000000000001', '1'), 'schema'],
+    [artifact('1', '1.00000000000000001'), 'invalid_trace_checkpoint_segment'],
+    [artifact('1', '1', '18446744073709551616'), 'invalid_trace_checkpoint_segment'],
+  ] as const) {
+    assert.throws(() => parseOperationalFailureArtifact(json, RUN_ID), (error: unknown) =>
+      error instanceof RunnerError
+        && error.category === 'corrupt_evidence'
+        && error.source.kind === 'invalid_operational_failure_artifact'
+        && error.source.field === field);
+  }
+});
+
 test('runtime trace requires authenticated readiness and an authoritative outcome', async (t) => {
   const { session } = await authenticatedSession(t);
   const { trace } = await createTrace(t);
@@ -269,12 +360,11 @@ test('runtime trace cannot finalize while a policy skill result is still pending
     error instanceof RunnerError && error.source.kind === 'policy_skill_result_pending');
 });
 
-async function createTrace(t: TestContext): Promise<Readonly<{
+async function createTrace(t: TestContext, runDirectoryPath = Buffer.from('run', 'ascii')): Promise<Readonly<{
   trace: RuntimeTraceBuilder;
   ownedRoot: Buffer;
 }>> {
   const ownedRoot = await readTestRootForTrace(t);
-  const runDirectoryPath = Buffer.from('run', 'ascii');
   await createRunDirectory({ helperPath, ownedRoot, relativePath: runDirectoryPath });
   return Object.freeze({
     trace: new RuntimeTraceBuilder({

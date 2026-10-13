@@ -16,6 +16,7 @@ export const MAX_OPERATIONAL_FAILURE_BYTES = MAX_OWNED_READ_BYTES;
 const RUN_DIRECTORY_PREFIX = '.work/arena/runs/';
 const FAILURE_ARTIFACT_NAME = 'operational-failure-v1.json';
 const TRACE_SEGMENT_LIMIT = 100_000;
+const MAX_U64 = 18_446_744_073_709_551_615n;
 
 const ERROR_CATEGORIES: ReadonlySet<string> = new Set([
   'invalid_input',
@@ -69,6 +70,7 @@ export async function writeOperationalFailureArtifact(options: Readonly<{
   helperPath: string;
   ownedRoot: Buffer;
   artifact: OperationalFailureArtifactV1;
+  signal?: AbortSignal;
 }>): Promise<Readonly<{ path: Buffer; identity: FileIdentity; byteLength: number }>> {
   validateArtifact(options.artifact, options.artifact.run_id);
   const contents = Buffer.from(canonicalJson(options.artifact), 'utf8');
@@ -84,6 +86,7 @@ export async function writeOperationalFailureArtifact(options: Readonly<{
     relativePath: path,
     contents,
     maxBytes: MAX_OPERATIONAL_FAILURE_BYTES,
+    ...(options.signal === undefined ? {} : { signal: options.signal }),
   });
   return Object.freeze({ path, identity, byteLength: contents.length });
 }
@@ -135,6 +138,7 @@ export function parseOperationalFailureArtifact(
   if (root === undefined || !hasExactKeys(root, ['schema', 'run_id', 'primary', 'cleanup', 'trace_checkpoint_segments'])) {
     throw invalidArtifact('invalid_shape');
   }
+  if (!isSafeIntegerNumber(root, 'schema', root.schema)) throw invalidArtifact('invalid_schema');
   if (root.schema !== OPERATIONAL_FAILURE_SCHEMA_VERSION) throw invalidArtifact('unsupported_schema');
   if (typeof root.run_id !== 'string' || !isValidRunId(root.run_id) || root.run_id !== expectedRunId) {
     throw invalidArtifact('invalid_run_id');
@@ -158,13 +162,16 @@ export function failureArtifactPath(runId: string): Buffer {
 }
 
 function validateArtifact(artifact: OperationalFailureArtifactV1, expectedRunId: string): void {
-  if (artifact.schema !== OPERATIONAL_FAILURE_SCHEMA_VERSION || artifact.run_id !== expectedRunId
-      || !isValidRunId(artifact.run_id)) {
+  const root = objectValue(artifact as unknown as StrictJsonValue);
+  if (root === undefined || !hasExactKeys(root, [
+    'schema', 'run_id', 'primary', 'cleanup', 'trace_checkpoint_segments',
+  ]) || root.schema !== OPERATIONAL_FAILURE_SCHEMA_VERSION || root.run_id !== expectedRunId
+      || typeof root.run_id !== 'string' || !isValidRunId(root.run_id)) {
     throw invalidArtifact('invalid_shape');
   }
-  parsePrimary(artifact.primary as unknown as StrictJsonValue);
-  parseCleanup(artifact.cleanup as unknown as StrictJsonValue);
-  parseSegments(artifact.trace_checkpoint_segments as unknown as StrictJsonValue, artifact.run_id);
+  parsePrimary(root.primary);
+  parseCleanup(root.cleanup);
+  parseSegments(root.trace_checkpoint_segments, root.run_id);
 }
 
 function parsePrimary(value: StrictJsonValue | undefined): OperationalFailurePrimaryV1 {
@@ -207,7 +214,7 @@ function parseErrorSource(value: StrictJsonValue | undefined): ErrorSource {
   }
   for (const field of ['argument', 'record', 'line', 'column', 'os_code', 'cleanup_os_code'] as const) {
     const fieldValue = source[field];
-    if (fieldValue !== undefined && (typeof fieldValue !== 'number' || !Number.isSafeInteger(fieldValue))) {
+    if (fieldValue !== undefined && !isSafeIntegerNumber(source, field, fieldValue)) {
       throw invalidArtifact('invalid_source');
     }
   }
@@ -232,8 +239,8 @@ function parseSegments(value: StrictJsonValue | undefined, runId: string): Opera
       throw invalidArtifact('invalid_trace_checkpoint_segment');
     }
     const expectedPath = traceSegmentPath(runId, index + 1);
-    if (segment.path !== expectedPath || typeof segment.byte_length !== 'number'
-        || !Number.isSafeInteger(segment.byte_length) || segment.byte_length <= 0
+    if (segment.path !== expectedPath || !isSafeIntegerNumber(segment, 'byte_length', segment.byte_length)
+        || segment.byte_length <= 0
         || segment.byte_length > MAX_TRACE_SEGMENT_BYTES) {
       throw invalidArtifact('invalid_trace_checkpoint_segment');
     }
@@ -256,8 +263,34 @@ function traceSegmentPath(runId: string, sequence: number): string {
 }
 
 function isFileIdentity(device: StrictJsonValue | undefined, inode: StrictJsonValue | undefined): boolean {
-  return typeof device === 'string' && /^(0|[1-9][0-9]*)$/.test(device)
-    && typeof inode === 'string' && /^(0|[1-9][0-9]*)$/.test(inode);
+  return isU64Decimal(device) && isU64Decimal(inode);
+}
+
+function isU64Decimal(value: StrictJsonValue | undefined): value is string {
+  return typeof value === 'string' && value.length <= 20 && /^(0|[1-9][0-9]*)$/.test(value)
+    && BigInt(value) <= MAX_U64;
+}
+
+function isSafeIntegerNumber(
+  owner: object,
+  key: string,
+  value: StrictJsonValue | undefined,
+): value is number {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value)) return false;
+  const token = strictJsonNumberToken(owner, key);
+  return token === undefined || isIntegerNumberToken(token);
+}
+
+function isIntegerNumberToken(token: string): boolean {
+  const match = /^-?(\d+)(?:\.(\d+))?(?:[eE]([+-]?\d+))?$/.exec(token);
+  if (match === null) return false;
+  const fraction = match[2] ?? '';
+  const exponent = match[3] === undefined ? 0 : Number(match[3]);
+  const decimalPlaces = fraction.length - exponent;
+  if (decimalPlaces <= 0) return true;
+  const digits = `${match[1]}${fraction}`;
+  if (decimalPlaces >= digits.length) return /^0+$/.test(digits);
+  return new RegExp(`0{${decimalPlaces}}$`).test(digits);
 }
 
 function objectValue(value: StrictJsonValue | undefined): Record<string, StrictJsonValue> | undefined {

@@ -77,9 +77,13 @@ export async function prepareRun(
   const worldPlanPath = Buffer.concat([runDirectoryPath, Buffer.from(`/${WORLD_PLAN_NAME}`, 'utf8')]);
   let resources: OwnedResourceSnapshot;
   try {
-    resources = await inspectOwnedResources({ helperPath, ownedRoot });
+    resources = await inspectOwnedResources({
+      helperPath,
+      ownedRoot,
+      ...(signal === undefined ? {} : { signal }),
+    });
   } catch (error) {
-    throw mapOwnedFilesError(error, 'run resource inspection');
+    throw mapPrepareOwnedFilesError(error, 'run resource inspection', signal);
   }
   assertPrepareResourceCapacity(resources);
 
@@ -92,7 +96,7 @@ export async function prepareRun(
       ...(signal === undefined ? {} : { signal }),
     });
   } catch (error) {
-    throw mapOwnedFilesError(error, 'run directory');
+    throw mapPrepareOwnedFilesError(error, 'run directory', signal);
   }
 
   try {
@@ -142,7 +146,7 @@ export async function prepareRun(
     }
 
     if (cleanupError !== undefined) throw mapPrepareCleanupError(stageError, cleanupError, published);
-    throw mapOwnedFilesError(stageError, 'world plan', published);
+    throw mapPrepareOwnedFilesError(stageError, 'world plan', signal, published);
   }
 }
 
@@ -162,7 +166,7 @@ async function readSource(
       ...(signal === undefined ? {} : { signal }),
     });
   } catch (error) {
-    throw mapOwnedFilesError(error, resource);
+    throw mapPrepareOwnedFilesError(error, resource, signal);
   }
 }
 
@@ -265,6 +269,19 @@ function mapOwnedFilesError(error: unknown, resource: string, published?: boolea
     ...(error.cleanupErrno === undefined ? {} : { cleanup_os_code: error.cleanupErrno }),
     ...((published ?? error.published) ? { published: true } : {}),
   });
+}
+
+function mapPrepareOwnedFilesError(
+  error: unknown,
+  resource: string,
+  signal?: AbortSignal,
+  published?: boolean,
+): RunnerError {
+  if (error instanceof OwnedFilesError && error.category === 'cancelled'
+      && signal?.reason instanceof RunnerError) {
+    return signal.reason;
+  }
+  return mapOwnedFilesError(error, resource, published);
 }
 
 /** Keeps new runs within explicit host-storage and retained-run bounds. */
