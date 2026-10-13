@@ -1,3 +1,5 @@
+import { canonicalJson } from './canonical.js';
+
 export type ErrorCategory = 'invalid_input' | 'missing_prerequisite' | 'corrupt_evidence' | 'runtime_failure';
 
 export interface ErrorSource {
@@ -27,7 +29,7 @@ export class RunnerError extends Error {
   }
 
   toJson(): string {
-    return JSON.stringify({
+    return canonicalJson({
       error: {
         category: this.category,
         resource: this.resource,

@@ -55,6 +55,7 @@ test('incomplete evidence returns a structured corrupt-evidence error', async ()
   assert.equal(error.error.category, 'corrupt_evidence');
   assert.equal(error.error.source.kind, 'invalid_completion_trailer');
   assert.equal(error.error.source.argument, 1);
+  assert.equal(result.stderr, '{"error":{"category":"corrupt_evidence","resource":"trace segment argument 1","source":{"argument":1,"kind":"invalid_completion_trailer"}}}');
 });
 
 test('missing input maps to prerequisite exit code with structured source details', async () => {
