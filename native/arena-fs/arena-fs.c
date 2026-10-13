@@ -52,6 +52,7 @@ extern char **environ;
 #define MAX_OWNED_RUN_CAPACITY 10U
 #define MAX_OWNED_TRACE_SEGMENTS 100000U
 #define OWNED_RUNS_DIRECTORY ".work/arena/runs"
+#define OWNED_TRACES_DIRECTORY ".work/arena/traces"
 #define OWNED_FAILURE_ARTIFACT "operational-failure-v1.json"
 #define RAW_ARGV_ENV "ARENA_RAW_ARGV_V1="
 
@@ -1470,6 +1471,35 @@ static bool is_owned_runs_child_component(const char *relative, size_t relative_
            memcmp(relative, prefix, prefix_length) == 0;
 }
 
+static const char *owned_run_id_from_path(const char *relative, size_t relative_length) {
+    static const char prefix[] = OWNED_RUNS_DIRECTORY "/";
+    size_t prefix_length = sizeof(prefix) - 1U;
+    if (relative_length <= prefix_length || memcmp(relative, prefix, prefix_length) != 0) {
+        return NULL;
+    }
+    const char *run_id = relative + prefix_length;
+    if (memchr(run_id, '/', relative_length - prefix_length) != NULL ||
+        !valid_owned_run_id(run_id)) return NULL;
+    return run_id;
+}
+
+/* Any trace-tree entry keeps its run ID reserved, including partial and non-directory entries. */
+static int check_owned_run_id_not_archived(int root_fd, const char *run_id) {
+    int traces_fd = -1;
+    int error = open_relative_directory(root_fd, OWNED_TRACES_DIRECTORY,
+                                        sizeof(OWNED_TRACES_DIRECTORY) - 1U, &traces_fd);
+    if (error == ENOENT) return 0;
+    if (error != 0) return error;
+    struct stat status;
+    if (fstatat(traces_fd, run_id, &status, AT_SYMLINK_NOFOLLOW) == 0) {
+        error = EEXIST;
+    } else {
+        error = errno == ENOENT ? 0 : errno;
+    }
+    if (close(traces_fd) != 0 && error == 0) error = errno;
+    return error;
+}
+
 static int lock_owned_runs_directory(int directory_fd) {
     for (;;) {
         if (cancelled()) return ECANCELED;
@@ -1560,10 +1590,20 @@ static int create_owned_directory(const char *root, const char *relative, size_t
         failure->code = error;
         return error;
     }
+    const char *requested_run_id = owned_run_id_from_path(relative, relative_length);
+    if (requested_run_id != NULL) {
+        error = check_owned_run_id_not_archived(root_fd, requested_run_id);
+        if (error != 0) {
+            close(root_fd);
+            failure->code = error;
+            return error;
+        }
+    }
     int current_fd = dup(root_fd);
-    close(root_fd);
     if (current_fd < 0) {
-        failure->code = errno;
+        error = errno;
+        close(root_fd);
+        failure->code = error;
         return failure->code;
     }
 
@@ -1593,6 +1633,10 @@ static int create_owned_directory(const char *root, const char *relative, size_t
             }
             error = lock_owned_runs_directory(current_fd);
             if (error != 0) goto fail;
+            if (requested_run_id != NULL) {
+                error = check_owned_run_id_not_archived(root_fd, requested_run_id);
+                if (error != 0) goto fail;
+            }
             struct stat existing_status;
             if (fstatat(current_fd, component, &existing_status, AT_SYMLINK_NOFOLLOW) != 0) {
                 if (errno != ENOENT) {
@@ -1729,11 +1773,13 @@ static int create_owned_directory(const char *root, const char *relative, size_t
         offset = end + 1U;
     }
     close(current_fd);
+    close(root_fd);
     close_created_directories(created, created_count);
     return 0;
 
 fail:
     close(current_fd);
+    close(root_fd);
     failure->code = error;
     cleanup_created_directories(created, created_count, failure);
     return error;

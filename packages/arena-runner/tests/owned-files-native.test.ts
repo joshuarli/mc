@@ -198,6 +198,39 @@ test('creates at most ten immediate owned runs under concurrent creation', async
   });
 });
 
+test('reserves archived run ids while allowing a different fresh id', async () => {
+  await withOwnedRoot(async (root, rootText) => {
+    const archivedId = 'archived-run-id';
+    const archivePath = join(rootText, '.work/arena/traces', archivedId);
+    await createOwnedDirectory({
+      helperPath,
+      ownedRoot: root,
+      relativePath: Buffer.from(`.work/arena/traces/${archivedId}`),
+    });
+    await writeFile(join(archivePath, 'partial-trace.json'),
+      Buffer.from('{"partial":true}'));
+    await writeFile(join(rootText, '.work/arena/traces', 'file-archive-id'), Buffer.from('partial'));
+    await symlink('missing-archive-target', join(rootText, '.work/arena/traces', 'symlink-archive-id'));
+
+    for (const runId of [archivedId, 'file-archive-id', 'symlink-archive-id']) {
+      await assert.rejects(createRunDirectory({
+        helperPath,
+        ownedRoot: root,
+        relativePath: Buffer.from(`.work/arena/runs/${runId}`),
+      }), nativeFailure('conflict'));
+    }
+    await assert.rejects(access(join(rootText, '.work/arena/runs')));
+
+    const freshId = 'fresh-run-id';
+    await createRunDirectory({
+      helperPath,
+      ownedRoot: root,
+      relativePath: Buffer.from(`.work/arena/runs/${freshId}`),
+    });
+    assert.deepEqual(await readdir(join(rootText, '.work/arena/runs')), [freshId]);
+  });
+});
+
 test('removes only the leased run tree and unlinks nested symlinks without following them', async () => {
   await withOwnedRoot(async (root, rootText) => {
     const runId = 'remove-nested-link';

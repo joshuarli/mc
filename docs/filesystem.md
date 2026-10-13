@@ -21,6 +21,9 @@ directories created by that call in reverse order when their type and identity
 still match. Creating an immediate run directory under `.work/arena/runs`
 serializes against other owned-run creators and removals, and the helper caps
 that directory at 10 real run directories.
+An ID is reserved while any entry at `.work/arena/traces/<run-id>` exists,
+including a partial archive. The helper checks this before creating missing run
+parents and again while holding the runs-directory lock.
 
 `stageWorldPlan` accepts at most 128 MiB. It creates a random, exclusive,
 same-directory temporary file with mode `0600`, writes at most the caller's
