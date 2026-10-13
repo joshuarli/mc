@@ -10,7 +10,7 @@ The `sha256` field is the lowercase SHA-256 digest of the compact serialization 
 
 ## Java world-plan transfer
 
-The TypeScript encoder writes world-plan schema version 1 in the field shape consumed by Java `MapPlanReader`: `schema`, `run_id`, `map_semantic_id`, `dimensions`, `blocks`, `spawns`, and `loot_containers`. Blocks and loot containers retain the spec compiler's canonical position order; spawn seats are contiguous from zero and capped at six; loot inventory order is preserved. The compact UTF-8 plan is capped at 128 MiB. Its golden fixture is shared with the Java reader. Writing that plan into an owned run directory remains parked until the runner has the native handle-relative filesystem boundary.
+The TypeScript encoder writes world-plan schema version 1 in the field shape consumed by Java `MapPlanReader`: `schema`, `run_id`, `map_semantic_id`, `dimensions`, `blocks`, `spawns`, and `loot_containers`. Blocks and loot containers retain the spec compiler's canonical position order; spawn seats are contiguous from zero and capped at six; loot inventory order is preserved. The compact UTF-8 plan is capped at 128 MiB. Its golden fixture is shared with the Java reader. `prepare` writes the plan to `.work/arena/runs/<run-id>/world-plan.json` using the native handle-relative filesystem helper. It creates the run directory exclusively and publishes the plan without overwriting an existing file.
 
 ## Replay and reports
 

@@ -5,9 +5,12 @@ export type ErrorCategory = 'invalid_input' | 'missing_prerequisite' | 'corrupt_
 export interface ErrorSource {
   readonly kind: string;
   readonly argument?: number;
+  readonly field?: string;
   readonly line?: number;
   readonly column?: number;
   readonly os_code?: number;
+  readonly cleanup_os_code?: number;
+  readonly published?: boolean;
 }
 
 export class RunnerError extends Error {

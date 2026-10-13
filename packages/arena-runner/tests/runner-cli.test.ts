@@ -14,9 +14,9 @@ function output(result: Awaited<ReturnType<typeof runCli>>): Record<string, unkn
   return JSON.parse(result.stdout) as Record<string, unknown>;
 }
 
-test('doctor describes available offline commands and parked live lifecycle capabilities', async () => {
+test('doctor describes preparation and offline evidence capabilities', async () => {
   const result = output(await runCli(['doctor']));
-  assert.equal(result.mode, 'offline_evidence');
+  assert.equal(result.mode, 'offline_prepare_and_evidence');
   assert.deepEqual(result.capabilities, {
     trace_validation: 'available',
     ordered_record_reconstruction: 'available',
@@ -24,8 +24,26 @@ test('doctor describes available offline commands and parked live lifecycle capa
     policy_replay: 'parked_missing_recorded_input_and_policy_contracts',
     authoritative_result_reporting: 'parked_missing_j1_event_contract',
     process_supervision_and_world_reset: 'parked_missing_live_prerequisites',
-    safe_owned_path_staging: 'parked_missing_handle_relative_filesystem_support',
+    scenario_compilation: 'available',
+    world_plan_staging: 'available',
+    safe_owned_path_staging: 'available',
   });
+});
+
+test('prepare requires both the scenario path and run id options', async () => {
+  const result = await runCli(['prepare']);
+  assert.equal(result.kind, 'failure');
+  if (result.kind !== 'failure') return;
+  assert.equal(result.exitCode, 2);
+  assert.equal(result.stderr, '{"error":{"category":"invalid_input","resource":"command line arguments","source":{"kind":"prepare_requires_scenario_and_run_id"}}}');
+});
+
+test('prepare rejects scenario paths outside the repository root', async () => {
+  const result = await runCli(['prepare', '--scenario', '../scenarios/hunger-six.toml', '--run-id', 'smoke-001']);
+  assert.equal(result.kind, 'failure');
+  if (result.kind !== 'failure') return;
+  assert.equal(result.exitCode, 2);
+  assert.equal(result.stderr, '{"error":{"category":"invalid_input","resource":"scenario path","source":{"kind":"outside_repository"}}}');
 });
 
 test('report CLI orders segments and compare ignores only the run id', async () => {

@@ -1,7 +1,7 @@
 import type { MapIr } from '@arena/spec';
+import { MAX_WORLD_PLAN_BYTES } from './owned-files/index.js';
 
 const WORLD_PLAN_SCHEMA_VERSION = 1;
-const MAX_WORLD_PLAN_BYTES = 128 * 1024 * 1024;
 
 export type WorldPlanErrorKind =
   | 'invalid_run_id'
