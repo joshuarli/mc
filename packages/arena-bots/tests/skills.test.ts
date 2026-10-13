@@ -100,10 +100,13 @@ test('cancellation quarantines an inventory operation that never receives its up
       rating: 3,
     });
     await waitUntil(() => equipStarted);
+    // Simulate a selected-slot update received while the equip request is still pending.
+    Object.assign(harness.bot, { quickBarSlot: 2 });
     const cancellation = harness.owner.cancel('shutdown');
     await assert.rejects(running, /client is quarantined/);
     await assert.rejects(cancellation, /client is quarantined/);
     assert.ok(harness.controlsCleared() > 0);
+    assert.equal(harness.bot.quickBarSlot, 2);
     await assert.rejects(
       harness.owner.run({ kind: 'hold', reason: 'agentStateUnknown' }),
       /client is quarantined/,

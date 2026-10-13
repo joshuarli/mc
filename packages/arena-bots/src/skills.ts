@@ -673,7 +673,9 @@ export class SkillOwner {
       }
     }
     try {
-      if (this.#bot.quickBarSlot !== active.resources.originalQuickBarSlot) {
+      // An unresolved inventory operation may still be applying server updates to the selected slot.
+      if (this.#cleanupFailure === null
+        && this.#bot.quickBarSlot !== active.resources.originalQuickBarSlot) {
         this.#bot.setQuickBarSlot(active.resources.originalQuickBarSlot);
       }
     } catch (error) {
