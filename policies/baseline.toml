@@ -1,0 +1,8 @@
+version = 1
+eat_at_hunger_or_below = 8
+retreat_at_health_half_hearts_or_below = 8
+border_margin_blocks = 2
+fight_range_blocks = 4
+opponent_memory_ticks = 100
+loot_hysteresis_blocks = 2
+search_radius_blocks = 8
