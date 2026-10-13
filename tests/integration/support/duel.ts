@@ -51,6 +51,8 @@ export function assertDeathWinner(
 
   const eventOutcome = run.events.find((event) => event.type === "outcome");
   assert.ok(eventOutcome, "the authenticated event stream must include its terminal outcome");
+  assert.equal(eventOutcome.payload.kind, "winner", "the authenticated outcome must be a winner result");
+  if (eventOutcome.payload.kind !== "winner") throw new Error("winner assertion did not narrow the outcome");
   const inspectedAt = object(outcome.at, "arena inspect winner must include its event time");
   assert.equal(inspectedAt.domain, eventOutcome.payload.at.domain);
   assert.equal(inspectedAt.value, eventOutcome.payload.at.value.toString());
