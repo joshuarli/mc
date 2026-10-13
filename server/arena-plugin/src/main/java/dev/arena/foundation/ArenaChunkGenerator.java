@@ -1,11 +1,13 @@
 package dev.arena.foundation;
 
 import java.util.ArrayList;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Random;
+import java.util.Set;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.World;
@@ -25,9 +27,18 @@ final class ArenaChunkGenerator extends ChunkGenerator {
         boolean isAir(Material material);
 
         boolean isItem(Material material);
+
+        boolean isSafeSpawnSupport(Material material);
     }
 
     private static final class PaperMaterialCatalog implements MaterialCatalog {
+        private static final Set<Material> HAZARDOUS_SUPPORTS = EnumSet.of(
+                Material.CACTUS,
+                Material.CAMPFIRE,
+                Material.MAGMA_BLOCK,
+                Material.SOUL_CAMPFIRE,
+                Material.SWEET_BERRY_BUSH);
+
         @Override
         public boolean isBlock(Material material) {
             return material.isBlock();
@@ -41,6 +52,11 @@ final class ArenaChunkGenerator extends ChunkGenerator {
         @Override
         public boolean isItem(Material material) {
             return material.isItem();
+        }
+
+        @Override
+        public boolean isSafeSpawnSupport(Material material) {
+            return material.isSolid() && !HAZARDOUS_SUPPORTS.contains(material);
         }
     }
 
@@ -63,6 +79,7 @@ final class ArenaChunkGenerator extends ChunkGenerator {
             throw new IllegalArgumentException("material catalog is required");
         }
         this.plan = plan;
+        Map<MapPlan.Position, Material> materialsByPosition = new HashMap<>();
         for (MapPlan.LootContainer container : plan.lootContainers()) {
             for (String item : container.inventory()) {
                 requireItemMaterial(item, materials);
@@ -71,11 +88,19 @@ final class ArenaChunkGenerator extends ChunkGenerator {
         Map<MapPlan.ChunkPosition, List<GeneratedBlock>> mutableIndex = new HashMap<>();
         for (MapPlan.BlockPlacement placement : plan.blocks()) {
             Material material = requireBlockMaterial(placement.material(), materials);
+            materialsByPosition.put(placement.position(), material);
             MapPlan.Position position = placement.position();
             MapPlan.ChunkPosition chunk = new MapPlan.ChunkPosition(
                     MapPlan.chunkCoordinate(position.x()), MapPlan.chunkCoordinate(position.z()));
             mutableIndex.computeIfAbsent(chunk, ignored -> new ArrayList<>())
                     .add(new GeneratedBlock(position, material));
+        }
+        for (MapPlan.SpawnPoint spawn : plan.spawns()) {
+            MapPlan.Position feet = spawn.position();
+            Material support = materialsByPosition.get(new MapPlan.Position(feet.x(), feet.y() - 1, feet.z()));
+            if (support == null || !materials.isSafeSpawnSupport(support)) {
+                throw new IllegalArgumentException("spawn support must be a safe solid surface for seat " + spawn.seat());
+            }
         }
         Map<MapPlan.ChunkPosition, List<GeneratedBlock>> immutableIndex = new HashMap<>();
         mutableIndex.forEach((chunk, blocks) -> immutableIndex.put(chunk, List.copyOf(blocks)));
@@ -157,6 +182,10 @@ final class ArenaChunkGenerator extends ChunkGenerator {
 
     static Material requireItemMaterial(String resourceId) {
         return requireItemMaterial(resourceId, PAPER_MATERIALS);
+    }
+
+    static boolean isSafeSpawnSupport(Material material) {
+        return PAPER_MATERIALS.isSafeSpawnSupport(material);
     }
 
     private static Material requireMinecraftMaterial(String resourceId) {

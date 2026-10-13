@@ -20,7 +20,7 @@ import dev.arena.foundation.MatchController.Settings;
 import dev.arena.foundation.MatchController.Winner;
 import java.util.List;
 import java.util.Optional;
-import java.util.OptionalLong;
+import java.math.BigInteger;
 import org.junit.jupiter.api.Test;
 
 final class MatchControllerTest {
@@ -34,26 +34,26 @@ final class MatchControllerTest {
         assertEquals(Phase.COUNTDOWN, match.phase());
 
         match.endServerTick(List.of());
-        assertEquals(1, match.countdownRemaining());
+        assertEquals(BigInteger.ONE, match.countdownRemaining());
         assertEquals(Phase.COUNTDOWN, match.phase());
 
         match.endServerTick(List.of());
         assertEquals(Phase.GRACE, match.phase());
-        assertEquals(OptionalLong.of(0), match.matchTick());
+        assertEquals(Optional.of(BigInteger.ZERO), match.matchTick());
 
         match.endServerTick(List.of());
         assertEquals(Phase.GRACE, match.phase());
-        assertEquals(OptionalLong.of(1), match.matchTick());
+        assertEquals(Optional.of(BigInteger.ONE), match.matchTick());
 
         match.endServerTick(List.of());
         assertEquals(Phase.ACTIVE, match.phase());
-        assertEquals(OptionalLong.of(2), match.matchTick());
+        assertEquals(Optional.of(BigInteger.TWO), match.matchTick());
     }
 
     @Test
     void worldBorderUsesMatchTicksAndReachesBothConfiguredEndpoints() {
-        MatchController match = new MatchController(new Settings(0, 0, 6,
-                new BorderSchedule(10, 1, 4, 4)), 2);
+        MatchController match = new MatchController(new Settings(BigInteger.ZERO, BigInteger.ZERO, BigInteger.valueOf(6),
+                new BorderSchedule(10, BigInteger.ONE, BigInteger.valueOf(4), 4)), 2);
         match.startCountdown();
 
         assertEquals(10.0, match.borderDiameterBlocks());
@@ -77,9 +77,9 @@ final class MatchControllerTest {
                 new Elimination(0, EliminationCause.DEATH)));
 
         assertEquals(List.of(0, 1), resolved.stream().map(ResolvedElimination::seat).toList());
-        assertEquals(new MatchTick(0), resolved.getFirst().at());
+        assertEquals(new MatchTick(BigInteger.ZERO), resolved.getFirst().at());
         assertEquals(Phase.FINISHED, match.phase());
-        assertEquals(new Draw(DrawReason.NO_SURVIVORS, List.of(), new MatchTick(0)), match.outcome().orElseThrow());
+        assertEquals(new Draw(DrawReason.NO_SURVIVORS, List.of(), new MatchTick(BigInteger.ZERO)), match.outcome().orElseThrow());
     }
 
     @Test
@@ -93,15 +93,15 @@ final class MatchControllerTest {
         assertEquals(Phase.FINISHED, winner.phase());
         assertTrue(winner.matchTick().isEmpty());
         assertEquals(List.of(new ResolvedElimination(
-                1, EliminationCause.DISCONNECT, new CountdownTick(0))), resolved);
-        assertEquals(new Winner(0, List.of(0), new CountdownTick(0)), winner.outcome().orElseThrow());
+                1, EliminationCause.DISCONNECT, new CountdownTick(BigInteger.ZERO))), resolved);
+        assertEquals(new Winner(0, List.of(0), new CountdownTick(BigInteger.ZERO)), winner.outcome().orElseThrow());
 
         MatchController draw = new MatchController(settings(3, 0, 6), 2);
         draw.startCountdown();
         draw.endServerTick(List.of(
                 new Elimination(1, EliminationCause.DISCONNECT),
                 new Elimination(0, EliminationCause.DISCONNECT)));
-        assertEquals(new Draw(DrawReason.NO_SURVIVORS, List.of(), new CountdownTick(0)), draw.outcome().orElseThrow());
+        assertEquals(new Draw(DrawReason.NO_SURVIVORS, List.of(), new CountdownTick(BigInteger.ZERO)), draw.outcome().orElseThrow());
     }
 
     @Test
@@ -113,7 +113,7 @@ final class MatchControllerTest {
 
         match.endServerTick(List.of(new Elimination(1, EliminationCause.DEATH)));
 
-        assertEquals(new Winner(0, List.of(0), new MatchTick(2)), match.outcome().orElseThrow());
+        assertEquals(new Winner(0, List.of(0), new MatchTick(BigInteger.TWO)), match.outcome().orElseThrow());
         assertEquals(Phase.FINISHED, match.phase());
     }
 
@@ -125,7 +125,7 @@ final class MatchControllerTest {
         match.endServerTick(List.of());
         match.endServerTick(List.of());
 
-        assertEquals(new Draw(DrawReason.TICK_LIMIT, List.of(0, 1), new MatchTick(2)), match.outcome().orElseThrow());
+        assertEquals(new Draw(DrawReason.TICK_LIMIT, List.of(0, 1), new MatchTick(BigInteger.TWO)), match.outcome().orElseThrow());
         assertEquals(Phase.FINISHED, match.phase());
     }
 
@@ -135,7 +135,7 @@ final class MatchControllerTest {
 
         match.startCountdown();
 
-        assertEquals(new Winner(0, List.of(0), new MatchTick(0)), match.outcome().orElseThrow());
+        assertEquals(new Winner(0, List.of(0), new MatchTick(BigInteger.ZERO)), match.outcome().orElseThrow());
         assertEquals(Phase.FINISHED, match.phase());
     }
 
@@ -148,8 +148,8 @@ final class MatchControllerTest {
                 new Elimination(1, EliminationCause.DISCONNECT),
                 new Elimination(1, EliminationCause.DEATH)));
 
-        assertEquals(List.of(new ResolvedElimination(1, EliminationCause.DEATH, new MatchTick(0))), resolved);
-        assertEquals(new Winner(0, List.of(0), new MatchTick(0)), match.outcome().orElseThrow());
+        assertEquals(List.of(new ResolvedElimination(1, EliminationCause.DEATH, new MatchTick(BigInteger.ZERO))), resolved);
+        assertEquals(new Winner(0, List.of(0), new MatchTick(BigInteger.ZERO)), match.outcome().orElseThrow());
     }
 
     @Test
@@ -164,7 +164,7 @@ final class MatchControllerTest {
         MatchController duringCountdown = new MatchController(settings(3, 0, 6), 2);
         duringCountdown.startCountdown();
         duringCountdown.abort(AbortReason.OPERATOR);
-        assertEquals(new Aborted(AbortReason.OPERATOR, List.of(0, 1), Optional.of(new CountdownTick(0))),
+        assertEquals(new Aborted(AbortReason.OPERATOR, List.of(0, 1), Optional.of(new CountdownTick(BigInteger.ZERO))),
                 duringCountdown.outcome().orElseThrow());
 
         MatchController completed = new MatchController(settings(0, 0, 6), 2);
@@ -187,11 +187,27 @@ final class MatchControllerTest {
     void rejectsInvalidTickAndBorderSettings() {
         assertThrows(IllegalArgumentException.class, () -> settings(0, 5, 5));
         assertThrows(IllegalArgumentException.class,
-                () -> new BorderSchedule(10, 8, 8, 4));
+                () -> new BorderSchedule(10, BigInteger.valueOf(8), BigInteger.valueOf(8), 4));
+    }
+
+    @Test
+    void advancesCountdownWithoutNarrowingUnsigned64TickValues() {
+        BigInteger maximum = ControlProtocol.MAX_U64;
+        MatchController match = new MatchController(new Settings(maximum, maximum.subtract(BigInteger.valueOf(4)),
+                maximum, new BorderSchedule(126, maximum.subtract(BigInteger.valueOf(4)),
+                        maximum.subtract(BigInteger.TWO), 16)), 2);
+
+        match.startCountdown();
+        assertEquals(maximum, match.countdownRemaining());
+        match.endServerTick(List.of());
+
+        assertEquals(maximum.subtract(BigInteger.ONE), match.countdownRemaining());
+        assertEquals(Phase.COUNTDOWN, match.phase());
     }
 
     private static Settings settings(long countdownTicks, long graceTicks, long authoritativeMaxTicks) {
-        return new Settings(countdownTicks, graceTicks, authoritativeMaxTicks,
-                new BorderSchedule(10, graceTicks, authoritativeMaxTicks - 1, 4));
+        return new Settings(BigInteger.valueOf(countdownTicks), BigInteger.valueOf(graceTicks),
+                BigInteger.valueOf(authoritativeMaxTicks), new BorderSchedule(10, BigInteger.valueOf(graceTicks),
+                        BigInteger.valueOf(authoritativeMaxTicks - 1), 4));
     }
 }

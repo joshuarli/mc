@@ -264,6 +264,14 @@ final class MapPlan {
                     || blockAt.containsKey(headroom)) {
                 throw new IllegalArgumentException("spawn seats must be contiguous with support and two clear blocks");
             }
+            for (int previous = 0; previous < index; previous++) {
+                Position other = points.get(previous).position();
+                long dx = (long) feet.x() - other.x();
+                long dz = (long) feet.z() - other.z();
+                if (Math.abs(dx) < 2 && Math.abs(dz) < 2) {
+                    throw new IllegalArgumentException("spawn seats must be separated by at least two horizontal blocks");
+                }
+            }
         }
     }
 

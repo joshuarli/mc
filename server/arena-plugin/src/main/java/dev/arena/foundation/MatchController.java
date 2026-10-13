@@ -5,8 +5,8 @@ import java.util.Collection;
 import java.util.List;
 import java.util.NavigableMap;
 import java.util.NavigableSet;
+import java.math.BigInteger;
 import java.util.Optional;
-import java.util.OptionalLong;
 import java.util.TreeMap;
 import java.util.TreeSet;
 
@@ -35,28 +35,32 @@ final class MatchController {
         OPERATOR,
         LEASE_LOST,
         INVALID_WORLD,
-        PROTOCOL_ERROR
+        PROTOCOL_ERROR,
+        HUMAN_WAIT_TIMEOUT,
+        RUNTIME_TIMEOUT
     }
 
     sealed interface ResolutionTick permits CountdownTick, MatchTick {}
 
-    record CountdownTick(long value) implements ResolutionTick {
+    record CountdownTick(BigInteger value) implements ResolutionTick {
         CountdownTick {
-            if (value < 0) {
+            if (value == null || value.signum() < 0) {
                 throw new IllegalArgumentException("countdown tick cannot be negative");
             }
         }
     }
 
-    record MatchTick(long value) implements ResolutionTick {
+    record MatchTick(BigInteger value) implements ResolutionTick {
         MatchTick {
-            if (value < 0) {
+            if (value == null || value.signum() < 0) {
                 throw new IllegalArgumentException("match tick cannot be negative");
             }
         }
     }
 
-    sealed interface Outcome permits Winner, Draw, Aborted {}
+    sealed interface Outcome permits Winner, Draw, Aborted {
+        Optional<ResolutionTick> resolutionTick();
+    }
 
     record Winner(int seat, List<Integer> survivors, ResolutionTick at) implements Outcome {
         Winner {
@@ -64,6 +68,11 @@ final class MatchController {
             if (survivors.size() != 1 || survivors.getFirst() != seat || at == null) {
                 throw new IllegalArgumentException("winner outcome must contain its sole surviving seat and resolution tick");
             }
+        }
+
+        @Override
+        public Optional<ResolutionTick> resolutionTick() {
+            return Optional.of(at);
         }
     }
 
@@ -75,6 +84,11 @@ final class MatchController {
                 throw new IllegalArgumentException("draw outcome does not match its reason and survivors");
             }
         }
+
+        @Override
+        public Optional<ResolutionTick> resolutionTick() {
+            return Optional.of(at);
+        }
     }
 
     record Aborted(AbortReason reason, List<Integer> survivors, Optional<ResolutionTick> at) implements Outcome {
@@ -83,6 +97,11 @@ final class MatchController {
             if (reason == null || at == null) {
                 throw new IllegalArgumentException("abort outcome requires a reason and tick option");
             }
+        }
+
+        @Override
+        public Optional<ResolutionTick> resolutionTick() {
+            return at;
         }
     }
 
@@ -98,29 +117,31 @@ final class MatchController {
 
     record BorderSchedule(
             double initialDiameterBlocks,
-            long shrinkStartTick,
-            long shrinkEndTick,
+            BigInteger shrinkStartTick,
+            BigInteger shrinkEndTick,
             double finalDiameterBlocks) {
         BorderSchedule {
             if (!Double.isFinite(initialDiameterBlocks) || !Double.isFinite(finalDiameterBlocks)
                     || initialDiameterBlocks <= 0 || finalDiameterBlocks <= 0
                     || finalDiameterBlocks >= initialDiameterBlocks
-                    || shrinkStartTick < 0 || shrinkEndTick <= shrinkStartTick) {
+                    || shrinkStartTick == null || shrinkEndTick == null || shrinkStartTick.signum() < 0
+                    || shrinkEndTick.compareTo(shrinkStartTick) <= 0) {
                 throw new IllegalArgumentException("invalid world-border schedule");
             }
         }
     }
 
     record Settings(
-            long countdownTicks,
-            long graceTicks,
-            long authoritativeMaxTicks,
+            BigInteger countdownTicks,
+            BigInteger graceTicks,
+            BigInteger authoritativeMaxTicks,
             BorderSchedule border) {
         Settings {
-            if (countdownTicks < 0 || graceTicks < 0 || authoritativeMaxTicks <= 0
-                    || graceTicks >= authoritativeMaxTicks || border == null
-                    || border.shrinkStartTick() < graceTicks
-                    || border.shrinkEndTick() >= authoritativeMaxTicks) {
+            if (countdownTicks == null || graceTicks == null || authoritativeMaxTicks == null
+                    || countdownTicks.signum() < 0 || graceTicks.signum() < 0 || authoritativeMaxTicks.signum() <= 0
+                    || graceTicks.compareTo(authoritativeMaxTicks) >= 0 || border == null
+                    || border.shrinkStartTick().compareTo(graceTicks) < 0
+                    || border.shrinkEndTick().compareTo(authoritativeMaxTicks) >= 0) {
                 throw new IllegalArgumentException("invalid match tick or border settings");
             }
         }
@@ -130,8 +151,8 @@ final class MatchController {
     private final int competitorCount;
     private final NavigableSet<Integer> aliveSeats = new TreeSet<>();
     private Phase phase = Phase.WAITING;
-    private long countdownRemaining;
-    private long matchTick = -1;
+    private BigInteger countdownRemaining = BigInteger.ZERO;
+    private BigInteger matchTick;
     private Outcome outcome;
 
     MatchController(Settings settings, int competitorCount) {
@@ -149,11 +170,11 @@ final class MatchController {
         return phase;
     }
 
-    OptionalLong matchTick() {
-        return matchTick < 0 ? OptionalLong.empty() : OptionalLong.of(matchTick);
+    Optional<BigInteger> matchTick() {
+        return Optional.ofNullable(matchTick);
     }
 
-    long countdownRemaining() {
+    BigInteger countdownRemaining() {
         return countdownRemaining;
     }
 
@@ -166,14 +187,14 @@ final class MatchController {
     }
 
     double borderDiameterBlocks() {
-        if (matchTick < settings.border().shrinkStartTick()) {
+        if (matchTick == null || matchTick.compareTo(settings.border().shrinkStartTick()) < 0) {
             return settings.border().initialDiameterBlocks();
         }
-        if (matchTick >= settings.border().shrinkEndTick()) {
+        if (matchTick.compareTo(settings.border().shrinkEndTick()) >= 0) {
             return settings.border().finalDiameterBlocks();
         }
-        double progress = (double) (matchTick - settings.border().shrinkStartTick())
-                / (settings.border().shrinkEndTick() - settings.border().shrinkStartTick());
+        double progress = matchTick.subtract(settings.border().shrinkStartTick()).doubleValue()
+                / settings.border().shrinkEndTick().subtract(settings.border().shrinkStartTick()).doubleValue();
         return settings.border().initialDiameterBlocks()
                 + progress * (settings.border().finalDiameterBlocks() - settings.border().initialDiameterBlocks());
     }
@@ -182,7 +203,7 @@ final class MatchController {
         if (phase != Phase.WAITING) {
             throw new IllegalStateException("match countdown can start only while waiting");
         }
-        if (settings.countdownTicks() == 0) {
+        if (settings.countdownTicks().signum() == 0) {
             release();
         } else {
             phase = Phase.COUNTDOWN;
@@ -196,17 +217,17 @@ final class MatchController {
             return List.of();
         }
         if (phase == Phase.COUNTDOWN) {
-            long countdownTick = settings.countdownTicks() - countdownRemaining;
-            List<ResolvedElimination> resolved = resolveEliminations(
-                    eliminations, new CountdownTick(countdownTick));
+            BigInteger countdownTick = settings.countdownTicks().subtract(countdownRemaining);
+            CountdownTick at = new CountdownTick(countdownTick);
+            List<ResolvedElimination> resolved = resolveEliminations(eliminations, at);
             if (!resolved.isEmpty()) {
-                finishSurvivorOutcome(new CountdownTick(countdownTick));
+                finishSurvivorOutcome(at);
                 if (outcome != null) {
                     return resolved;
                 }
             }
-            countdownRemaining--;
-            if (countdownRemaining == 0) {
+            countdownRemaining = countdownRemaining.subtract(BigInteger.ONE);
+            if (countdownRemaining.signum() == 0) {
                 release();
             }
             return resolved;
@@ -216,11 +237,11 @@ final class MatchController {
         if (!resolved.isEmpty()) {
             finishSurvivorOutcome(new MatchTick(matchTick));
         }
-        if (outcome == null && matchTick == settings.authoritativeMaxTicks()) {
+        if (outcome == null && matchTick.equals(settings.authoritativeMaxTicks())) {
             finish(new Draw(DrawReason.TICK_LIMIT, aliveSeats(), new MatchTick(matchTick)));
         } else if (outcome == null) {
-            matchTick++;
-            phase = matchTick < settings.graceTicks() ? Phase.GRACE : Phase.ACTIVE;
+            matchTick = matchTick.add(BigInteger.ONE);
+            phase = matchTick.compareTo(settings.graceTicks()) < 0 ? Phase.GRACE : Phase.ACTIVE;
         }
         return List.copyOf(resolved);
     }
@@ -234,7 +255,7 @@ final class MatchController {
         }
         Optional<ResolutionTick> at = switch (phase) {
             case WAITING -> Optional.empty();
-            case COUNTDOWN -> Optional.of(new CountdownTick(settings.countdownTicks() - countdownRemaining));
+            case COUNTDOWN -> Optional.of(new CountdownTick(settings.countdownTicks().subtract(countdownRemaining)));
             case GRACE, ACTIVE -> Optional.of(new MatchTick(matchTick));
             case FINISHED, ABORTED -> throw new IllegalStateException("terminal match cannot be aborted again");
         };
@@ -277,8 +298,8 @@ final class MatchController {
     }
 
     private void release() {
-        matchTick = 0;
-        phase = settings.graceTicks() == 0 ? Phase.ACTIVE : Phase.GRACE;
+        matchTick = BigInteger.ZERO;
+        phase = settings.graceTicks().signum() == 0 ? Phase.ACTIVE : Phase.GRACE;
         finishSurvivorOutcome(new MatchTick(matchTick));
     }
 

@@ -3,3 +3,7 @@ version: 0.1.0
 main: dev.arena.foundation.ArenaFoundationPlugin
 api-version: '${pluginApiVersion}'
 load: STARTUP
+commands:
+  arena:
+    description: Claims the reserved human seat in an active arena run.
+    usage: /arena ready

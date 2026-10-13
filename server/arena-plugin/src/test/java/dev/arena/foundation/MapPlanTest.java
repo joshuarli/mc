@@ -144,6 +144,37 @@ final class MapPlanTest {
     }
 
     @Test
+    void rejectsSpawnSeatsThatAreLessThanTwoHorizontalBlocksApart() {
+        Dimensions dimensions = new Dimensions(8, 8, 0, 8);
+        List<BlockPlacement> blocks = List.of(
+                new BlockPlacement(new Position(0, 1, 0), "minecraft:stone"),
+                new BlockPlacement(new Position(1, 1, 0), "minecraft:stone"),
+                new BlockPlacement(new Position(4, 1, 4), "minecraft:stone"),
+                new BlockPlacement(new Position(4, 2, 4), "minecraft:chest"));
+
+        assertThrows(IllegalArgumentException.class, () -> plan(dimensions, blocks,
+                List.of(new SpawnPoint(0, new Position(0, 2, 0)), new SpawnPoint(1, new Position(1, 2, 0))),
+                List.of(new LootContainer(new Position(4, 2, 4), List.of("minecraft:bread")))));
+    }
+
+    @Test
+    void validatesSpawnSeparationWithoutOverflowingAtCoordinateLimits() {
+        Dimensions dimensions = new Dimensions(2_147_483_648L, 2_147_483_648L, 0, 3);
+        List<BlockPlacement> blocks = List.of(
+                new BlockPlacement(new Position(0, 1, 0), "minecraft:stone"),
+                new BlockPlacement(new Position(4, 0, 4), "minecraft:stone"),
+                new BlockPlacement(new Position(4, 1, 4), "minecraft:chest"),
+                new BlockPlacement(new Position(Integer.MAX_VALUE, 1, Integer.MAX_VALUE), "minecraft:stone"));
+
+        MapPlan plan = plan(dimensions, blocks,
+                List.of(new SpawnPoint(0, new Position(0, 2, 0)),
+                        new SpawnPoint(1, new Position(Integer.MAX_VALUE, 2, Integer.MAX_VALUE))),
+                List.of(new LootContainer(new Position(4, 1, 4), List.of("minecraft:bread"))));
+
+        assertEquals(2, plan.spawns().size());
+    }
+
+    @Test
     void rejectsPlansAboveTheLootContainerLimit() {
         assertThrows(IllegalArgumentException.class, () -> new MapPlan(1, "test-run", id('a'), dimensions(),
                 validBlocks(), spawns(),

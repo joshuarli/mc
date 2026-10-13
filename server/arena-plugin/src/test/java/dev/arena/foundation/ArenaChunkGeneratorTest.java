@@ -24,7 +24,8 @@ final class ArenaChunkGeneratorTest {
             new ArenaChunkGenerator.MaterialCatalog() {
                 @Override
                 public boolean isBlock(Material material) {
-                    return material == Material.STONE || material == Material.CHEST;
+                    return material == Material.STONE || material == Material.CHEST || material == Material.WATER
+                            || material == Material.CACTUS;
                 }
 
                 @Override
@@ -35,6 +36,11 @@ final class ArenaChunkGeneratorTest {
                 @Override
                 public boolean isItem(Material material) {
                     return material == Material.STONE || material == Material.CHEST || material == Material.BREAD;
+                }
+
+                @Override
+                public boolean isSafeSpawnSupport(Material material) {
+                    return material == Material.STONE;
                 }
             };
 
@@ -97,6 +103,18 @@ final class ArenaChunkGeneratorTest {
                 () -> new ArenaChunkGenerator(planWithLootItem("minecraft:water"), TEST_MATERIALS));
     }
 
+    @Test
+    void rejectsWaterAsSpawnSupportBeforeGenerationStarts() {
+        assertThrows(IllegalArgumentException.class,
+                () -> new ArenaChunkGenerator(planWithSpawnSupport("minecraft:water"), TEST_MATERIALS));
+    }
+
+    @Test
+    void rejectsHazardousSolidMaterialAsSpawnSupportBeforeGenerationStarts() {
+        assertThrows(IllegalArgumentException.class,
+                () -> new ArenaChunkGenerator(planWithSpawnSupport("minecraft:cactus"), TEST_MATERIALS));
+    }
+
     private static ChunkGenerator.ChunkData chunkData(List<Generated> generated, int minHeight, int maxHeight) {
         return (ChunkGenerator.ChunkData) Proxy.newProxyInstance(
                 ChunkGenerator.ChunkData.class.getClassLoader(),
@@ -154,6 +172,17 @@ final class ArenaChunkGeneratorTest {
                 new BlockPlacement(new Position(1, 65, 0), "minecraft:chest"));
         List<SpawnPoint> spawns = List.of(new SpawnPoint(0, new Position(0, 65, 0)));
         List<LootContainer> loot = List.of(new LootContainer(new Position(1, 65, 0), List.of(item)));
+        return mapPlan(dimensions, blocks, spawns, loot);
+    }
+
+    private static MapPlan planWithSpawnSupport(String support) {
+        Dimensions dimensions = new Dimensions(32, 32, 0, 128);
+        List<BlockPlacement> blocks = List.of(
+                new BlockPlacement(new Position(0, 64, 0), support),
+                new BlockPlacement(new Position(1, 64, 0), "minecraft:stone"),
+                new BlockPlacement(new Position(1, 65, 0), "minecraft:chest"));
+        List<SpawnPoint> spawns = List.of(new SpawnPoint(0, new Position(0, 65, 0)));
+        List<LootContainer> loot = List.of(new LootContainer(new Position(1, 65, 0), List.of("minecraft:bread")));
         return mapPlan(dimensions, blocks, spawns, loot);
     }
 
