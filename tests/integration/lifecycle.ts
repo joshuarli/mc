@@ -61,11 +61,19 @@ async function runLifecycleCycle(
 ): Promise<CompletedCycle> {
   const prepared = await prepareOwnedAcceptanceRun(scenarioPath, `lifecycle-${cycle}`, signal);
   const beforeServers = activeResourceCount("TCPServerWrap");
-  const beforeTcp = activeResourceCount("TCPWrap");
+  const beforeSockets = activeResourceCount("TCPSocketWrap");
   const completed = await runPreparedRun({
     ...prepared,
     competitorDriver: "evaluator",
     evaluate: async (active) => {
+      assert.ok(
+        activeResourceCount("TCPServerWrap") > beforeServers,
+        "the lifecycle probe must observe the live control listener",
+      );
+      assert.ok(
+        activeResourceCount("TCPSocketWrap") > beforeSockets,
+        "the lifecycle probe must observe live control and bot sockets",
+      );
       await active.start();
       await active.waitForOutcome();
     },
@@ -78,7 +86,7 @@ async function runLifecycleCycle(
   await assertGamePortReleased();
   await nextTurn();
   assert.equal(activeResourceCount("TCPServerWrap"), beforeServers, "the control listener must be closed");
-  assert.equal(activeResourceCount("TCPWrap"), beforeTcp, "the runtime must close its bot sockets");
+  assert.equal(activeResourceCount("TCPSocketWrap"), beforeSockets, "the runtime must close its control and bot sockets");
   return { prepared, completed };
 }
 
@@ -86,7 +94,24 @@ async function archiveCompletedCycles(cycles: readonly CompletedCycle[]): Promis
   assert.ok(cycles.length > 0 && cycles.length <= ARCHIVE_BATCH_SIZE);
   const helperPath = cycles[0]!.prepared.helperPath;
   assert.ok(cycles.every(({ prepared }) => prepared.helperPath === helperPath));
-  const args = ["gc", "--apply", ...cycles.flatMap(({ completed }) => ["--run-id", completed.runId])];
+  const selectedRuns = cycles.flatMap(({ completed }) => ["--run-id", completed.runId]);
+  const preview = await runCliWithHelper(helperPath, ["gc", "--dry-run", ...selectedRuns]);
+  assert.equal(preview.kind, "success", preview.kind === "failure" ? preview.stderr : "");
+  if (preview.kind !== "success") throw new Error(`GC preflight failed: ${preview.stderr}`);
+  const previewResult = parseJsonObject(preview.stdout, "GC preflight must return a JSON object");
+  assert.equal(previewResult.mode, "dry_run");
+  assert.ok(Array.isArray(previewResult.runs));
+  const previewDecisions = previewResult.runs as readonly Record<string, unknown>[];
+  assert.equal(previewDecisions.length, cycles.length);
+  for (const { completed } of cycles) {
+    const decision = previewDecisions.find((row) => row.run_id === completed.runId);
+    assert.ok(decision, `GC preflight must report lifecycle run ${completed.runId}`);
+    assert.equal(decision.status, "eligible", "GC must identify the completed run as eligible before apply");
+    assert.equal(decision.reason, "completed_success");
+    assert.equal(decision.outcome_kind, completed.outcome.kind);
+  }
+
+  const args = ["gc", "--apply", ...selectedRuns];
   const gc = await runCliWithHelper(helperPath, args);
   assert.equal(gc.kind, "success", gc.kind === "failure" ? gc.stderr : "");
   if (gc.kind !== "success") throw new Error(`GC failed: ${gc.stderr}`);

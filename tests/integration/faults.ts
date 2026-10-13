@@ -245,18 +245,23 @@ function faultMapSource(): string {
 }
 
 function replacePluginIdentity(pluginJarPath: string, javaExecutable: string, scratch: string): string {
-  const sourceDescriptor = join(ROOT, "server", "arena-plugin", "src", "main", "resources", "plugin.yml");
-  const descriptor = readFileSync(sourceDescriptor, "utf8");
-  const identityLine = /^name: ([A-Za-z0-9][A-Za-z0-9._+-]{0,127})$/m;
-  const mismatch = descriptor.replace(identityLine, "name: ArenaWrongIdentity");
-  assert.notEqual(mismatch, descriptor, "the plugin descriptor must contain one supported name line");
-
   const jarPath = join(scratch, "wrong-plugin.jar");
   copyFileSync(pluginJarPath, jarPath);
   const jarDirectory = join(scratch, "descriptor");
   mkdirSync(jarDirectory);
-  writeFileSync(join(jarDirectory, "plugin.yml"), mismatch, { encoding: "utf8", flag: "wx" });
   const jarExecutable = join(dirname(javaExecutable), "jar");
+  execFileSync(jarExecutable, ["xf", jarPath, "plugin.yml"], {
+    cwd: jarDirectory,
+    encoding: "utf8",
+  });
+
+  const descriptorPath = join(jarDirectory, "plugin.yml");
+  const descriptor = readFileSync(descriptorPath, "utf8");
+  const identityLine = /^name: ([A-Za-z0-9][A-Za-z0-9._+-]{0,127})$/m;
+  const mismatch = descriptor.replace(identityLine, "name: ArenaWrongIdentity");
+  assert.notEqual(mismatch, descriptor, "the packaged plugin descriptor must contain one supported name line");
+
+  writeFileSync(descriptorPath, mismatch, { encoding: "utf8", flag: "w" });
   execFileSync(jarExecutable, ["--update", "--file", jarPath, "--directory", jarDirectory, "plugin.yml"], {
     cwd: ROOT,
     encoding: "utf8",
