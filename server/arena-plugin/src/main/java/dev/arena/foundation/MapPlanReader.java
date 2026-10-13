@@ -48,6 +48,13 @@ final class MapPlanReader {
     }
 
     static MapPlan read(Path path) throws IOException {
+        return read(path, MAX_PLAN_BYTES);
+    }
+
+    static MapPlan read(Path path, long byteLimit) throws IOException {
+        if (byteLimit < 0) {
+            throw new IllegalArgumentException("generation-plan byte limit cannot be negative");
+        }
         if (path == null) {
             throw new IOException("generation plan must be a regular file");
         }
@@ -57,7 +64,7 @@ final class MapPlanReader {
         }
         try (InputStream input = Files.newInputStream(
                      path, StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS);
-                InputStream bounded = new BoundedInputStream(input, MAX_PLAN_BYTES);
+                InputStream bounded = new BoundedInputStream(input, byteLimit);
                 Reader decoded = new InputStreamReader(bounded, StandardCharsets.UTF_8.newDecoder()
                         .onMalformedInput(CodingErrorAction.REPORT)
                         .onUnmappableCharacter(CodingErrorAction.REPORT));
@@ -345,7 +352,7 @@ final class MapPlanReader {
         private void account(int count) throws IOException {
             bytesRead += count;
             if (bytesRead > limit) {
-                throw new IOException("generation plan exceeds the 128 MiB input limit");
+                throw new IOException("generation plan exceeds the input byte limit");
             }
         }
     }

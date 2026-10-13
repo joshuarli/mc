@@ -27,6 +27,17 @@ final class MapPlanReaderTest {
     }
 
     @Test
+    void acceptsTheExactByteLimitAndRejectsOneByteLess() throws IOException {
+        long fixtureBytes = Files.size(FIXTURE);
+
+        assertEquals("fixture-run", MapPlanReader.read(FIXTURE, fixtureBytes).runId());
+
+        IOException failure = assertThrows(IOException.class,
+                () -> MapPlanReader.read(FIXTURE, fixtureBytes - 1));
+        assertEquals("generation plan exceeds the input byte limit", failure.getMessage());
+    }
+
+    @Test
     void rejectsDuplicateNamesUnknownFieldsAndTrailingJson() throws IOException {
         String fixture = Files.readString(FIXTURE);
 
