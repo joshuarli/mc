@@ -4,7 +4,7 @@ import type { BotCompetitor, PreparePayload } from '../control/index.js';
 import { RunnerError } from '../errors.js';
 import type { PlayerIdentity } from './observations.js';
 
-const MAX_SPECTATOR_CLIENTS = 64;
+export const MAX_RUNTIME_SPECTATORS = 4;
 
 /** Creates stable offline identities from seat numbers so every run preserves roster identity. */
 export function createRuntimeRoster(scenario: ScenarioIr): Readonly<{
@@ -27,7 +27,7 @@ export function createRuntimeRoster(scenario: ScenarioIr): Readonly<{
     competitorIdentities.push(Object.freeze({ username, offlineUuid }));
   }
 
-  if (scenario.roster.spectatorCapacity > BigInt(MAX_SPECTATOR_CLIENTS)) {
+  if (scenario.roster.spectatorCapacity > BigInt(MAX_RUNTIME_SPECTATORS)) {
     throw new RunnerError('invalid_input', 'scenario spectator capacity', {
       kind: 'runtime_client_limit_exceeded',
     });

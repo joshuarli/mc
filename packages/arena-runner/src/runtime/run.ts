@@ -72,6 +72,7 @@ export interface RunPreparedRunOptions {
   readonly pluginJarPath: string;
   readonly signal?: AbortSignal;
   readonly evaluate?: ActiveRunEvaluator;
+  readonly competitorDriver?: 'baselinePolicy' | 'evaluator';
 }
 
 /** Owns a headless Paper run from its pristine world through stopped evidence. */
@@ -103,6 +104,10 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
   try {
     assertRunning(runSignal);
     const scenario = options.preparedRun.scenario;
+    const competitorDriver = options.competitorDriver ?? 'baselinePolicy';
+    if (competitorDriver === 'evaluator' && options.evaluate === undefined) {
+      throw new RunnerError('invalid_input', 'competitor driver', { kind: 'evaluator_missing' });
+    }
     const javaTmpDir = validateJavaTempDirectory(options.ownedRoot);
     const policy = await loadPolicy(options, runSignal);
     const serverInputs: RuntimeServerInputs = { ...options, javaTmpDir, signal: runSignal };
@@ -195,7 +200,7 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
       processFailure,
       abortPromise,
       leaseLost,
-      policy: options.evaluate === undefined ? policy : undefined,
+      policy: competitorDriver === 'baselinePolicy' ? policy : undefined,
       policySeed: scenario.seed,
       competitors: () => clients,
       recordPolicy: scenario.record.policyReplay,
