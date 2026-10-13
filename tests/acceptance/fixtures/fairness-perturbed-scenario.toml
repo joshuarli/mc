@@ -29,7 +29,7 @@ natural_random_ticks = false
 initial_diameter_blocks = 120
 shrink_start_tick = 100
 shrink_end_tick = 180
-final_diameter_blocks = 16
+final_diameter_blocks = 112
 
 [bots]
 strategy_interval_ticks = 4

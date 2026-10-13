@@ -26,3 +26,19 @@ test("all live acceptance scenario and policy sources compile offline", () => {
     assert.ok(policy.semanticId, `${scenarioPath} must resolve and compile its policy source`);
   }
 });
+
+// Observation-only clients stay at their spawns through the authoritative tick limit.
+test("fairness fixtures keep both stationary competitors inside the final border", () => {
+  for (const name of ["fairness-scenario.toml", "fairness-perturbed-scenario.toml"]) {
+    const scenarioPath = resolve(FIXTURE_DIRECTORY, name);
+    const source = readFileSync(scenarioPath, "utf8");
+    const scenario = compileScenario(source, readFileSync(resolve(dirname(scenarioPath), scenarioMapReference(source)), "utf8"));
+    const centerX = scenario.map.dimensions.width / 2;
+    const centerZ = scenario.map.dimensions.depth / 2;
+    const radius = scenario.border.finalDiameterBlocks / 2;
+    for (const spawn of scenario.map.spawns) {
+      assert.ok(Math.abs(spawn.position.x + 0.5 - centerX) + 0.3 < radius, `${name}: seat ${spawn.seat} must remain within the border in x`);
+      assert.ok(Math.abs(spawn.position.z + 0.5 - centerZ) + 0.3 < radius, `${name}: seat ${spawn.seat} must remain within the border in z`);
+    }
+  }
+});
