@@ -157,3 +157,109 @@ test('reconstructs an archived active clock in flight while abort awaits acknowl
   });
   assert.equal(result.report.statistics.elimination_count, 0);
 });
+
+
+async function pendingAbortFixture() {
+  return await readSegment(join(repositoryRoot, 'tests/fixtures/pending-abort/trace-v2-000001.json'), 1);
+}
+
+function evidenceWithRecords(segment: Awaited<ReturnType<typeof pendingAbortFixture>>, records: readonly object[]) {
+  return reconstruct([parseSegment(canonicalJson({ schema: 2, run_id: segment.runId,
+    first_sequence: '1', last_sequence: String(records.length), records,
+    sha256: sha256Json(records), trailer: { complete: true },
+  }))]);
+}
+
+function rejectsEvidence(kind: string) {
+  return (error: unknown) => error instanceof TraceError && error.source.kind === kind;
+}
+
+test('pending abort preserves in-flight public state at the active clock tick', async () => {
+  const segment = await pendingAbortFixture();
+  const records = [...segment.records];
+  records.splice(10, 0, { direction: 'plugin', protocol: 1, run_id: segment.runId,
+    sequence: '1558', type: 'public_state',
+    payload: { at: { domain: 'match', value: '1376' }, alive_seats: [0, 1] },
+  });
+  const result = reconstructRunEvidence(evidenceWithRecords(segment, records));
+  assert.deepEqual(result.report.statistics.survivor_seats, [0, 1]);
+});
+
+test('pending abort preserves an in-flight elimination and its matching public state', async () => {
+  const segment = await pendingAbortFixture();
+  const records = [...segment.records];
+  records.splice(10, 0, { direction: 'plugin', protocol: 1, run_id: segment.runId,
+    sequence: '1558', type: 'elimination',
+    payload: { at: { domain: 'match', value: '1376' }, eliminations: [{ seat: 1, cause: 'death' }] },
+  }, { direction: 'plugin', protocol: 1, run_id: segment.runId, sequence: '1559', type: 'public_state',
+    payload: { at: { domain: 'match', value: '1376' }, alive_seats: [0] },
+  });
+  const outcome = records[records.length - 1]!;
+  records[records.length - 1] = { ...outcome, payload: { kind: 'abort', reason: 'protocol_error',
+    survivors: [0], at: { domain: 'match', value: '1379' },
+  } };
+  const result = reconstructRunEvidence(evidenceWithRecords(segment, records));
+  assert.equal(result.report.statistics.death_count, 1);
+  assert.deepEqual(result.report.statistics.survivor_seats, [0]);
+});
+
+test('pending abort requires the exact acknowledgment and retains an absent acknowledgment failure', async () => {
+  const segment = await pendingAbortFixture();
+  const wrongAck = [...segment.records];
+  wrongAck[10] = { ...wrongAck[10], correlation: '5' };
+  assert.throws(() => reconstructRunEvidence(evidenceWithRecords(segment, wrongAck)),
+    rejectsEvidence('invalid_command_acknowledgment'));
+  assert.throws(() => reconstructRunEvidence(evidenceWithRecords(segment, segment.records.slice(0, 10))),
+    rejectsEvidence('unacknowledged_runner_command'));
+});
+
+test('pending abort rejects terminal clock and outcome effects before acknowledgment', async () => {
+  const segment = await pendingAbortFixture();
+  const records = segment.records;
+  for (const terminal of [records[11]!, records[12]!]) {
+    const earlyTerminal = [...records.slice(0, 10), terminal, ...records.slice(10)];
+    assert.throws(() => reconstructRunEvidence(evidenceWithRecords(segment, earlyTerminal)),
+      rejectsEvidence('event_before_command_acknowledgment'));
+  }
+  const finished = { ...records[11], payload: { phase: 'finished',
+    tick: { domain: 'match', value: '1379' }, border_diameter_blocks: 60.28458333333333,
+  } };
+  assert.throws(() => reconstructRunEvidence(evidenceWithRecords(segment, [...records.slice(0, 10), finished, ...records.slice(10)])),
+    rejectsEvidence('event_before_command_acknowledgment'));
+});
+
+test('abort acknowledgment does not allow authority after the terminal outcome', async () => {
+  const segment = await pendingAbortFixture();
+  const records = [...segment.records, { direction: 'plugin', protocol: 1, run_id: segment.runId,
+    sequence: '1564', type: 'public_state',
+    payload: { at: { domain: 'match', value: '1379' }, alive_seats: [0, 1] },
+  }];
+  assert.throws(() => reconstructRunEvidence(evidenceWithRecords(segment, records)), rejectsEvidence('event_after_outcome'));
+});
+
+test('prepare and start still reject authority before their acknowledgment', async () => {
+  const segment = await pendingAbortFixture();
+  const records = segment.records;
+  const waitingClock = records[3]!;
+  assert.throws(() => reconstructRunEvidence(evidenceWithRecords(segment,
+    [...records.slice(0, 2), waitingClock, ...records.slice(2)])), rejectsEvidence('event_before_command_acknowledgment'));
+  const countdownClock = records[6]!;
+  assert.throws(() => reconstructRunEvidence(evidenceWithRecords(segment,
+    [...records.slice(0, 5), countdownClock, ...records.slice(5)])), rejectsEvidence('event_before_command_acknowledgment'));
+});
+
+
+test('pending abort retains plugin sequence and public state invariants', async () => {
+  const segment = await pendingAbortFixture();
+  const regressed = [...segment.records];
+  regressed[9] = { ...regressed[9], sequence: '7' };
+  assert.throws(() => reconstructRunEvidence(evidenceWithRecords(segment, regressed)),
+    rejectsEvidence('event_sequence_not_increasing'));
+  const mismatchedState = [...segment.records];
+  mismatchedState.splice(10, 0, { direction: 'plugin', protocol: 1, run_id: segment.runId,
+    sequence: '1558', type: 'public_state',
+    payload: { at: { domain: 'match', value: '1376' }, alive_seats: [0] },
+  });
+  assert.throws(() => reconstructRunEvidence(evidenceWithRecords(segment, mismatchedState)),
+    rejectsEvidence('public_state_mismatch'));
+});

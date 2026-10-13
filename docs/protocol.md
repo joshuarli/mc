@@ -81,6 +81,17 @@ under `fixtures/protocol/control-*.json`.
 - `metrics` contains bounded public operational counters. `error` contains a
   closed code and a non-secret message.
 
+The command acknowledgment marks processing on the plugin's server thread. It
+precedes the authority effects caused by that command. While an `abort` awaits
+its matching acknowledgment, nonterminal clocks, alive-seat states, and
+eliminations from the running match may already be in flight and remain valid
+in their plugin sequence order. An aborted or finished clock and every outcome
+still require the outstanding acknowledgment first. `prepare` and `start`
+retain the stricter rule that authority follows their acknowledgments. A wrong
+or absent acknowledgment, invalid state progression, or authority after the
+terminal outcome fails reconstruction. A natural terminal outcome racing a
+queued abort has no special acceptance path.
+
 Clock, alive-seat, elimination, outcome, and metrics messages are evaluator
 events. They must not be copied unfiltered into a policy observation. A policy
 gets only its own Mineflayer client's received observations and explicit team
