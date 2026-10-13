@@ -10,6 +10,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import test, { type TestContext } from "node:test";
 
 import { RunnerError } from "../../packages/arena-runner/src/errors.js";
+import { decodeControlEnvelope } from "../../packages/arena-runner/src/control/index.js";
 import { reconstruct, reconstructRunEvidence } from "../../packages/arena-runner/src/evidence.js";
 import {
   acquireOwnedRunLease,
@@ -399,7 +400,10 @@ function assertInterruptedTrace(segments: readonly TraceSegment[], category: "ca
   assert.equal(category, "cancelled", "a crashed server must not claim a terminal plugin outcome");
   const abortIndex = evidence.records.findIndex((record) => record.direction === "runner" && record.type === "abort");
   assert.ok(abortIndex >= 0 && abortIndex < outcomeIndex, "an operator abort must follow its recorded runner command");
-  assert.deepEqual(evidence.records[abortIndex]!.payload, { reason: "operator" });
+  const { direction: _direction, ...abortEnvelope } = evidence.records[abortIndex]!;
+  const abortCommand = decodeControlEnvelope(abortEnvelope);
+  assert.ok(abortCommand.type === "abort");
+  assert.equal(abortCommand.payload.reason, "operator");
   const { report } = reconstructRunEvidence(evidence);
   assert.equal(report.outcome.kind, "abort", "cancellation must not claim a winner or draw");
   assert.equal(report.outcome.reason, "operator");
