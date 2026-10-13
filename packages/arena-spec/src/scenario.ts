@@ -80,21 +80,36 @@ export interface ScenarioIr {
   readonly semanticId: SemanticId;
 }
 
+const SCENARIO_FIELDS = [
+  "schema",
+  "name",
+  "mode",
+  "seed",
+  "map",
+  "policy",
+  "roster",
+  "server",
+  "match",
+  "border",
+  "bots",
+  "record",
+] as const;
+
+/**
+ * Validates the scenario root and returns its normalized map reference before
+ * the runner reads that map's source.
+ */
+export function scenarioMapReference(source: string): ResourceReference {
+  const root = parseScenarioRoot(source);
+  return parseReference(raw.field(root, "map", "scenario"), "scenario.map");
+}
+
 /**
  * Compiles schema-v1 scenario settings and the content of its declared map.
  * Resolving file references remains the runner's responsibility.
  */
 export function compileScenario(scenarioSource: string, mapSource: string): ScenarioIr {
-  const root = raw.asTable(raw.parseDocument(scenarioSource, "scenario"), "scenario");
-  raw.checkFields(
-    root,
-    ["schema", "name", "mode", "seed", "map", "policy", "roster", "server", "match", "border", "bots", "record"],
-    ["schema", "name", "mode", "seed", "map", "policy", "roster", "server", "match", "border", "bots", "record"],
-    "scenario",
-  );
-  if (raw.integer(raw.field(root, "schema", "scenario"), "scenario.schema") !== 1n) {
-    throw new SpecError(SpecErrorKind.InvalidValue, "scenario.schema", "only schema version 1 is supported");
-  }
+  const root = parseScenarioRoot(scenarioSource);
 
   const name = raw.string(raw.field(root, "name", "scenario"), "scenario.name");
   const mode = parseMode(raw.field(root, "mode", "scenario"));
@@ -141,6 +156,15 @@ export function compileScenario(scenarioSource: string, mapSource: string): Scen
     map,
     semanticId,
   });
+}
+
+function parseScenarioRoot(source: string): raw.RawTable {
+  const root = raw.asTable(raw.parseDocument(source, "scenario"), "scenario");
+  raw.checkFields(root, SCENARIO_FIELDS, SCENARIO_FIELDS, "scenario");
+  if (raw.integer(raw.field(root, "schema", "scenario"), "scenario.schema") !== 1n) {
+    throw new SpecError(SpecErrorKind.InvalidValue, "scenario.schema", "only schema version 1 is supported");
+  }
+  return root;
 }
 
 function parseMode(value: raw.RawValue): GameMode {

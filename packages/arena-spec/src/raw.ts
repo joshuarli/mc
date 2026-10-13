@@ -1,7 +1,11 @@
 import { ParseError, parseTOML } from "toml-eslint-parser";
 import type { AST } from "toml-eslint-parser";
+import { Buffer } from "node:buffer";
 
 import { SpecError, SpecErrorKind } from "./errors.js";
+
+/** Maximum UTF-8 source size accepted for a single map or scenario. */
+export const MAX_SOURCE_BYTES = 16 * 1024 * 1024;
 
 export type RawValue =
   | { readonly kind: "string"; readonly value: string }
@@ -24,6 +28,14 @@ const I64_MIN = -(1n << 63n);
 const I64_MAX = (1n << 63n) - 1n;
 
 export function parseDocument(source: string, document: string): RawValue {
+  if (Buffer.byteLength(source, "utf8") > MAX_SOURCE_BYTES) {
+    throw new SpecError(
+      SpecErrorKind.ResourceLimit,
+      `${document}.source`,
+      `source exceeds the ${MAX_SOURCE_BYTES / (1024 * 1024)} MiB UTF-8 byte limit`,
+    );
+  }
+
   let ast: AST.TOMLProgram;
   try {
     ast = parseTOML(source, { tomlVersion: "1.0" });

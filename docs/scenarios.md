@@ -2,13 +2,15 @@
 
 Scenario and map files use schema version 1 and TOML 1.0. `@arena/spec` parses source in memory, rejects unknown or missing keys, and produces immutable typed values after checking field types, ranges, cross-field rules, and map geometry. `SpecError` keeps the failure kind and field path; unknown-key errors also include the key's one-based source line and column. The compiler does not read files. The runner resolves each declared map and policy reference relative to the scenario file and confirms the canonical targets remain inside the repository roots.
 
-The two scenario inputs are [hunger-six.toml](../scenarios/hunger-six.toml) and [duel.toml](../scenarios/duel.toml). Their map inputs are [hunger-six.toml](../maps/hunger-six.toml) and [duel.toml](../maps/duel.toml). Hunger six has six stable bot seats and an automated spectator outside the competitor roster. Duel uses two bot seats for a compact combat world. Both use the schema-v1 Hunger Games rules.
+Each map or scenario source is limited to 16 MiB of UTF-8 bytes. `@arena/spec` rejects larger source strings before parsing, and the native runner enforces the same bound while reading source files.
+
+The two scenario inputs are [hunger-six.toml](../scenarios/hunger-six.toml) and [duel.toml](../scenarios/duel.toml). Their map inputs are [hunger-six.toml](../maps/hunger-six.toml) and [duel.toml](../maps/duel.toml). Hunger six has six stable bot seats. Duel uses two bot seats for a compact combat world. Both use the schema-v1 Hunger Games rules.
 
 ## Scenario rules
 
-Every field in `schemas/scenario.schema.json` is required. Supported modes are `hunger_games` and `civilization`; the compiled policy view is currently only `competitive-v1`. Both checked-in scenarios target Minecraft `26.1.2`. The runner checks each scenario's version against `versions.lock.toml` when it resolves the stack.
+Every field in the scenario-v1 compiler contract is required. Supported modes are `hunger_games` and `civilization`; the compiled policy view is currently only `competitive-v1`. Both checked-in scenarios target Minecraft `26.1.2`. The runner checks each scenario's version against `versions.lock.toml` when it resolves the stack.
 
-Competitor seats are limited to 1–6, with bot-only competitor seats and automated spectators outside the roster. View and simulation distances are 2–32 chunks, simulation distance cannot exceed view distance, and tick rate is 1–20. TOML integers retain their exact value; the scenario seed and tick settings are represented as `bigint` in TypeScript. The grace period must end before the authoritative tick limit. The border must shrink after grace, finish after its start and before the authoritative limit, and remain inside the map footprint. Hunger Games rejects respawn, block breaking, block placing, natural mobs, and natural random ticks. Civilization requires six seats, no respawn, and survival block breaking and placing.
+Competitor seats are limited to 1–6, and every competitor seat is assigned to a bot. Spectator capacity remains independently configurable. View and simulation distances are 2–32 chunks, simulation distance cannot exceed view distance, and tick rate is 1–20. TOML integers retain their exact value; the scenario seed and tick settings are represented as `bigint` in TypeScript. The grace period must end before the authoritative tick limit. The border must shrink after grace, finish after its start and before the authoritative limit, and remain inside the map footprint. Hunger Games rejects respawn, block breaking, block placing, natural mobs, and natural random ticks. Civilization requires six seats, no respawn, and survival block breaking and placing.
 
 Map and policy references must be relative, portable paths using `/`. Dot segments are normalized before they appear in the IR. Canonical repository-root confinement requires the declaring file's location and is checked by the runner.
 
@@ -41,8 +43,12 @@ Named offline checks:
 - `scenario_v1_compiles_hunger_six_and_duel`
 - `semantic_ids_ignore_toml_layout_and_labels_but_cover_world_content`
 - `scenario_compiler_rejects_unknown_fields_enums_and_invalid_ranges`
+- `scenario_rejects_removed_human_seat_field_without_fallback`
 - `map_compiler_rejects_unknown_schema_fields_operations_and_coordinate_overflow`
+- `map_compiler_resolves_nested_tables_under_the_current_array_table`
+- `map_chest_placement_counts_toward_the_block_write_cap`
 - `map_compiler_checks_spawn_support_headroom_and_routes`
 - `map_positions_use_shared_core_geometry_and_stable_order`
 - `map_semantic_id_matches_java_world_plan_v1_fixture`
 - `scenario_prepared_chunk_halo_matches_java_limit_at_aligned_boundaries`
+- `compilers_reject_sources_above_the_utf8_byte_limit`

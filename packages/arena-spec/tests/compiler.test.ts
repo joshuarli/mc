@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { Buffer } from "node:buffer";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import test from "node:test";
@@ -8,8 +9,10 @@ import {
   GameMode,
   SpecError,
   SpecErrorKind,
+  MAX_SOURCE_BYTES,
   compileMap,
   compileScenario,
+  scenarioMapReference,
 } from "../src/index.js";
 
 const HUNGER = readRepoFile("scenarios/hunger-six.toml");
@@ -34,6 +37,13 @@ test("scenario_v1_compiles_hunger_six_and_duel", () => {
   assert.equal(duel.map.lootContainers.length, 2);
   assert.equal(duel.seed, 88_172_645_463_325_252n);
   assert.notEqual(hunger.semanticId, duel.semanticId);
+});
+
+test("scenario_map_reference_is_available_before_loading_map_source", () => {
+  assert.equal(scenarioMapReference(HUNGER), "../maps/hunger-six.toml");
+  const invalid = specError(() => scenarioMapReference(`unknown = true\n${HUNGER}`));
+  assert.equal(invalid.kind, SpecErrorKind.UnknownField);
+  assert.equal(invalid.path, "scenario.unknown");
 });
 
 test("semantic_ids_ignore_toml_layout_and_labels_but_cover_world_content", () => {
@@ -106,6 +116,61 @@ max_y = 8
   assert.equal(overflow.path, "map.dimensions.width");
 });
 
+test("map_compiler_resolves_nested_tables_under_the_current_array_table", () => {
+  const nestedTables = `
+schema = 1
+name = "nested-array-table"
+
+[dimensions]
+width = 8
+depth = 8
+min_y = 0
+max_y = 8
+
+[[operations]]
+kind = "cuboid"
+block = "stone"
+
+[operations.from]
+x = 0
+y = 1
+z = 0
+
+[operations.to]
+x = 7
+y = 1
+z = 7
+
+[[operations]]
+kind = "spawn"
+seat = 0
+position = { x = 1, y = 2, z = 1 }
+
+[[operations]]
+kind = "loot_container"
+position = { x = 4, y = 2, z = 4 }
+inventory = ["bread"]
+`;
+  const inlineTables = `
+schema = 1
+name = "nested-array-table"
+
+[dimensions]
+width = 8
+depth = 8
+min_y = 0
+max_y = 8
+
+operations = [
+  { kind = "cuboid", from = { x = 0, y = 1, z = 0 }, to = { x = 7, y = 1, z = 7 }, block = "stone" },
+  { kind = "spawn", seat = 0, position = { x = 1, y = 2, z = 1 } },
+  { kind = "loot_container", position = { x = 4, y = 2, z = 4 }, inventory = ["bread"] }
+]
+`;
+
+  assert.equal(compileMap(nestedTables).semanticId, compileMap(inlineTables).semanticId);
+});
+
 test("chest_inventory_limit_matches_cross_language_contracts", () => {
   const maxItems = 27;
   const inventory = Array.from({ length: maxItems }, () => '"minecraft:bread"').join(", ");
@@ -153,6 +218,56 @@ block = "stone"
   const error = specError(() => compileMap(source));
   assert.equal(error.kind, SpecErrorKind.ResourceLimit);
   assert.equal(error.path, "map.operations[0]");
+});
+
+test("map_chest_placement_counts_toward_the_block_write_cap", () => {
+  const source = `
+schema = 1
+name = "chest-over-placement-cap"
+
+[dimensions]
+width = 1000
+depth = 1000
+min_y = 0
+max_y = 3
+
+[[operations]]
+kind = "cuboid"
+from = { x = 0, y = 0, z = 0 }
+to = { x = 999, y = 0, z = 999 }
+block = "stone"
+
+[[operations]]
+kind = "spawn"
+seat = 0
+position = { x = 1, y = 1, z = 1 }
+
+[[operations]]
+kind = "loot_container"
+position = { x = 4, y = 1, z = 4 }
+inventory = ["bread"]
+`;
+  const error = specError(() => compileMap(source));
+  assert.equal(error.kind, SpecErrorKind.ResourceLimit);
+});
+
+test("compilers_reject_sources_above_the_utf8_byte_limit", () => {
+  assert.equal(MAX_SOURCE_BYTES, 16 * 1024 * 1024);
+  const oversized = " ".repeat(MAX_SOURCE_BYTES - 1) + "é";
+  assert.equal(oversized.length, MAX_SOURCE_BYTES);
+  assert.equal(Buffer.byteLength(oversized), MAX_SOURCE_BYTES + 1);
+
+  const mapError = specError(() => compileMap(oversized));
+  assert.equal(mapError.kind, SpecErrorKind.ResourceLimit);
+  assert.equal(mapError.path, "map.source");
+
+  const scenarioError = specError(() => compileScenario(oversized, HUNGER_MAP));
+  assert.equal(scenarioError.kind, SpecErrorKind.ResourceLimit);
+  assert.equal(scenarioError.path, "scenario.source");
+
+  const mapReferenceError = specError(() => compileScenario(HUNGER, oversized));
+  assert.equal(mapReferenceError.kind, SpecErrorKind.ResourceLimit);
+  assert.equal(mapReferenceError.path, "map.source");
 });
 
 test("map_compiler_checks_spawn_support_headroom_and_routes", () => {
