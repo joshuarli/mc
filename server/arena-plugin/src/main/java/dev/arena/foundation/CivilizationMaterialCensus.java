@@ -191,6 +191,7 @@ final class CivilizationMaterialCensus {
         private final Consumer<String> markerSink;
         private BigInteger nextSequence = FIRST_SEQUENCE;
         private BigInteger lastCheckpointSequence;
+        private BigInteger pendingDeathMatchTick;
         private MaterialState lastMaterialState;
         private int markerCount;
         private RuntimeException failure;
@@ -214,7 +215,10 @@ final class CivilizationMaterialCensus {
                 if (lastCheckpointSequence == null && matchTick.signum() != 0) {
                     throw new IllegalStateException("material census initial checkpoint must be at match tick zero");
                 }
-                if (state.equals(lastMaterialState)) {
+                if (pendingDeathMatchTick != null && !pendingDeathMatchTick.equals(matchTick)) {
+                    throw new IllegalStateException("material census death requires a checkpoint at the death tick");
+                }
+                if (pendingDeathMatchTick == null && state.equals(lastMaterialState)) {
                     return;
                 }
                 BigInteger sequence = nextSequence;
@@ -223,6 +227,7 @@ final class CivilizationMaterialCensus {
                 nextSequence = nextSequence.add(BigInteger.ONE);
                 lastCheckpointSequence = sequence;
                 lastMaterialState = state;
+                pendingDeathMatchTick = null;
             } catch (RuntimeException failedCheckpoint) {
                 poison(failedCheckpoint);
                 throw failedCheckpoint;
@@ -236,6 +241,9 @@ final class CivilizationMaterialCensus {
                 if (lastCheckpointSequence == null) {
                     throw new IllegalStateException("material census death cargo has no preceding checkpoint");
                 }
+                if (pendingDeathMatchTick != null && !pendingDeathMatchTick.equals(matchTick)) {
+                    throw new IllegalStateException("material census death markers must share one pending tick");
+                }
                 MaterialCounts inventory = count(inventoryItems);
                 MaterialCounts drops = count(eventDrops);
                 BigInteger sequence = nextSequence;
@@ -243,6 +251,7 @@ final class CivilizationMaterialCensus {
                         inventory.oakLogs(), inventory.oakPlanks(), drops.oakLogs(), drops.oakPlanks());
                 emit(deathCargoJson(cargo));
                 nextSequence = nextSequence.add(BigInteger.ONE);
+                pendingDeathMatchTick = matchTick;
             } catch (RuntimeException failedDeathCargo) {
                 poison(failedDeathCargo);
                 throw failedDeathCargo;

@@ -145,14 +145,17 @@ Join and combat log markers remain diagnostic; only typed seat events and
 For private six-seat acceptance runs, `-Darena.civilization-evaluator=true`
 enables `ARENA_CIV_MATERIAL_V1` log markers. The initial checkpoint is sampled
 at match tick zero after the starting kit is applied. Later checkpoints are
-emitted at match-tick end only when the sampled material state changes. They
-count oak logs and planks in each bound player's inventory (including the
-cursor), dropped item entities, and each declared loot-container inventory;
-they also list the surviving coordinates of the map's original oak logs and
-actual placed oak-plank coordinates. A death-cargo marker records the dying
-player's inventory and the death event's actual drops, so it does not depend on
-dropped items remaining in the world long enough to be sampled. These markers
-are log-only and are not sent to control clients or policy observers.
+emitted at match-tick end when the sampled material state changes, and once
+after any successful death-cargo marker even if the state is unchanged. They
+count oak logs and planks in each bound player's inventory, cursor, and open
+crafting input matrix; the crafting result preview and an open container's top
+inventory are excluded. They also count dropped item entities and each
+declared loot-container inventory, and list the surviving coordinates of the
+map's original oak logs and actual placed oak-plank coordinates. A death-cargo
+marker records the dying player's inventory and the death event's actual drops,
+so it does not depend on dropped items remaining in the world long enough to be
+sampled. These markers are log-only and are not sent to control clients or
+policy observers.
 
 Each match tick reads six player inventories, the currently loaded item
 entities, the map's declared original-log positions and loot containers, and

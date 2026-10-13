@@ -56,6 +56,7 @@ import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.event.player.PlayerSwapHandItemsEvent;
 import org.bukkit.event.world.WorldLoadEvent;
 import org.bukkit.generator.ChunkGenerator;
+import org.bukkit.inventory.CraftingInventory;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.util.Vector;
@@ -926,10 +927,15 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
         CivilizationMaterialCensus.requirePositionChunkLoaded(position.x(), position.z(), world::isChunkLoaded);
     }
 
-    private static List<CivilizationMaterialCensus.StackCount> playerMaterialStacks(Player player) {
+    static List<CivilizationMaterialCensus.StackCount> playerMaterialStacks(Player player) {
         List<CivilizationMaterialCensus.StackCount> items = new ArrayList<>(
                 inventoryMaterialStacks(player.getInventory()));
         appendMaterialStack(items, player.getItemOnCursor());
+        if (player.getOpenInventory().getTopInventory() instanceof CraftingInventory craftingInventory) {
+            for (ItemStack item : craftingInventory.getMatrix()) {
+                appendMaterialStack(items, item);
+            }
+        }
         return List.copyOf(items);
     }
 

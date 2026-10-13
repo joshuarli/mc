@@ -7,9 +7,21 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.lang.reflect.InvocationHandler;
+import java.lang.reflect.Method;
+import java.lang.reflect.Proxy;
 import java.math.BigInteger;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import org.bukkit.Material;
+import org.bukkit.entity.Player;
+import org.bukkit.inventory.CraftingInventory;
+import org.bukkit.inventory.Inventory;
+import org.bukkit.inventory.InventoryView;
+import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.PlayerInventory;
 import org.junit.jupiter.api.Test;
 
 final class CivilizationMaterialCensusTest {
@@ -108,6 +120,71 @@ final class CivilizationMaterialCensusTest {
         assertTrue(afterDeath.contains("{\"seat\":1,\"oak_logs\":0,\"oak_planks\":0}"));
         assertTrue(afterDeath.contains("{\"seat\":2,\"oak_logs\":2,\"oak_planks\":3}"));
         assertTrue(afterDeath.contains("\"item_entities\":[]"));
+    }
+
+    @Test
+    void successfulDeathsForceOneSameTickCheckpointEvenWhenStateIsUnchanged() {
+        List<String> markers = new ArrayList<>();
+        CivilizationMaterialCensus.Recorder recorder = new CivilizationMaterialCensus.Recorder(
+                "run-zero-cargo", markers::add);
+        CivilizationMaterialCensus.MaterialState unchanged = state(List.of());
+        recorder.checkpoint(BigInteger.ZERO, unchanged);
+
+        recorder.deathCargo(BigInteger.ONE, 0, List.of(), List.of());
+        recorder.deathCargo(BigInteger.ONE, 1, List.of(), List.of());
+        recorder.checkpoint(BigInteger.ONE, unchanged);
+        recorder.checkpoint(BigInteger.TWO, unchanged);
+
+        assertEquals(4, markers.size());
+        assertTrue(markers.get(1).contains("\"sequence\":\"2\""));
+        assertTrue(markers.get(2).contains("\"sequence\":\"3\""));
+        assertTrue(markers.get(3).contains("\"sequence\":\"4\""));
+        assertTrue(markers.get(3).contains("\"match_tick\":\"1\""));
+        assertTrue(markers.get(3).contains("\"kind\":\"checkpoint\""));
+    }
+
+    @Test
+    void deathCheckpointMustMatchThePendingDeathTick() {
+        List<String> markers = new ArrayList<>();
+        CivilizationMaterialCensus.Recorder recorder = new CivilizationMaterialCensus.Recorder(
+                "run-death-tick", markers::add);
+        CivilizationMaterialCensus.MaterialState unchanged = state(List.of());
+        recorder.checkpoint(BigInteger.ZERO, unchanged);
+        recorder.deathCargo(BigInteger.valueOf(4), 0, List.of(), List.of());
+
+        IllegalStateException tickMismatch = assertThrows(IllegalStateException.class,
+                () -> recorder.checkpoint(BigInteger.valueOf(5), unchanged));
+        assertEquals(2, markers.size());
+        assertSame(tickMismatch, assertThrows(IllegalStateException.class,
+                () -> recorder.checkpoint(BigInteger.valueOf(4), unchanged)));
+    }
+
+    @Test
+    void playerSamplerCountsCraftingInputsButNotPreviewOrContainerTop() {
+        ItemStack oakLog = new ItemStack(Material.OAK_LOG, 1);
+        ItemStack plankPreview = new ItemStack(Material.OAK_PLANKS, 4);
+        PlayerInventory emptyPlayerInventory = playerInventory(new ItemStack[0]);
+        CraftingInventory craftingMatrix = craftingInventory(new ItemStack[] {oakLog, null, null, null},
+                plankPreview);
+        Player craftingPlayer = player(emptyPlayerInventory, craftingMatrix, null);
+
+        List<CivilizationMaterialCensus.StackCount> staged = ArenaFoundationPlugin.playerMaterialStacks(craftingPlayer);
+        assertEquals(1, materialCount(staged, "minecraft:oak_log"));
+        assertEquals(0, materialCount(staged, "minecraft:oak_planks"));
+        assertEquals(4, woodUnits(staged));
+
+        PlayerInventory craftedPlayerInventory = playerInventory(new ItemStack[] {plankPreview});
+        CraftingInventory emptyCraftingMatrix = craftingInventory(new ItemStack[4], null);
+        Player craftedPlayer = player(craftedPlayerInventory, emptyCraftingMatrix, null);
+        List<CivilizationMaterialCensus.StackCount> collected =
+                ArenaFoundationPlugin.playerMaterialStacks(craftedPlayer);
+        assertEquals(0, materialCount(collected, "minecraft:oak_log"));
+        assertEquals(4, materialCount(collected, "minecraft:oak_planks"));
+        assertEquals(4, woodUnits(collected));
+
+        Inventory chestTop = inventory(new ItemStack[] {oakLog});
+        Player chestViewer = player(emptyPlayerInventory, chestTop, null);
+        assertTrue(ArenaFoundationPlugin.playerMaterialStacks(chestViewer).isEmpty());
     }
 
     @Test
@@ -269,5 +346,71 @@ final class CivilizationMaterialCensusTest {
 
     private static CivilizationMaterialCensus.Position position(int x, int y, int z) {
         return new CivilizationMaterialCensus.Position(x, y, z);
+    }
+
+    private static long materialCount(List<CivilizationMaterialCensus.StackCount> items, String material) {
+        return items.stream()
+                .filter(item -> item.material().equals(material))
+                .mapToLong(CivilizationMaterialCensus.StackCount::amount)
+                .sum();
+    }
+
+    private static long woodUnits(List<CivilizationMaterialCensus.StackCount> items) {
+        return 4 * materialCount(items, "minecraft:oak_log")
+                + materialCount(items, "minecraft:oak_planks");
+    }
+
+    private static Player player(PlayerInventory inventory, Inventory topInventory, ItemStack cursor) {
+        InventoryView view = bukkitProxy(InventoryView.class, proxyResults("getTopInventory", topInventory));
+        return bukkitProxy(Player.class, proxyResults(
+                "getInventory", inventory,
+                "getOpenInventory", view,
+                "getItemOnCursor", cursor));
+    }
+
+    private static PlayerInventory playerInventory(ItemStack[] contents) {
+        return bukkitProxy(PlayerInventory.class, Map.of("getContents", contents));
+    }
+
+    private static CraftingInventory craftingInventory(ItemStack[] matrix, ItemStack result) {
+        ItemStack[] contents = new ItemStack[matrix.length + 1];
+        System.arraycopy(matrix, 0, contents, 0, matrix.length);
+        contents[matrix.length] = result;
+        return bukkitProxy(CraftingInventory.class, proxyResults(
+                "getContents", contents,
+                "getMatrix", matrix,
+                "getResult", result));
+    }
+
+    private static Inventory inventory(ItemStack[] contents) {
+        return bukkitProxy(Inventory.class, Map.of("getContents", contents));
+    }
+
+    private static <T> T bukkitProxy(Class<T> api, Map<String, Object> results) {
+        InvocationHandler handler = (proxy, method, arguments) -> proxyResult(proxy, method, arguments, results);
+        return api.cast(Proxy.newProxyInstance(api.getClassLoader(), new Class<?>[] {api}, handler));
+    }
+
+    private static Map<String, Object> proxyResults(Object... entries) {
+        Map<String, Object> results = new HashMap<>();
+        for (int index = 0; index < entries.length; index += 2) {
+            results.put((String) entries[index], entries[index + 1]);
+        }
+        return results;
+    }
+
+    private static Object proxyResult(Object proxy, Method method, Object[] arguments, Map<String, Object> results) {
+        if (method.getDeclaringClass() == Object.class) {
+            return switch (method.getName()) {
+                case "equals" -> proxy == arguments[0];
+                case "hashCode" -> System.identityHashCode(proxy);
+                case "toString" -> "Bukkit API proxy";
+                default -> throw new AssertionError("unexpected Object method: " + method);
+            };
+        }
+        if (results.containsKey(method.getName())) {
+            return results.get(method.getName());
+        }
+        throw new AssertionError("unexpected Bukkit API call: " + method);
     }
 }
