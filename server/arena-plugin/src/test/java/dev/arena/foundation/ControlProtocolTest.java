@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
@@ -34,7 +35,10 @@ final class ControlProtocolTest {
     private static final List<String> INVALID_FIXTURES = List.of(
             "control-invalid-civilization.json",
             "control-invalid-duplicate-key.json",
+            "control-invalid-dynamic-capability.json",
             "control-invalid-finish.json",
+            "control-invalid-human-roster.json",
+            "control-invalid-human-wait-timeout.json",
             "control-invalid-leading-zero.json",
             "control-invalid-roster-gap.json",
             "control-invalid-sequence-number.json",
@@ -76,6 +80,48 @@ final class ControlProtocolTest {
 
         assertEquals(ControlProtocol.MAX_U64, decoded.seed());
         assertEquals(original.roster(), decoded.roster());
+    }
+
+    @Test
+    void rejectsLossyIntegerNumbersAndUnderflow() throws IOException {
+        String ready = Files.readString(fixturePath("control-ready.json"));
+        String fractionalProtocol = ready.replace("\"protocol_version\":775",
+                "\"protocol_version\":775.00000000000000001");
+        String underflowCounter = "{\"protocol\":1,\"run_id\":\"fixture-run\",\"sequence\":\"1\","
+                + "\"type\":\"metrics\",\"payload\":{\"server_tick_duration_micros\":1e-324,"
+                + "\"critical_queue_depth\":0,\"dropped_optional_metrics\":0}}";
+
+        assertThrows(IOException.class,
+                () -> ControlProtocol.decodeBody(fractionalProtocol.getBytes(StandardCharsets.UTF_8)));
+        assertThrows(IOException.class,
+                () -> ControlProtocol.decodeBody(underflowCounter.getBytes(StandardCharsets.UTF_8)));
+    }
+
+    @Test
+    void measuresStringLimitsInUnicodeCodePoints() throws IOException {
+        String ready = Files.readString(fixturePath("control-ready.json"));
+        String serverName = "😀".repeat(128);
+        String unicodeReady = ready.replace("\"name\":\"paper\"", "\"name\":\"" + serverName + "\"");
+        ControlProtocol.ReadyPayload payload = (ControlProtocol.ReadyPayload)
+                ControlProtocol.decodeBody(unicodeReady.getBytes(StandardCharsets.UTF_8)).payload();
+
+        assertEquals(serverName, payload.server().name());
+        assertThrows(IllegalArgumentException.class,
+                () -> new ControlProtocol.ServerIdentity("😀".repeat(129), "1", "1", 775));
+    }
+
+    @Test
+    void rejectsUnpairedSurrogatesAtTheControlBoundary() throws IOException {
+        String error = Files.readString(fixturePath("control-error.json"));
+        String escapedSurrogate = "\\" + "uD800";
+        String malformed = error.replace("\"message\":\"match is not prepared\"",
+                "\"message\":\"" + escapedSurrogate + "\"");
+
+        assertThrows(IOException.class,
+                () -> ControlProtocol.decodeBody(malformed.getBytes(StandardCharsets.UTF_8)));
+        assertThrows(IllegalArgumentException.class,
+                () -> new ControlProtocol.ErrorPayload(ControlProtocol.ErrorCode.INTERNAL,
+                        String.valueOf((char) 0xd800)));
     }
 
     private static Path fixturePath(String filename) {

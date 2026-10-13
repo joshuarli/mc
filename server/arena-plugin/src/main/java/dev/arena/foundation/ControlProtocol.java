@@ -75,8 +75,7 @@ final class ControlProtocol {
     }
 
     enum Capability {
-        HUNGER_GAMES_V1("hunger_games_v1"),
-        DYNAMIC_HUMAN_SEAT_V1("dynamic_human_seat_v1");
+        HUNGER_GAMES_V1("hunger_games_v1");
 
         static final List<Capability> SUPPORTED = List.of(HUNGER_GAMES_V1);
 
@@ -105,7 +104,6 @@ final class ControlProtocol {
         LEASE_LOST("lease_lost"),
         INVALID_WORLD("invalid_world"),
         PROTOCOL_ERROR("protocol_error"),
-        HUMAN_WAIT_TIMEOUT("human_wait_timeout"),
         RUNTIME_TIMEOUT("runtime_timeout");
 
         private final String wireName;
@@ -311,29 +309,12 @@ final class ControlProtocol {
         }
     }
 
-    sealed interface Competitor permits BotCompetitor, HumanCompetitor {
-        int seat();
-
-        String participantId();
-    }
-
-    record BotCompetitor(int seat, String participantId, String username, UUID offlineUuid) implements Competitor {
+    record BotCompetitor(int seat, String participantId, String username, UUID offlineUuid) {
         BotCompetitor {
             require(seat >= 0 && seat <= 5, "bot seat is out of range");
             require(participantId != null && participantId.matches(PARTICIPANT_PATTERN), "invalid participant id");
             require(username != null && username.matches(USERNAME_PATTERN), "invalid bot username");
             Objects.requireNonNull(offlineUuid, "bot offline UUID");
-        }
-    }
-
-    record HumanCompetitor(String participantId) implements Competitor {
-        HumanCompetitor {
-            require(participantId != null && participantId.matches(PARTICIPANT_PATTERN), "invalid participant id");
-        }
-
-        @Override
-        public int seat() {
-            return 0;
         }
     }
 
@@ -375,7 +356,7 @@ final class ControlProtocol {
             String mode,
             MatchSettings match,
             BorderSettings border,
-            List<Competitor> roster) implements Payload {
+            List<BotCompetitor> roster) implements Payload {
         PreparePayload {
             require(mapSemanticId != null && mapSemanticId.matches(SEMANTIC_ID_PATTERN), "invalid map semantic id");
             require(scenarioSemanticId != null && scenarioSemanticId.matches(SEMANTIC_ID_PATTERN),
@@ -642,7 +623,7 @@ final class ControlProtocol {
                 Set.of("match", "border"), Set.of("match", "border"));
         MatchSettings match = readMatchSettings(settings.get("match"));
         BorderSettings border = readBorderSettings(settings.get("border"));
-        List<Competitor> roster = readRoster(payload.get("roster"));
+        List<BotCompetitor> roster = readRoster(payload.get("roster"));
         return new PreparePayload(
                 readString(payload.get("map_semantic_id"), "payload.map_semantic_id", 64, 64, SEMANTIC_ID_PATTERN),
                 readString(payload.get("scenario_semantic_id"), "payload.scenario_semantic_id", 64, 64, SEMANTIC_ID_PATTERN),
@@ -683,14 +664,14 @@ final class ControlProtocol {
                 readFiniteNumber(border.get("final_diameter_blocks"), path + ".final_diameter_blocks"));
     }
 
-    private static List<Competitor> readRoster(Object value) throws IOException {
+    private static List<BotCompetitor> readRoster(Object value) throws IOException {
         List<Object> entries = array(value, "payload.roster", 1, 6);
-        List<Competitor> roster = new ArrayList<>(entries.size());
+        List<BotCompetitor> roster = new ArrayList<>(entries.size());
         for (int index = 0; index < entries.size(); index++) {
             String path = "payload.roster[" + index + "]";
             Map<String, Object> member = object(entries.get(index), path,
                     Set.of("kind", "seat", "participant_id", "username", "offline_uuid"),
-                    Set.of("kind", "seat", "participant_id"));
+                    Set.of("kind", "seat", "participant_id", "username", "offline_uuid"));
             String kind = readString(member.get("kind"), path + ".kind", 1, 16, null);
             int seat = readInteger(member.get("seat"), path + ".seat", 0, 5);
             String participantId = readString(member.get("participant_id"), path + ".participant_id", 1, 128,
@@ -698,25 +679,19 @@ final class ControlProtocol {
             if (seat != index) {
                 throw invalid(path + ".seat", "roster seats must be ordered and contiguous from zero");
             }
-            if ("human".equals(kind)) {
-                if (member.containsKey("username") || member.containsKey("offline_uuid") || seat != 0) {
-                    throw invalid(path, "human entry must reserve seat zero without a bound game identity");
-                }
-                roster.add(new HumanCompetitor(participantId));
-            } else if ("bot".equals(kind)) {
-                String username = readString(member.get("username"), path + ".username", 1, 16, USERNAME_PATTERN);
-                String uuidText = readString(member.get("offline_uuid"), path + ".offline_uuid", 36, 36,
-                        "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}");
-                UUID uuid;
-                try {
-                    uuid = UUID.fromString(uuidText);
-                } catch (IllegalArgumentException invalidUuid) {
-                    throw invalid(path + ".offline_uuid", "invalid offline UUID");
-                }
-                roster.add(new BotCompetitor(seat, participantId, username, uuid));
-            } else {
-                throw invalid(path + ".kind", "roster member kind must be bot or human");
+            if (!"bot".equals(kind)) {
+                throw invalid(path + ".kind", "all roster members must be bots");
             }
+            String username = readString(member.get("username"), path + ".username", 1, 16, USERNAME_PATTERN);
+            String uuidText = readString(member.get("offline_uuid"), path + ".offline_uuid", 36, 36,
+                    "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}");
+            UUID uuid;
+            try {
+                uuid = UUID.fromString(uuidText);
+            } catch (IllegalArgumentException invalidUuid) {
+                throw invalid(path + ".offline_uuid", "invalid offline UUID");
+            }
+            roster.add(new BotCompetitor(seat, participantId, username, uuid));
         }
         validateRoster(roster);
         return List.copyOf(roster);
@@ -917,11 +892,7 @@ final class ControlProtocol {
         throw new IllegalArgumentException("unknown control payload type");
     }
 
-    private static Object competitorValue(Competitor competitor) {
-        if (competitor instanceof HumanCompetitor human) {
-            return object("kind", "human", "seat", human.seat(), "participant_id", human.participantId());
-        }
-        BotCompetitor bot = (BotCompetitor) competitor;
+    private static Object competitorValue(BotCompetitor bot) {
         return object("kind", "bot", "seat", bot.seat(), "participant_id", bot.participantId(),
                 "username", bot.username(), "offline_uuid", bot.offlineUuid().toString());
     }
@@ -945,6 +916,9 @@ final class ControlProtocol {
         if (value == null) {
             writer.nullValue();
         } else if (value instanceof String string) {
+            if (!wellFormedUnicode(string)) {
+                throw new IOException("control JSON string contains an unpaired surrogate");
+            }
             writer.value(string);
         } else if (value instanceof Boolean bool) {
             writer.value(bool);
@@ -965,7 +939,10 @@ final class ControlProtocol {
         } else if (value instanceof Map<?, ?> map) {
             writer.beginObject();
             for (Map.Entry<?, ?> entry : map.entrySet()) {
-                writer.name((String) entry.getKey());
+                if (!(entry.getKey() instanceof String name) || !wellFormedUnicode(name)) {
+                    throw new IOException("control JSON object key contains an unpaired surrogate");
+                }
+                writer.name(name);
                 writeJsonValue(writer, entry.getValue());
             }
             writer.endObject();
@@ -1060,7 +1037,8 @@ final class ControlProtocol {
     }
 
     private static String readString(Object value, String path, int min, int max, String pattern) throws IOException {
-        if (!(value instanceof String string) || string.length() < min || string.length() > max
+        if (!(value instanceof String string) || !wellFormedUnicode(string)
+                || codePointLength(string) < min || codePointLength(string) > max
                 || (pattern != null && !string.matches(pattern))) {
             throw invalid(path, "must be a string with the required length and format");
         }
@@ -1138,23 +1116,17 @@ final class ControlProtocol {
         };
     }
 
-    private static void validateRoster(List<Competitor> roster) {
+    private static void validateRoster(List<BotCompetitor> roster) {
         require(!roster.isEmpty() && roster.size() <= 6, "roster must contain one to six competitors");
         Set<String> participants = new HashSet<>();
         Set<String> usernames = new HashSet<>();
         Set<UUID> uuids = new HashSet<>();
-        int humans = 0;
         for (int index = 0; index < roster.size(); index++) {
-            Competitor competitor = Objects.requireNonNull(roster.get(index), "roster competitor");
-            require(competitor.seat() == index, "roster seats must be ordered and contiguous from zero");
-            require(participants.add(competitor.participantId()), "participant ids must be unique");
-            if (competitor instanceof HumanCompetitor) {
-                require(competitor.seat() == 0 && humans++ == 0, "human must reserve unique seat zero");
-            } else {
-                BotCompetitor bot = (BotCompetitor) competitor;
-                require(usernames.add(bot.username()), "bot usernames must be unique");
-                require(uuids.add(bot.offlineUuid()), "bot offline UUIDs must be unique");
-            }
+            BotCompetitor bot = Objects.requireNonNull(roster.get(index), "roster competitor");
+            require(bot.seat() == index, "roster seats must be ordered and contiguous from zero");
+            require(participants.add(bot.participantId()), "participant ids must be unique");
+            require(usernames.add(bot.username()), "bot usernames must be unique");
+            require(uuids.add(bot.offlineUuid()), "bot offline UUIDs must be unique");
         }
     }
 
@@ -1195,7 +1167,12 @@ final class ControlProtocol {
     }
 
     private static boolean text(String value, int min, int max) {
-        return value != null && value.length() >= min && value.length() <= max && wellFormedUnicode(value);
+        return value != null && wellFormedUnicode(value) && codePointLength(value) >= min
+                && codePointLength(value) <= max;
+    }
+
+    private static int codePointLength(String value) {
+        return value.codePointCount(0, value.length());
     }
 
     private static boolean wellFormedUnicode(String value) {

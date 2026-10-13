@@ -36,7 +36,6 @@ final class MatchController {
         LEASE_LOST,
         INVALID_WORLD,
         PROTOCOL_ERROR,
-        HUMAN_WAIT_TIMEOUT,
         RUNTIME_TIMEOUT
     }
 

@@ -281,10 +281,6 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
             throw new CommandFailure(ControlProtocol.ErrorCode.INVALID_STATE,
                     "prepare requires a ready, unused staged arena world");
         }
-        if (prepare.roster().stream().anyMatch(competitor -> !(competitor instanceof ControlProtocol.BotCompetitor))) {
-            throw new CommandFailure(ControlProtocol.ErrorCode.INVALID_COMMAND,
-                    "headless runtime accepts only configured bot seats");
-        }
         if (!generationPlan.mapSemanticId().equals(prepare.mapSemanticId())) {
             throw new CommandFailure(ControlProtocol.ErrorCode.INVALID_WORLD,
                     "prepare does not identify the staged arena map");
@@ -368,10 +364,8 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
         if (preparedMatch == null || isRunningMatch()) {
             return false;
         }
-        for (ControlProtocol.Competitor competitor : preparedMatch.roster()) {
-            if (competitor instanceof ControlProtocol.BotCompetitor bot
-                    && bot.offlineUuid().equals(player.getUniqueId())
-                    && bot.username().equals(player.getName())) {
+        for (ControlProtocol.BotCompetitor bot : preparedMatch.roster()) {
+            if (bot.offlineUuid().equals(player.getUniqueId()) && bot.username().equals(player.getName())) {
                 UUID previous = playersBySeat.get(bot.seat());
                 if (previous != null && !previous.equals(player.getUniqueId())) {
                     return false;
@@ -398,10 +392,9 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
     }
 
     private boolean allConfiguredBotsAreOnline() {
-        for (ControlProtocol.Competitor competitor : preparedMatch.roster()) {
-            if (competitor instanceof ControlProtocol.BotCompetitor bot
-                    && (!bot.offlineUuid().equals(playersBySeat.get(bot.seat()))
-                            || Bukkit.getPlayer(bot.offlineUuid()) == null)) {
+        for (ControlProtocol.BotCompetitor bot : preparedMatch.roster()) {
+            if (!bot.offlineUuid().equals(playersBySeat.get(bot.seat()))
+                    || Bukkit.getPlayer(bot.offlineUuid()) == null) {
                 return false;
             }
         }
