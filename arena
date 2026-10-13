@@ -428,9 +428,9 @@ usage() {
     cat <<'EOF'
 usage:
   ./arena bootstrap
-  ./arena build [--package core|spec|bots|runner|all]
+  ./arena build [--package core|spec|bots|control|runner|all]
   ./arena check <compatibility|build-script>
-  ./arena test --suite <core|spec|bots|runner|integration|acceptance|java> --case <name>
+  ./arena test --suite <core|spec|bots|runner|protocol|integration|acceptance|java> --case <name>
   ./arena <report|inspect|compare|prepare|validate|doctor|run|play|replay-policy> <arguments...>
 EOF
 }
@@ -446,11 +446,11 @@ bootstrap() {
 build_command() {
     target=all
     if [ "$#" -gt 0 ]; then
-        [ "$#" -eq 2 ] && [ "$1" = --package ] || fail "usage: ./arena build [--package core|spec|bots|runner|all]"
+        [ "$#" -eq 2 ] && [ "$1" = --package ] || fail "usage: ./arena build [--package core|spec|bots|control|runner|all]"
         target=$2
     fi
     case "$target" in
-        core|spec|bots|runner|all) ;;
+        core|spec|bots|control|runner|all) ;;
         *) fail "unknown TypeScript package: $target" ;;
     esac
     prepare_node
@@ -523,6 +523,12 @@ test_command() {
             ensure_workspace_dependencies
             build_typescript "$suite"
             run_named_tests "$suite" "$case_name"
+            ;;
+        protocol:*)
+            prepare_node
+            ensure_workspace_dependencies
+            build_typescript control
+            run_named_tests protocol "$case_name"
             ;;
         integration:stack|integration:maps-reset|integration:match-rules|integration:legal-player|integration:fairness)
             [ -f "$root/tests/integration/$case_name.ts" ] || fail "blocked: integration case is not ready: $case_name"

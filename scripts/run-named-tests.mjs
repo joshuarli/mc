@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 
@@ -31,6 +32,7 @@ const suite = process.argv[2];
 const name = process.argv[3];
 if (!name) fail("test name is required");
 let target = suites.get(suite);
+let targets;
 if (suite === "integration") {
   const testFile = integrationCases.get(name);
   if (!testFile) fail("unknown integration case");
@@ -39,15 +41,26 @@ if (suite === "integration") {
   const testFile = acceptanceCases.get(name);
   if (!testFile) fail("unknown acceptance case");
   target = join(root, ".work", "build", "tests", "acceptance", testFile);
+} else if (suite === "protocol") {
+  const testDirectory = join(root, ".work", "build", "packages", "arena-runner", "tests");
+  let testFiles;
+  try {
+    testFiles = readdirSync(testDirectory).filter((file) => /^control-.*\.test\.js$/.test(file));
+  } catch (error) {
+    if (error.code === "ENOENT") fail("control test output is unavailable; build the control target first");
+    throw error;
+  }
+  if (testFiles.length === 0) fail("no compiled control tests are available");
+  targets = testFiles.map((file) => join(testDirectory, file));
 }
-if (!target) fail("unknown package suite");
+if (!target && !targets) fail("unknown package suite");
 
 const exactName = `^${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`;
 const result = spawnSync(process.execPath, [
   "--test",
   "--test-reporter=tap",
   `--test-name-pattern=${exactName}`,
-  target
+  ...(targets ?? [target])
 ], { cwd: root, encoding: "utf8" });
 
 if (result.error) fail(`could not start the Node test runner: ${result.error.message}`);

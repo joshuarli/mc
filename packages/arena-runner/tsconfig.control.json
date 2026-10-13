@@ -1,0 +1,7 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "tsBuildInfoFile": "../../.work/build/tsbuildinfo/arena-runner-control.tsbuildinfo"
+  },
+  "include": ["src/control/**/*.ts", "tests/control-*.test.ts"]
+}

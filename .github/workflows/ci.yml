@@ -41,6 +41,8 @@ jobs:
         run: |
           ./arena build --package core
           ./arena build --package spec
+      - name: Typecheck runner control contracts
+        run: ./arena build --package control
 
   java-plugin:
     needs: offline-core-spec
