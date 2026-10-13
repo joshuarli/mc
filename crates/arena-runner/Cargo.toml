@@ -6,5 +6,10 @@ license.workspace = true
 
 [dependencies]
 arena-core = { workspace = true }
-arena-spec = { workspace = true }
-arena-bots = { workspace = true }
+serde = "=1.0.229"
+serde_json = "=1.0.154"
+sha2 = "=0.11.1"
+
+[[test]]
+name = "lifecycle"
+path = "../../tests/integration/lifecycle.rs"
