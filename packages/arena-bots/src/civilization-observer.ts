@@ -18,6 +18,7 @@ import {
   tick,
   unknownKnowledge,
   type BlockPosition,
+  type CivilizationResourceObservation,
   type CivilizationPolicyContextInput,
   type Knowledge,
   type MaterialItem,
@@ -34,7 +35,6 @@ const MAX_LOCAL_DROP_CANDIDATES = 64;
 type CivilizationPolicyContext = ReturnType<typeof civilizationPolicyContext>;
 type CivilizationObservation = ReturnType<typeof civilizationObservation>;
 type CivilizationTeamMessage = ReturnType<typeof civilizationTeamMessage>;
-type CivilizationResourceObservation = CivilizationObservation['observedResources'] extends Knowledge<infer T> ? T[number] : never;
 type MineflayerItem = NonNullable<Bot['inventory']['slots'][number]>;
 type MineflayerBlock = NonNullable<ReturnType<Bot['blockAt']>>;
 type MineflayerChest = Awaited<ReturnType<Bot['openContainer']>>;

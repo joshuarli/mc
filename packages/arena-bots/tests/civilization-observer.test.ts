@@ -142,8 +142,8 @@ test('team reports reject stale, future, malformed, over-rate, and over-capacity
 
 test('civilization observations exclude rostered teammates and retain rostered enemies', () => {
   const bot = makeBot();
-  const teammate = Object.assign(vector(0, 64, -2), { id: 2, type: 'player', height: 1.8 });
-  const enemy = Object.assign(vector(1, 64, -2), { id: 3, type: 'player', height: 1.8 });
+  const teammate = { id: 2, type: 'player', position: vector(0, 64, -2), height: 1.8 };
+  const enemy = { id: 3, type: 'player', position: vector(1, 64, -2), height: 1.8 };
   const roster = publicRoster();
   Object.assign(bot, {
     entity: {
@@ -242,7 +242,7 @@ test('container contents become current only for this client’s synchronized op
       id: 1,
       position: vector(0, 64, 0),
       yaw: -Math.PI / 2,
-      pitch: 0,
+      pitch: -0.2,
       eyeHeight: 1.62,
       height: 1.8,
     },
