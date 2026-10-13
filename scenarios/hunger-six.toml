@@ -11,7 +11,7 @@ human_seats_in_play_mode = 1
 spectator_capacity = 4
 
 [server]
-minecraft = "26.2"
+minecraft = "26.1.2"
 view_distance_chunks = 6
 simulation_distance_chunks = 5
 max_tick_rate = 20
