@@ -246,7 +246,7 @@ test('operational failure artifact reader rejects rounded fractional integers an
     `{"schema":${schema},"run_id":"${RUN_ID}","primary":{"category":"runtime_failure","resource":"Paper server","source":{"kind":"timeout"}},"cleanup":{"status":"succeeded","source":null},"trace_checkpoint_segments":[{"path":".work/arena/runs/${RUN_ID}/trace-v2-000001.json","identity":{"device":"${device}","inode":"2"},"byte_length":${byteLength}}]}`;
 
   for (const [json, field] of [
-    [artifact('1.00000000000000001', '1'), 'schema'],
+    [artifact('1.00000000000000001', '1'), 'invalid_schema'],
     [artifact('1', '1.00000000000000001'), 'invalid_trace_checkpoint_segment'],
     [artifact('1', '1', '18446744073709551616'), 'invalid_trace_checkpoint_segment'],
   ] as const) {

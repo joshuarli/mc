@@ -8,7 +8,12 @@ import {
   type FileIdentity,
 } from '../owned-files/index.js';
 import { isValidRunId } from '../run-id.js';
-import { parseStrictJson, StrictJsonError, type StrictJsonValue } from '../control/strict-json.js';
+import {
+  parseStrictJson,
+  strictJsonNumberToken,
+  StrictJsonError,
+  type StrictJsonValue,
+} from '../control/strict-json.js';
 import { MAX_TRACE_SEGMENT_BYTES } from '../trace.js';
 
 export const OPERATIONAL_FAILURE_SCHEMA_VERSION = 1;
