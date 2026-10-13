@@ -28,6 +28,7 @@ interface TestBot extends EventEmitter {
   currentWindow: TestWindow | null;
   readonly inventory: EventEmitter & { slots: (TestItem | null)[] };
   readonly entity: {
+    readonly type: "player";
     readonly username: string;
     readonly position: {
       clone(): TestBot["entity"]["position"];
@@ -87,6 +88,15 @@ test("hunger evidence ignores full snapshots for a different window id", () => {
   fixture.evidence.close();
 });
 
+test("hunger evidence ignores damage events without a tracked attacker", () => {
+  const fixture = makeRecorder();
+
+  assert.doesNotThrow(() => fixture.bot.emit("entityHurt", fixture.bot.entity, undefined));
+  assert.deepEqual([...fixture.evidence.snapshot().pvpEngagements], []);
+
+  fixture.evidence.close();
+});
+
 function makeRecorder(): {
   readonly bot: TestBot;
   readonly client: EventEmitter;
@@ -101,7 +111,7 @@ function makeRecorder(): {
     _client: client,
     currentWindow: null as TestWindow | null,
     inventory: Object.assign(new EventEmitter(), { slots: Array<TestItem | null>(36).fill(null) }),
-    entity: { username: "bot-seat-2", position },
+    entity: { type: "player" as const, username: "bot-seat-2", position },
   }) as TestBot;
 
   // Mineflayer installs this handler before the acceptance recorder subscribes.

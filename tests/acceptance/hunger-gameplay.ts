@@ -73,8 +73,8 @@ export function recordHungerGameplayEvidence(active: AcceptanceRunContext): {
     };
     const onMove = (): void => observeMovement();
     const onForcedMove = (): void => observeMovement();
-    const onEntityHurt = (entity: Bot["entity"], source: Bot["entity"]): void => {
-      if (entity.type !== "player" || source.type !== "player") return;
+    const onEntityHurt = (entity?: Bot["entity"], source?: Bot["entity"]): void => {
+      if (entity?.type !== "player" || source?.type !== "player") return;
       if (entity.username === undefined || source.username === undefined) return;
       const victimSeat = seatByUsername.get(entity.username);
       const attackerSeat = seatByUsername.get(source.username);
