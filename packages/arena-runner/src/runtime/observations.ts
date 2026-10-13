@@ -23,6 +23,7 @@ export async function readStoppedPlayerStats(options: Readonly<{
   ownedRoot: Buffer;
   runDirectoryPath: Buffer;
   players: readonly PlayerIdentity[];
+  signal?: AbortSignal;
 }>): Promise<readonly StoppedPlayerStats[]> {
   const results: StoppedPlayerStats[] = [];
   for (const player of options.players) {
@@ -42,6 +43,7 @@ export async function readStoppedPlayerStats(options: Readonly<{
         ownedRoot: options.ownedRoot,
         relativePath,
         maxBytes: MAX_STATS_BYTES,
+        ...(options.signal === undefined ? {} : { signal: options.signal }),
       });
     } catch (error) {
       if (error instanceof OwnedFilesError && error.category === 'not_found') {

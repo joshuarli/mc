@@ -1,5 +1,5 @@
 import { compileScenario, MAX_SOURCE_BYTES, scenarioMapReference } from '@arena/spec';
-import type { ScenarioIr } from '@arena/spec';
+import type { ResourceReference, ScenarioIr } from '@arena/spec';
 import { TextDecoder } from 'node:util';
 import {
   createRunDirectory,
@@ -38,14 +38,14 @@ export async function prepareRun(
 ): Promise<PreparedRun> {
   const scenarioBytes = await readSource(helperPath, ownedRoot, scenarioPath, 'scenario input', signal);
   const scenarioSource = decodeSource(scenarioBytes, 'scenario input');
-  let scenarioMap: string;
+  let scenarioMap: ResourceReference;
   try {
     scenarioMap = scenarioMapReference(scenarioSource);
   } catch (error) {
     throw mapSpecError(error);
   }
 
-  const mapPath = resolveRepositoryReference(scenarioPath, scenarioMap);
+  const mapPath = resolveScenarioResource({ scenarioPath, reference: scenarioMap });
   const mapBytes = await readSource(helperPath, ownedRoot, mapPath, 'map input', signal);
   const mapSource = decodeSource(mapBytes, 'map input');
 
@@ -157,6 +157,14 @@ function decodeSource(bytes: Buffer, resource: string): string {
   } catch {
     throw new RunnerError('invalid_input', resource, { kind: 'invalid_utf8' });
   }
+}
+
+/** Resolves a compiled scenario resource reference against its declaring file. */
+export function resolveScenarioResource(options: Readonly<{
+  scenarioPath: Buffer;
+  reference: ResourceReference;
+}>): Buffer {
+  return resolveRepositoryReference(options.scenarioPath, options.reference);
 }
 
 function resolveRepositoryReference(scenarioPath: Buffer, reference: string): Buffer {
