@@ -37,7 +37,7 @@ export type PolicyDisposition =
   | { readonly kind: 'hold' }
   | { readonly kind: 'start'; readonly action_sequence: string }
   | { readonly kind: 'continue'; readonly action_sequence: string }
-  | { readonly kind: 'defer'; readonly action_sequence: string; readonly reason: 'lowerPriority' | 'hysteresis' | 'cleanupPending' }
+  | { readonly kind: 'defer'; readonly action_sequence: string; readonly reason: 'lowerPriority' | 'hysteresis' | 'cleanupPending' | 'goalPersistence' }
   | { readonly kind: 'replace'; readonly action_sequence: string; readonly replaces_action_sequence: string; readonly reason: 'higherPriority' | 'targetChanged' };
 
 export interface PolicyReplayRecordV2 extends Omit<PolicyReplayRecordV1, 'schema' | 'input' | 'decision'> {
@@ -307,7 +307,7 @@ function readDisposition(value: unknown, recordNumber: number | undefined): Poli
       return { kind: object.kind, action_sequence };
     case 'defer':
       exact(['kind', 'action_sequence', 'reason']);
-      if (object.reason !== 'lowerPriority' && object.reason !== 'hysteresis' && object.reason !== 'cleanupPending') return fail();
+      if (object.reason !== 'lowerPriority' && object.reason !== 'hysteresis' && object.reason !== 'cleanupPending' && object.reason !== 'goalPersistence') return fail();
       return { kind: 'defer', action_sequence, reason: object.reason };
     case 'replace': {
       exact(['kind', 'action_sequence', 'replaces_action_sequence', 'reason']);

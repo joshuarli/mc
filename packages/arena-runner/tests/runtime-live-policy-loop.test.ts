@@ -380,3 +380,31 @@ test('live policy bounds equal priority target hysteresis to two strategy interv
   assert.equal(starts, 2);
   await state.loop.stopAndJoin();
 });
+
+test('live policy preserves a pending exploration route across fresh random proposals', async () => {
+  let active: ReturnType<typeof pending<SkillOutcome>> | undefined;
+  let starts = 0;
+  let cancellations = 0;
+  const seat = competitor(0, () => {
+    starts += 1;
+    active = pending<SkillOutcome>();
+    return active.promise;
+  }, false, 0);
+  seat.client.cancel = async (reason) => {
+    cancellations += 1;
+    active?.resolve({ kind: 'cancelled', reason });
+  };
+  const state = fixture([seat]);
+  try {
+    for (let value = 0; value < 9; value += 1) { state.loop.onTick(value); await settle(); }
+    assert.equal(state.decisions.length, 9);
+    assert.equal(starts, 1);
+    assert.equal(cancellations, 0);
+    assert.equal(state.effects.length, 0);
+    const later = state.decisions.slice(1);
+    assert.ok(later.some((record) => record.schema === 'policy-replay-v2'
+      && record.disposition.kind === 'defer' && record.disposition.reason === 'goalPersistence'));
+    assert.ok(later.every((record) => record.schema === 'policy-replay-v2'
+      && (record.disposition.kind === 'continue' || record.disposition.kind === 'defer')));
+  } finally { await state.loop.stopAndJoin(); }
+});

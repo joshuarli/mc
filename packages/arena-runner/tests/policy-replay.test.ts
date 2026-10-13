@@ -312,3 +312,14 @@ test('policy replay v2 producer rejects invalid action identities and dispositio
   assert.throws(() => makePolicyReplayRecord({ ...source,
     disposition: { kind: 'defer', action_sequence: '1', reason: 'unknown' as 'hysteresis' } }), TypeError);
 });
+
+test('policy replay v2 accepts goal persistence without claiming another action effect', () => {
+  const first = actionRecord(1n, { kind: 'start', action_sequence: '1' });
+  const deferred = actionRecord(2n, { kind: 'defer', action_sequence: '1', reason: 'goalPersistence' });
+  const summary = replayPolicyJson(evidence([first, deferred, makePolicyEffectRecord(1n, { kind: 'succeeded' }, [])]));
+  assert.equal(summary.decision_count, 2);
+  assert.equal(summary.effect_count, 1);
+  const produced = makePolicyReplayRecord({ sequence: 2n, seat: deferred.seat, input: deferred.input,
+    decision: deferred.decision, rngStateAfter: BigInt(deferred.rng_state_after), disposition: deferred.disposition });
+  assert.deepEqual(produced.disposition, { kind: 'defer', action_sequence: '1', reason: 'goalPersistence' });
+});

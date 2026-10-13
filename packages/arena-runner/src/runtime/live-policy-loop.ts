@@ -169,6 +169,10 @@ export class LivePolicyLoop {
     if (decision.intent.kind === 'hold' || priority < previousPriority) return { kind: 'defer', action_sequence: activeSequence, reason: 'lowerPriority' };
     if (priority === previousPriority) {
       if (previous.state === 'reserved') return { kind: 'defer', action_sequence: activeSequence, reason: 'cleanupPending' };
+      // Exploration redraws a target on every observation; a fresh draw does not invalidate the owned route.
+      if (previous.decision.goal.kind === 'explore' && decision.goal.kind === 'explore') {
+        return { kind: 'defer', action_sequence: activeSequence, reason: 'goalPersistence' };
+      }
       if (BigInt(tick - previous.acceptedTick) < this.#strategyIntervalTicks * 2n) return { kind: 'defer', action_sequence: activeSequence, reason: 'hysteresis' };
     }
     return { kind: 'replace', action_sequence, replaces_action_sequence: activeSequence,
