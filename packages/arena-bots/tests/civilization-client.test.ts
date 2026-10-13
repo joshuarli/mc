@@ -120,6 +120,8 @@ test('clients keep inventory snapshots and teammate reports within their own obs
 test('invalid civilization context unwinds the already-created base observer', () => {
   const bot = makeBot(0);
   const valid = options(0);
+  const velocityListeners = bot._client.listenerCount('entity_velocity');
+  const spawnVelocityListeners = bot._client.listenerCount('spawn_entity');
 
   assert.throws(() => createMineflayerCivilizationClient(bot as unknown as Bot, {
     ...valid,
@@ -134,6 +136,8 @@ test('invalid civilization context unwinds the already-created base observer', (
   assert.equal(bot.listenerCount('entityHurt'), 0);
   assert.equal(bot._client.listenerCount('window_items'), 0);
   assert.equal(bot._client.listenerCount('initialize_world_border'), 0);
+  assert.equal(bot._client.listenerCount('entity_velocity'), velocityListeners);
+  assert.equal(bot._client.listenerCount('spawn_entity'), spawnVelocityListeners);
 });
 
 test('client preserves protocol 775 setup, exact block navigation, and only releases owned listeners', async () => {
@@ -142,14 +146,37 @@ test('client preserves protocol 775 setup, exact block navigation, and only rele
   const nativeStateIdUsed = baseSupportFeature('stateIdUsed');
   const externalHealthListener = () => undefined;
   const externalSnapshotListener = () => undefined;
+  const externalVelocityListener = () => undefined;
+  const externalSpawnListener = () => undefined;
   bot.on('health', externalHealthListener);
   bot._client.on('window_items', externalSnapshotListener);
+  bot._client.on('entity_velocity', externalVelocityListener);
+  bot._client.on('spawn_entity', externalSpawnListener);
   const client = createMineflayerCivilizationClient(bot as unknown as Bot, options(0));
 
   try {
     assert.equal(bot.physics.playerHalfWidth, Math.fround(0.6) / 2);
     assert.equal(bot.supportFeature('entityActionUsesStringMapper'), true);
     assert.equal(bot.supportFeature('stateIdUsed'), nativeStateIdUsed);
+
+    let physicsTickVelocity = 0;
+    bot.once('physicsTick', () => { physicsTickVelocity = bot.entity.velocity.x; });
+    bot._client.emit('entity_velocity', {
+      entityId: bot.entity.id,
+      velocity: { x: 0.4, y: -0.2, z: 0.25 },
+    });
+    bot.emit('physicsTick');
+    assert.ok(physicsTickVelocity > 0.39 && physicsTickVelocity < 0.41);
+    assert.ok(bot.entity.velocity.y < -0.19 && bot.entity.velocity.y > -0.21);
+    assert.ok(bot.entity.velocity.z > 0.24 && bot.entity.velocity.z < 0.26);
+
+    bot._client.emit('spawn_entity', {
+      entityId: bot.entity.id,
+      velocity: { x: -0.3, y: 0.15, z: 0.2 },
+    });
+    assert.ok(bot.entity.velocity.x < -0.29 && bot.entity.velocity.x > -0.31);
+    assert.ok(bot.entity.velocity.y > 0.14 && bot.entity.velocity.y < 0.16);
+    assert.ok(bot.entity.velocity.z > 0.19 && bot.entity.velocity.z < 0.21);
 
     bot._client.emit('initialize_world_border', {
       x: 0,
@@ -177,14 +204,23 @@ test('client preserves protocol 775 setup, exact block navigation, and only rele
   assert.equal(bot.listenerCount('blockUpdate'), 0);
   assert.equal(bot.listenerCount('entityHurt'), 0);
   assert.equal(bot.listenerCount('windowClose'), 0);
+  assert.equal(bot._client.listenerCount('entity_velocity'), 1);
+  assert.equal(bot._client.listenerCount('spawn_entity'), 1);
   for (const event of [
     'initialize_world_border', 'world_border_center', 'world_border_lerp_size',
     'world_border_size', 'login', 'respawn', 'end',
   ]) {
     assert.equal(bot._client.listenerCount(event), 0);
   }
+  bot._client.emit('entity_velocity', {
+    entityId: bot.entity.id,
+    velocity: { x: 0.2, y: 0, z: 0 },
+  });
+  assert.ok(bot.entity.velocity.x < -0.29 && bot.entity.velocity.x > -0.31);
   bot.removeListener('health', externalHealthListener);
   bot._client.removeListener('window_items', externalSnapshotListener);
+  bot._client.removeListener('entity_velocity', externalVelocityListener);
+  bot._client.removeListener('spawn_entity', externalSpawnListener);
 });
 
 function makeBot(seat: number) {
@@ -193,6 +229,12 @@ function makeBot(seat: number) {
     inventory: { slots: (null | { name: string; type: number; metadata: number; count: number; slot: number })[] };
     physics: { playerHalfWidth: number };
     supportFeature(feature: string): boolean;
+    entity: {
+      readonly id: number;
+      readonly position: ReturnType<typeof vector>;
+      readonly velocity: ReturnType<typeof vector>;
+    };
+    entities: Readonly<Record<number, { readonly velocity: ReturnType<typeof vector> }>>;
   };
   const client = new EventEmitter();
   const world = makeLocalWorld();
@@ -209,6 +251,15 @@ function makeBot(seat: number) {
   const roster = publicRoster();
   const member = roster[seat];
   assert.ok(member);
+  const entity = {
+    id: seat + 1,
+    position: vector(0, 64, 0),
+    velocity: vector(0, 0, 0),
+    yaw: 0,
+    pitch: 0,
+    eyeHeight: 1.62,
+    height: 1.8,
+  };
 
   Object.assign(bot, {
     _client: client,
@@ -235,15 +286,8 @@ function makeBot(seat: number) {
     currentWindow: null,
     heldItem: null,
     usingHeldItem: false,
-    entity: {
-      id: seat + 1,
-      position: vector(0, 64, 0),
-      yaw: 0,
-      pitch: 0,
-      eyeHeight: 1.62,
-      height: 1.8,
-    },
-    entities: {},
+    entity,
+    entities: { [entity.id]: entity },
     players: {},
     hasPlugin: () => true,
     setQuickBarSlot: (slot: number) => Object.assign(bot, { quickBarSlot: slot }),

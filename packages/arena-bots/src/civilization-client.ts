@@ -6,7 +6,11 @@ import type {
   SkillOutcome,
 } from '@arena/core';
 import type { Bot } from 'mineflayer';
-import { bindEntityActionStringMapperFeature, bindPlayerCollisionDimensions } from './mineflayer-compat.js';
+import {
+  bindEntityActionStringMapperFeature,
+  bindPlayerCollisionDimensions,
+  bindProtocol775VelocityUnits,
+} from './mineflayer-compat.js';
 import {
   MineflayerCivilizationObserver,
   type CivilizationRosterMember,
@@ -48,10 +52,12 @@ export function createMineflayerCivilizationClient(
 
   const baseObserver = new MineflayerObserver(bot);
   let civilizationObserver: MineflayerCivilizationObserver | null = null;
+  let disposeVelocityUnits = (): void => undefined;
   try {
+    disposeVelocityUnits = bindProtocol775VelocityUnits(bot);
     civilizationObserver = new MineflayerCivilizationObserver(bot, options.context, options.publicRoster);
     const skills = new SkillOwner(bot, baseObserver, civilizationObserver);
-    return createClient(baseObserver, civilizationObserver, skills);
+    return createClient(baseObserver, civilizationObserver, skills, disposeVelocityUnits);
   } catch (error) {
     const cleanupFailures: unknown[] = [];
     if (civilizationObserver !== null) {
@@ -60,6 +66,11 @@ export function createMineflayerCivilizationClient(
       } catch (cleanupError) {
         cleanupFailures.push(cleanupError);
       }
+    }
+    try {
+      disposeVelocityUnits();
+    } catch (cleanupError) {
+      cleanupFailures.push(cleanupError);
     }
     try {
       baseObserver.close();
@@ -77,6 +88,7 @@ function createClient(
   baseObserver: MineflayerObserver,
   civilizationObserver: MineflayerCivilizationObserver,
   skills: SkillOwner,
+  disposeVelocityUnits: () => void,
 ): MineflayerCivilizationClient {
   let closePromise: Promise<void> | null = null;
 
@@ -91,7 +103,7 @@ function createClient(
     runCivilization: (intent) => skills.runCivilization(intent),
     cancel: (reason) => skills.cancel(reason),
     close: () => {
-      closePromise ??= closeOwnedClient(skills, civilizationObserver, baseObserver);
+      closePromise ??= closeOwnedClient(skills, civilizationObserver, disposeVelocityUnits, baseObserver);
       return closePromise;
     },
   };
@@ -100,6 +112,7 @@ function createClient(
 async function closeOwnedClient(
   skills: SkillOwner,
   civilizationObserver: MineflayerCivilizationObserver,
+  disposeVelocityUnits: () => void,
   baseObserver: MineflayerObserver,
 ): Promise<void> {
   const failures: unknown[] = [];
@@ -110,6 +123,11 @@ async function closeOwnedClient(
   }
   try {
     civilizationObserver.close();
+  } catch (error) {
+    failures.push(error);
+  }
+  try {
+    disposeVelocityUnits();
   } catch (error) {
     failures.push(error);
   }
