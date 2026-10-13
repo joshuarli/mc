@@ -1,6 +1,6 @@
 # Acceptance report
 
-**Status: stack and configured map reset passed; remaining gameplay cases are unverified.** The isolated commit `6c553f2` passed the revised `stack` smoke after the Paper fixture set the actual spawn-radius game rule to zero. The same fix is present on the campaign mainline as `af84687`. At `a44e0ab`, the configured `maps-reset` case passed three independent runs, including ordinary loot, death, stopped stats, and clean resets. Match rules, fairness, and six-seat behavior still require live proof.
+**Status: stack, configured map reset, and the live duel/phase-guard case passed; remaining gameplay cases are unverified.** The isolated commit `6c553f2` passed the revised `stack` smoke after the Paper fixture set the actual spawn-radius game rule to zero. The same fix is present on the campaign mainline as `af84687`. At `a44e0ab`, the configured `maps-reset` case passed three independent runs, including ordinary loot, death, stopped stats, and clean resets. At `10d8a75`, the live `match-rules` case passed phase guards and an ordinary duel with independently reconstructed outcome and stats. Additional authority variants, fairness, legal player mechanics, and six-seat behavior still require live proof.
 
 ## Environment and selected stack
 
@@ -18,7 +18,7 @@
 | --- | --- | --- |
 | `stack` | Pass | `./arena test --suite integration --case stack` on isolated commit `6c553f2`; includes ordinary two-client actions, per-client receipt checks, damage/disconnect outcome, and wrong-protocol rejection. |
 | `maps-reset` | Pass | `./arena test --suite integration --case maps-reset` at `a44e0ab` passed all three runs: both clients observed the declared blocks, spawns, and chest contents; ordinary collection and fall death occurred; stopped inspection recorded the death; both subsequent clones had empty inventories and zero deaths. |
-| `match-rules` | Parked | Not run. No ordinary two-client duel or independently reconstructed typed result has been observed. |
+| `match-rules` | Partial pass | `./arena test --suite integration --case match-rules` at `10d8a75` passed waiting/countdown movement and chest guards, active movement and looting, and an ordinary equipped duel with death, winner, independently reconstructed outcome, and stopped stats. Border, zero-survivor, timeout, abort, and remaining seat variants still need live proof. |
 | `legal-player` | Parked | Not run. No configured live route, container interaction, and attack sequence has been exercised through the Mineflayer skill client. |
 | `fairness` | Parked | Not run. Independent client receipt histories, complete current perception, and a live hidden-state perturbation remain unproven. |
 | `hunger-six` | Parked | Not run. Acceptance will assert all six bot seats, an automated spectator outside the competitor roster, and death/reconnect seat outcomes. |
@@ -39,7 +39,7 @@ The passing runs in `verify-live-m1` are `maps-reset-first-dc582f54-71fa-42a4-b8
 
 At `1cd0a60`, the strict TypeScript stack build and `all live acceptance scenario and policy sources compile offline` passed. This check compiles every live fixture's scenario, referenced map, and policy. It caught malformed recording fields and a border end tick equal to the match limit before a server was started. The native helper's strict C build and 19 owned-file cases also passed, including bounded resource accounting and rejection of symlinked work roots. These are offline checks.
 
-At `e6357db`, the five focused Java test classes passed all 44 cases, including the pre-release phase policy. The plugin now freezes competitive positions and blocks inventory actions before release; the live `match-rules` case still must verify the Bukkit event wiring and initial player reset.
+At `e6357db`, the five focused Java test classes passed all 44 cases, including the pre-release phase policy. The plugin now freezes competitive positions and blocks inventory actions before release; the live `match-rules` case at `10d8a75` subsequently verified the Bukkit phase guards and ordinary duel wiring.
 
 ## Contract changes and measurements
 
@@ -49,3 +49,5 @@ The runtime exposes `run --scenario`, read-only `validate --scenario`, stopped-r
 
 1. Verify configured-world startup, bounded shutdown, and stopped-run stats through `arena inspect`.
 2. Run the remaining cases against genuine Mineflayer observations and retain exact commands and results here.
+
+The passing duel run in `verify-live-m1` is `match-rules-57a09553-1557-406c-ad87-cf5da6680846`. The first duel attempt exposed a mirrored client pitch calculation and hotbar restoration undoing a successful weapon equip. Focused regressions covered both fixes; ordinary look operations now respect Mineflayer physics rotation pacing. The retry passed with these fixes and a stopped JVM. This is functional evidence, not a performance measurement.
