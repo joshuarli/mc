@@ -19,6 +19,7 @@ import { isAuthenticatedControlMessage, type RunnerCommandEnvelope } from './ses
 
 const MAX_RUNTIME_TRACE_RECORDS = 100_000;
 const CHECKPOINT_OBSERVATION_INTERVAL = 200;
+const MAX_POLICY_SEQUENCE = (1n << 64n) - 1n;
 
 export interface RuntimeTraceSegment {
   readonly relativePath: Buffer;
@@ -46,6 +47,10 @@ export class RuntimeTraceBuilder {
   readonly #runDirectoryPath: Buffer;
   readonly #segments: RuntimeTraceSegment[] = [];
   readonly #records: TraceRecord[] = [];
+  readonly #policyDecisionSequences = new Set<string>();
+  // An action can still settle after Java publishes the terminal result.
+  readonly #pendingPolicyEffectSequences = new Set<string>();
+  readonly #policyEffectSequences = new Set<string>();
   #recordBytes = 0;
   #totalRecordCount = 0;
   #stagedByteLength = 0;
@@ -56,6 +61,7 @@ export class RuntimeTraceBuilder {
   #lastPluginSequence = 0n;
   #lastRunnerSequence = 0n;
   #lastAcknowledgedRunnerSequence = 0n;
+  #lastPolicyDecisionSequence = 0n;
   #lastCheckpointObservation = 0;
   #tail: Promise<void> = Promise.resolve();
   #failure: unknown;
@@ -184,27 +190,51 @@ export class RuntimeTraceBuilder {
   recordPolicyDecision(record: PolicyReplayRecordV1): Promise<void> {
     return this.#enqueue(async () => {
       this.#assertMutable();
-      if (!this.#hasReady || !this.#hasPrepare || this.#hasOutcome) {
+      if (!this.#hasReady || !this.#hasPrepare) {
         throw new RunnerError('runtime_failure', 'run trace', { kind: 'policy_decision_out_of_order' });
+      }
+      if (this.#hasOutcome) {
+        throw new RunnerError('runtime_failure', 'run trace', { kind: 'policy_decision_after_outcome' });
       }
       if (record.schema !== 'policy-replay-v1') {
         throw new RunnerError('runtime_failure', 'run trace', { kind: 'invalid_policy_decision' });
       }
+      const sequence = parsePolicySequence(record.sequence, 'sequence');
+      if (sequence <= this.#lastPolicyDecisionSequence || this.#policyDecisionSequences.has(record.sequence)) {
+        throw new RunnerError('runtime_failure', 'run trace', { kind: 'policy_sequence_not_increasing' });
+      }
       await this.#append(toTraceRecord(undefined, record));
+      this.#lastPolicyDecisionSequence = sequence;
+      this.#policyDecisionSequences.add(record.sequence);
+      if (record.decision.intent.kind !== 'hold') this.#pendingPolicyEffectSequences.add(record.sequence);
     });
   }
 
-  /** Records completed skill and actual path effects associated with a policy decision. */
+  /** Records completed skill effects, including late cancellation of an already recorded decision. */
   recordPolicyEffect(record: PolicyEffectRecordV1): Promise<void> {
     return this.#enqueue(async () => {
       this.#assertMutable();
-      if (!this.#hasReady || !this.#hasPrepare || this.#hasOutcome) {
+      if (!this.#hasReady || !this.#hasPrepare) {
         throw new RunnerError('runtime_failure', 'run trace', { kind: 'policy_effect_out_of_order' });
       }
       if (record.schema !== 'policy-effect-v1') {
         throw new RunnerError('runtime_failure', 'run trace', { kind: 'invalid_policy_effect' });
       }
+      parsePolicySequence(record.decision_sequence, 'decision_sequence');
+      if (!this.#policyDecisionSequences.has(record.decision_sequence)) {
+        throw new RunnerError('runtime_failure', 'run trace', { kind: 'unmatched_policy_effect' });
+      }
+      if (this.#policyEffectSequences.has(record.decision_sequence)) {
+        throw new RunnerError('runtime_failure', 'run trace', { kind: 'duplicate_policy_effect' });
+      }
+      if (!this.#pendingPolicyEffectSequences.has(record.decision_sequence)) {
+        throw new RunnerError('runtime_failure', 'run trace', {
+          kind: this.#hasOutcome ? 'policy_effect_not_pending_after_outcome' : 'policy_effect_not_pending',
+        });
+      }
       await this.#append(toTraceRecord(undefined, record));
+      this.#policyEffectSequences.add(record.decision_sequence);
+      this.#pendingPolicyEffectSequences.delete(record.decision_sequence);
     });
   }
 
@@ -233,6 +263,9 @@ export class RuntimeTraceBuilder {
       }
       if (!this.#hasOutcome) {
         throw new RunnerError('runtime_failure', 'run trace', { kind: 'outcome_missing' });
+      }
+      if (this.#pendingPolicyEffectSequences.size > 0) {
+        throw new RunnerError('runtime_failure', 'run trace', { kind: 'policy_skill_result_pending' });
       }
       if (this.#records.length === 0) {
         throw new RunnerError('runtime_failure', 'run trace', { kind: 'outcome_segment_missing' });
@@ -389,4 +422,15 @@ function copyTraceResult(result: RuntimeTraceResult): RuntimeTraceResult {
     segments: Object.freeze(result.segments.map(copySegment)),
     totalByteLength: result.totalByteLength,
   });
+}
+
+function parsePolicySequence(value: string, field: string): bigint {
+  if (!/^[1-9][0-9]{0,19}$/.test(value)) {
+    throw new RunnerError('runtime_failure', 'run trace', { kind: 'invalid_policy_sequence', field });
+  }
+  const sequence = BigInt(value);
+  if (sequence > MAX_POLICY_SEQUENCE) {
+    throw new RunnerError('runtime_failure', 'run trace', { kind: 'invalid_policy_sequence', field });
+  }
+  return sequence;
 }

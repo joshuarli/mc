@@ -5,12 +5,30 @@ import { createConnection, type Socket } from 'node:net';
 import { basename, join, resolve } from 'node:path';
 import test, { type TestContext } from 'node:test';
 import {
+  agentObservation,
+  agentState,
+  blockPosition,
+  currentKnowledge,
+  decide,
+  DeterministicRandom,
+  emptyEquipment,
+  emptyPolicyMemory,
+  normalizePolicyReplayInput,
+  observationSequence,
+  PolicyParams,
+  rehydratePolicyReplayInput,
+  tick,
+  unknownKnowledge,
+  worldBorder,
+} from '@arena/core';
+import {
   decodeControlFrame,
   encodeControlFrame,
   type ControlMessage,
 } from '../src/control/index.js';
 import { RunnerError } from '../src/errors.js';
 import { createRunDirectory, readOwnedFile } from '../src/owned-files/index.js';
+import { makePolicyEffectRecord, makePolicyReplayRecord } from '../src/policy-replay.js';
 import { parseSegment } from '../src/trace.js';
 import { RuntimeTraceBuilder } from '../src/runtime/trace.js';
 import {
@@ -180,6 +198,77 @@ test('runtime trace rejects checkpoints outside the 200-observation cadence', as
     error instanceof RunnerError && error.source.kind === 'invalid_trace_checkpoint');
 });
 
+test('runtime trace records a pending skill cancellation after authoritative outcome', async (t) => {
+  const { session, client } = await authenticatedSession(t);
+  const { trace, ownedRoot } = await createTrace(t);
+  const messages = await beginOneSeatRun(trace, session, client);
+  const decision = policyDecisionRecord(1n);
+  await trace.recordPolicyDecision(decision);
+  await endOneSeatRun(trace, session, client, messages);
+
+  const effect = makePolicyEffectRecord(BigInt(decision.sequence), { kind: 'cancelled', reason: 'shutdown' }, []);
+  await trace.recordPolicyEffect(effect);
+  const finalized = await trace.finalize();
+  const records: string[] = [];
+  for (const segment of finalized.segments) {
+    const bytes = await readOwnedFile({
+      helperPath,
+      ownedRoot,
+      relativePath: segment.relativePath,
+      maxBytes: segment.byteLength,
+    });
+    records.push(...parseSegment(bytes).records.map((record) => record.schema === 'policy-effect-v1'
+      ? 'policy-effect-v1'
+      : typeof record.type === 'string' ? record.type : 'unknown'));
+  }
+  assert.equal(records.at(-2), 'outcome');
+  assert.equal(records.at(-1), 'policy-effect-v1');
+});
+
+test('runtime trace rejects new decisions and unmatched effects after outcome', async (t) => {
+  const first = await authenticatedSession(t);
+  const firstTrace = await createTrace(t);
+  const firstMessages = await beginOneSeatRun(firstTrace.trace, first.session, first.client);
+  await endOneSeatRun(firstTrace.trace, first.session, first.client, firstMessages);
+  await assert.rejects(
+    firstTrace.trace.recordPolicyEffect(makePolicyEffectRecord(99n, { kind: 'cancelled', reason: 'shutdown' }, [])),
+    (error: unknown) => error instanceof RunnerError && error.source.kind === 'unmatched_policy_effect',
+  );
+
+  const second = await authenticatedSession(t);
+  const secondTrace = await createTrace(t);
+  const secondMessages = await beginOneSeatRun(secondTrace.trace, second.session, second.client);
+  await secondTrace.trace.recordPolicyDecision(policyDecisionRecord(1n));
+  await endOneSeatRun(secondTrace.trace, second.session, second.client, secondMessages);
+  await assert.rejects(
+    secondTrace.trace.recordPolicyDecision(policyDecisionRecord(2n)),
+    (error: unknown) => error instanceof RunnerError && error.source.kind === 'policy_decision_after_outcome',
+  );
+
+  const third = await authenticatedSession(t);
+  const thirdTrace = await createTrace(t);
+  const thirdMessages = await beginOneSeatRun(thirdTrace.trace, third.session, third.client);
+  const decision = policyDecisionRecord(1n);
+  await thirdTrace.trace.recordPolicyDecision(decision);
+  await endOneSeatRun(thirdTrace.trace, third.session, third.client, thirdMessages);
+  const effect = makePolicyEffectRecord(BigInt(decision.sequence), { kind: 'cancelled', reason: 'shutdown' }, []);
+  await thirdTrace.trace.recordPolicyEffect(effect);
+  await assert.rejects(
+    thirdTrace.trace.recordPolicyEffect(effect),
+    (error: unknown) => error instanceof RunnerError && error.source.kind === 'duplicate_policy_effect',
+  );
+});
+
+test('runtime trace cannot finalize while a policy skill result is still pending', async (t) => {
+  const { session, client } = await authenticatedSession(t);
+  const { trace } = await createTrace(t);
+  const messages = await beginOneSeatRun(trace, session, client);
+  await trace.recordPolicyDecision(policyDecisionRecord(1n));
+  await endOneSeatRun(trace, session, client, messages);
+  await assert.rejects(trace.finalize(), (error: unknown) =>
+    error instanceof RunnerError && error.source.kind === 'policy_skill_result_pending');
+});
+
 async function createTrace(t: TestContext): Promise<Readonly<{
   trace: RuntimeTraceBuilder;
   ownedRoot: Buffer;
@@ -238,6 +327,132 @@ async function authenticatedSession(t: TestContext): Promise<Readonly<{
   }));
   session = await accepting;
   return Object.freeze({ session, client, token });
+}
+
+async function beginOneSeatRun(
+  trace: RuntimeTraceBuilder,
+  session: ControlSession,
+  client: Socket,
+): Promise<AsyncGenerator<ControlMessage>> {
+  await trace.recordReady(session.ready);
+  const messages = session.messages();
+  const prepare = await session.send({ type: 'prepare', payload: preparePayload() });
+  await trace.recordRunnerCommand(prepare);
+  client.write(frame({
+    protocol: 1,
+    run_id: RUN_ID,
+    sequence: 3n,
+    correlation: prepare.sequence,
+    type: 'ack',
+    payload: {},
+  }));
+  await recordNextMessage(trace, messages);
+
+  const start = await session.send({ type: 'start', payload: {} });
+  await trace.recordRunnerCommand(start);
+  client.write(frame({
+    protocol: 1,
+    run_id: RUN_ID,
+    sequence: 4n,
+    correlation: start.sequence,
+    type: 'ack',
+    payload: {},
+  }));
+  await recordNextMessage(trace, messages);
+
+  client.write(Buffer.concat([
+    frame({
+      protocol: 1,
+      run_id: RUN_ID,
+      sequence: 5n,
+      type: 'public_clock',
+      payload: { phase: 'active', tick: { domain: 'match', value: 0n }, border_diameter_blocks: 100 },
+    }),
+    frame({
+      protocol: 1,
+      run_id: RUN_ID,
+      sequence: 6n,
+      type: 'public_state',
+      payload: { at: { domain: 'match', value: 0n }, alive_seats: [0] },
+    }),
+  ]));
+  await recordNextMessage(trace, messages);
+  await recordNextMessage(trace, messages);
+  return messages;
+}
+
+async function endOneSeatRun(
+  trace: RuntimeTraceBuilder,
+  session: ControlSession,
+  client: Socket,
+  messages: AsyncGenerator<ControlMessage>,
+): Promise<void> {
+  const abort = await session.send({ type: 'abort', payload: { reason: 'operator' } });
+  await trace.recordRunnerCommand(abort);
+  client.write(Buffer.concat([
+    frame({
+      protocol: 1,
+      run_id: RUN_ID,
+      sequence: 7n,
+      correlation: abort.sequence,
+      type: 'ack',
+      payload: {},
+    }),
+    frame({
+      protocol: 1,
+      run_id: RUN_ID,
+      sequence: 8n,
+      type: 'public_clock',
+      payload: { phase: 'aborted', tick: { domain: 'match', value: 0n }, border_diameter_blocks: 100 },
+    }),
+    frame({
+      protocol: 1,
+      run_id: RUN_ID,
+      sequence: 9n,
+      type: 'outcome',
+      payload: { kind: 'abort', reason: 'operator', survivors: [0], at: { domain: 'match', value: 0n } },
+    }),
+  ]));
+  await recordNextMessage(trace, messages);
+  await recordNextMessage(trace, messages);
+  await recordNextMessage(trace, messages);
+}
+
+async function recordNextMessage(
+  trace: RuntimeTraceBuilder,
+  messages: AsyncGenerator<ControlMessage>,
+): Promise<void> {
+  const next = await messages.next();
+  assert.equal(next.done, false);
+  await trace.recordControlMessage(next.value!);
+}
+
+function policyDecisionRecord(sequence: bigint) {
+  const observation = agentObservation({
+    tick: tick(10),
+    sequence: observationSequence(1),
+    agent: currentKnowledge(agentState({
+      position: blockPosition(0, 64, 0),
+      healthHalfHearts: 40,
+      hungerPoints: 20,
+      foodStacks: [],
+      equipped: emptyEquipment(),
+      upgrades: [],
+    })),
+    border: currentKnowledge(worldBorder(0, 0, 100)),
+    opponents: currentKnowledge([]),
+    loot: unknownKnowledge(),
+  });
+  const input = normalizePolicyReplayInput({
+    observation,
+    memory: emptyPolicyMemory(),
+    params: PolicyParams.baseline(),
+    random: DeterministicRandom.fromState(1n),
+  });
+  const restored = rehydratePolicyReplayInput(input);
+  const decision = decide(restored.observation, restored.memory, restored.params, restored.random);
+  assert.notEqual(decision.intent.kind, 'hold');
+  return makePolicyReplayRecord(sequence, 0, input, decision, restored.random.snapshotState());
 }
 
 class TestFrameReader {
