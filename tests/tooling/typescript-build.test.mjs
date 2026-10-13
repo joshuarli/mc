@@ -15,7 +15,7 @@ test("arena wrapper dispatches garbage collection to runner validation", () => {
   });
   assert.equal(result.error, undefined);
   assert.equal(result.status, 2, result.stderr || result.stdout);
-  const failure = JSON.parse(result.stderr);
+  const failure = JSON.parse(result.stderr.trim().split(/\r?\n/).at(-1));
   assert.equal(failure.error.category, "invalid_input");
   assert.equal(failure.error.source.kind, "gc_requires_run_id");
 });
