@@ -3,7 +3,28 @@ import type { Bot } from "mineflayer";
 import type { AcceptanceRunContext } from "../integration/support/owned-run.js";
 
 const CHEST_SLOT_COUNT = 27;
-const WINDOW_CLEANUP_DELAY_MS = 1_000;
+
+interface WindowItemsPacket {
+  readonly windowId?: unknown;
+  readonly items?: unknown;
+}
+
+interface PacketEventSource {
+  on(event: "window_items", listener: (packet: WindowItemsPacket) => void): unknown;
+  removeListener(event: "window_items", listener: (packet: WindowItemsPacket) => void): unknown;
+}
+
+type MineflayerWindow = NonNullable<Bot["currentWindow"]>;
+
+interface LootItemCounts {
+  readonly player: number;
+  readonly container: number;
+}
+
+interface TrackedWindow {
+  readonly window: MineflayerWindow;
+  readonly lootItemCounts: ReadonlyMap<string, LootItemCounts>;
+}
 
 export interface HungerGameplayEvidence {
   readonly maximumMovementBySeat: ReadonlyMap<number, number>;
@@ -19,7 +40,6 @@ export function recordHungerGameplayEvidence(active: AcceptanceRunContext): {
   const maximumMovementBySeat = new Map<number, number>();
   const lootedSeats = new Set<number>();
   const pvpEngagements = new Set<string>();
-  const timers = new Set<ReturnType<typeof setTimeout>>();
   const cleanup: Array<() => void> = [];
   if (active.prepare.type !== "prepare") throw new Error("gameplay evidence requires the prepare event");
   const seatByUsername = new Map(active.prepare.payload.roster.map(({ seat, username }) => [username, seat] as const));
@@ -39,18 +59,13 @@ export function recordHungerGameplayEvidence(active: AcceptanceRunContext): {
     }),
     close: () => {
       for (const detach of cleanup.splice(0)) detach();
-      for (const timer of timers) clearTimeout(timer);
-      timers.clear();
     },
   };
 
   function attachCompetitorBot(seat: number, bot: Bot): void {
     const startPosition = bot.entity.position.clone();
-    const openWindows = new Map<number, {
-      readonly lootNames: ReadonlySet<string>;
-      readonly inventoryBefore: ReadonlyMap<string, number>;
-      cleanupTimer?: ReturnType<typeof setTimeout>;
-    }>();
+    const client = bot._client as unknown as PacketEventSource;
+    const openWindows = new Map<number, TrackedWindow>();
 
     const observeMovement = (): void => {
       const distance = bot.entity.position.distanceTo(startPosition);
@@ -66,47 +81,41 @@ export function recordHungerGameplayEvidence(active: AcceptanceRunContext): {
       if (victimSeat === undefined || attackerSeat === undefined || victimSeat === attackerSeat) return;
       pvpEngagements.add(`${attackerSeat}:${victimSeat}`);
     };
-    const onWindowOpen = (window: NonNullable<Bot["currentWindow"]>): void => {
-      if (window.inventoryStart !== CHEST_SLOT_COUNT) return;
+    const onWindowOpen = (window: MineflayerWindow): void => {
+      openWindows.delete(window.id);
+      if (bot.currentWindow !== window
+        || window.inventoryStart !== CHEST_SLOT_COUNT
+        || window.inventoryEnd > window.slots.length) return;
       const lootNames = new Set(window.slots.slice(0, CHEST_SLOT_COUNT)
         .flatMap((item) => item === null ? [] : [`minecraft:${item.name}`])
         .filter((item) => lootItems.has(item)));
       if (lootNames.size === 0) return;
-      const previous = openWindows.get(window.id);
-      if (previous?.cleanupTimer !== undefined) {
-        clearTimeout(previous.cleanupTimer);
-        timers.delete(previous.cleanupTimer);
-      }
       openWindows.set(window.id, {
-        lootNames,
-        inventoryBefore: new Map([...lootNames].map((item) => [item, inventoryCount(bot, item)] as const)),
+        window,
+        lootItemCounts: new Map([...lootNames].map((item) => [item, {
+          container: countWindowItem(window, item, 0, window.inventoryStart),
+          player: countWindowItem(window, item, window.inventoryStart, window.inventoryEnd),
+        }] as const)),
       });
     };
-    const onWindowClose = (window: NonNullable<Bot["currentWindow"]>): void => {
-      const opened = openWindows.get(window.id);
-      if (!opened) return;
-      onInventoryUpdate();
-      if (!openWindows.has(window.id)) return;
-      const timer = setTimeout(() => {
-        openWindows.delete(window.id);
-        timers.delete(timer);
-      }, WINDOW_CLEANUP_DELAY_MS);
-      opened.cleanupTimer = timer;
-      timers.add(timer);
+    const onWindowClose = (window: MineflayerWindow): void => {
+      if (openWindows.get(window.id)?.window === window) openWindows.delete(window.id);
     };
-    const onInventoryUpdate = (): void => {
-      for (const [windowId, opened] of openWindows) {
-        const movedLoot = [...opened.lootNames].some((item) =>
-          inventoryCount(bot, item) > (opened.inventoryBefore.get(item) ?? 0),
-        );
-        if (!movedLoot) continue;
-        lootedSeats.add(seat);
-        if (opened.cleanupTimer !== undefined) {
-          clearTimeout(opened.cleanupTimer);
-          timers.delete(opened.cleanupTimer);
-        }
-        openWindows.delete(windowId);
-      }
+    const onWindowItems = (packet: WindowItemsPacket): void => {
+      if (typeof packet.windowId !== "number" || !Array.isArray(packet.items)) return;
+      const opened = openWindows.get(packet.windowId);
+      if (!opened
+        || bot.currentWindow !== opened.window
+        || packet.items.length !== opened.window.slots.length) return;
+
+      // Mineflayer updates currentWindow synchronously before this later raw-client listener runs.
+      const transferredLoot = [...opened.lootItemCounts].some(([item, before]) =>
+        countWindowItem(opened.window, item, 0, opened.window.inventoryStart) < before.container
+        && countWindowItem(opened.window, item, opened.window.inventoryStart, opened.window.inventoryEnd) > before.player,
+      );
+      if (!transferredLoot) return;
+      lootedSeats.add(seat);
+      openWindows.delete(packet.windowId);
     };
 
     bot.on("move", onMove);
@@ -114,29 +123,26 @@ export function recordHungerGameplayEvidence(active: AcceptanceRunContext): {
     bot.on("entityHurt", onEntityHurt);
     bot.on("windowOpen", onWindowOpen);
     bot.on("windowClose", onWindowClose);
-    bot.inventory.on("updateSlot", onInventoryUpdate);
+    client.on("window_items", onWindowItems);
     cleanup.push(() => {
       bot.removeListener("move", onMove);
       bot.removeListener("forcedMove", onForcedMove);
       bot.removeListener("entityHurt", onEntityHurt);
       bot.removeListener("windowOpen", onWindowOpen);
       bot.removeListener("windowClose", onWindowClose);
-      bot.inventory.removeListener("updateSlot", onInventoryUpdate);
-      for (const opened of openWindows.values()) {
-        if (opened.cleanupTimer !== undefined) {
-          clearTimeout(opened.cleanupTimer);
-          timers.delete(opened.cleanupTimer);
-        }
-      }
+      client.removeListener("window_items", onWindowItems);
       openWindows.clear();
     });
   }
 }
 
-function inventoryCount(bot: Bot, item: string): number {
+function countWindowItem(window: MineflayerWindow, item: string, start: number, end: number): number {
   const name = item.startsWith("minecraft:") ? item.slice("minecraft:".length) : item;
-  return bot.inventory.slots.reduce((count, slot) =>
-    count + (slot?.name === name ? slot.count : 0),
-  0);
+  let count = 0;
+  for (let slotIndex = start; slotIndex < end; slotIndex += 1) {
+    const slot = window.slots[slotIndex];
+    if (slot?.name === name) count += slot.count;
+  }
+  return count;
 }
 
