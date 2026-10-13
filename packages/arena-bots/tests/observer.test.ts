@@ -34,3 +34,15 @@ test('reports only client-received border state before the client has complete s
   assert.equal(bot._client.listenerCount('initialize_world_border'), 0);
   assert.throws(() => observer.observe(2), /closed/);
 });
+
+test('ignores damage events without a client-tracked attacker', () => {
+  const bot = new EventEmitter() as EventEmitter & { _client: EventEmitter; entity: { id: number } };
+  bot._client = new EventEmitter();
+  bot.entity = { id: 17 };
+  const observer = new MineflayerObserver(bot as unknown as Bot);
+
+  assert.doesNotThrow(() => bot.emit('entityHurt', bot.entity));
+  assert.doesNotThrow(() => bot.emit('entityHurt', bot.entity, undefined));
+
+  observer.close();
+});

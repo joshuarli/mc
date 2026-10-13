@@ -31,8 +31,13 @@ export function classifyItem(bot: Bot, item: MineflayerItem): KnownItem | null {
 
   const armor = /^(leather|chainmail|iron|golden|gold|diamond|netherite)_(helmet|chestplate|leggings|boots)$/.exec(item.name);
   if (armor !== null) {
-    const rating = MATERIAL_RATING[armor[1]];
-    const equipmentSlot = ARMOR_SLOT[armor[2]];
+    const material = armor[1];
+    const armorType = armor[2];
+    if (material === undefined || armorType === undefined) {
+      throw new Error(`unsupported armor item ${item.name}`);
+    }
+    const rating = MATERIAL_RATING[material];
+    const equipmentSlot = ARMOR_SLOT[armorType];
     if (rating === undefined || equipmentSlot === undefined) throw new Error(`unsupported armor item ${item.name}`);
     return { kind: 'armor', equipmentSlot, rating };
   }
@@ -40,7 +45,9 @@ export function classifyItem(bot: Bot, item: MineflayerItem): KnownItem | null {
 
   const weapon = /^(wooden|stone|iron|golden|gold|diamond|netherite)_(sword|axe)$/.exec(item.name);
   if (weapon !== null) {
-    const rating = MATERIAL_RATING[weapon[1]];
+    const material = weapon[1];
+    if (material === undefined) throw new Error(`unsupported weapon item ${item.name}`);
+    const rating = MATERIAL_RATING[material];
     if (rating === undefined) throw new Error(`unsupported weapon item ${item.name}`);
     return { kind: 'weapon', rating };
   }

@@ -9,7 +9,7 @@ import {
   type SkillFailure,
   type SkillOutcome,
 } from '@arena/core';
-import type { Bot, BotEvents, Entity } from 'mineflayer';
+import type { Bot, BotEvents } from 'mineflayer';
 import { Movements, goals, pathfinder } from 'mineflayer-pathfinder';
 import { classifyItem, mineflayerEquipmentDestination } from './items.js';
 import { MineflayerObserver } from './observer.js';
@@ -32,6 +32,7 @@ const MAX_TARGET_REPLANS = 8;
 type MineflayerItem = NonNullable<Bot['inventory']['slots'][number]>;
 type MineflayerWindow = NonNullable<Bot['currentWindow']>;
 type MineflayerChest = Awaited<ReturnType<Bot['openContainer']>>;
+type MineflayerEntity = Bot['entity'];
 type BoundedPathfinder = Bot['pathfinder'] & { searchRadius: number };
 
 interface ActiveSkill {
@@ -493,7 +494,7 @@ export class SkillOwner {
     }
   }
 
-  #visibleOpponent(entityIdValue: number): Entity {
+  #visibleOpponent(entityIdValue: number): MineflayerEntity {
     const entity = this.#bot.entities[String(entityIdValue)];
     if (entity === undefined || !isTargetablePlayer(this.#bot, entity)) {
       throw new SkillFault('preconditionsNotMet', `opponent ${entityIdValue} is not currently targetable`);
@@ -504,7 +505,7 @@ export class SkillOwner {
     return entity;
   }
 
-  #visibleDrop(entityIdValue: number): Entity {
+  #visibleDrop(entityIdValue: number): MineflayerEntity {
     const entity = this.#bot.entities[String(entityIdValue)];
     if (entity === undefined || entity.type !== 'object' || entity.getDroppedItem() === null) {
       throw new SkillFault('preconditionsNotMet', `drop ${entityIdValue} is not currently present`);
@@ -662,8 +663,8 @@ async function waitForAttackConfirmation(
   await new Promise<void>((resolve, reject) => {
     const timeout = setTimeout(() => finish(new SkillFault('timedOut', `attack on entity ${targetId} had no observed damage`)), timeoutMs);
     const onAbort = () => finish(new SkillInterrupted());
-    const onHurt = (entity: Entity, source: Entity) => {
-      if (entity.id === targetId && source.id === bot.entity.id) finish();
+    const onHurt = (entity?: MineflayerEntity, source?: MineflayerEntity) => {
+      if (entity?.id === targetId && source?.id === bot.entity.id) finish();
     };
     const finish = (error?: Error) => {
       clearTimeout(timeout);

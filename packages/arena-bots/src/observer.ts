@@ -24,7 +24,7 @@ import {
   type VisibleOpponent,
   type WorldBorder,
 } from '@arena/core';
-import type { Bot, Entity } from 'mineflayer';
+import type { Bot } from 'mineflayer';
 import { classifyItem } from './items.js';
 import { isTargetablePlayer, isVisibleEntity, isVisiblePosition, toBlockPosition } from './perception.js';
 import { ClientWorldBorder } from './world-border.js';
@@ -44,6 +44,7 @@ interface Sample<T> {
 }
 
 type MineflayerBlock = NonNullable<ReturnType<Bot['blockAt']>>;
+type MineflayerEntity = Bot['entity'];
 
 /** Builds each policy input from this bot's received packets and loaded client world. */
 export class MineflayerObserver {
@@ -58,7 +59,7 @@ export class MineflayerObserver {
   readonly #onRespawn: () => void;
   readonly #onEnd: () => void;
   readonly #onBlockUpdate: (oldBlock: MineflayerBlock | null, newBlock: MineflayerBlock) => void;
-  readonly #onEntityHurt: (entity: Entity, source: Entity) => void;
+  readonly #onEntityHurt: (entity?: MineflayerEntity, source?: MineflayerEntity) => void;
   #sequence = 0;
   #lastTick: Tick | null = null;
   #spawned = false;
@@ -93,11 +94,10 @@ export class MineflayerObserver {
       }
     };
     this.#onEntityHurt = (entity, source) => {
-      if (entity.id === this.#bot.entity?.id && source.type === 'player') {
-        const at = this.#clock();
-        if (!Number.isFinite(at)) throw new RangeError(`monotonic clock returned a non-finite value: ${at}`);
-        this.#lastDamage = { entityId: source.id, at };
-      }
+      if (entity?.id !== this.#bot.entity?.id || source?.type !== 'player') return;
+      const at = this.#clock();
+      if (!Number.isFinite(at)) throw new RangeError(`monotonic clock returned a non-finite value: ${at}`);
+      this.#lastDamage = { entityId: source.id, at };
     };
 
     this.#client.on('window_items', this.#onWindowItems);

@@ -1,15 +1,17 @@
 import { blockPosition, type BlockPosition } from '@arena/core';
-import type { Bot, Entity } from 'mineflayer';
+import type { Bot } from 'mineflayer';
 import { hasLocalVoxelLineOfSight, isInsidePerceptionCone, type ViewDirection } from './visibility.js';
 
+type MineflayerEntity = Bot['entity'];
+
 /** Uses this connection's current aim and loaded voxel raycast for entity visibility. */
-export function isVisibleEntity(bot: Bot, entity: Pick<Entity, 'position' | 'height'>): boolean {
+export function isVisibleEntity(bot: Bot, entity: Pick<MineflayerEntity, 'position' | 'height'>): boolean {
   return isVisiblePosition(bot, entity.position, entity.height);
 }
 
 export function isVisiblePosition(
   bot: Bot,
-  position: Pick<Entity, 'position'>['position'],
+  position: Pick<MineflayerEntity, 'position'>['position'],
   height: number,
 ): boolean {
   const viewer = viewDirection(bot);
@@ -17,7 +19,7 @@ export function isVisiblePosition(
     && hasLocalVoxelLineOfSight(bot, position);
 }
 
-export function isTargetablePlayer(bot: Bot, entity: Entity): boolean {
+export function isTargetablePlayer(bot: Bot, entity: MineflayerEntity): boolean {
   if (entity.type !== 'player') return false;
   const player = Object.values(bot.players).find((candidate) => candidate.entity === entity);
   return player !== undefined && (player.gamemode === 0 || player.gamemode === 2);
