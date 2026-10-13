@@ -11,6 +11,7 @@ import {
 } from "@arena/core";
 import { test } from "node:test";
 
+import { waitForActivePhase } from "./support/duel.js";
 import { createMineflayerSemanticWorldReader } from "./support/mineflayer-world.js";
 import { runOwnedAcceptanceScenario, type AcceptanceRunContext } from "./support/owned-run.js";
 
@@ -71,14 +72,16 @@ async function runFairnessVariant(
     variant.scenarioPath,
     variant.runId,
     async (active, runSignal) => {
-      capture = await captureFairnessRun(active, runSignal);
       await active.start();
+      await waitForActivePhase(active, runSignal);
+      capture = await captureFairnessRun(active, runSignal);
       await active.waitForOutcome();
     },
     signal,
+    { competitorDriver: "evaluator" },
   );
   assert.equal(completed.outcome.kind, "draw", "fairness fixture must finish its bounded observation run");
-  assert.ok(capture, "fairness evaluator must capture observations before the match starts");
+  assert.ok(capture, "fairness evaluator must capture observations before scripted gameplay");
   return capture;
 }
 

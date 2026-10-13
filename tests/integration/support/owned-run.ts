@@ -17,6 +17,9 @@ export async function runOwnedAcceptanceScenario(
   runId: string,
   evaluate: AcceptanceEvaluator,
   signal: AbortSignal,
+  options: Readonly<{
+    competitorDriver?: NonNullable<Parameters<typeof runPreparedRun>[0]["competitorDriver"]>;
+  }> = {},
 ) {
   const repositoryRoot = process.cwd();
   const helperPath = process.env.ARENA_FS_HELPER ?? resolve(repositoryRoot, ".work/arena-fs/arena-fs");
@@ -48,6 +51,7 @@ export async function runOwnedAcceptanceScenario(
     pluginJarPath,
     signal,
     evaluate,
+    competitorDriver: options.competitorDriver ?? "baselinePolicy",
   });
   const inspection = await inspectCompletedRun(helperPath, completed.runId);
   return { ...completed, inspection };

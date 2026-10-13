@@ -41,5 +41,3 @@ perception = "competitive-v1"
 mode = "evaluation"
 policy_replay = true
 world_outcomes = true
-schema = 1
-name = "hunger-six-seed-481518"

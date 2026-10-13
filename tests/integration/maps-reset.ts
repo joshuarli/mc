@@ -31,6 +31,9 @@ test("maps-reset", { timeout: 300_000 }, async (t) => {
     seatZeroUuid = seatZero.identity.offlineUuid;
     seatOneUuid = seatOne.identity.offlineUuid;
     const map = active.preparedRun.scenario.map;
+    await active.start();
+    await waitForActivePhase(active, signal);
+
     const usernamesBySeat = competitorUsernamesBySeat(active);
     const seatZeroReader = createMineflayerSemanticWorldReader(seatZero.bot, usernamesBySeat);
     const seatOneReader = createMineflayerSemanticWorldReader(seatOne.bot, usernamesBySeat);
@@ -49,8 +52,6 @@ test("maps-reset", { timeout: 300_000 }, async (t) => {
 
     const chest = map.lootContainers[0];
     assert.ok(chest, "maps-reset fixture must declare a loot container");
-    await active.start();
-    await waitForActivePhase(active, signal);
     assert.deepStrictEqual(
       await seatZero.client.run({ kind: "containerOpen", position: chest.position }),
       { kind: "succeeded" },
@@ -64,7 +65,7 @@ test("maps-reset", { timeout: 300_000 }, async (t) => {
 
     await leavePlatformAndDie(seatZero.bot, signal);
     await active.waitForOutcome();
-  }, t.signal);
+  }, t.signal, { competitorDriver: "evaluator" });
 
   assert.ok(firstWorld, "first run must retain its initial client-observed map");
   assert.ok(seatZeroUuid && seatOneUuid, "first run must assign stable offline UUIDs to both seats");
@@ -78,6 +79,9 @@ test("maps-reset", { timeout: 300_000 }, async (t) => {
       const seatZero = duelCompetitorForSeat(active, 0);
       const seatOne = duelCompetitorForSeat(active, 1);
       const map = active.preparedRun.scenario.map;
+      await active.start();
+      await waitForActivePhase(active, signal);
+
       const usernamesBySeat = competitorUsernamesBySeat(active);
       const seatZeroWorld = await captureSemanticWorld(
         map,
@@ -100,9 +104,8 @@ test("maps-reset", { timeout: 300_000 }, async (t) => {
       assertPlayerInventoryEmpty(observePlayerInventory(seatZero.bot));
       assertPlayerInventoryEmpty(observePlayerInventory(seatOne.bot));
 
-      await active.start();
       await active.waitForOutcome();
-    }, t.signal);
+    }, t.signal, { competitorDriver: "evaluator" });
 
     assert.ok(seatZeroUuid && seatOneUuid);
     assertPlayerDeathStatsReset({ deaths: stoppedDeaths(resetRun.inspection.stats, seatZeroUuid) });

@@ -65,6 +65,7 @@ test("legal-player", { timeout: 300_000 }, async (t) => {
       await active.waitForOutcome();
     },
     t.signal,
+    { competitorDriver: "evaluator" },
   );
 
   assertDeathWinner(run, 0, 1, 2);

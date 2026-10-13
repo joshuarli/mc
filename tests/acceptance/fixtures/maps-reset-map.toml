@@ -21,9 +21,9 @@ position = { x = 12, y = 121, z = 15 }
 [[operations]]
 kind = "spawn"
 seat = 1
-position = { x = 20, y = 121, z = 15 }
+position = { x = 16, y = 121, z = 15 }
 
 [[operations]]
 kind = "loot_container"
-position = { x = 13, y = 121, z = 15 }
+position = { x = 14, y = 121, z = 15 }
 inventory = ["minecraft:bread", "minecraft:stone_sword"]
