@@ -24,7 +24,7 @@ import { bindControlListener, ControlSessionError, createControlToken } from './
 import type { ControlListenerLease, ControlSession, RunnerCommand, RunnerCommandEnvelope } from './session.js';
 import { RuntimeTraceBuilder } from './trace.js';
 import { clonePristineWorld } from './world.js';
-import { decideRuntimePolicy } from './policy-decision.js';
+import { decideRuntimePolicy, isStrategyDecisionTick } from './policy-decision.js';
 import { armRuntimeDeadline, COLD_START_TIMEOUT_MS, type RuntimeDeadline } from './deadline.js';
 import {
   collectClientFailures,
@@ -225,6 +225,7 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
       leaseLost,
       policy: competitorDriver === 'baselinePolicy' ? policy : undefined,
       policySeed: scenario.seed,
+      strategyIntervalTicks: scenario.bots.strategyIntervalTicks,
       competitors: () => clients,
       recordPolicy: scenario.record.policyReplay,
     });
@@ -420,6 +421,7 @@ class ControlCoordinator {
     leaseLost: Promise<never>;
     policy: ReturnType<typeof compilePolicy> | undefined;
     policySeed: bigint;
+    strategyIntervalTicks: bigint;
     competitors(): readonly RuntimeCompetitorClient[];
     recordPolicy: boolean;
   }>) {
@@ -440,6 +442,7 @@ class ControlCoordinator {
         trace: options.trace,
         params: options.policy.params,
         seed: options.policySeed,
+        strategyIntervalTicks: options.strategyIntervalTicks,
         recordPolicy: options.recordPolicy,
         competitors: options.competitors,
         fail: (error) => this.#fail(error),
@@ -587,6 +590,7 @@ class LivePolicyLoop {
   readonly #trace: RuntimeTraceBuilder;
   readonly #params: ReturnType<typeof compilePolicy>['params'];
   readonly #seed: bigint;
+  readonly #strategyIntervalTicks: bigint;
   readonly #recordPolicy: boolean;
   readonly #competitors: () => readonly RuntimeCompetitorClient[];
   readonly #fail: (error: unknown) => void;
@@ -605,6 +609,7 @@ class LivePolicyLoop {
     trace: RuntimeTraceBuilder;
     params: ReturnType<typeof compilePolicy>['params'];
     seed: bigint;
+    strategyIntervalTicks: bigint;
     recordPolicy: boolean;
     competitors(): readonly RuntimeCompetitorClient[];
     fail(error: unknown): void;
@@ -612,6 +617,7 @@ class LivePolicyLoop {
     this.#trace = options.trace;
     this.#params = options.params;
     this.#seed = options.seed;
+    this.#strategyIntervalTicks = options.strategyIntervalTicks;
     this.#recordPolicy = options.recordPolicy;
     this.#competitors = options.competitors;
     this.#fail = options.fail;
@@ -624,6 +630,7 @@ class LivePolicyLoop {
     }
     if (tick === this.#lastTick) return;
     this.#lastTick = tick;
+    if (!isStrategyDecisionTick(BigInt(tick), this.#strategyIntervalTicks)) return;
     for (const competitor of this.#competitors()) {
       if (this.#tasks.has(competitor.seat)) continue;
       const task = this.#runDecision(competitor, tick);

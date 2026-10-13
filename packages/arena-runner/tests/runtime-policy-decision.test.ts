@@ -18,7 +18,17 @@ import {
   worldBorder,
   decide,
 } from '@arena/core';
-import { decideRuntimePolicy } from '../src/runtime/policy-decision.js';
+import { decideRuntimePolicy, isStrategyDecisionTick } from '../src/runtime/policy-decision.js';
+
+test('strategy decision cadence uses exact bigint ticks and intervals', () => {
+  assert.equal(isStrategyDecisionTick(0n, 4n), true);
+  assert.equal(isStrategyDecisionTick(3n, 4n), false);
+  assert.equal(isStrategyDecisionTick(4n, 4n), true);
+
+  const interval = 9_007_199_254_740_993n;
+  assert.equal(isStrategyDecisionTick(9_007_199_254_740_992n, interval), false);
+  assert.equal(isStrategyDecisionTick(interval, interval), true);
+});
 
 test('runtime policy replay captures the RNG state before an exploration draw', () => {
   const observation = agentObservation({
