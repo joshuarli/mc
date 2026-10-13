@@ -2,8 +2,9 @@ import { MAX_OWNED_READ_BYTES, OwnedFilesError, readOwnedFile } from '../owned-f
 import { RunnerError } from '../errors.js';
 import { parseStrictJson, strictJsonNumberToken, type StrictJsonValue } from '../control/strict-json.js';
 
-const STATS_DIRECTORY = Buffer.from('/server/world/players/stats/', 'ascii');
+const STATS_DIRECTORY = Buffer.from('/server/world/players/stats', 'ascii');
 const STATS_SUFFIX = Buffer.from('.json', 'ascii');
+const STATS_PATH_SEPARATOR = Buffer.from('/', 'ascii');
 
 export interface PlayerIdentity {
   readonly username: string;
@@ -16,10 +17,15 @@ export interface StoppedPlayerStats extends PlayerIdentity {
   readonly playerKills: number | null;
 }
 
-export interface StoppedPlayerStatsFile {
-  readonly stats: StoppedPlayerStats;
-  readonly contents: Buffer | null;
-}
+export type StoppedPlayerStatsFile =
+  | Readonly<{
+      stats: StoppedPlayerStats & Readonly<{ status: 'present' }>;
+      contents: Buffer;
+    }>
+  | Readonly<{
+      stats: StoppedPlayerStats & Readonly<{ status: 'absent' }>;
+      contents: null;
+    }>;
 
 /** Reads Minecraft statistics through the owned-files helper after the server has stopped. */
 export async function readStoppedPlayerStats(options: Readonly<{
@@ -64,13 +70,14 @@ export async function readStoppedPlayerStatsFile(options: Readonly<{
     });
   } catch (error) {
     if (error instanceof OwnedFilesError && error.category === 'not_found') {
+      const stats: StoppedPlayerStats & Readonly<{ status: 'absent' }> = Object.freeze({
+        ...player,
+        status: 'absent' as const,
+        deaths: null,
+        playerKills: null,
+      });
       return Object.freeze({
-        stats: Object.freeze({
-          ...player,
-          status: 'absent',
-          deaths: null,
-          playerKills: null,
-        }),
+        stats,
         contents: null,
       });
     }
@@ -78,15 +85,23 @@ export async function readStoppedPlayerStatsFile(options: Readonly<{
   }
 
   const stats = parseStats(contents);
+  const presentStats: StoppedPlayerStats & Readonly<{ status: 'present' }> = Object.freeze({
+    ...player,
+    status: 'present' as const,
+    deaths: readCounter(stats, 'minecraft:deaths'),
+    playerKills: readCounter(stats, 'minecraft:player_kills'),
+  });
   return Object.freeze({
-    stats: Object.freeze({
-      ...player,
-      status: 'present',
-      deaths: readCounter(stats, 'minecraft:deaths'),
-      playerKills: readCounter(stats, 'minecraft:player_kills'),
-    }),
+    stats: presentStats,
     contents,
   });
+}
+
+export function stoppedPlayerStatsDirectoryPath(runDirectoryPath: Buffer): Buffer {
+  return Buffer.concat([
+    runDirectoryPath,
+    STATS_DIRECTORY,
+  ]);
 }
 
 export function stoppedPlayerStatsPath(runDirectoryPath: Buffer, offlineUuid: string): Buffer {
@@ -94,8 +109,8 @@ export function stoppedPlayerStatsPath(runDirectoryPath: Buffer, offlineUuid: st
     throw new RunnerError('runtime_failure', 'player statistics', { kind: 'invalid_offline_uuid' });
   }
   return Buffer.concat([
-    runDirectoryPath,
-    STATS_DIRECTORY,
+    stoppedPlayerStatsDirectoryPath(runDirectoryPath),
+    STATS_PATH_SEPARATOR,
     Buffer.from(offlineUuid, 'ascii'),
     STATS_SUFFIX,
   ]);

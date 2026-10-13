@@ -38,6 +38,7 @@ import {
 import {
   readStoppedPlayerStats,
   readStoppedPlayerStatsFile,
+  stoppedPlayerStatsDirectoryPath,
   stoppedPlayerStatsPath,
   type StoppedPlayerStatsFile,
 } from './observations.js';
@@ -483,10 +484,7 @@ async function archiveCompletedRun(
     await publishOrCompareArchiveFile(options, destination, source.segmentContents[index]!);
   }
   if (statsFiles.some(({ contents }) => contents !== null)) {
-    const statsDirectory = Buffer.concat([
-      archiveDirectory,
-      Buffer.from('/server/world/players/stats', 'ascii'),
-    ]);
+    const statsDirectory = stoppedPlayerStatsDirectoryPath(archiveDirectory);
     await ensureArchiveDirectory(options, statsDirectory);
   }
   for (const [index, player] of sourceReconstruction.players.entries()) {
