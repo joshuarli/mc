@@ -1,0 +1,23 @@
+{
+  "stats": {
+    "minecraft:used": {
+      "minecraft:stone_sword": 6,
+      "minecraft:bread": 1
+    },
+    "minecraft:custom": {
+      "minecraft:sprint_one_cm": 28921,
+      "minecraft:open_chest": 1,
+      "minecraft:time_since_rest": 1968,
+      "minecraft:walk_one_cm": 687,
+      "minecraft:total_world_time": 1968,
+      "minecraft:leave_game": 1,
+      "minecraft:fly_one_cm": 2281,
+      "minecraft:play_time": 1968,
+      "minecraft:damage_dealt": 252,
+      "minecraft:jump": 9,
+      "minecraft:player_kills": 1,
+      "minecraft:time_since_death": 1968
+    }
+  },
+  "DataVersion": 4790
+}
