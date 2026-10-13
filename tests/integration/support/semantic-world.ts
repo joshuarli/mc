@@ -112,7 +112,7 @@ export function assertSemanticWorldMatchesMap(map: MapIr, observed: SemanticWorl
 
 /**
  * Reset is correct only when the independently observed world state is exact.
- * Inventory slot and event order are deliberately part of this comparison.
+ * Inventory slot order and all observed values are part of this comparison.
  */
 export function assertResetWorldMatchesFirst(
   first: SemanticWorldObservation,
