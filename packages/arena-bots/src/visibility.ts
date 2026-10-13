@@ -36,7 +36,7 @@ export function isInsidePerceptionCone(viewer: ViewDirection, target: ViewTarget
   if (distance > MAX_ENTITY_RANGE_BLOCKS || distance === 0) return false;
 
   const targetYaw = Math.atan2(-dx, -dz);
-  const targetPitch = Math.atan2(-dy, horizontalDistance);
+  const targetPitch = Math.atan2(dy, horizontalDistance);
   return Math.abs(shortestAngle(targetYaw - viewer.yaw)) <= HALF_HORIZONTAL_FOV_RADIANS
     && Math.abs(shortestAngle(targetPitch - viewer.pitch)) <= HALF_VERTICAL_FOV_RADIANS;
 }

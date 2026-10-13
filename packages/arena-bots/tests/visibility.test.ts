@@ -32,6 +32,20 @@ test('applies range, horizontal field of view, and vertical field of view', () =
   }), false);
 });
 
+test('accepts targets above and below when aligned with Mineflayer lookAt pitch', () => {
+  const above = { position: { x: 0, y: 7.1, z: -4 }, height: 1.8 };
+  const abovePitch = mineflayerLookAtPitch(viewer, above);
+  assert.ok(abovePitch > 0);
+  assert.equal(isInsidePerceptionCone({ ...viewer, pitch: abovePitch }, above), true);
+  assert.equal(isInsidePerceptionCone({ ...viewer, pitch: -abovePitch }, above), false);
+
+  const below = { position: { x: 0, y: -5.7, z: -4 }, height: 1.8 };
+  const belowPitch = mineflayerLookAtPitch(viewer, below);
+  assert.ok(belowPitch < 0);
+  assert.equal(isInsidePerceptionCone({ ...viewer, pitch: belowPitch }, below), true);
+  assert.equal(isInsidePerceptionCone({ ...viewer, pitch: -belowPitch }, below), false);
+});
+
 test('rejects incomplete or non-finite positions', () => {
   assert.equal(isInsidePerceptionCone(viewer, {
     position: { x: Number.NaN, y: 0, z: 1 },
@@ -42,3 +56,13 @@ test('rejects incomplete or non-finite positions', () => {
     height: 1.8,
   }), false);
 });
+
+function mineflayerLookAtPitch(
+  view: typeof viewer,
+  target: { readonly position: { readonly x: number; readonly y: number; readonly z: number }; readonly height: number },
+): number {
+  const dx = target.position.x - view.position.x;
+  const dy = target.position.y + target.height / 2 - (view.position.y + view.eyeHeight);
+  const dz = target.position.z - view.position.z;
+  return Math.atan2(dy, Math.sqrt(dx * dx + dz * dz));
+}
