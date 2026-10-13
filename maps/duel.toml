@@ -1,0 +1,68 @@
+schema = 1
+name = "duel"
+
+[dimensions]
+width = 64
+depth = 64
+min_y = 0
+max_y = 128
+
+[[operations]]
+kind = "cuboid"
+from = { x = 0, y = 64, z = 0 }
+to = { x = 63, y = 64, z = 63 }
+block = "minecraft:stone"
+
+[[operations]]
+kind = "ramp"
+position = { x = 31, y = 65, z = 21 }
+block = "minecraft:cobblestone"
+
+[[operations]]
+kind = "ramp"
+position = { x = 32, y = 65, z = 42 }
+block = "minecraft:cobblestone"
+
+[[operations]]
+kind = "cuboid"
+from = { x = 14, y = 65, z = 14 }
+to = { x = 14, y = 66, z = 14 }
+block = "minecraft:oak_log"
+
+[[operations]]
+kind = "cuboid"
+from = { x = 49, y = 65, z = 14 }
+to = { x = 49, y = 66, z = 14 }
+block = "minecraft:oak_log"
+
+[[operations]]
+kind = "cuboid"
+from = { x = 14, y = 65, z = 49 }
+to = { x = 14, y = 66, z = 49 }
+block = "minecraft:oak_log"
+
+[[operations]]
+kind = "cuboid"
+from = { x = 49, y = 65, z = 49 }
+to = { x = 49, y = 66, z = 49 }
+block = "minecraft:oak_log"
+
+[[operations]]
+kind = "spawn"
+seat = 0
+position = { x = 12, y = 65, z = 32 }
+
+[[operations]]
+kind = "spawn"
+seat = 1
+position = { x = 52, y = 65, z = 32 }
+
+[[operations]]
+kind = "loot_container"
+position = { x = 30, y = 65, z = 31 }
+inventory = ["minecraft:bread", "minecraft:stone_sword"]
+
+[[operations]]
+kind = "loot_container"
+position = { x = 33, y = 65, z = 32 }
+inventory = ["minecraft:bread", "minecraft:stone_axe"]

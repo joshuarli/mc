@@ -1,0 +1,71 @@
+use std::{error::Error, fmt};
+
+/// The kind of invalid input found while compiling a scenario or map.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SpecErrorKind {
+    Syntax,
+    UnknownField,
+    MissingField,
+    InvalidValue,
+    Range,
+    Conflict,
+    Geometry,
+    ResourceLimit,
+}
+
+/// A source-aware specification failure suitable for CLI or API presentation.
+#[derive(Debug)]
+pub struct SpecError {
+    kind: SpecErrorKind,
+    path: String,
+    message: String,
+    source: Option<Box<dyn Error + Send + Sync>>,
+}
+
+impl SpecError {
+    pub(crate) fn new(kind: SpecErrorKind, path: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            kind,
+            path: path.into(),
+            message: message.into(),
+            source: None,
+        }
+    }
+
+    pub(crate) fn syntax(
+        document: &str,
+        error: toml_edit::TomlError,
+    ) -> Self {
+        let message = error.to_string();
+        Self {
+            kind: SpecErrorKind::Syntax,
+            path: document.to_owned(),
+            message,
+            source: Some(Box::new(error)),
+        }
+    }
+
+    /// Returns the structured input failure category.
+    pub const fn kind(&self) -> SpecErrorKind {
+        self.kind
+    }
+
+    /// Returns the scenario, map, or field path associated with the failure.
+    pub fn path(&self) -> &str {
+        &self.path
+    }
+}
+
+impl fmt::Display for SpecError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}: {}", self.path, self.message)
+    }
+}
+
+impl Error for SpecError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        self.source
+            .as_deref()
+            .map(|source| source as &(dyn Error + 'static))
+    }
+}
