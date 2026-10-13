@@ -1,0 +1,10 @@
+[package]
+name = "arena-runner"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+arena-core = { workspace = true }
+arena-spec = { workspace = true }
+arena-bots = { workspace = true }

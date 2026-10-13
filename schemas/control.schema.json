@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://arena.invalid/schemas/control-v1.schema.json",
+  "title": "Arena loopback control envelope schema version 1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["protocol", "run_id", "sequence", "type", "payload"],
+  "properties": {
+    "protocol": { "const": 1 },
+    "run_id": { "type": "string", "minLength": 1 },
+    "sequence": { "type": "integer", "minimum": 1 },
+    "correlation": { "type": "integer", "minimum": 1 },
+    "type": {
+      "enum": ["ready", "build_progress", "prepare", "start", "abort", "finish", "public_clock", "public_state", "outcome", "metrics", "ack", "error"]
+    },
+    "payload": { "type": "object" }
+  }
+}

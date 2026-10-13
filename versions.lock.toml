@@ -1,0 +1,33 @@
+schema = 1
+
+[azalea]
+repository = "https://github.com/azalea-rs/azalea"
+revision = "0bd22cbcdd30b611b112fc1c0a3d78535fd493a1"
+minecraft_version = "26.2"
+protocol_version = 776
+rust_toolchain = "nightly-2026-10-07"
+rustc = "1.101.0-nightly (8d1a76430 2026-10-06)"
+
+[paper]
+version = "26.2"
+channel = "STABLE"
+server_build = 133
+server_file = "paper-26.2-133.jar"
+server_url = "https://fill-data.papermc.io/v1/objects/bf1dcf627364f8a631ab15250d240eb5a8e89faaac523b391e1c61367fce9ff1/paper-26.2-133.jar"
+server_size_bytes = 64525509
+server_sha256 = "bf1dcf627364f8a631ab15250d240eb5a8e89faaac523b391e1c61367fce9ff1"
+api_version = "26.2.build.133-stable"
+api_version_string = "26.2"
+
+[java]
+distribution = "Homebrew openjdk@25"
+version = "25.0.4.1"
+build = "25.0.4.1"
+architecture = "aarch64-apple-darwin"
+bottle_sha256 = "f7840c6ec13b024123567e0f7c2d422feea611932fad408ea801dfade699bd50"
+
+[gradle]
+version = "9.6.1"
+distribution = "https://services.gradle.org/distributions/gradle-9.6.1-bin.zip"
+distribution_sha256 = "9c0f7faeeb306cb14e4279a3e084ca6b596894089a0638e68a07c945a32c9e14"
+wrapper_jar_sha256 = "497c8c2a7e5031f6aa847f88104aa80a93532ec32ee17bdb8d1d2f67a194a9c7"

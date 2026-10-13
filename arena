@@ -1,0 +1,45 @@
+#!/bin/sh
+set -eu
+
+root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+mkdir -p "$root/.work/tmp" "$root/.work/arena"
+export TMPDIR="$root/.work/tmp"
+export CARGO_HOME="$root/.work/arena/cargo"
+export CARGO_TARGET_DIR="$root/.work/arena/target"
+export RUSTUP_HOME="$root/.work/arena/rustup"
+
+fail() {
+    printf '%s\n' "arena: $*" >&2
+    exit 2
+}
+
+if [ "${1-}" != test ]; then
+    fail "usage: ./arena test --suite integration --case stack"
+fi
+shift
+
+suite=
+case_name=
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --suite)
+            [ -z "$suite" ] || fail "--suite may be specified once"
+            [ "$#" -ge 2 ] || fail "--suite requires a value"
+            suite=$2
+            shift 2
+            ;;
+        --case)
+            [ -z "$case_name" ] || fail "--case may be specified once"
+            [ "$#" -ge 2 ] || fail "--case requires a value"
+            case_name=$2
+            shift 2
+            ;;
+        *) fail "unknown test selector argument: $1" ;;
+    esac
+done
+
+[ "$suite" = integration ] || fail "unknown or unsupported suite: ${suite:-<missing>}"
+[ "$case_name" = stack ] || fail "unknown or blocked integration case: ${case_name:-<missing>}"
+[ -f "$root/tests/integration/stack.rs" ] || fail "blocked: stack smoke harness is not ready"
+
+exec cargo test --locked --package arena-runner --test stack -- --exact stack --nocapture

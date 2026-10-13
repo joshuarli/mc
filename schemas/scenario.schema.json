@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://arena.invalid/schemas/scenario-v1.schema.json",
+  "title": "Arena scenario schema version 1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "name", "mode", "seed", "map", "policy", "roster", "server", "match", "border", "bots", "record"],
+  "properties": {
+    "schema": { "const": 1 },
+    "name": { "type": "string", "minLength": 1 },
+    "mode": { "enum": ["hunger_games", "civilization"] },
+    "seed": { "type": "integer", "minimum": 0 },
+    "map": { "type": "string", "minLength": 1 },
+    "policy": { "type": "string", "minLength": 1 },
+    "roster": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["competitors", "human_seats_in_play_mode", "spectator_capacity"],
+      "properties": {
+        "competitors": { "type": "integer", "minimum": 1 },
+        "human_seats_in_play_mode": { "type": "integer", "minimum": 0 },
+        "spectator_capacity": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "server": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["minecraft", "view_distance_chunks", "simulation_distance_chunks", "max_tick_rate"],
+      "properties": {
+        "minecraft": { "type": "string", "minLength": 1 },
+        "view_distance_chunks": { "type": "integer", "minimum": 2, "maximum": 32 },
+        "simulation_distance_chunks": { "type": "integer", "minimum": 2, "maximum": 32 },
+        "max_tick_rate": { "type": "integer", "minimum": 1, "maximum": 20 }
+      }
+    },
+    "match": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["countdown_ticks", "grace_ticks", "authoritative_max_ticks", "respawn", "block_breaking", "block_placing", "natural_mobs", "natural_random_ticks"],
+      "properties": {
+        "countdown_ticks": { "type": "integer", "minimum": 0 },
+        "grace_ticks": { "type": "integer", "minimum": 0 },
+        "authoritative_max_ticks": { "type": "integer", "minimum": 1 },
+        "respawn": { "type": "boolean" },
+        "block_breaking": { "type": "boolean" },
+        "block_placing": { "type": "boolean" },
+        "natural_mobs": { "type": "boolean" },
+        "natural_random_ticks": { "type": "boolean" }
+      }
+    },
+    "border": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["initial_diameter_blocks", "shrink_start_tick", "shrink_end_tick", "final_diameter_blocks"],
+      "properties": {
+        "initial_diameter_blocks": { "type": "number", "exclusiveMinimum": 0 },
+        "shrink_start_tick": { "type": "integer", "minimum": 0 },
+        "shrink_end_tick": { "type": "integer", "minimum": 0 },
+        "final_diameter_blocks": { "type": "number", "exclusiveMinimum": 0 }
+      }
+    },
+    "bots": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["strategy_interval_ticks", "path_expansions_per_slice", "max_pending_paths_per_bot", "perception"],
+      "properties": {
+        "strategy_interval_ticks": { "type": "integer", "minimum": 1 },
+        "path_expansions_per_slice": { "type": "integer", "minimum": 1 },
+        "max_pending_paths_per_bot": { "type": "integer", "minimum": 1 },
+        "perception": { "type": "string", "minLength": 1 }
+      }
+    },
+    "record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "policy_replay", "world_outcomes"],
+      "properties": {
+        "mode": { "enum": ["evaluation"] },
+        "policy_replay": { "type": "boolean" },
+        "world_outcomes": { "type": "boolean" }
+      }
+    }
+  }
+}

@@ -1,0 +1,15 @@
+[package]
+name = "arena-bots"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+arena-core = { workspace = true }
+azalea = { workspace = true }
+eyre = { workspace = true }
+tokio = { workspace = true }
+
+[[bin]]
+name = "arena-smoke-client"
+path = "src/bin/smoke.rs"

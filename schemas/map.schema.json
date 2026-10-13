@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://arena.invalid/schemas/map-v1.schema.json",
+  "title": "Arena map schema version 1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "name", "dimensions", "operations"],
+  "properties": {
+    "schema": { "const": 1 },
+    "name": { "type": "string", "minLength": 1 },
+    "dimensions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["width", "depth", "min_y", "max_y"],
+      "properties": {
+        "width": { "type": "integer", "minimum": 1 },
+        "depth": { "type": "integer", "minimum": 1 },
+        "min_y": { "type": "integer" },
+        "max_y": { "type": "integer" }
+      }
+    },
+    "operations": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/operation" }
+    }
+  },
+  "$defs": {
+    "position": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y", "z"],
+      "properties": {
+        "x": { "type": "integer" },
+        "y": { "type": "integer" },
+        "z": { "type": "integer" }
+      }
+    },
+    "operation": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "from", "to", "block"],
+          "properties": {
+            "kind": { "const": "cuboid" },
+            "from": { "$ref": "#/$defs/position" },
+            "to": { "$ref": "#/$defs/position" },
+            "block": { "type": "string", "minLength": 1 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "position", "block"],
+          "properties": {
+            "kind": { "enum": ["path", "ramp"] },
+            "position": { "$ref": "#/$defs/position" },
+            "block": { "type": "string", "minLength": 1 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "position", "seat"],
+          "properties": {
+            "kind": { "const": "spawn" },
+            "position": { "$ref": "#/$defs/position" },
+            "seat": { "type": "integer", "minimum": 0 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "position", "inventory"],
+          "properties": {
+            "kind": { "const": "loot_container" },
+            "position": { "$ref": "#/$defs/position" },
+            "inventory": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+          }
+        }
+      ]
+    }
+  }
+}
