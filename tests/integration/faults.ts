@@ -7,7 +7,7 @@ import { once } from "node:events";
 import { dirname, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
-import test from "node:test";
+import test, { type TestContext } from "node:test";
 
 import { RunnerError } from "../../packages/arena-runner/src/errors.js";
 import {
@@ -25,162 +25,220 @@ const ROOT = process.cwd();
 const GAME_PORT = 25565;
 const MAX_CHILD_OUTPUT_BYTES = 4 * 1024 * 1024;
 
-test("faults", { timeout: 900_000 }, async (t) => {
-  const scenario = createLongRunningScenario();
-  t.after(() => rmSync(scenario.directory, { recursive: true, force: true }));
+interface FaultScenario {
+  readonly directory: string;
+  readonly path: string;
+}
 
-  await t.test("occupied game port is reported as an owner conflict without stopping its owner", { timeout: 120_000 }, async (caseTest) => {
-    const prepared = await prepareOwnedAcceptanceRun(scenario.path, "fault-port-conflict", caseTest.signal);
-    const blocker = createServer();
-    await listenOnGamePort(blocker);
-    try {
-      const failure = await expectRunnerFailure(runPreparedRun(prepared));
-      assert.equal(failure.category, "owner_conflict");
-      assert.equal(failure.source.kind, "paper_port_bind_failed");
-      assert.equal(blocker.listening, true, "the runtime must leave the unrelated listener alive");
-    } finally {
-      await closeServer(blocker);
-    }
+interface FaultCase {
+  readonly selector: string;
+  readonly description: string;
+  readonly timeoutMs: number;
+  readonly run: (scenario: FaultScenario, testContext: TestContext) => Promise<void>;
+}
+
+const faultCases = [
+  {
+    selector: "faults-port-conflict",
+    description: "occupied game port is reported as an owner conflict without stopping its owner",
+    timeoutMs: 120_000,
+    run: runOccupiedPortConflict,
+  },
+  {
+    selector: "faults-second-owner",
+    description: "a second runtime owner is rejected by the native run lease",
+    timeoutMs: 60_000,
+    run: runSecondOwnerConflict,
+  },
+  {
+    selector: "faults-plugin-identity",
+    description: "the runtime rejects a loaded plugin with the wrong identity",
+    timeoutMs: 180_000,
+    run: runWrongPluginIdentity,
+  },
+  {
+    selector: "faults-server-crash",
+    description: "a Paper crash closes control and leaves only a truthful partial trace",
+    timeoutMs: 180_000,
+    run: runPaperCrash,
+  },
+  {
+    selector: "faults-sigint",
+    description: "Ctrl-C returns exit 130 with a partial trace and no fabricated outcome",
+    timeoutMs: 180_000,
+    run: runSigint,
+  },
+] satisfies readonly FaultCase[];
+
+for (const faultCase of faultCases) {
+  test(faultCase.selector, { timeout: faultCase.timeoutMs }, async (testContext) => {
+    const scenario = createLongRunningScenario();
+    testContext.after(() => rmSync(scenario.directory, { recursive: true, force: true }));
+    await faultCase.run(scenario, testContext);
   });
+}
 
-  await t.test("a second runtime owner is rejected by the native run lease", { timeout: 60_000 }, async (caseTest) => {
-    const prepared = await prepareOwnedAcceptanceRun(scenario.path, "fault-second-owner", caseTest.signal);
-    const owner = await acquireOwnedRunLease({
+test("faults", { timeout: 900_000 }, async (testContext) => {
+  const scenario = createLongRunningScenario();
+  testContext.after(() => rmSync(scenario.directory, { recursive: true, force: true }));
+
+  for (const faultCase of faultCases) {
+    await testContext.test(faultCase.description, { timeout: faultCase.timeoutMs }, (caseTest) =>
+      faultCase.run(scenario, caseTest));
+  }
+});
+
+async function runOccupiedPortConflict(scenario: FaultScenario, testContext: TestContext): Promise<void> {
+  const prepared = await prepareOwnedAcceptanceRun(scenario.path, "fault-port-conflict", testContext.signal);
+  const blocker = createServer();
+  await listenOnGamePort(blocker);
+  try {
+    const failure = await expectRunnerFailure(runPreparedRun(prepared));
+    assert.equal(failure.category, "owner_conflict");
+    assert.equal(failure.source.kind, "paper_port_bind_failed");
+    assert.equal(blocker.listening, true, "the runtime must leave the unrelated listener alive");
+  } finally {
+    await closeServer(blocker);
+  }
+}
+
+async function runSecondOwnerConflict(scenario: FaultScenario, testContext: TestContext): Promise<void> {
+  const prepared = await prepareOwnedAcceptanceRun(scenario.path, "fault-second-owner", testContext.signal);
+  const owner = await acquireOwnedRunLease({
+    helperPath: prepared.helperPath,
+    ownedRoot: prepared.ownedRoot,
+    relativePath: prepared.preparedRun.runDirectoryPath,
+    signal: testContext.signal,
+  });
+  try {
+    const failure = await expectRunnerFailure(runPreparedRun(prepared));
+    assert.equal(failure.category, "owner_conflict");
+    assert.equal(failure.source.kind, "owner_conflict");
+  } finally {
+    await owner.release();
+  }
+}
+
+async function runWrongPluginIdentity(scenario: FaultScenario, testContext: TestContext): Promise<void> {
+  const prepared = await prepareOwnedAcceptanceRun(scenario.path, "fault-plugin-identity", testContext.signal);
+  const scratch = mkdtempSync(join(ROOT, ".work", "tmp", "arena-plugin-identity-"));
+  try {
+    const mismatchedPluginJar = replacePluginIdentity(prepared.pluginJarPath, prepared.javaExecutable, scratch);
+    const failure = await expectRunnerFailure(runPreparedRun({
+      ...prepared,
+      pluginJarPath: mismatchedPluginJar,
+    }));
+    assert.equal(failure.category, "runtime_failure");
+    assert.equal(failure.source.kind, "plugin_identity_mismatch");
+    const artifact = await readOperationalFailureArtifact({
       helperPath: prepared.helperPath,
       ownedRoot: prepared.ownedRoot,
-      relativePath: prepared.preparedRun.runDirectoryPath,
-      signal: caseTest.signal,
+      runId: prepared.preparedRun.runId,
     });
-    try {
-      const failure = await expectRunnerFailure(runPreparedRun(prepared));
-      assert.equal(failure.category, "owner_conflict");
-      assert.equal(failure.source.kind, "owner_conflict");
-    } finally {
-      await owner.release();
-    }
-  });
+    assert.equal(artifact.primary.source.kind, "plugin_identity_mismatch");
+    await assertGamePortReleased();
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+}
 
-  await t.test("the runtime rejects a loaded plugin with the wrong identity", { timeout: 180_000 }, async (caseTest) => {
-    const prepared = await prepareOwnedAcceptanceRun(scenario.path, "fault-plugin-identity", caseTest.signal);
-    const scratch = mkdtempSync(join(ROOT, ".work", "tmp", "arena-plugin-identity-"));
-    try {
-      const mismatchedPluginJar = replacePluginIdentity(prepared.pluginJarPath, prepared.javaExecutable, scratch);
-      const failure = await expectRunnerFailure(runPreparedRun({
-        ...prepared,
-        pluginJarPath: mismatchedPluginJar,
-      }));
-      assert.equal(failure.category, "runtime_failure");
-      assert.equal(failure.source.kind, "plugin_identity_mismatch");
-      const artifact = await readOperationalFailureArtifact({
+async function runPaperCrash(scenario: FaultScenario, testContext: TestContext): Promise<void> {
+  const prepared = await prepareOwnedAcceptanceRun(scenario.path, "fault-server-crash", testContext.signal);
+  const failure = await expectRunnerFailure(runPreparedRun({
+    ...prepared,
+    evaluate: async (active, signal) => {
+      await active.start();
+      await waitForTraceCheckpoint({
         helperPath: prepared.helperPath,
         ownedRoot: prepared.ownedRoot,
         runId: prepared.preparedRun.runId,
-      });
-      assert.equal(artifact.primary.source.kind, "plugin_identity_mismatch");
-      await assertGamePortReleased();
-    } finally {
-      rmSync(scratch, { recursive: true, force: true });
-    }
-  });
+      }, signal, 90_000);
+      const server = await waitForOwnedJavaProcess(prepared.preparedRun.runId, process.pid, signal, 10_000);
+      process.kill(server.pid, "SIGKILL");
+      await active.waitForOutcome();
+    },
+  }));
+  assert.equal(failure.category, "runtime_failure");
+  assert.ok(
+    failure.source.kind === "server_exited_before_shutdown"
+      || failure.source.kind === "control_disconnected"
+      || failure.source.kind === "control_protocol",
+    `unexpected server/control failure: ${failure.source.kind}`,
+  );
+  await assertInterruptedEvidence(prepared.helperPath, prepared.ownedRoot, prepared.preparedRun.runId, "runtime_failure");
+  assert.equal(ownedJavaProcesses(prepared.preparedRun.runId).length, 0, "the crashed Paper process must be reaped");
+  await assertGamePortReleased();
+}
 
-  await t.test("a Paper crash closes control and leaves only a truthful partial trace", { timeout: 180_000 }, async (caseTest) => {
-    const prepared = await prepareOwnedAcceptanceRun(scenario.path, "fault-server-crash", caseTest.signal);
-    const failure = await expectRunnerFailure(runPreparedRun({
-      ...prepared,
-      evaluate: async (active, signal) => {
-        await active.start();
-        await waitForTraceCheckpoint({
-          helperPath: prepared.helperPath,
-          ownedRoot: prepared.ownedRoot,
-          runId: prepared.preparedRun.runId,
-        }, signal, 90_000);
-        const server = await waitForOwnedJavaProcess(prepared.preparedRun.runId, process.pid, signal, 10_000);
-        process.kill(server.pid, "SIGKILL");
-        await active.waitForOutcome();
-      },
-    }));
-    assert.equal(failure.category, "runtime_failure");
-    assert.ok(
-      failure.source.kind === "server_exited_before_shutdown"
-        || failure.source.kind === "control_disconnected"
-        || failure.source.kind === "control_protocol",
-      `unexpected server/control failure: ${failure.source.kind}`,
+async function runSigint(scenario: FaultScenario, testContext: TestContext): Promise<void> {
+  const runId = `fault-sigint-${randomUUID()}`;
+  const helperPath = process.env.ARENA_FS_HELPER ?? resolve(ROOT, ".work/arena-fs/arena-fs");
+  const javaHome = process.env.JAVA_HOME;
+  assert.ok(javaHome, "the pinned JDK must be configured by the integration selector");
+  const paperJarPath = join(ROOT, ".work", "arena", "downloads", lockedPaperFile());
+  const pluginJarPath = join(ROOT, ".work", "arena", "gradle-build", "libs", "arena-plugin-0.1.0.jar");
+  const javaExecutable = join(javaHome, "bin", "java");
+  const cliPath = join(ROOT, ".work", "build", "packages", "arena-runner", "src", "cli.js");
+  const marker = `ARENA_FAULT_RESULT_${runId}:`;
+  const args = ["run", "--scenario", scenario.path, "--run-id", runId];
+  const childSource = [
+    `import { runCli } from ${JSON.stringify(pathToFileURL(cliPath).href)};`,
+    `const result = await runCli(${JSON.stringify(args)});`,
+    `process.stdout.write(${JSON.stringify(marker)} + JSON.stringify(result) + "\\n");`,
+    "process.exitCode = result.exitCode;",
+  ].join("\n");
+  const child = spawn(process.execPath, ["--input-type=module", "-e", childSource], {
+    cwd: ROOT,
+    env: {
+      ...process.env,
+      ARENA_FS_HELPER: helperPath,
+      ARENA_JAVA_HOME: javaHome,
+      ARENA_JAVA_TMPDIR: join(ROOT, ".work", "tmp"),
+      ARENA_PAPER_JAR: paperJarPath,
+      ARENA_PLUGIN_JAR: pluginJarPath,
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const captured = captureChildOutput(child);
+  const closed = childExit(child);
+  let finished = false;
+  try {
+    await once(child, "spawn");
+    const childPid = child.pid;
+    assert.ok(childPid, "the pinned Node child must expose its process id");
+    await waitForTraceCheckpoint(
+      { helperPath, ownedRoot: Buffer.from(ROOT, "utf8"), runId },
+      testContext.signal,
+      90_000,
+      () => captured.status,
     );
-    await assertInterruptedEvidence(prepared.helperPath, prepared.ownedRoot, prepared.preparedRun.runId, "runtime_failure");
-    assert.equal(ownedJavaProcesses(prepared.preparedRun.runId).length, 0, "the crashed Paper process must be reaped");
+    await waitForOwnedJavaProcess(runId, childPid, testContext.signal, 10_000);
+    assert.equal(child.kill("SIGINT"), true, "the runtime child must still be running when Ctrl-C is sent");
+    const status = await withTimeout(closed, 60_000, "Ctrl-C runtime cleanup");
+    finished = true;
+    assert.equal(status.code, 130, "the CLI child must preserve operator cancellation as exit 130");
+    const result = parseChildResult(captured.output(), marker);
+    assert.equal(result.kind, "failure");
+    assert.equal(result.exitCode, 130);
+    const error = parseCliError(result.stderr);
+    assert.equal(error.category, "cancelled");
+    assert.equal(error.source.kind, "cancelled");
+    assert.equal(error.source.run_id, runId);
+
+    const ownedRoot = Buffer.from(ROOT, "utf8");
+    await assertInterruptedEvidence(helperPath, ownedRoot, runId, "cancelled");
+    assert.equal(ownedJavaProcesses(runId).length, 0, "Ctrl-C cleanup must reap the Paper process");
     await assertGamePortReleased();
-  });
-
-  await t.test("Ctrl-C returns exit 130 with a partial trace and no fabricated outcome", { timeout: 180_000 }, async (caseTest) => {
-    const runId = `fault-sigint-${randomUUID()}`;
-    const helperPath = process.env.ARENA_FS_HELPER ?? resolve(ROOT, ".work/arena-fs/arena-fs");
-    const javaHome = process.env.JAVA_HOME;
-    assert.ok(javaHome, "the pinned JDK must be configured by the integration selector");
-    const paperJarPath = join(ROOT, ".work", "arena", "downloads", lockedPaperFile());
-    const pluginJarPath = join(ROOT, ".work", "arena", "gradle-build", "libs", "arena-plugin-0.1.0.jar");
-    const javaExecutable = join(javaHome, "bin", "java");
-    const cliPath = join(ROOT, ".work", "build", "packages", "arena-runner", "src", "cli.js");
-    const marker = `ARENA_FAULT_RESULT_${runId}:`;
-    const args = ["run", "--scenario", scenario.path, "--run-id", runId];
-    const childSource = [
-      `import { runCli } from ${JSON.stringify(pathToFileURL(cliPath).href)};`,
-      `const result = await runCli(${JSON.stringify(args)});`,
-      `process.stdout.write(${JSON.stringify(marker)} + JSON.stringify(result) + "\\n");`,
-      "process.exitCode = result.exitCode;",
-    ].join("\n");
-    const child = spawn(process.execPath, ["--input-type=module", "-e", childSource], {
-      cwd: ROOT,
-      env: {
-        ...process.env,
-        ARENA_FS_HELPER: helperPath,
-        ARENA_JAVA_HOME: javaHome,
-        ARENA_JAVA_TMPDIR: join(ROOT, ".work", "tmp"),
-        ARENA_PAPER_JAR: paperJarPath,
-        ARENA_PLUGIN_JAR: pluginJarPath,
-      },
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    const captured = captureChildOutput(child);
-    const closed = childExit(child);
-    let finished = false;
-    try {
-      await once(child, "spawn");
-      const childPid = child.pid;
-      assert.ok(childPid, "the pinned Node child must expose its process id");
-      await waitForTraceCheckpoint(
-        { helperPath, ownedRoot: Buffer.from(ROOT, "utf8"), runId },
-        caseTest.signal,
-        90_000,
-        () => captured.status,
-      );
-      await waitForOwnedJavaProcess(runId, childPid, caseTest.signal, 10_000);
-      assert.equal(child.kill("SIGINT"), true, "the runtime child must still be running when Ctrl-C is sent");
-      const status = await withTimeout(closed, 60_000, "Ctrl-C runtime cleanup");
-      finished = true;
-      assert.equal(status.code, 130, "the CLI child must preserve operator cancellation as exit 130");
-      const result = parseChildResult(captured.output(), marker);
-      assert.equal(result.kind, "failure");
-      assert.equal(result.exitCode, 130);
-      const error = parseCliError(result.stderr);
-      assert.equal(error.category, "cancelled");
-      assert.equal(error.source.kind, "cancelled");
-      assert.equal(error.source.run_id, runId);
-
-      const ownedRoot = Buffer.from(ROOT, "utf8");
-      await assertInterruptedEvidence(helperPath, ownedRoot, runId, "cancelled");
-      assert.equal(ownedJavaProcesses(runId).length, 0, "Ctrl-C cleanup must reap the Paper process");
-      await assertGamePortReleased();
-    } finally {
-      if (!finished && child.exitCode === null && child.signalCode === null) {
-        child.kill("SIGINT");
-        await withTimeout(closed, 30_000, "interrupt failed CLI child").catch(() => {
-          child.kill("SIGKILL");
-          return closed;
-        });
-      }
+  } finally {
+    if (!finished && child.exitCode === null && child.signalCode === null) {
+      child.kill("SIGINT");
+      await withTimeout(closed, 30_000, "interrupt failed CLI child").catch(() => {
+        child.kill("SIGKILL");
+        return closed;
+      });
     }
-  });
-});
+  }
+}
 
 function createLongRunningScenario(): Readonly<{ directory: string; path: string }> {
   const directory = mkdtempSync(join(ROOT, ".work", "tmp", "arena-runtime-fault-scenario-"));

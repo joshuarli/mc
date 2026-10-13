@@ -28,6 +28,11 @@ const integrationCases = new Map([
   ["lifecycle", "lifecycle.js"],
   ["lifecycle-smoke", "lifecycle.js"],
   ["faults", "faults.js"],
+  ["faults-port-conflict", "faults.js"],
+  ["faults-second-owner", "faults.js"],
+  ["faults-plugin-identity", "faults.js"],
+  ["faults-server-crash", "faults.js"],
+  ["faults-sigint", "faults.js"],
   ["legal-player", "legal-player.js"],
   ["replay-report", "replay-report.js"],
   ["fairness", "fairness.js"]

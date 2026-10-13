@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
@@ -59,4 +59,65 @@ test("named test runner dispatches suite files and rejects unknown cases", (cont
   assert.equal(missing.status, 2, missing.stderr || missing.stdout);
   assert.equal(missing.stdout.includes(`# Subtest: ${missingTitle}`), false);
   assert.match(missing.stderr, /no test ran with exact name/);
+});
+
+test("fault integration selectors dispatch their exact standalone cases", (context) => {
+  const faultsSource = readFileSync(join(root, "tests", "integration", "faults.ts"), "utf8");
+  const runnerSource = readFileSync(join(root, "scripts", "run-named-tests.mjs"), "utf8");
+  const arenaSource = readFileSync(join(root, "arena"), "utf8");
+  const operationsSource = readFileSync(join(root, "docs", "operations.md"), "utf8");
+  const faultSelectors = [...faultsSource.matchAll(/^\s*selector: "([^"]+)"/gm)].map((match) => match[1]);
+  assert.equal(faultSelectors.length, 5, "the independent runtime fault proofs must remain individually selectable");
+  assert.equal(new Set(faultSelectors).size, faultSelectors.length, "fault selectors must be unique");
+  assert.ok(faultsSource.includes("test(faultCase.selector"), "each fault case must register as a top-level test");
+
+  const expectedCommands = ["faults", ...faultSelectors].sort();
+  const runnerCommands = [...runnerSource.matchAll(/^\s*\["(faults(?:-[a-z-]+)?)", "faults\.js"\],?$/gm)]
+    .map((match) => match[1])
+    .sort();
+  const arenaCommands = [...arenaSource.matchAll(/integration:(faults(?:-[a-z-]+)?)/g)]
+    .map((match) => match[1])
+    .sort();
+  const documentedCommands = [...operationsSource.matchAll(/--case (faults(?:-[a-z-]+)?)/g)]
+    .map((match) => match[1])
+    .sort();
+  assert.deepEqual(runnerCommands, expectedCommands, "the named-test registry must map every fault selector to faults.js");
+  assert.deepEqual(arenaCommands, expectedCommands, "the arena wrapper must prepare the shared faults.ts suite for every selector");
+  assert.deepEqual(documentedCommands, expectedCommands, "operations docs must list each standalone and aggregate fault command");
+  assert.ok(faultsSource.includes('test("faults"'), "the sequential aggregate fault case must remain available");
+
+  const scratch = join(root, ".work", "tmp");
+  mkdirSync(scratch, { recursive: true });
+  const fixtureRoot = mkdtempSync(join(scratch, "arena-fault-selector-"));
+  context.after(() => rmSync(fixtureRoot, { recursive: true, force: true }));
+
+  const fixtureRunner = join(fixtureRoot, "scripts", "run-named-tests.mjs");
+  const fixtureTests = join(fixtureRoot, ".work", "build", "tests", "integration", "faults.js");
+  mkdirSync(join(fixtureRoot, "scripts"), { recursive: true });
+  mkdirSync(join(fixtureRoot, ".work", "build", "tests", "integration"), { recursive: true });
+  copyFileSync(join(root, "scripts", "run-named-tests.mjs"), fixtureRunner);
+
+  const standalone = faultSelectors.map((selector) => (
+    `test(${JSON.stringify(selector)}, () => process.stdout.write(${JSON.stringify(`FAULT_SELECTOR_EXECUTED:${selector}\n`)}));`
+  ));
+  const aggregate = [
+    'test("faults", () => {',
+    ...faultSelectors.map((selector) => `  process.stdout.write(${JSON.stringify(`FAULT_SELECTOR_EXECUTED:${selector}\n`)});`),
+    "});",
+  ];
+  writeFileSync(fixtureTests, [
+    'import { test } from "node:test";',
+    ...standalone,
+    ...aggregate,
+    "",
+  ].join("\n"), { encoding: "utf8", flag: "wx" });
+
+  for (const selector of [...faultSelectors, "faults"]) {
+    const dispatched = runNamedTests(fixtureRunner, "integration", selector);
+    assert.equal(dispatched.error, undefined);
+    assert.equal(dispatched.status, 0, dispatched.stderr || dispatched.stdout);
+    const executed = [...(dispatched.stdout ?? "").matchAll(/FAULT_SELECTOR_EXECUTED:(faults-[a-z-]+)/g)]
+      .map((match) => match[1]);
+    assert.deepEqual(executed, selector === "faults" ? faultSelectors : [selector]);
+  }
 });

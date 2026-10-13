@@ -584,8 +584,19 @@ test_command() {
             build_fs_helper
             run_named_tests runtime "$case_name"
             ;;
-        integration:stack|integration:maps-reset|integration:match-rules|integration:lifecycle|integration:faults|integration:legal-player|integration:fairness|integration:replay-report)
+        integration:stack|integration:maps-reset|integration:match-rules|integration:lifecycle|integration:legal-player|integration:fairness|integration:replay-report)
             [ -f "$root/tests/integration/$case_name.ts" ] || fail "blocked: integration case is not ready: $case_name"
+            prepare_node
+            ensure_workspace_dependencies
+            build_typescript stack
+            build_fs_helper
+            prepare_jdk
+            build_plugin
+            ensure_paper_artifact
+            run_named_tests integration "$case_name"
+            ;;
+        integration:faults|integration:faults-port-conflict|integration:faults-second-owner|integration:faults-plugin-identity|integration:faults-server-crash|integration:faults-sigint)
+            [ -f "$root/tests/integration/faults.ts" ] || fail "blocked: integration case is not ready: faults"
             prepare_node
             ensure_workspace_dependencies
             build_typescript stack
