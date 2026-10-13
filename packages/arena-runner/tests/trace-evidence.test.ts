@@ -38,7 +38,8 @@ test('reconstructs generic segments for inspection and requires typed events for
 
 test('rejects duplicate object names at every depth before checksum validation', async () => {
   const fixture = await readFile(join(replayFixtures, 'segment-0001.json'), 'utf8');
-  const duplicate = fixture.replace('{"a":1}', '{"outer":{"key":1,"key":2}}');
+  const duplicate = fixture.replace(/"a"\s*:\s*1/, '"outer":{"key":1,"key":2}');
+  assert.notEqual(duplicate, fixture, 'the malformed fixture must contain the duplicate nested keys');
 
   assert.throws(() => parseSegment(duplicate), (error: unknown) => {
     assert.ok(error instanceof TraceError);
@@ -101,9 +102,12 @@ test('rejects gaps, overlaps, and run changes when reconstructing segments', asy
   const second = await readSegment(join(replayFixtures, 'segment-0002.json'), 2);
   assert.equal(reconstruct([second, first]).first_sequence, '1');
 
-  const gap = parseSegment((await readFile(join(replayFixtures, 'segment-0002.json'), 'utf8'))
-    .replace('"first_sequence":"2"', '"first_sequence":"3"')
-    .replace('"last_sequence":"2"', '"last_sequence":"3"'));
+  const gapSource = await readFile(join(replayFixtures, 'segment-0002.json'), 'utf8');
+  const gapText = gapSource
+    .replace(/("first_sequence"\s*:\s*)"2"/, '$1"3"')
+    .replace(/("last_sequence"\s*:\s*)"2"/, '$1"3"');
+  assert.notEqual(gapText, gapSource, 'the malformed fixture must move the sequence range');
+  const gap = parseSegment(gapText);
   assert.throws(() => reconstruct([first, gap]), (error: unknown) => {
     assert.ok(error instanceof TraceError);
     assert.equal(error.source.kind, 'sequence_discontinuity');
