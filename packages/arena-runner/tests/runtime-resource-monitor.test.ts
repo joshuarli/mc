@@ -18,16 +18,24 @@ test('resource monitor rejects the initial sample when owned RSS exceeds 8 GiB',
   );
 });
 
-test('resource monitor aborts after free memory falls below 4 GiB', async () => {
+test('resource monitor uses process-available memory from its host effects', async () => {
+  const effects = createEffects([sample({ availableMemoryBytes: 16n * GIB })]);
+  const monitor = await startOwnedResourceMonitor({ javaPid: 1, effects });
+
+  assert.equal(effects.availableMemoryReadCount, 1);
+  await monitor.stop();
+});
+
+test('resource monitor aborts after process-available memory falls below 4 GiB', async () => {
   const effects = createEffects([
-    sample({ freeMemoryBytes: 4n * GIB }),
-    sample({ freeMemoryBytes: 4n * GIB - 1n }),
+    sample({ availableMemoryBytes: 4n * GIB }),
+    sample({ availableMemoryBytes: 4n * GIB - 1n }),
   ]);
   const monitor = await startOwnedResourceMonitor({ javaPid: 1, effects });
 
   effects.tick();
   const failure = await monitor.failure;
-  assert.equal(failure.source.kind, 'free_memory_limit_exceeded');
+  assert.equal(failure.source.kind, 'available_memory_limit_exceeded');
   await monitor.stop();
 });
 
@@ -55,11 +63,14 @@ test('resource monitor stops its pending poll without starting another sample', 
 
 test('resource monitor reports unavailable measurements without a fallback', async () => {
   const effects: ResourceMonitorEffects = {
-    sample: async () => {
+    readJavaRssBytes: async () => 128n * 1024n * 1024n,
+    readSwapCounters: async () => {
       throw new RunnerError('missing_prerequisite', 'runtime resource monitor', {
         kind: 'swap_counters_unavailable',
       });
     },
+    nodeRssBytes: () => 0,
+    availableMemoryBytes: () => Number(16n * GIB),
     wait: async () => {},
   };
 
@@ -72,7 +83,7 @@ test('resource monitor reports unavailable measurements without a fallback', asy
 function sample(overrides: Partial<RuntimeResourceSample> = {}): RuntimeResourceSample {
   return Object.freeze({
     ownedRssBytes: 128n * 1024n * 1024n,
-    freeMemoryBytes: 16n * GIB,
+    availableMemoryBytes: 16n * GIB,
     swapIns: 0n,
     swapOuts: 0n,
     ...overrides,
@@ -81,16 +92,34 @@ function sample(overrides: Partial<RuntimeResourceSample> = {}): RuntimeResource
 
 function createEffects(samples: readonly RuntimeResourceSample[]): ResourceMonitorEffects & {
   readonly sampleCount: number;
+  readonly availableMemoryReadCount: number;
   tick(): void;
 } {
   let nextSample = 0;
+  let currentSample: RuntimeResourceSample | undefined;
+  let availableMemoryReadCount = 0;
   const waiters: Array<() => void> = [];
-  const effects: ResourceMonitorEffects & { sampleCount: number; tick(): void } = {
-    sample: async () => {
+  const effects: ResourceMonitorEffects & {
+    sampleCount: number;
+    availableMemoryReadCount: number;
+    tick(): void;
+  } = {
+    readJavaRssBytes: async () => {
       const value = samples[nextSample];
       nextSample += 1;
       if (value === undefined) throw new Error('test sample exhausted');
-      return value;
+      currentSample = value;
+      return value.ownedRssBytes;
+    },
+    readSwapCounters: async () => {
+      assert.ok(currentSample, 'Java RSS read selects a sample first');
+      return { swapIns: currentSample.swapIns, swapOuts: currentSample.swapOuts };
+    },
+    nodeRssBytes: () => 0,
+    availableMemoryBytes: () => {
+      assert.ok(currentSample, 'Java RSS read selects a sample first');
+      availableMemoryReadCount += 1;
+      return Number(currentSample.availableMemoryBytes);
     },
     wait: (_intervalMs, signal) => new Promise<void>((resolve) => {
       const finish = (): void => {
@@ -101,6 +130,7 @@ function createEffects(samples: readonly RuntimeResourceSample[]): ResourceMonit
       waiters.push(finish);
     }),
     get sampleCount() { return nextSample; },
+    get availableMemoryReadCount() { return availableMemoryReadCount; },
     tick: () => {
       const wake = waiters.shift();
       assert.ok(wake, 'monitor is waiting for its next sample');

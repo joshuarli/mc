@@ -1,10 +1,9 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
-import { freemem } from 'node:os';
 import { RunnerError } from '../errors.js';
 
 const MAX_OWNED_RSS_BYTES = 8n * 1024n * 1024n * 1024n;
-const MIN_FREE_MEMORY_BYTES = 4n * 1024n * 1024n * 1024n;
+const MIN_AVAILABLE_MEMORY_BYTES = 4n * 1024n * 1024n * 1024n;
 const DEFAULT_INTERVAL_MS = 1_000;
 const COMMAND_TIMEOUT_MS = 2_000;
 const COMMAND_KILL_GRACE_MS = 1_000;
@@ -12,20 +11,23 @@ const COMMAND_REAP_TIMEOUT_MS = 2_000;
 const MAX_COMMAND_OUTPUT_BYTES = 4_096;
 const RESOURCE_FIELDS = Object.freeze({
   ownedRssBytes: 'owned_rss_bytes',
-  freeMemoryBytes: 'free_memory_bytes',
+  availableMemoryBytes: 'available_memory_bytes',
   swapIns: 'swap_ins',
   swapOuts: 'swap_outs',
 } as const);
 
 export interface RuntimeResourceSample {
   readonly ownedRssBytes: bigint;
-  readonly freeMemoryBytes: bigint;
+  readonly availableMemoryBytes: bigint;
   readonly swapIns: bigint;
   readonly swapOuts: bigint;
 }
 
 export interface ResourceMonitorEffects {
-  sample(javaPid: number, signal: AbortSignal): Promise<RuntimeResourceSample>;
+  readJavaRssBytes(javaPid: number, signal: AbortSignal): Promise<bigint>;
+  readSwapCounters(signal: AbortSignal): Promise<Readonly<{ swapIns: bigint; swapOuts: bigint }>>;
+  nodeRssBytes(): number;
+  availableMemoryBytes(): number;
   wait(intervalMs: number, signal: AbortSignal): Promise<void>;
 }
 
@@ -47,9 +49,11 @@ export async function startOwnedResourceMonitor(options: Readonly<{
 
   const effects = options.effects ?? hostEffects;
   const controller = new AbortController();
+  const sampleCurrent = (signal: AbortSignal): Promise<RuntimeResourceSample> =>
+    sampleOwnedResources(options.javaPid, signal, effects);
   let previous: RuntimeResourceSample;
   try {
-    previous = await effects.sample(options.javaPid, controller.signal);
+    previous = await sampleCurrent(controller.signal);
   } catch (error) {
     throw mapMonitorError(error);
   }
@@ -72,7 +76,7 @@ export async function startOwnedResourceMonitor(options: Readonly<{
       if (controller.signal.aborted) return;
       let current: RuntimeResourceSample;
       try {
-        current = await effects.sample(options.javaPid, controller.signal);
+        current = await sampleCurrent(controller.signal);
       } catch (error) {
         if (!controller.signal.aborted) publishFailure(mapMonitorError(error));
         return;
@@ -105,7 +109,7 @@ function resourceLimit(
   current: RuntimeResourceSample,
   previous?: RuntimeResourceSample,
 ): RunnerError | undefined {
-  if (current.ownedRssBytes < 0n || current.freeMemoryBytes < 0n
+  if (current.ownedRssBytes < 0n || current.availableMemoryBytes < 0n
       || current.swapIns < 0n || current.swapOuts < 0n) {
     return new RunnerError('runtime_failure', 'runtime resource monitor', { kind: 'invalid_resource_sample' });
   }
@@ -115,10 +119,10 @@ function resourceLimit(
       field: RESOURCE_FIELDS.ownedRssBytes,
     });
   }
-  if (current.freeMemoryBytes < MIN_FREE_MEMORY_BYTES) {
-    return new RunnerError('runtime_failure', 'system memory', {
-      kind: 'free_memory_limit_exceeded',
-      field: RESOURCE_FIELDS.freeMemoryBytes,
+  if (current.availableMemoryBytes < MIN_AVAILABLE_MEMORY_BYTES) {
+    return new RunnerError('runtime_failure', 'process memory availability', {
+      kind: 'available_memory_limit_exceeded',
+      field: RESOURCE_FIELDS.availableMemoryBytes,
     });
   }
   if (previous !== undefined
@@ -132,11 +136,18 @@ function resourceLimit(
 }
 
 const hostEffects: ResourceMonitorEffects = Object.freeze({
-  sample: sampleHostResources,
+  readJavaRssBytes: readProcessRss,
+  readSwapCounters,
+  nodeRssBytes: () => process.memoryUsage().rss,
+  availableMemoryBytes: () => process.availableMemory(),
   wait: waitForInterval,
 });
 
-async function sampleHostResources(javaPid: number, signal: AbortSignal): Promise<RuntimeResourceSample> {
+async function sampleOwnedResources(
+  javaPid: number,
+  signal: AbortSignal,
+  effects: ResourceMonitorEffects,
+): Promise<RuntimeResourceSample> {
   if (process.platform !== 'darwin' && process.platform !== 'linux') {
     throw new RunnerError('missing_prerequisite', 'runtime resource monitor', { kind: 'unsupported_platform' });
   }
@@ -145,8 +156,8 @@ async function sampleHostResources(javaPid: number, signal: AbortSignal): Promis
   signal.addEventListener('abort', abortSample, { once: true });
   let javaRssBytes: bigint;
   let swap: Readonly<{ swapIns: bigint; swapOuts: bigint }>;
-  const javaRss = readProcessRss(javaPid, sampleController.signal);
-  const swapCounters = readSwapCounters(sampleController.signal);
+  const javaRss = effects.readJavaRssBytes(javaPid, sampleController.signal);
+  const swapCounters = effects.readSwapCounters(sampleController.signal);
   try {
     [javaRssBytes, swap] = await Promise.all([javaRss, swapCounters]);
   } catch (error) {
@@ -156,14 +167,14 @@ async function sampleHostResources(javaPid: number, signal: AbortSignal): Promis
   } finally {
     signal.removeEventListener('abort', abortSample);
   }
-  const nodeRssBytes = process.memoryUsage().rss;
-  const freeMemoryBytes = freemem();
-  if (!Number.isSafeInteger(nodeRssBytes) || !Number.isSafeInteger(freeMemoryBytes)) {
+  const nodeRssBytes = effects.nodeRssBytes();
+  const availableMemoryBytes = effects.availableMemoryBytes();
+  if (!Number.isSafeInteger(nodeRssBytes) || !Number.isSafeInteger(availableMemoryBytes)) {
     throw new RunnerError('runtime_failure', 'runtime resource monitor', { kind: 'invalid_host_memory_value' });
   }
   return Object.freeze({
     ownedRssBytes: BigInt(nodeRssBytes) + javaRssBytes,
-    freeMemoryBytes: BigInt(freeMemoryBytes),
+    availableMemoryBytes: BigInt(availableMemoryBytes),
     swapIns: swap.swapIns,
     swapOuts: swap.swapOuts,
   });
