@@ -9,6 +9,7 @@ import { RunnerError } from './errors.js';
 export const TRACE_SCHEMA_VERSION = 2;
 export const MAX_TRACE_SEGMENT_BYTES = 8 * 1024 * 1024;
 export const MAX_EVIDENCE_BYTES = 256 * 1024 * 1024;
+export const MAX_TRACE_SEGMENTS = 100_000;
 const MAX_SEQUENCE = (1n << 64n) - 1n;
 const TRACE_FIELDS = new Set([
   'schema',

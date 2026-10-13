@@ -14,13 +14,12 @@ import {
   StrictJsonError,
   type StrictJsonValue,
 } from '../control/strict-json.js';
-import { MAX_TRACE_SEGMENT_BYTES } from '../trace.js';
+import { MAX_TRACE_SEGMENT_BYTES, MAX_TRACE_SEGMENTS } from '../trace.js';
 
 export const OPERATIONAL_FAILURE_SCHEMA_VERSION = 1;
 export const MAX_OPERATIONAL_FAILURE_BYTES = MAX_OWNED_READ_BYTES;
 const RUN_DIRECTORY_PREFIX = '.work/arena/runs/';
 const FAILURE_ARTIFACT_NAME = 'operational-failure-v1.json';
-const TRACE_SEGMENT_LIMIT = 100_000;
 const MAX_U64 = 18_446_744_073_709_551_615n;
 
 const ERROR_CATEGORIES: ReadonlySet<string> = new Set([
@@ -234,7 +233,7 @@ function parseErrorSource(value: StrictJsonValue | undefined): ErrorSource {
 }
 
 function parseSegments(value: StrictJsonValue | undefined, runId: string): OperationalFailureTraceSegmentV1[] {
-  if (!Array.isArray(value) || value.length > TRACE_SEGMENT_LIMIT) {
+  if (!Array.isArray(value) || value.length > MAX_TRACE_SEGMENTS) {
     throw invalidArtifact('invalid_trace_checkpoint_segments');
   }
   const segments: OperationalFailureTraceSegmentV1[] = [];

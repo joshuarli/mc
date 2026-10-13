@@ -12,6 +12,7 @@ import { prepareRun, resolveScenarioResource } from './prepare.js';
 import { replayPolicyJson } from './policy-replay.js';
 import { isValidRunId } from './run-id.js';
 import { inspectStoppedRun } from './runtime/inspect.js';
+import { collectOwnedRuns, type RunGarbageCollectionMode } from './runtime/gc.js';
 import { runPreparedRun } from './runtime/run.js';
 import { armRuntimeDeadline, COLD_START_TIMEOUT_MS } from './runtime/deadline.js';
 import { readSegment, TraceError, type TraceSegment } from './trace.js';
@@ -39,6 +40,7 @@ async function runCliBytes(args: readonly Buffer[]): Promise<CliResult> {
       if (rest.length !== 0) throw invalidInput('unexpected_argument');
       return success(doctorJson());
     }
+    if (command === 'gc') return await garbageCollectCommand(rest);
     if (command === 'inspect' && rest.length > 0 && argumentText(rest[0]!, 1) === '--run-id') {
       return await inspectRunCommand(rest);
     }
@@ -167,6 +169,38 @@ async function inspectRunCommand(args: readonly Buffer[]): Promise<CliResult> {
     runId,
   });
   return success(inspection);
+}
+
+async function garbageCollectCommand(args: readonly Buffer[]): Promise<CliResult> {
+  let mode: RunGarbageCollectionMode | undefined;
+  const runIds: string[] = [];
+  for (let index = 0; index < args.length;) {
+    const option = argumentText(args[index]!, index + 1);
+    if (option === '--dry-run' || option === '--apply') {
+      if (mode !== undefined) throw invalidInput('gc_requires_one_mode');
+      mode = option === '--dry-run' ? 'dry_run' : 'apply';
+      index += 1;
+      continue;
+    }
+    if (option === '--run-id') {
+      if (index + 1 >= args.length) throw invalidInput('gc_requires_run_id');
+      runIds.push(argumentText(args[index + 1]!, index + 2));
+      index += 2;
+      continue;
+    }
+    throw invalidInput('unexpected_argument');
+  }
+  if (mode === undefined) throw invalidInput('gc_requires_one_mode');
+  if (runIds.length === 0) throw invalidInput('gc_requires_run_id');
+
+  const helperPath = configuredAbsolutePath('ARENA_FS_HELPER', 'filesystem helper');
+  const result = await collectOwnedRuns({
+    helperPath,
+    ownedRoot: Buffer.from(process.cwd(), 'utf8'),
+    runIds,
+    mode,
+  });
+  return success(result);
 }
 
 async function validateCommand(args: readonly Buffer[]): Promise<CliResult> {
@@ -462,6 +496,7 @@ function helpJson(): object {
     schema: 1,
     commands: {
       doctor: 'Report runner and runtime capabilities.',
+      'gc --dry-run|--apply --run-id <id>...': 'Remove only selected completed runs while retaining the latest three validated failures.',
       'inspect <segment>...': 'Validate and display ordered records from completed trace segments.',
       'inspect --run-id <id>': 'Reconstruct a stopped run result and read its player statistics.',
       'report <segment>...': 'Reconstruct the terminal result from prepared-roster and authoritative event records.',
@@ -497,6 +532,7 @@ function doctorJson(): object {
       world_plan_staging: 'available',
       safe_owned_path_staging: 'available',
       stopped_run_inspection: 'available',
+      selected_run_cleanup: 'available_for_validated_runs',
     },
   };
 }

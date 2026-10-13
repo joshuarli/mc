@@ -10,6 +10,7 @@ import {
 import { isValidRunId } from '../run-id.js';
 import {
   MAX_EVIDENCE_BYTES,
+  MAX_TRACE_SEGMENTS,
   MAX_TRACE_SEGMENT_BYTES,
   parseSegment,
   TraceError,
@@ -19,8 +20,6 @@ import { readStoppedPlayerStats } from './observations.js';
 import type { StoppedPlayerStats } from './observations.js';
 
 const RUN_DIRECTORY_PREFIX = '.work/arena/runs/';
-const MAX_TRACE_SEGMENTS = 100_000;
-
 export interface StoppedRunInspection {
   readonly schema: 1;
   readonly run_id: string;

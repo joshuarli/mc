@@ -32,7 +32,28 @@ test('doctor describes runner, runtime, and evidence capabilities', async () => 
     world_plan_staging: 'available',
     safe_owned_path_staging: 'available',
     stopped_run_inspection: 'available',
+    selected_run_cleanup: 'available_for_validated_runs',
   });
+});
+
+test('garbage collection requires one explicit mode and at least one run ID', async () => {
+  const missingMode = await runCli(['gc', '--run-id', 'gc-run-a']);
+  assert.equal(missingMode.kind, 'failure');
+  if (missingMode.kind !== 'failure') return;
+  assert.equal(missingMode.exitCode, 2);
+  assert.equal(JSON.parse(missingMode.stderr).error.source.kind, 'gc_requires_one_mode');
+
+  const missingRunId = await runCli(['gc', '--dry-run']);
+  assert.equal(missingRunId.kind, 'failure');
+  if (missingRunId.kind !== 'failure') return;
+  assert.equal(missingRunId.exitCode, 2);
+  assert.equal(JSON.parse(missingRunId.stderr).error.source.kind, 'gc_requires_run_id');
+
+  const duplicateMode = await runCli(['gc', '--dry-run', '--apply', '--run-id', 'gc-run-a']);
+  assert.equal(duplicateMode.kind, 'failure');
+  if (duplicateMode.kind !== 'failure') return;
+  assert.equal(duplicateMode.exitCode, 2);
+  assert.equal(JSON.parse(duplicateMode.stderr).error.source.kind, 'gc_requires_one_mode');
 });
 
 test('help documents the stable conflict and cancellation exit codes', async () => {
