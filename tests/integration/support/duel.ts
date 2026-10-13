@@ -105,12 +105,12 @@ export async function eliminateOpponentWithSkillAttacks(
   for (let attack = 0; attack < MAX_ATTACKS; attack += 1) {
     signal.throwIfAborted();
     if (hasDeathElimination(active, targetSeat)) return;
+    const currentTargetEntity = targetEntityFor(attacker.bot, target.identity.username);
+    await attacker.bot.lookAt(currentTargetEntity.position.offset(0, currentTargetEntity.height * 0.6, 0), true);
     const observation = await waitForOpponentObservation(active, attackerSeat, targetSeat, signal);
     assert.equal(observation.opponents.kind, "current");
-    const currentTargetEntity = targetEntityFor(attacker.bot, target.identity.username);
     const visibleTarget = observation.opponents.value.find(({ id }) => id === currentTargetEntity.id);
     assert.ok(visibleTarget, "the attacker's complete current perception must identify its opponent before each attack");
-    await attacker.bot.lookAt(currentTargetEntity.position.offset(0, currentTargetEntity.height * 0.6, 0), true);
     assert.deepStrictEqual(
       await attacker.client.run({ kind: "approach", target: visibleTarget.id }),
       { kind: "succeeded" },
