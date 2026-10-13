@@ -167,6 +167,7 @@ test('opt-in path diagnostics capture bounded local movement evidence and detach
     assert.equal(handoff.goal, null);
     assert.equal(handoff.control.jump, true);
 
+    ring.setExternalMovementOwner(null);
     const running = harness.owner.run({ kind: 'navigateToBlock', target: blockPosition(31, 66, 21) });
     await waitUntil(() => harness.pathfinder.goal !== null);
     harness.bot.emit('path_update', {
@@ -251,7 +252,7 @@ test('opt-in path diagnostics capture bounded local movement evidence and detach
     harness.bot.emit('physicsTick');
     const afterCleanup = ring.snapshot().filter((record) => record.kind === 'physicsTick').at(-1);
     assert.ok(afterCleanup);
-    assert.equal(afterCleanup.owner, 'sprintCourse');
+    assert.equal(afterCleanup.owner, null);
     assert.equal(afterCleanup.navigationActive, false);
     assert.equal(afterCleanup.goal, null);
     assert.deepEqual(afterCleanup.control, {
@@ -263,6 +264,10 @@ test('opt-in path diagnostics capture bounded local movement evidence and detach
       sprint: false,
       sneak: false,
     });
+    assert.deepEqual(
+      ring.snapshot().filter((record) => record.kind === 'externalMovementOwner').map((record) => record.owner),
+      ['sprintCourse', null],
+    );
     assert.ok(ring.snapshot().some((record) => record.kind === 'pathSearch' && record.transition === 'released'));
   } finally {
     ring.close();
@@ -348,7 +353,17 @@ test('opt-in path diagnostics reject malformed position correction deltas', asyn
       dz: 0,
       yaw: 0,
       pitch: 0,
-      flags: {},
+      flags: {
+        x: false,
+        y: false,
+        z: false,
+        yaw: false,
+        pitch: false,
+        dx: false,
+        dy: false,
+        dz: false,
+        yawDelta: false,
+      },
       teleportId: 1,
     });
     assert.throws(() => ring.snapshot(), /path diagnostic capture failed/);
@@ -356,6 +371,55 @@ test('opt-in path diagnostics reject malformed position correction deltas', asyn
     ring.close();
     await harness.owner.close();
     harness.observer.close();
+  }
+});
+
+test('opt-in path diagnostics require the complete 26.1 position correction flags', async () => {
+  const completeFlags = {
+    x: false,
+    y: false,
+    z: false,
+    yaw: false,
+    pitch: false,
+    dx: false,
+    dy: false,
+    dz: false,
+    yawDelta: false,
+  };
+  const missingFlag: Record<string, unknown> = { ...completeFlags };
+  delete missingFlag.yawDelta;
+  const invalidFlags: readonly unknown[] = [
+    missingFlag,
+    { ...completeFlags, dx: 0 },
+    { ...completeFlags, futureFlag: false },
+    0,
+  ];
+
+  for (const flags of invalidFlags) {
+    const harness = makeHarness();
+    const ring = new PathDiagnosticRing(harness.bot, {
+      clientLabel: 'invalid-flags-test',
+      clock: () => ({ clientMs: 0, authorityTick: null }),
+    });
+    try {
+      (harness.bot._client as unknown as EventEmitter).emit('position', {
+        x: 1,
+        y: 2,
+        z: 3,
+        dx: 0,
+        dy: 0,
+        dz: 0,
+        yaw: 0,
+        pitch: 0,
+        flags,
+        teleportId: 1,
+      });
+      assert.throws(() => ring.snapshot(), /path diagnostic capture failed/);
+    } finally {
+      ring.close();
+      await harness.owner.close();
+      harness.observer.close();
+    }
   }
 });
 

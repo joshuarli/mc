@@ -197,6 +197,18 @@ interface PacketPositionCorrection {
   readonly teleportId?: unknown;
 }
 
+const POSITION_CORRECTION_FLAGS = [
+  'x',
+  'y',
+  'z',
+  'yaw',
+  'pitch',
+  'dx',
+  'dy',
+  'dz',
+  'yawDelta',
+] as const;
+
 type PhysicsEntity = Bot['entity'] & {
   readonly isCollidedHorizontally?: boolean;
   readonly isCollidedVertically?: boolean;
@@ -562,38 +574,28 @@ function copyCorrectionFlags(value: unknown): Readonly<{
   readonly dz: boolean;
   readonly yawDelta: boolean;
 }> {
-  if (typeof value === 'number') {
-    if (!Number.isSafeInteger(value) || value < 0) throw new RangeError('position correction flag mask must be a non-negative safe integer');
-    return Object.freeze({
-      x: (value & 1) !== 0,
-      y: (value & 2) !== 0,
-      z: (value & 4) !== 0,
-      yaw: (value & 8) !== 0,
-      pitch: (value & 16) !== 0,
-      dx: (value & 32) !== 0,
-      dy: (value & 64) !== 0,
-      dz: (value & 128) !== 0,
-      yawDelta: (value & 256) !== 0,
-    });
-  }
-  if (value === null || typeof value !== 'object') throw new TypeError('position correction flags must be a flag mask or object');
+  if (value === null || typeof value !== 'object') throw new TypeError('position correction flags must be an object');
   const flags = value as Readonly<Record<string, unknown>>;
+  const unknownFlags = Object.keys(flags).filter((name) => !POSITION_CORRECTION_FLAGS.some((known) => known === name));
+  if (unknownFlags.length > 0) throw new TypeError(`unknown position correction flag: ${unknownFlags[0]}`);
   return Object.freeze({
-    x: booleanFlag(flags.x, 'position correction x flag'),
-    y: booleanFlag(flags.y, 'position correction y flag'),
-    z: booleanFlag(flags.z, 'position correction z flag'),
-    yaw: booleanFlag(flags.yaw, 'position correction yaw flag'),
-    pitch: booleanFlag(flags.pitch, 'position correction pitch flag'),
-    dx: booleanFlag(flags.dx, 'position correction dx flag'),
-    dy: booleanFlag(flags.dy, 'position correction dy flag'),
-    dz: booleanFlag(flags.dz, 'position correction dz flag'),
-    yawDelta: booleanFlag(flags.yawDelta, 'position correction yaw delta flag'),
+    x: requiredBooleanFlag(flags, 'x'),
+    y: requiredBooleanFlag(flags, 'y'),
+    z: requiredBooleanFlag(flags, 'z'),
+    yaw: requiredBooleanFlag(flags, 'yaw'),
+    pitch: requiredBooleanFlag(flags, 'pitch'),
+    dx: requiredBooleanFlag(flags, 'dx'),
+    dy: requiredBooleanFlag(flags, 'dy'),
+    dz: requiredBooleanFlag(flags, 'dz'),
+    yawDelta: requiredBooleanFlag(flags, 'yawDelta'),
   });
 }
 
-function booleanFlag(value: unknown, name: string): boolean {
-  if (value === undefined) return false;
-  if (typeof value !== 'boolean') throw new TypeError(`${name} must be boolean when supplied`);
+function requiredBooleanFlag(flags: Readonly<Record<string, unknown>>, name: string): boolean {
+  const value = flags[name];
+  if (!Object.hasOwn(flags, name) || typeof value !== 'boolean') {
+    throw new TypeError(`position correction ${name} flag must be supplied as a boolean`);
+  }
   return value;
 }
 
