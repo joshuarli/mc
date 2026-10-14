@@ -38,7 +38,23 @@ Progress goes to stderr: run ID, Minecraft version, address, mode, role and seat
 
 ## Explain a seat
 
-`./arena explain --run-id <id> --seat <n>` prints one seat's recorded decisions, skill outcomes, action-funnel stages, and authoritative effects for a stopped run. It needs a schema 4 trace for funnel and effect fields and states only what the trace records. See [determinism](determinism.md).
+`./arena explain --run-id <id> --seat <n>` prints one seat's recorded decisions, skill outcomes, action-funnel stages, and authoritative effects for a stopped run as JSON, and a text timeline to stderr. The timeline collapses equal decisions into tick ranges with goal, intent, wait reason, reason code (`decision-explain-v1`), scored alternatives with their rejecting condition, nearest cache, opponent and border-center distances, then idle spans (marked UNEXPLAINED when no wait reason or deferral covers them), engagements by opponent, environment damage, and the death with its cause. It needs a schema 4 trace for funnel, effect, and explanation fields and states only what the trace records. See [determinism](determinism.md).
+
+`./arena report <segment>...` adds `seat_quality` to its JSON and the per-seat table to stderr.
+
+## Per-seat quality table
+
+Every league match, `quality` run, and `report` derives one row per seat from recorded evidence only: loot actions started and chests opened (a succeeded `containerOpen`), distance travelled (horizontal, summed between consecutive decision observations), idle ticks (consecutive decisions with under one block of movement and no in-place action) split by waiting reason or `no_progress:<intent>`, attacks issued against rejected before issue with the funnel miss reason and a self-inflicted count, damage dealt and taken from `damage` events with the share taken from competitors, time alive, death tick and cause (the last damage cause before the elimination, with the attacker seat when PvP), and decision reason-code counts. The match adds PvP engagements (distinct attacker-victim pairs), PvP hits, and elimination causes.
+
+Self-inflicted rejections are `outOfGeometricReach`, `cooldownNotReady`, `aimNotReady`, `blockedLineOfSight`, `ownershipDeferred`, `clientOperationFailed`, `friendlyFireRisk`, and `noAmmunition`. The Hunger quality gates are: every match terminates; at least 75% of seats open a chest or collect a drop; at least 40% of eliminations are PvP; self-inflicted rejections under 5% of issued attacks; no unexplained idle span over 600 ticks. A gate without data fails with `no_data`.
+
+## Quality loop
+
+`./arena quality --scenario scenarios/hunger-six.toml --seeds 481516,481517 --accept-minecraft-eula [--candidate <id>] [--concurrency <1-4>]` plays one Hunger match per seed, the candidate on even seats and `baseline` on odd seats (`baseline` on all seats without `--candidate`), and prints the per-seat table, reason-code histograms per policy, and the gates to stderr. The JSON report goes to stdout and `.work/arena/league/quality/report-NNNN.json`. A failed match stays in the report with its reason and counts against the termination gate.
+
+Every league, quality, acceptance, and bench match takes an ephemeral loopback game port (`ephemeralGamePort`); only `run`, `play`, `watch`, `make server`, and the fault and lifecycle selectors keep 25565. `--concurrency n` (default 1, maximum 4) runs up to n matches at once, each in its own run directory with its own Paper process. One world template per scenario is built once per process and cloned per run, so concurrent runs of one seed share only the read-only template. Results are ordered by plan, never by completion; a failed match does not stop the others; each match records the concurrency level it ran at, and a report with concurrency above 1 labels its outcomes timing-sensitive, because server tick pressure changes with the number of live servers.
+
+Memory budget: each match runs Paper with `-Xms512m -Xmx2g`, plus about 1 GiB of JVM metaspace, thread stacks and chunk data, plus the runner's six in-process bots; plan 3.5 GiB per match and one runner process of about 1 GiB. Concurrency 3 needs about 11.5 GiB and concurrency 4 about 15 GiB; the 32 GiB development host fits 4, and 3 matches fit 10 CPUs without starving the 20 TPS tick.
 
 ## Capacity benchmark
 
@@ -60,11 +76,11 @@ Metrics: authoritative TPS from clock ticks over arrival time, tick service time
 
 ## League
 
-`./arena league --manifest evaluation/league-v1.toml --accept-minecraft-eula` runs candidate policies against frozen opponents on hunger-six and prints a paired report. A league unit is one natural match: three candidate seats against three opponent seats, played twice per world seed with the seat parity swapped. A match scores 1 for a last survivor on the candidate side, 0.5 for a draw, 0 otherwise.
+`./arena league --manifest evaluation/league-v1.toml --accept-minecraft-eula [--concurrency <1-4>]` runs candidate policies against frozen opponents on hunger-six and prints a paired report. A league unit is one natural match: three candidate seats against three opponent seats, played twice per world seed with the seat parity swapped. A match scores 1 for a last survivor on the candidate side, 0.5 for a draw, 0 otherwise.
 
 The manifest (`schema = 1`, strict TOML) lists `[[candidate]]` and `[[opponent]]` entries, each either `id` with optional `params` or `profile = "<path to policies/candidates/<id>.toml>"`, the seed file and set (`evaluation/seeds-v1.toml`: mechanics regression `481516..481521`, development `500001..500012`, held-out `600001..600024`), the analysis method (`bootstrap` or `tInterval`, 95% interval, grouped by world seed), and the promotion thresholds. The frozen baseline must be an opponent.
 
-Matches run serially through the normal run path. Each completed or failed match is published atomically as `.work/arena/league/<id>/matches/<match>.json`; a rerun skips published matches and refuses a record whose plan digest no longer matches the manifest. Per-seat candidate identity is written into each trace as `seat-policy-v1`.
+Matches run through the normal run path, serially unless `--concurrency <1-4>` is given (see Quality loop). Each completed or failed match is published atomically as `.work/arena/league/<id>/matches/<match>.json`; a rerun skips published matches and refuses a record whose plan digest no longer matches the manifest. Per-seat candidate identity is written into each trace as `seat-policy-v1`.
 
 The report keeps denominators: planned, completed, failed or censored (with reasons), degraded, and matches with disconnects. It gives the cluster mean, interval, effect size against an even match, the mean if censored matches count as losses, and survival and attack-issue gates against the opponent side. A candidate is promoted only when every match completed, the mean is at least `min_mean`, the interval lower bound exceeds `min_lower_bound`, no match was degraded or lost a seat to a disconnect, and neither gate regressed beyond its tolerance. Otherwise the verdict is `keep_baseline` with the reasons.
 

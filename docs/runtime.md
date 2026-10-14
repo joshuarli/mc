@@ -4,7 +4,7 @@
 
 ## Start a run
 
-The runner resolves the scenario and policy, acquires the run lease, and builds or reuses a pristine world template under `.work/arena/templates/`. It clones that stopped template into the run's `server/world` directory, stages Paper files, binds an ephemeral loopback control listener, and starts Paper.
+The runner resolves the scenario and policy, acquires the run lease, and builds or reuses a pristine world template under `.work/arena/templates/`. It clones that stopped template into the run's `server/world` directory, stages Paper files, binds an ephemeral loopback control listener, and starts Paper. The game port is 25565 unless `ephemeralGamePort` is set, which reserves a free loopback port per Paper process (the world bootstrap included) and reports it in `gameAddress`.
 
 The plugin connects to the listener with the per-run credential. After authentication, the runner checks the plugin identity and mode capabilities before sending `prepare`. Schema 3 scenarios, and any run with an external seat, require `hunger_games_roster_v2`; they stage world plan schema 3 and send `prepare` with `roster_version: 2`. Schema 1 and 2 scenarios without an external seat keep the six-seat roster. The runner connects each bot competitor and each automated spectator, and `start` follows admission.
 
