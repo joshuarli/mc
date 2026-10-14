@@ -7,13 +7,14 @@ import { canonicalJson } from '../canonical.js';
 import type { RuntimeTraceBuilder } from './trace.js';
 import { mapRuntimeFailure } from './failures.js';
 import {
-  decideRuntimeCandidateOpening, decideRuntimeCandidatePolicy, decideRuntimeOpeningPolicy, decideRuntimePolicy,
+  decideRuntimeCandidateOpening, decideRuntimeCandidatePolicy, decideRuntimeDuelPool, decideRuntimeDuelPoolOpening,
+  decideRuntimeOpeningPolicy, decideRuntimePolicy,
   isStrategyDecisionTick,
 } from './policy-decision.js';
 import { PolicyCompetitorGate } from './policy-gate.js';
 import type { RuntimeCompetitorClient } from './clients.js';
 import type { ActionFunnelCollector } from './funnel.js';
-import { openingPolicyState, policyMemory, type CompiledCandidate, type PolicyMemoryInput } from '@arena/core';
+import { openingPolicyState, policyMemory, type CompiledCandidate, type DuelPoolId, type PolicyMemoryInput } from '@arena/core';
 import { makeActionFunnelTraceRecord } from '../funnel-record.js';
 import { isClientQuarantine, type ClientQuarantine } from './client-quarantine.js';
 
@@ -66,6 +67,7 @@ export class LivePolicyLoop {
   readonly #onActivity: ((event: PolicyActivityEvent) => void) | undefined;
   readonly #funnel: ActionFunnelCollector | undefined;
   readonly #candidates: ReadonlyMap<number, CompiledCandidate> | undefined;
+  readonly #poolPartners: ReadonlyMap<number, DuelPoolId> | undefined;
   readonly #memories = new Map<number, PolicyMemory>();
   readonly #openingStates = new Map<number, OpeningPolicyState>();
   readonly #feedback = new Map<number, PolicyFeedbackBatch>();
@@ -98,6 +100,7 @@ export class LivePolicyLoop {
     onActivity?: (event: PolicyActivityEvent) => void;
     funnel?: ActionFunnelCollector;
     candidates?: ReadonlyMap<number, CompiledCandidate>;
+    poolPartners?: ReadonlyMap<number, DuelPoolId>;
     restore?: ReadonlyMap<number, SeatPolicyState>;
   }>) {
     this.#trace = options.trace;
@@ -111,6 +114,7 @@ export class LivePolicyLoop {
     this.#onActivity = options.onActivity;
     this.#funnel = options.funnel;
     this.#candidates = options.candidates;
+    this.#poolPartners = options.poolPartners;
     for (const [seat, state] of options.restore ?? []) {
       this.#memories.set(seat, policyMemory(state.memory as PolicyMemoryInput));
       this.#randoms.set(seat, DeterministicRandom.fromState(BigInt(state.rng_state)));
@@ -188,6 +192,19 @@ export class LivePolicyLoop {
         const feedback = this.#feedback.get(seat) ?? [];
         this.#feedback.delete(seat);
         const inputObservation = gameplay.client.observe(tick);
+        const poolId = this.#poolPartners?.get(seat);
+        if (poolId !== undefined) {
+          if (this.#openingStyleCycle === undefined) {
+            const result = decideRuntimeDuelPool(poolId, inputObservation, memory, this.#params, random, feedback);
+            return { mode: 'hunger_games' as const, observation: inputObservation, ...result };
+          }
+          const poolStyle = openingStyleForSeat(this.#seed, seat, this.#openingStyleCycle);
+          const poolOpening = this.#openingStates.get(seat) ?? Object.freeze({ cacheTakenAt: null });
+          const poolAssignment = { seed: this.#seed, seat, style: poolStyle, cycle: this.#openingStyleCycle, state: poolOpening };
+          const result = decideRuntimeDuelPoolOpening(poolId, inputObservation, memory, this.#params, random, feedback, poolAssignment);
+          this.#openingStates.set(seat, result.openingState);
+          return { mode: 'hunger_games' as const, observation: inputObservation, ...result };
+        }
         const candidate = this.#candidates?.get(seat);
         if (this.#openingStyleCycle === undefined) {
           const result = candidate === undefined

@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import test from 'node:test';
 import { RunnerError } from '../src/errors.js';
 import { estimateMean } from '../src/league/analysis.js';
+import { DUEL_POOL_IDS } from '@arena/core';
 import {
   DUEL_ENGAGEMENT_OMITTED, duelPlanDigest, planDuelMatches, runDuel, scoreDuelMatch,
   type DuelEngagement,
@@ -17,7 +18,7 @@ const request = {
   seeds: [10, 11],
   rounds: 2,
   candidate: { id: 'improved' as const, params: {} },
-  opponent: { id: 'baseline' as const, params: {} },
+  opponent: { kind: 'candidate' as const, spec: { id: 'baseline' as const, params: {} } },
   runTag: 'tag',
 };
 
@@ -164,13 +165,76 @@ test('duel scores paired seeds, keeps failures, and omits engagement fields the 
   assert.match(result.text, /first_strike \(/);
   assert.match(result.text, /timing-sensitive/);
   assert.equal(report.analysis.grouping, 'world_seed');
+  assert.equal(Object.hasOwn(report, 'pool_version'), false);
 });
 
-test('duel command rejects a pool opponent, a non-duel roster, and implied eula acceptance', async () => {
-  const pool = await runCli(['duel', '--opponent', 'pool']);
-  assert.equal(pool.kind, 'failure');
-  if (pool.kind === 'failure') assert.equal(JSON.parse(pool.stderr).error.source.kind, 'duel_opponent_pool_unavailable');
+test('duel plans the opponent pool once per member across the swap matrix', async () => {
+  const single = planDuelMatches(request);
+  const pooled = { ...request, opponent: { kind: 'pool' as const } };
+  const plans = planDuelMatches(pooled);
+  const matrix = request.seeds.length * request.rounds * 2;
+  assert.equal(plans.length, DUEL_POOL_IDS.length * matrix);
+  assert.equal(plans.length, single.length * DUEL_POOL_IDS.length);
+  for (const [index, id] of DUEL_POOL_IDS.entries()) {
+    const rows = plans.slice(index * matrix, (index + 1) * matrix);
+    assert.ok(rows.every((planned) => planned.plan.opponent.label === id));
+    assert.deepEqual(rows[0]!.plan.candidateSeats, [0]);
+    assert.deepEqual(rows[1]!.plan.candidateSeats, [1]);
+    assert.equal(rows[0]!.plan.matchId, `dtag-m${index}-s10-r0-a0`);
+  }
+  assert.notEqual(duelPlanDigest(plans[0]!.plan, 0), duelPlanDigest(plans[matrix]!.plan, 0));
+  const againstSelf = planDuelMatches({
+    ...pooled,
+    candidate: { id: 'baseline', params: {} },
+  });
+  assert.equal(againstSelf.length, plans.length);
+  assert.ok(againstSelf.some((planned) => planned.plan.opponent.label === 'baseline'));
+  const member = planDuelMatches({ ...request, opponent: { kind: 'member', id: 'strafer' } });
+  assert.equal(member.length, matrix);
+  assert.ok(member.every((planned) => planned.plan.opponent.label === 'strafer'));
 
+  const runner: MatchRunner = {
+    async run(plan) {
+      return winner(plan, 1);
+    },
+  };
+  const result = await runDuel({
+    request: { ...pooled, rounds: 1 },
+    runner,
+    concurrency: 1,
+    signal: never,
+  });
+  const report = result.report;
+  const planned = planDuelMatches({ ...pooled, rounds: 1 });
+  assert.equal(report.schema, 1);
+  assert.equal(report.opponent, 'pool');
+  assert.equal(report.pool_version, 1);
+  assert.equal(report.matches.length, planned.length);
+  assert.deepEqual(report.matches.map((row) => (row as { opponent: string }).opponent), planned.map((row) => row.plan.opponent.label));
+  const scored = planned.map((row) => ({ worldSeed: row.plan.worldSeed, score: 1 as const }));
+  const estimate = estimateMean(scored, 'tInterval', 0, 0);
+  assert.equal(report.score.mean, estimate.mean);
+  assert.equal(report.score.lower, estimate.lower);
+  assert.equal(report.score.upper, estimate.upper);
+  assert.equal(report.score.clusters, estimate.clusters);
+  assert.equal(report.score.method, 'tInterval');
+  assert.equal(report.analysis.grouping, 'world_seed');
+
+  const rejected = await runCli([
+    'duel', '--scenario', 'scenarios/duel.toml', '--candidate', 'strafer', '--opponent', 'pool',
+    '--seeds', '1', '--rounds', '1', '--accept-minecraft-eula',
+  ]);
+  assert.equal(rejected.kind, 'failure');
+  if (rejected.kind === 'failure') assert.equal(JSON.parse(rejected.stderr).error.source.kind, 'duel_unknown_candidate');
+  const accepted = await runCli([
+    'duel', '--scenario', 'scenarios/duel.toml', '--candidate', 'improved', '--opponent', 'pool',
+    '--seeds', '1', '--rounds', '1',
+  ]);
+  assert.equal(accepted.kind, 'failure');
+  if (accepted.kind === 'failure') assert.equal(JSON.parse(accepted.stderr).error.source.kind, 'missing_eula');
+});
+
+test('duel command rejects a non-duel roster and implied eula acceptance', async () => {
   const rounds = await runCli([
     'duel', '--scenario', 'scenarios/duel.toml', '--candidate', 'improved', '--opponent', 'baseline',
     '--seeds', '1', '--rounds', '4', '--accept-minecraft-eula',

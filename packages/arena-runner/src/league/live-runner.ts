@@ -1,3 +1,4 @@
+import { isDuelPoolId, type CandidateId, type DuelPoolId } from '@arena/core';
 import type { ResourceReference } from '@arena/spec';
 import { RunnerError } from '../errors.js';
 import { actionFunnelReport } from '../funnel-report.js';
@@ -42,6 +43,11 @@ export function seededScenarioSource(
   return text;
 }
 
+function seatOpponent(opponent: Readonly<{ id: CandidateId; params: Readonly<Record<string, number>>; label: string }>): { readonly id: CandidateId | DuelPoolId; readonly params: Readonly<Record<string, number>> } {
+  if (isDuelPoolId(opponent.label) && opponent.label !== opponent.id) return { id: opponent.label, params: {} };
+  return { id: opponent.id, params: opponent.params };
+}
+
 export class LiveMatchRunner implements MatchRunner {
   readonly #options: LiveMatchRunnerOptions;
   readonly #prepared = new Set<number>();
@@ -55,9 +61,9 @@ export class LiveMatchRunner implements MatchRunner {
     const scenarioPath = await this.#seedScenario(plan.worldSeed, signal);
     const runId = `${options.leagueId.slice(0, 24)}-${plan.matchId}`;
     const preparedRun = await prepareRun(options.helperPath, options.ownedRoot, scenarioPath, runId, signal);
-    const seatCandidates = new Map<number, { id: typeof plan.candidate.id; params: Readonly<Record<string, number>> }>();
+    const seatCandidates = new Map<number, { id: CandidateId | DuelPoolId; params: Readonly<Record<string, number>> }>();
     for (const seat of plan.candidateSeats) seatCandidates.set(seat, { id: plan.candidate.id, params: plan.candidate.params });
-    for (const seat of plan.opponentSeats) seatCandidates.set(seat, { id: plan.opponent.id, params: plan.opponent.params });
+    for (const seat of plan.opponentSeats) seatCandidates.set(seat, seatOpponent(plan.opponent));
     let completed: Awaited<ReturnType<typeof runPreparedRun>>;
     try {
       completed = await runPreparedRun({

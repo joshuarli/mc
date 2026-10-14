@@ -46,7 +46,10 @@ import type { CheckpointWrittenPayload } from '../control/types.js';
 import type { SeatPolicyState } from './live-policy-loop.js';
 import { cloneOwnedTree, MAX_OWNED_TREE_BYTES, MAX_OWNED_TREE_FILES } from '../owned-files/index.js';
 import { resolve as resolvePath } from 'node:path';
-import { compileCandidate, type CandidateId, type CompiledCandidate } from '@arena/core';
+import {
+  compileCandidate, DUEL_POOL_VERSION, duelPoolMember, isDuelPoolId,
+  type CandidateId, type CompiledCandidate, type DuelPoolId,
+} from '@arena/core';
 import { assertEventSeatsInRoster } from './roster-bounds.js';
 import {
   paperArguments,
@@ -132,7 +135,7 @@ export interface RunPreparedRunOptions {
   readonly checkpointing?: true;
   readonly checkpointScenario?: Readonly<{ externalSeat: ExternalSeatRequest | null }>;
   readonly resume?: LoadedCheckpoint;
-  readonly seatCandidates?: ReadonlyMap<number, Readonly<{ id: CandidateId; params?: Readonly<Record<string, number>> }>>;
+  readonly seatCandidates?: ReadonlyMap<number, Readonly<{ id: CandidateId | DuelPoolId; params?: Readonly<Record<string, number>> }>>;
   readonly workerLauncher?: WorkerLauncher;
   readonly onExternalAdmitted?: (username: string) => void;
   readonly onUnexpectedPlayer?: (username: string) => void;
@@ -212,17 +215,40 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
       throw new RunnerError('invalid_input', 'worker count', { kind: 'workers_require_unattended_hunger_games' });
     }
     const seatCandidates = new Map<number, CompiledCandidate>();
+    const poolPartners = new Map<number, DuelPoolId>();
+    const assignedPolicies: {
+      seat: number;
+      id: string;
+      version: number;
+      implementation: string;
+      semanticId: string;
+      params: Readonly<Record<string, number>>;
+    }[] = [];
     for (const [seat, request] of options.seatCandidates ?? []) {
       if (scenario.mode !== 'hunger_games' || !roster.botCompetitors.some((entry) => entry.seat === seat)) {
         throw new RunnerError('invalid_input', 'seat candidate', { kind: 'candidate_seat_not_a_bot_seat', field: String(seat) });
       }
+      if (isDuelPoolId(request.id) && request.id !== 'baseline') {
+        const member = duelPoolMember(request.id);
+        poolPartners.set(seat, request.id);
+        assignedPolicies.push({
+          seat, id: member.id, version: DUEL_POOL_VERSION, implementation: 'duel-pool-v1',
+          semanticId: member.semanticId, params: {},
+        });
+        continue;
+      }
       try {
-        seatCandidates.set(seat, compileCandidate(request.id, request.params ?? {}));
+        const compiled = compileCandidate(request.id as CandidateId, request.params ?? {});
+        seatCandidates.set(seat, compiled);
+        assignedPolicies.push({
+          seat, id: compiled.id, version: compiled.version, implementation: compiled.implementation,
+          semanticId: compiled.semanticId, params: compiled.params,
+        });
       } catch (error) {
         throw new RunnerError('invalid_input', 'seat candidate', { kind: 'invalid_candidate', field: String(seat) }, { cause: error });
       }
     }
-    if (seatCandidates.size > 0 && workerCount > 1) {
+    if (assignedPolicies.length > 0 && workerCount > 1) {
       throw new RunnerError('invalid_input', 'worker count', { kind: 'candidates_require_one_worker' });
     }
     const loadedPolicy = await loadPolicy(options, runSignal);
@@ -401,6 +427,7 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
       recordPolicy: scenario.record.policyReplay,
       ...(funnel === undefined ? {} : { funnel }),
       ...(seatCandidates.size === 0 ? {} : { candidates: seatCandidates }),
+      ...(poolPartners.size === 0 ? {} : { poolPartners }),
     });
     if (workerCount > 1) {
       cohort = new WorkerCohort({
@@ -445,15 +472,15 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
         eliminated_seats: resume.record.seats.filter((entry) => !entry.alive).map((entry) => entry.seat),
       });
     }
-    if (seatCandidates.size > 0) {
+    if (assignedPolicies.length > 0) {
       if (!recordsActionFunnel) {
         throw new RunnerError('invalid_input', 'seat candidate', { kind: 'candidates_require_policy_replay_recording' });
       }
-      for (const [seat, candidate] of [...seatCandidates.entries()].sort(([a], [b]) => a - b)) {
+      for (const policy of [...assignedPolicies].sort((left, right) => left.seat - right.seat)) {
         await runtimeTrace.recordRunNote({
-          schema: 'seat-policy-v1', seat, candidate: candidate.id, version: candidate.version,
-          implementation: candidate.implementation, semantic_id: candidate.semanticId,
-          params: { ...candidate.params },
+          schema: 'seat-policy-v1', seat: policy.seat, candidate: policy.id, version: policy.version,
+          implementation: policy.implementation, semantic_id: policy.semanticId,
+          params: { ...policy.params },
         });
       }
     }
@@ -744,9 +771,9 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
       spectators: roster.spectators,
       stats,
       ...(degraded.length > 0 ? { degraded: Object.freeze(degraded) } : {}),
-      ...(seatCandidates.size === 0 ? {} : {
-        seatPolicies: Object.freeze([...seatCandidates.entries()].sort(([a], [b]) => a - b)
-          .map(([seat, candidate]) => Object.freeze({ seat, candidate: candidate.id, semanticId: candidate.semanticId }))),
+      ...(assignedPolicies.length === 0 ? {} : {
+        seatPolicies: Object.freeze([...assignedPolicies].sort((left, right) => left.seat - right.seat)
+          .map((policy) => Object.freeze({ seat: policy.seat, candidate: policy.id, semanticId: policy.semanticId }))),
       }),
     });
   } catch (error) {
@@ -835,6 +862,7 @@ class ControlCoordinator {
     competitors(): readonly RuntimeCompetitorClient[];
     funnel?: ActionFunnelCollector;
     candidates?: ReadonlyMap<number, CompiledCandidate>;
+    poolPartners?: ReadonlyMap<number, DuelPoolId>;
     restore?: ReadonlyMap<number, SeatPolicyState>;
     rosterSize: number;
     onMetrics?: (payload: import('../control/types.js').MetricsPayload) => void;
@@ -870,6 +898,7 @@ class ControlCoordinator {
         recordPolicy: options.recordPolicy,
         ...(options.funnel === undefined ? {} : { funnel: options.funnel }),
         ...(options.candidates === undefined ? {} : { candidates: options.candidates }),
+        ...(options.poolPartners === undefined ? {} : { poolPartners: options.poolPartners }),
         ...(options.restore === undefined ? {} : { restore: options.restore }),
         competitors: options.competitors,
         fail: (error) => this.#fail(error),

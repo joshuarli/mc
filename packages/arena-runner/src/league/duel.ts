@@ -8,7 +8,8 @@ import {
   planDigest,
   type MatchObservation, type MatchPlan, type MatchRunner, type StoredMatch,
 } from './harness.js';
-import { opponentLabel, type CandidateSpec } from './manifest.js';
+import { DUEL_POOL_IDS, type DuelPoolId } from '@arena/core';
+import { opponentLabel, type CandidateSpec, type OpponentSpec } from './manifest.js';
 
 export const DUEL_MAX_ROUNDS = 3;
 export const DUEL_MAX_SEEDS = 24;
@@ -40,12 +41,17 @@ export const DUEL_ENGAGEMENT_OMITTED = Object.freeze([
   }),
 ]);
 
+export type DuelOpponentRequest =
+  | { readonly kind: 'candidate'; readonly spec: CandidateSpec }
+  | { readonly kind: 'member'; readonly id: DuelPoolId }
+  | { readonly kind: 'pool' };
+
 export interface DuelRunRequest {
   readonly scenario: string;
   readonly seeds: readonly number[];
   readonly rounds: number;
   readonly candidate: CandidateSpec;
-  readonly opponent: CandidateSpec;
+  readonly opponent: DuelOpponentRequest;
   readonly runTag: string;
 }
 
@@ -74,35 +80,58 @@ export interface DuelEngagement {
 
 export function planDuelMatches(request: DuelRunRequest): readonly DuelPlannedMatch[] {
   const plans: DuelPlannedMatch[] = [];
-  for (const worldSeed of request.seeds) {
-    for (let duelRound = 0; duelRound < request.rounds; duelRound += 1) {
-      for (const assignment of [0, 1] as const) {
-        const candidateSeats = Object.freeze(assignment === 0 ? [0] : [1]);
-        const opponentSeats = Object.freeze(assignment === 0 ? [1] : [0]);
-        plans.push(Object.freeze({
-          duelRound,
-          assignment,
-          plan: Object.freeze({
-            matchId: `d${request.runTag}-s${worldSeed}-r${duelRound}-a${assignment}`,
-            worldSeed,
-            round: assignment,
-            candidate: request.candidate,
-            opponent: Object.freeze({ ...request.opponent, label: opponentLabel(request.opponent) }),
-            candidateSeats,
-            opponentSeats,
-          }),
-        }));
+  const opponents = plannedOpponents(request);
+  const pooled = request.opponent.kind === 'pool';
+  for (const [memberIndex, opponent] of opponents.entries()) {
+    for (const worldSeed of request.seeds) {
+      for (let duelRound = 0; duelRound < request.rounds; duelRound += 1) {
+        for (const assignment of [0, 1] as const) {
+          const candidateSeats = Object.freeze(assignment === 0 ? [0] : [1]);
+          const opponentSeats = Object.freeze(assignment === 0 ? [1] : [0]);
+          const memberTag = pooled ? `-m${memberIndex}` : '';
+          plans.push(Object.freeze({
+            duelRound,
+            assignment,
+            plan: Object.freeze({
+              matchId: `d${request.runTag}${memberTag}-s${worldSeed}-r${duelRound}-a${assignment}`,
+              worldSeed,
+              round: assignment,
+              candidate: request.candidate,
+              opponent,
+              candidateSeats,
+              opponentSeats,
+            }),
+          }));
+        }
       }
     }
   }
   return Object.freeze(plans);
 }
 
+function plannedOpponents(request: DuelRunRequest): readonly OpponentSpec[] {
+  if (request.opponent.kind === 'candidate') {
+    return [Object.freeze({ ...request.opponent.spec, label: opponentLabel(request.opponent.spec) })];
+  }
+  const ids = request.opponent.kind === 'pool' ? DUEL_POOL_IDS : [request.opponent.id];
+  return ids.map((id) => poolOpponent(id));
+}
+
+function poolOpponent(id: DuelPoolId): OpponentSpec {
+  if (id === 'baseline') {
+    const spec = Object.freeze({ id: 'baseline' as const, params: Object.freeze({}) });
+    return Object.freeze({ ...spec, label: opponentLabel(spec) });
+  }
+  return Object.freeze({ id: 'baseline', params: Object.freeze({}), label: id });
+}
+
 export function duelPlanDigest(plan: MatchPlan, duelRound: number): string {
-  return createHash('sha256').update(canonicalJson({
+  const body: { seat_plan: string; duel_round: number; pool_member?: string } = {
     seat_plan: planDigest(plan),
     duel_round: duelRound,
-  })).digest('hex');
+  };
+  if (plan.opponent.label !== plan.opponent.id) body.pool_member = plan.opponent.label;
+  return createHash('sha256').update(canonicalJson(body)).digest('hex');
 }
 
 export function scoreDuelMatch(plan: MatchPlan, observation: MatchObservation | undefined): 0 | 0.5 | 1 | null {
@@ -203,6 +232,7 @@ export interface DuelReport {
   readonly rounds: number;
   readonly concurrency: number;
   readonly timing_sensitive: boolean;
+  readonly pool_version?: 1;
   readonly analysis: Readonly<{ method: 'tInterval'; confidence: 0.95; grouping: 'world_seed' }>;
   readonly denominators: Readonly<{
     planned: number;
@@ -305,12 +335,12 @@ function duelReport(
   });
   const estimate = estimateMean(scored, 'tInterval', 0, 0);
   const roundLog = roundEntries(plans, byId);
-  return {
-    schema: 1,
-    kind: 'duel',
+  const report: DuelReport = {
+    schema: 1 as const,
+    kind: 'duel' as const,
     scenario: request.scenario,
     candidate: request.candidate.id,
-    opponent: request.opponent.id,
+    opponent: reportedOpponent(request),
     seeds: request.seeds,
     rounds: request.rounds,
     concurrency: running,
@@ -340,6 +370,14 @@ function duelReport(
     matches,
     round_log: roundLog,
   };
+  if (request.opponent.kind !== 'pool') return report;
+  return { ...report, pool_version: 1 as const };
+}
+
+function reportedOpponent(request: DuelRunRequest): string {
+  if (request.opponent.kind === 'pool') return 'pool';
+  if (request.opponent.kind === 'member') return request.opponent.id;
+  return request.opponent.spec.id;
 }
 
 function roundEntries(plans: readonly DuelPlannedMatch[], byId: ReadonlyMap<string, DuelStoredMatch>): readonly object[] {

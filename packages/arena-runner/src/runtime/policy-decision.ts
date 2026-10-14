@@ -19,6 +19,8 @@ import {
   type PolicyParams,
   type PolicyReplayInputV4,
   type PolicyFeedbackBatch,
+  explainDuelPool,
+  type DuelPoolId,
 } from '@arena/core';
 
 export interface RuntimePolicyDecision {
@@ -122,6 +124,47 @@ export function decideRuntimeCandidatePolicy(
   });
   const { decision, explanation } = candidate.explain(observation, memory, random, feedback);
   return Object.freeze({ input, decision, rngStateAfter: random.snapshotState(), explanation: () => explanation });
+}
+
+export function decideRuntimeDuelPool(
+  id: DuelPoolId,
+  observation: AgentObservation,
+  memory: PolicyMemory,
+  params: PolicyParams,
+  random: DeterministicRandom,
+  feedback: PolicyFeedbackBatch = [],
+): RuntimePolicyDecision {
+  const input = normalizePolicyReplayInputV4({ observation, memory, params, random, feedback });
+  const explained = explainDuelPool(id, observation, memory, random, feedback);
+  return Object.freeze({
+    input, decision: explained.decision, rngStateAfter: random.snapshotState(), explanation: () => explained.explanation,
+  });
+}
+
+export function decideRuntimeDuelPoolOpening(
+  id: DuelPoolId,
+  observation: AgentObservation,
+  memory: PolicyMemory,
+  params: PolicyParams,
+  random: DeterministicRandom,
+  feedback: PolicyFeedbackBatch,
+  assignment: Readonly<{
+    readonly seed: bigint;
+    readonly seat: number;
+    readonly style: CoreOpeningStyle;
+    readonly cycle: CoreOpeningStyleCycle;
+    readonly state: OpeningPolicyState;
+  }>,
+): RuntimeOpeningPolicyDecision {
+  const input = normalizeOpeningPolicyReplayInputV4({
+    observation, memory, feedback, params, random,
+    opening: { seed: assignment.seed, style: assignment.style, cycle: assignment.cycle, state: assignment.state },
+  });
+  const explained = explainDuelPool(id, observation, memory, random, feedback);
+  return Object.freeze({
+    input, decision: explained.decision, openingState: assignment.state, rngStateAfter: random.snapshotState(),
+    explanation: () => explained.explanation,
+  });
 }
 
 export function decideRuntimeCandidateOpening(

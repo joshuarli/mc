@@ -297,3 +297,15 @@ export type {
   DecisionDiffReport,
   DecisionDiffSide,
 } from './candidates.js';
+export {
+  DUEL_POOL_IDS,
+  DUEL_POOL_SHIELD_RETREAT_HEALTH_HALF_HEARTS,
+  DUEL_POOL_VERSION,
+  decideDuelPool,
+  decideDuelPoolOpening,
+  duelPoolMember,
+  duelPoolMembers,
+  explainDuelPool,
+  isDuelPoolId,
+} from './duel-pool.js';
+export type { DuelPoolId, DuelPoolMember } from './duel-pool.js';

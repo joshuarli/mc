@@ -1,5 +1,5 @@
 import { randomBytes, randomUUID } from 'node:crypto';
-import { CANDIDATE_IDS } from '@arena/core';
+import { CANDIDATE_IDS, isDuelPoolId, type DuelPoolId } from '@arena/core';
 import { pathToFileURL } from 'node:url';
 import { isAbsolute, resolve } from 'node:path';
 import { TextDecoder } from 'node:util';
@@ -19,7 +19,7 @@ import { commandPerfGate } from './bench/perf-gate.js';
 import { profileById, WORKLOAD_KINDS, type WorkerLayout, type WorkloadKind, type WorldRegime } from './bench/profile.js';
 import { parseConcurrency } from './bounded.js';
 import { runLeague } from './league/harness.js';
-import { DUEL_MAX_ROUNDS, DUEL_MAX_SEEDS, runDuel } from './league/duel.js';
+import { DUEL_MAX_ROUNDS, DUEL_MAX_SEEDS, runDuel, type DuelOpponentRequest } from './league/duel.js';
 import { runQuality } from './league/quality.js';
 import { LiveMatchRunner } from './league/live-runner.js';
 import { parseLeagueManifest, parseSeedManifest, profileSpec, resolveLeagueManifest, type CandidateSpec } from './league/manifest.js';
@@ -492,7 +492,6 @@ async function duelCommand(args: readonly Buffer[]): Promise<CliResult> {
     } else throw invalidInput('unexpected_argument');
     index += 2;
   }
-  if (opponentText === 'pool') throw invalidInput('duel_opponent_pool_unavailable');
   if (scenarioArgument === undefined) throw invalidInput('duel_requires_scenario');
   if (seedsText === undefined) throw invalidInput('duel_requires_seeds');
   if (candidateText === undefined) throw invalidInput('duel_requires_candidate');
@@ -510,7 +509,7 @@ async function duelCommand(args: readonly Buffer[]): Promise<CliResult> {
   if (rounds > DUEL_MAX_ROUNDS) throw invalidInput('duel_invalid_rounds');
   const ids = CANDIDATE_IDS as readonly string[];
   if (!ids.includes(candidateText)) throw invalidInput('duel_unknown_candidate');
-  if (!ids.includes(opponentText)) throw invalidInput('duel_unknown_opponent');
+  const opponent = duelOpponent(opponentText, ids);
   if (!accepted) throw new RunnerError('missing_prerequisite', 'Minecraft EULA', { kind: 'missing_eula' });
   const scenarioPath = normalizeScenarioPath(scenarioArgument);
   const helperPath = configuredAbsolutePath('ARENA_FS_HELPER', 'filesystem helper');
@@ -533,7 +532,7 @@ async function duelCommand(args: readonly Buffer[]): Promise<CliResult> {
         seeds,
         rounds,
         candidate: { id: candidateText as CandidateSpec['id'], params: {} },
-        opponent: { id: opponentText as CandidateSpec['id'], params: {} },
+        opponent,
         runTag: randomBytes(3).toString('hex'),
       },
       runner, concurrency, signal,
@@ -544,6 +543,16 @@ async function duelCommand(args: readonly Buffer[]): Promise<CliResult> {
     const path = await store.writeReport(report);
     return success({ ...report, report_path: path });
   });
+}
+
+function duelOpponent(opponentText: string, candidateIds: readonly string[]): DuelOpponentRequest {
+  if (opponentText === 'pool') return { kind: 'pool' };
+  if (isDuelPoolId(opponentText) && !candidateIds.includes(opponentText)) {
+    const id: DuelPoolId = opponentText;
+    return { kind: 'member', id };
+  }
+  if (!candidateIds.includes(opponentText)) throw invalidInput('duel_unknown_opponent');
+  return { kind: 'candidate', spec: { id: opponentText as CandidateSpec['id'], params: {} } };
 }
 
 async function explainCommand(args: readonly Buffer[]): Promise<CliResult> {
@@ -1115,7 +1124,7 @@ function helpJson(): object {
       'resume --checkpoint <id> --accept-minecraft-eula [--run-id <id>] [--join-timeout-seconds <n>]': 'Resume a saved match in a new run at the next epoch.',
       'league --manifest <path> --accept-minecraft-eula [--concurrency <1-4>]': 'Run or resume a league of candidate policies against frozen opponents and report the paired analysis, per-seat quality, and quality gates.',
       'quality --scenario <path> --seeds <a,b,c> --accept-minecraft-eula [--candidate <id>] [--concurrency <1-4>]': 'Run one Hunger Games match per seed, concurrently on ephemeral ports, and report the per-seat quality table and quality gates.',
-      'duel --scenario <path> --candidate <id> --opponent <id|pool> --seeds <a,b,c> --rounds <1-3> --accept-minecraft-eula [--concurrency <1-4>]': 'Run both seat assignments of a two-competitor Hunger Games duel for each seed and round, and report the paired score. --opponent pool is rejected until a frozen opponent pool exists.',
+      'duel --scenario <path> --candidate <id> --opponent <id|pool> --seeds <a,b,c> --rounds <1-3> --accept-minecraft-eula [--concurrency <1-4>]': 'Run both seat assignments of a two-competitor Hunger Games duel for each seed and round, and report the paired score. --opponent pool plans pool version 1 once per sparring partner.',
       'prepare --scenario <path> --run-id <id>': 'Compile a scenario and stage its world plan in a new run directory.',
       'validate --scenario <path>': 'Compile the scenario, map, and policy without staging a run.',
       'run --scenario <path> --accept-minecraft-eula [--run-id <id>] [--reserve-external-spectator-slot] [--wait-for-external-player] [--join-timeout-seconds <n>] [--workers <n>]': 'Run a match and report its stopped result.',

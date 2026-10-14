@@ -27,7 +27,13 @@ import {
   type PolicyReplayInputV4,
   type OpeningPolicyState,
   decide,
+  decideDuelPool,
+  decideDuelPoolOpening,
   decidePolicyReplayV1,
+  DUEL_POOL_VERSION,
+  duelPoolMember,
+  isDuelPoolId,
+  type DuelPoolId,
   rehydratePolicyReplayInput,
   type Decision,
   type DecisionV1,
@@ -475,14 +481,21 @@ export function replayPolicyJson(evidence: Evidence): PolicyReplaySummary {
   };
 }
 
-function readSeatCandidates(evidence: Evidence): ReadonlyMap<number, CompiledCandidate> {
-  const candidates = new Map<number, CompiledCandidate>();
+function readSeatCandidates(evidence: Evidence): ReadonlyMap<number, ReplaySeatPolicy> {
+  const candidates = new Map<number, ReplaySeatPolicy>();
   for (const [index, record] of evidence.records.entries()) {
     if (record.schema !== 'seat-policy-v1') continue;
     const params = record.params;
     if (typeof record.seat !== 'number' || typeof record.candidate !== 'string' || typeof record.semantic_id !== 'string'
         || params === null || typeof params !== 'object' || Array.isArray(params) || candidates.has(record.seat)) {
       throw replayFailure('invalid_seat_policy', index + 1);
+    }
+    if (isDuelPoolId(record.candidate) && record.candidate !== 'baseline') {
+      if (record.version !== DUEL_POOL_VERSION) throw replayFailure('invalid_seat_policy', index + 1, 'version');
+      const member = duelPoolMember(record.candidate);
+      if (member.semanticId !== record.semantic_id) throw replayFailure('seat_policy_identity_mismatch', index + 1, 'semantic_id');
+      candidates.set(record.seat, { duelPoolId: record.candidate });
+      continue;
     }
     let compiled: CompiledCandidate;
     try {
@@ -622,11 +635,17 @@ function freezePosition(position: Readonly<{ x: number; y: number; z: number }>)
   return Object.freeze({ x: position.x, y: position.y, z: position.z });
 }
 
+type ReplaySeatPolicy = CompiledCandidate | { readonly duelPoolId: DuelPoolId };
+
+function isDuelPoolReplay(candidate: ReplaySeatPolicy | undefined): candidate is { readonly duelPoolId: DuelPoolId } {
+  return candidate !== undefined && 'duelPoolId' in candidate;
+}
+
 function replayDecision(
   record: PolicyReplayRecord,
   recordNumber: number,
   preparedSeed?: bigint,
-  candidate?: CompiledCandidate,
+  candidate?: ReplaySeatPolicy,
 ): OpeningPolicyReplayTransition | undefined {
   if (record.schema === 'civilization-policy-replay-v1') {
     const input = strictObject(record.input);
@@ -684,7 +703,9 @@ function replayDecision(
       if (record.opening_state_after !== null) {
         throw replayFailure('policy_opening_state_mismatch', recordNumber, 'opening_state_after');
       }
-      const actualDecision = candidate === undefined
+      const actualDecision = isDuelPoolReplay(candidate)
+        ? decideDuelPool(candidate.duelPoolId, restored.observation, restored.memory, restored.random, restored.feedback)
+        : candidate === undefined
         ? decide(restored.observation, restored.memory, restored.params, restored.random, restored.feedback)
         : candidate.decide(restored.observation, restored.memory, restored.random, restored.feedback);
       if (canonicalJson(actualDecision) !== canonicalJson(record.decision)) {
@@ -706,7 +727,10 @@ function replayDecision(
     }
     let actual: ReturnType<typeof decideOpening>;
     try {
-      actual = candidate === undefined
+      actual = isDuelPoolReplay(candidate)
+        ? decideDuelPoolOpening(candidate.duelPoolId, restored.observation, restored.memory, restored.random, restored.feedback,
+          { style: restored.opening.style, state: restored.opening.state })
+        : candidate === undefined
         ? decideOpening(restored.observation, restored.memory, restored.params, restored.random, restored.feedback,
           { style: restored.opening.style, state: restored.opening.state })
         : candidate.decideOpening(restored.observation, restored.memory, restored.random, restored.feedback,
