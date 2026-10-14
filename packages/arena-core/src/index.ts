@@ -309,3 +309,18 @@ export {
   isDuelPoolId,
 } from './duel-pool.js';
 export type { DuelPoolId, DuelPoolMember } from './duel-pool.js';
+export { FRONTIER_GOALS, frontierBelief, frontierDecisionExplanation, stepAgent } from './policy-v6.js';
+export type {
+  AgentStep,
+  AgentStepInput,
+  FrontierBelief,
+  FrontierCommand,
+  FrontierCooldown,
+  FrontierExplanation,
+  FrontierGoalName,
+  FrontierMode,
+  FrontierProposal,
+  FrontierRejection,
+  FrontierSkillOwner,
+  FrontierTask,
+} from './policy-v6.js';

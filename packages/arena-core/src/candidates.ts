@@ -27,6 +27,7 @@ import {
   type ExplainedDecision,
   type ExplainedOpeningDecision,
 } from './policy-v5.js';
+import { frontierDecisionExplanation, stepAgent } from './policy-v6.js';
 import { DeterministicRandom, RandomStream } from './random.js';
 
 export const CANDIDATE_IDS = [
@@ -36,10 +37,11 @@ export const CANDIDATE_IDS = [
   'melee-duelist',
   'ranged-kiter',
   'improved',
+  'frontier-v1',
 ] as const;
 
 export type CandidateId = typeof CANDIDATE_IDS[number];
-export type CandidateImplementationId = 'policy-v4' | 'policy-v5' | 'tactical-v1';
+export type CandidateImplementationId = 'policy-v4' | 'policy-v5' | 'tactical-v1' | 'policy-v6';
 
 export const CANDIDATE_TUNABLES = [
   'eatAtHungerOrBelow',
@@ -166,6 +168,21 @@ const DEFINITIONS: Readonly<Record<CandidateId, CandidateDefinition>> = Object.f
       searchRadiusBlocks: 10,
       lootFirstRangeBlocks: 3,
       kiteRangeBlocks: 3,
+    }),
+  }),
+  'frontier-v1': Object.freeze({
+    version: 1,
+    implementation: 'policy-v6' as const,
+    defaults: Object.freeze({
+      eatAtHungerOrBelow: 8,
+      retreatAtHealthHalfHeartsOrBelow: 8,
+      borderMarginBlocks: 2,
+      fightRangeBlocks: 4,
+      opponentMemoryTicks: 100,
+      lootHysteresisBlocks: 2,
+      searchRadiusBlocks: 8,
+      lootFirstRangeBlocks: 0,
+      kiteRangeBlocks: 0,
     }),
   }),
 });
@@ -369,6 +386,34 @@ const IMPLEMENTATIONS: Readonly<Record<CandidateImplementationId, CandidateImple
       return kited === decision ? decision : Object.freeze({ ...kited, openingState: decision.openingState });
     },
   }),
+  'policy-v6': {
+    decide: (observation, memory, policyParams, _params, random, feedback) => stepAgent({
+      observation, memory, params: policyParams, random, feedback, task: null,
+    }).decision,
+    decideOpening: (observation, memory, policyParams, _params, random, feedback, context) => {
+      const step = stepAgent({
+        observation, memory, params: policyParams, random, feedback, task: null,
+        style: context.style, openingState: context.state,
+      });
+      return Object.freeze({ ...step.decision, openingState: step.openingState });
+    },
+    explain: (observation, memory, policyParams, _params, random, feedback) => {
+      const step = stepAgent({
+        observation, memory, params: policyParams, random, feedback, task: null,
+      });
+      return Object.freeze({ decision: step.decision, explanation: frontierDecisionExplanation(step) });
+    },
+    explainOpening: (observation, memory, policyParams, _params, random, feedback, context) => {
+      const step = stepAgent({
+        observation, memory, params: policyParams, random, feedback, task: null,
+        style: context.style, openingState: context.state,
+      });
+      return Object.freeze({
+        decision: Object.freeze({ ...step.decision, openingState: step.openingState }),
+        explanation: frontierDecisionExplanation(step),
+      });
+    },
+  },
 };
 
 function lootFirstView(observation: AgentObservation, params: CandidateParamValues): AgentObservation {
