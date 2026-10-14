@@ -14,6 +14,42 @@ export {
 export type { BlockPosition, CheckedPositionOffset, WorldBorder } from './geometry.js';
 
 export {
+  ACTION_FUNNEL_MISS_REASONS,
+  ACTION_FUNNEL_STAGES,
+  nextActionFunnelStage,
+  reachedActionFunnelRecord,
+  stoppedActionFunnelRecord,
+} from './action-funnel.js';
+export type {
+  ActionFunnelAction,
+  ActionFunnelMissReason,
+  ActionFunnelRecord,
+  ActionFunnelSink,
+  ActionFunnelStage,
+} from './action-funnel.js';
+
+export {
+  FIXED_UNITS_PER_BLOCK,
+  MELEE_REACH_BLOCKS,
+  combatBody,
+  combatSelfBody,
+  eyeToBodyDistance,
+  feetSquaredDistanceUnits,
+  isCrosshairOnBody,
+  isWithinMeleeReach,
+} from './combat.js';
+export type {
+  CombatBody,
+  CombatBodyMeasurement,
+  CombatSelfBody,
+  CombatSelfBodyMeasurement,
+  FixedAngle,
+  FixedBlocks,
+  FixedVector,
+  VectorMeasurement,
+} from './combat.js';
+
+export {
   ObservationValidationError,
   agentObservation,
   agentState,

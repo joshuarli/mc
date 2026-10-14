@@ -2,9 +2,21 @@ import { performance } from 'node:perf_hooks';
 import { createRequire } from 'node:module';
 import {
   blockPosition,
+  eyeToBodyDistance,
+  entityId,
+  isCrosshairOnBody,
   isOutsideBorder,
+  isWithinMeleeReach,
+  reachedActionFunnelRecord,
+  stoppedActionFunnelRecord,
+  type ActionFunnelAction,
+  type ActionFunnelMissReason,
+  type ActionFunnelSink,
+  type ActionFunnelStage,
   type BlockPosition,
   type CivIntent,
+  type CombatBody,
+  type CombatSelfBody,
   type EquipmentSlot,
   type SkillCancellation,
   type SkillOutcome,
@@ -22,7 +34,8 @@ import {
 } from './civilization-skills.js';
 import { MineflayerObserver } from './observer.js';
 import { recordPathDiagnostic } from './path-diagnostics.js';
-import { isTargetablePlayer, isVisibleEntity, toBlockPosition } from './perception.js';
+import { readCombatBody, readCombatSelfBody } from './combat-view.js';
+import { classifyEntityVisibility, isTargetablePlayer, isVisibleEntity, toBlockPosition } from './perception.js';
 import type { ArenaSkillIntent } from './skill-intent.js';
 import {
   ACTION_TIMEOUT_MS,
@@ -54,8 +67,23 @@ const MAX_WORKER_PATH_SLICE_MS = 10;
 const PINNED_PATHFINDER_VERSION = '2.4.5';
 const PATH_TIMEOUT_MS = 20_000;
 const PICKUP_RANGE_BLOCKS = 0.9;
-const APPROACH_RANGE_BLOCKS = 3;
+const PURSUIT_STANDOFF_BLOCKS = 2;
+const ATTACK_COOLDOWN_TICKS = 13;
+const ATTACK_RESPONSE_TICKS = 10;
 const MAX_TARGET_REPLANS = 8;
+
+type EngageObjective = 'closeDistance' | 'strike';
+
+interface EngageProgress {
+  lastPassed: ActionFunnelStage;
+  eyeToBodyUnits: number | null;
+}
+
+interface EngagementView {
+  readonly entity: MineflayerEntity;
+  readonly self: CombatSelfBody;
+  readonly target: CombatBody;
+}
 
 type BoundedPathfinder = Bot['pathfinder'] & { searchRadius: number };
 type PathfinderGoal = import('mineflayer-pathfinder').goals.Goal;
@@ -453,7 +481,11 @@ export class SkillOwner {
   readonly #observer: MineflayerObserver;
   readonly #civilizationObserver: MineflayerCivilizationObserver | null;
   readonly #onHealth: () => void;
+  readonly #onPhysicsTick: () => void;
+  readonly #funnel: ActionFunnelSink | null;
   readonly #pathSearchRegistration: PathSearchRegistration;
+  #physicsTicks = 0;
+  #lastSwingTick: number | null = null;
   #active: ActiveSkill | null = null;
   #transition: Promise<void> = Promise.resolve();
   #cleanupFailure: Error | null = null;
@@ -464,10 +496,15 @@ export class SkillOwner {
     bot: Bot,
     observer: MineflayerObserver,
     civilizationObserver: MineflayerCivilizationObserver | null = null,
+    funnel: ActionFunnelSink | null = null,
   ) {
     this.#bot = bot;
     this.#observer = observer;
     this.#civilizationObserver = civilizationObserver;
+    this.#funnel = funnel;
+    this.#onPhysicsTick = () => {
+      this.#physicsTicks += 1;
+    };
     this.#onHealth = () => {
       if (this.#bot.health !== 0) return;
       void this.cancel('agentEliminated').catch((error: unknown) => {
@@ -477,6 +514,7 @@ export class SkillOwner {
     this.#pathSearchRegistration = configurePathfinder(bot);
     try {
       this.#bot.on('health', this.#onHealth);
+      this.#bot.on('physicsTick', this.#onPhysicsTick);
     } catch (error) {
       try {
         this.#pathSearchRegistration.close();
@@ -542,6 +580,7 @@ export class SkillOwner {
         cancellationError = error;
       } finally {
         this.#bot.removeListener('health', this.#onHealth);
+        this.#bot.removeListener('physicsTick', this.#onPhysicsTick);
       }
       try {
         this.#pathSearchRegistration.close();
@@ -671,10 +710,10 @@ export class SkillOwner {
         await this.#navigateToBlock(intent.target, active);
         return;
       case 'approach':
-        await this.#approach(intent.target, active);
+        await this.#engage('closeDistance', intent.target, active);
         return;
       case 'attack':
-        await this.#attack(intent.target, active);
+        await this.#engage('strike', intent.target, active);
         return;
       case 'dropCollect':
         await this.#collectDrop(intent.entityId, active);
@@ -784,46 +823,124 @@ export class SkillOwner {
     throw new Error('bounded navigation loop exited unexpectedly');
   }
 
-  async #approach(targetId: number, active: ActiveSkill): Promise<void> {
-    for (let attempt = 0; attempt < MAX_TARGET_REPLANS; attempt += 1) {
-      throwIfInterrupted(active.controller.signal);
-      const target = this.#visibleOpponent(targetId);
-      if (distance(this.#bot.entity.position, target.position) <= APPROACH_RANGE_BLOCKS) return;
-      await this.#navigateTo(toBlockPosition(target.position), 2, active);
+  async #engage(objective: EngageObjective, targetId: number, active: ActiveSkill): Promise<void> {
+    const action: ActionFunnelAction = objective === 'strike' ? 'attack' : 'approach';
+    const progress: EngageProgress = { lastPassed: 'skillAdmission', eyeToBodyUnits: null };
+    try {
+      await this.#pursueAndStrike(objective, targetId, active, progress);
+    } catch (error) {
+      this.#recordStopped(action, targetId, progress, error, active);
+      throw error;
     }
-    throw new SkillFault('noProgress', `opponent ${targetId} kept moving during approach`);
+    this.#funnel?.(reachedActionFunnelRecord(action, entityId(targetId), progress.lastPassed));
   }
 
-  async #attack(targetId: number, active: ActiveSkill): Promise<void> {
-    let target = this.#visibleOpponent(targetId);
-    if (distance(this.#bot.entity.position, target.position) > APPROACH_RANGE_BLOCKS) {
-      throw new SkillFault('preconditionsNotMet', `opponent ${targetId} is outside melee reach`);
+  #recordStopped(
+    action: ActionFunnelAction,
+    targetId: number,
+    progress: EngageProgress,
+    error: unknown,
+    active: ActiveSkill,
+  ): void {
+    if (this.#funnel === null) return;
+    let reason: ActionFunnelMissReason;
+    if (error instanceof SkillInterrupted || active.controller.signal.aborted) {
+      const cancellation = active.cancellation;
+      reason = cancellation === 'agentEliminated' ? 'agentEliminated'
+        : cancellation === 'shutdown' ? 'runShutdown' : 'ownershipDeferred';
+    } else if (error instanceof SkillFault) {
+      reason = error.miss ?? (error.failure === 'timedOut' ? 'timeout' : 'clientOperationFailed');
+    } else {
+      reason = 'clientOperationFailed';
     }
-    const aim = target.position.offset(0, target.height * 0.65, 0);
-    await this.#lookAt(active, 'look at opponent', aim);
-    throwIfInterrupted(active.controller.signal);
-    target = this.#visibleOpponent(targetId);
-    if (distance(this.#bot.entity.position, target.position) > APPROACH_RANGE_BLOCKS) {
-      throw new SkillFault('noProgress', `opponent ${targetId} moved out of melee reach`);
+    this.#funnel(stoppedActionFunnelRecord({
+      action,
+      target: entityId(targetId),
+      lastPassed: progress.lastPassed,
+      reason,
+      eyeToBodyUnits: progress.eyeToBodyUnits,
+    }));
+  }
+
+  async #pursueAndStrike(
+    objective: EngageObjective,
+    targetId: number,
+    active: ActiveSkill,
+    progress: EngageProgress,
+  ): Promise<void> {
+    const signal = active.controller.signal;
+    let replans = 0;
+    for (;;) {
+      throwIfInterrupted(signal);
+      let view = this.#engagementView(targetId, progress);
+      if (!isWithinMeleeReach(view.self, view.target)) {
+        if (replans >= MAX_TARGET_REPLANS) {
+          throw new SkillFault(
+            'noProgress',
+            `opponent ${targetId} kept moving during pursuit`,
+            'outOfGeometricReach',
+          );
+        }
+        replans += 1;
+        await this.#navigateTo(toBlockPosition(view.entity.position), PURSUIT_STANDOFF_BLOCKS, active);
+        continue;
+      }
+      if (objective === 'closeDistance') {
+        progress.lastPassed = 'clientResponse';
+        return;
+      }
+
+      await this.#awaitAttackCooldown(active);
+      await this.#lookAt(active, 'look at opponent', aimPoint(view.entity));
+      throwIfInterrupted(signal);
+      view = this.#engagementView(targetId, progress);
+      if (!isWithinMeleeReach(view.self, view.target)) continue;
+      await this.#lookAt(active, 'look at opponent', aimPoint(view.entity));
+      throwIfInterrupted(signal);
+      view = this.#engagementView(targetId, progress);
+      if (!isWithinMeleeReach(view.self, view.target)) continue;
+      if (!isCrosshairOnBody(view.self, view.target)) {
+        throw new SkillFault('noProgress', `aim at opponent ${targetId} did not settle`, 'aimNotReady');
+      }
+      progress.lastPassed = 'localValidation';
+
+      const response = waitForAttackResponse(this.#bot, targetId, signal, ATTACK_RESPONSE_TICKS);
+      this.#lastSwingTick = this.#physicsTicks;
+      this.#bot.attack(view.entity);
+      progress.lastPassed = 'issued';
+      await response;
+      progress.lastPassed = 'clientResponse';
+      return;
     }
-    await this.#lookAt(
-      active,
-      'look at opponent',
-      target.position.offset(0, target.height * 0.65, 0),
-    );
-    throwIfInterrupted(active.controller.signal);
-    target = this.#visibleOpponent(targetId);
-    if (distance(this.#bot.entity.position, target.position) > APPROACH_RANGE_BLOCKS) {
-      throw new SkillFault('noProgress', `opponent ${targetId} moved out of melee reach`);
+  }
+
+  async #awaitAttackCooldown(active: ActiveSkill): Promise<void> {
+    const lastSwing = this.#lastSwingTick;
+    if (lastSwing === null) return;
+    const remaining = ATTACK_COOLDOWN_TICKS - (this.#physicsTicks - lastSwing);
+    if (remaining <= 0) return;
+    const readyAt = this.#physicsTicks + remaining;
+    try {
+      await waitForCondition(
+        this.#bot,
+        () => this.#physicsTicks >= readyAt,
+        active.controller.signal,
+        ACTION_TIMEOUT_MS,
+      );
+    } catch (error) {
+      if (error instanceof SkillFault) {
+        throw new SkillFault(error.failure, error.message, 'cooldownNotReady');
+      }
+      throw error;
     }
-    const confirmation = waitForAttackConfirmation(
-      this.#bot,
-      targetId,
-      active.controller.signal,
-      ACTION_TIMEOUT_MS,
-    );
-    this.#bot.attack(target);
-    await confirmation;
+  }
+
+  #engagementView(targetId: number, progress: EngageProgress): EngagementView {
+    const entity = this.#visibleOpponent(targetId);
+    const self = readCombatSelfBody(this.#bot.entity);
+    const target = readCombatBody(entity);
+    progress.eyeToBodyUnits = eyeToBodyDistance(self, target);
+    return { entity, self, target };
   }
 
   async #collectDrop(entityIdValue: number, active: ActiveSkill): Promise<void> {
@@ -1092,13 +1209,26 @@ export class SkillOwner {
   #visibleOpponent(entityIdValue: number): MineflayerEntity {
     const entity = this.#bot.entities[String(entityIdValue)];
     if (entity === undefined || !isTargetablePlayer(this.#bot, entity)) {
-      throw new SkillFault('preconditionsNotMet', `opponent ${entityIdValue} is not currently targetable`);
+      throw new SkillFault(
+        'preconditionsNotMet',
+        `opponent ${entityIdValue} is not currently targetable`,
+        'targetDespawnedOrEliminated',
+      );
     }
     if (this.#civilizationObserver !== null && !this.#civilizationObserver.isRosteredOpponent(entityIdValue)) {
-      throw new SkillFault('preconditionsNotMet', `entity ${entityIdValue} is not a rostered opposing-faction player`);
+      throw new SkillFault(
+        'preconditionsNotMet',
+        `entity ${entityIdValue} is not a rostered opposing-faction player`,
+        'targetDespawnedOrEliminated',
+      );
     }
-    if (!isVisibleEntity(this.#bot, entity)) {
-      throw new SkillFault('preconditionsNotMet', `opponent ${entityIdValue} is not currently visible to this client`);
+    const visibility = classifyEntityVisibility(this.#bot, entity);
+    if (visibility !== 'visible') {
+      throw new SkillFault(
+        'preconditionsNotMet',
+        `opponent ${entityIdValue} is not currently visible to this client`,
+        visibility === 'blocked' ? 'blockedLineOfSight' : 'targetNoLongerVisible',
+      );
     }
     return entity;
   }
@@ -1419,26 +1549,46 @@ async function waitForPathStop(bot: Bot, timeoutMs: number): Promise<void> {
   });
 }
 
-async function waitForAttackConfirmation(
+function aimPoint(entity: MineflayerEntity): MineflayerEntity['position'] {
+  return entity.position.offset(0, entity.height * 0.65, 0);
+}
+
+async function waitForAttackResponse(
   bot: Bot,
   targetId: number,
   signal: AbortSignal,
-  timeoutMs: number,
+  maxTicks: number,
 ): Promise<void> {
   await new Promise<void>((resolve, reject) => {
-    const timeout = setTimeout(() => finish(new SkillFault('timedOut', `attack on entity ${targetId} had no observed damage`)), timeoutMs);
+    let ticks = 0;
     const onAbort = () => finish(new SkillInterrupted());
     const onHurt = (entity?: MineflayerEntity, source?: MineflayerEntity) => {
       if (entity?.id === targetId && source?.id === bot.entity.id) finish();
     };
+    const onGone = (entity: MineflayerEntity) => {
+      if (entity.id === targetId) {
+        finish(new SkillFault('noProgress', `opponent ${targetId} left before damage was observed`, 'targetDespawnedOrEliminated'));
+      }
+    };
+    const onTick = () => {
+      ticks += 1;
+      if (ticks >= maxTicks) {
+        finish(new SkillFault('timedOut', `attack on entity ${targetId} had no observed damage`, 'ambiguousConfirmation'));
+      }
+    };
     const finish = (error?: Error) => {
-      clearTimeout(timeout);
       bot.removeListener('entityHurt', onHurt);
+      bot.removeListener('entityGone', onGone);
+      bot.removeListener('entityDead', onGone);
+      bot.removeListener('physicsTick', onTick);
       signal.removeEventListener('abort', onAbort);
       if (error === undefined) resolve();
       else reject(error);
     };
     bot.on('entityHurt', onHurt);
+    bot.on('entityGone', onGone);
+    bot.on('entityDead', onGone);
+    bot.on('physicsTick', onTick);
     signal.addEventListener('abort', onAbort, { once: true });
     if (signal.aborted) onAbort();
   });

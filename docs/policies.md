@@ -41,11 +41,21 @@ The baseline applies these priorities:
 2. Retreat from a nearby remembered or visible opponent at low health.
 3. Eat when hungry, food is present, and a current opponent observation establishes a safe moment. Select the lowest confirmed food inventory slot.
 4. Equip the best confirmed owned upgrade. Compare armor only with the same armor slot, then emit the candidate inventory slot and equipment slot.
-5. Approach or attack a currently visible opponent in range while above the retreat threshold.
+5. Approach or attack a currently visible opponent in range while above the retreat threshold. Fight range (4 blocks) decides when to engage; melee reach (`MELEE_REACH_BLOCKS`, 3 blocks, eye to target bounding box) decides attack versus approach.
 6. Collect a useful visible drop or open a visible container.
 7. Search a bounded last-seen position, then choose a short exploration point.
 
 A failed loot target is skipped while that same candidate remains unchanged. A failed last-known search is skipped while the opponent remains at the same position. A failed exploration point stays suppressed until the agent moves at least eight Manhattan blocks from its failure origin; changes to the tick, loot, opponents, or border do not retry it. Relevant loot or search evidence changes and explicit success clear the corresponding failed target. When every representable exploration direction is remembered as failed, the policy returns `wait { reason: 'failedTargetsExhausted' }`. Border escape and low-health retreat always retain their priority over failed-target memory.
+
+## Combat view and engagement
+
+An agent state and each visible opponent may carry a validated fractional combat view: feet position, velocity per tick, yaw, pitch, bounding-box width and height, and for the agent the eye height. Values are fixed-point integers in 1/1024 block (angles in 1/1024 radian), so the strict replay encoding keeps them as safe integers. Non-finite or out-of-range measurements are rejected when the view is built. Positions are floored when quantized, so the integer block position that identifies a block or an entity cell is always the floor of the fractional position; a mismatch is rejected. Observations without a view keep the integer block geometry, which is how historical replays decide.
+
+With views on both sides, the policy measures reach from the agent's eye to the target's bounding box against `MELEE_REACH_BLOCKS`, the same function the adapter uses before a swing, so policy and adapter cannot disagree about whether a target is in reach. Fight range uses feet-to-feet fixed-point distance. Among opponents inside fight range the policy prefers one attacking the agent, then one inside reach, then the nearest, then the lowest entity ID. An agent at or below twice the retreat threshold with two or more opponents inside fight range retreats instead of engaging.
+
+The adapter runs `approach` and `attack` as one engagement under the exclusive skill owner: pursuit by bounded re-pathing toward the target, a weapon cooldown wait counted in client physics ticks, non-forced looks, a crosshair-on-body check, a reach and line-of-sight recheck immediately before the swing, one swing, and a bounded tick wait for the client to observe the damage. Cancellation restores controls and the selected hotbar slot. A swing is never issued while the target is outside reach, outside the perception cone, or occluded.
+
+Each engagement reports one action funnel record through the optional `funnel` sink of `createMineflayerArenaClient`. A record names the last passed stage of opportunity, tactical choice, skill admission, local validation, issued, client response and confirmed effect, and for a stop one typed reason: `outOfGeometricReach`, `targetNoLongerVisible`, `targetDespawnedOrEliminated`, `cooldownNotReady`, `aimNotReady`, `blockedLineOfSight`, `ownershipDeferred`, `clientOperationFailed`, `serverRejection`, `ambiguousConfirmation`, `timeout`, `agentEliminated` or `runShutdown`. The adapter can pass at most client response; evaluator confirmation and the stages before skill admission belong to the runner and the plugin.
 
 ## Opening styles
 

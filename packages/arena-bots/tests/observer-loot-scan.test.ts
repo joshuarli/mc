@@ -33,7 +33,7 @@ function clientWorld(position = new Vec3(8, 1, 8), height = 16, minY = 0): {
     _client: new EventEmitter(), registry, version: '26.1.2',
     supportFeature: registry.supportFeature.bind(registry),
     game: { minY, height }, world,
-    entity: { id: 1, position, eyeHeight: 1.62, height: 1.8, yaw: 0, pitch: 0 },
+    entity: { id: 1, position, eyeHeight: 1.62, height: 1.8, width: 0.6, velocity: { x: 0, y: 0, z: 0 }, yaw: 0, pitch: 0 },
     entities: {}, players: {}, health: 20, food: 20, heldItem: null,
     inventory: { slots: [], inventoryStart: 0, inventoryEnd: 0 },
     getEquipmentDestSlot: () => 0,
@@ -104,7 +104,9 @@ test('observer quantization preserves every integer policy health threshold', ()
       id: 2,
       type: 'player',
       position: new Vec3(8, 1, 10),
-      height: 1.8,
+      yaw: 0,
+      pitch: 0,
+      height: 1.8, width: 0.6, velocity: { x: 0, y: 0, z: 0 },
       getDroppedItem: () => null,
     }) as unknown as Bot['entity'];
     Object.assign(client.bot.entities, { 2: opponent });

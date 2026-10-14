@@ -163,8 +163,8 @@ test('team reports reject stale, future, malformed, over-rate, and over-capacity
 
 test('civilization observations exclude rostered teammates and retain rostered enemies', () => {
   const bot = makeBot(true);
-  const teammate = { id: 2, type: 'player', position: vector(0, 64, -2), height: 1.8, getDroppedItem: () => null };
-  const enemy = { id: 3, type: 'player', position: vector(1, 64, -2), height: 1.8, getDroppedItem: () => null };
+  const teammate = { id: 2, type: 'player', position: vector(0, 64, -2), yaw: 0, pitch: 0, height: 1.8, width: 0.6, velocity: { x: 0, y: 0, z: 0 }, getDroppedItem: () => null };
+  const enemy = { id: 3, type: 'player', position: vector(1, 64, -2), yaw: 0, pitch: 0, height: 1.8, width: 0.6, velocity: { x: 0, y: 0, z: 0 }, getDroppedItem: () => null };
   const roster = publicRoster();
   Object.assign(bot, {
     entity: {
@@ -173,7 +173,7 @@ test('civilization observations exclude rostered teammates and retain rostered e
       yaw: 0,
       pitch: 0,
       eyeHeight: 1.62,
-      height: 1.8,
+      height: 1.8, width: 0.6, velocity: { x: 0, y: 0, z: 0 },
     },
     entities: { 2: teammate, 3: enemy },
     players: {
@@ -224,7 +224,7 @@ test('civilization observations include item drops reported as other entities', 
     getDroppedItem: () => ({ name: 'oak_log', type: 10, metadata: 0, count: 1, slot: 0, stackSize: 64 }),
   };
   Object.assign(bot, {
-    entity: { id: 1, position: vector(0, 64, 0), yaw: 0, pitch: 0, eyeHeight: 1.62, height: 1.8 },
+    entity: { id: 1, position: vector(0, 64, 0), yaw: 0, pitch: 0, eyeHeight: 1.62, height: 1.8, width: 0.6, velocity: { x: 0, y: 0, z: 0 } },
     entities: { 4: droppedLog },
     registry: pinnedRegistry,
     findBlocks: () => [],
@@ -250,7 +250,7 @@ test('unloaded outpost cells are omitted instead of reported as air', () => {
   const bot = makeBot();
   bot.unloadColumn(0, 0);
   Object.assign(bot, {
-    entity: { id: 1, position: vector(0, 64, 0), yaw: 0, pitch: 0, eyeHeight: 1.62, height: 1.8 },
+    entity: { id: 1, position: vector(0, 64, 0), yaw: 0, pitch: 0, eyeHeight: 1.62, height: 1.8, width: 0.6, velocity: { x: 0, y: 0, z: 0 } },
     registry: pinnedRegistry,
     entities: {},
     findBlocks: () => [],
@@ -286,7 +286,7 @@ test('container contents become current only for this client’s synchronized op
       yaw: -Math.PI / 2,
       pitch: -0.2,
       eyeHeight: 1.62,
-      height: 1.8,
+      height: 1.8, width: 0.6, velocity: { x: 0, y: 0, z: 0 },
     },
     registry: pinnedRegistry,
     entities: {},

@@ -8,8 +8,18 @@ import {
 
 type MineflayerEntity = Bot['entity'];
 
+export type EntityVisibility = 'visible' | 'outsideView' | 'blocked';
+
 export function isVisibleEntity(bot: Bot, entity: Pick<MineflayerEntity, 'position' | 'height'>): boolean {
   return isVisiblePosition(bot, entity.position, entity.height);
+}
+
+export function classifyEntityVisibility(
+  bot: Bot,
+  entity: Pick<MineflayerEntity, 'position' | 'height'>,
+): EntityVisibility {
+  if (!isInsidePerceptionCone(viewDirection(bot), entity)) return 'outsideView';
+  return isVisiblePosition(bot, entity.position, entity.height) ? 'visible' : 'blocked';
 }
 
 export function isVisiblePosition(

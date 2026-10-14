@@ -1029,6 +1029,10 @@ test('attack waits for tick-driven non-forced look before launching', async () =
     id: 2,
     type: 'player',
     position: targetPosition,
+    velocity: new TestPosition(0, 0, 0),
+    yaw: 0,
+    pitch: 0,
+    width: 0.6,
     height: 1.8,
     getDroppedItem: () => null,
   } as Bot['entity'];
@@ -1043,7 +1047,10 @@ test('attack waits for tick-driven non-forced look before launching', async () =
     entity: {
       id: 1,
       position: new TestPosition(0, 64, 0),
+      velocity: new TestPosition(0, 0, 0),
       eyeHeight: 1.62,
+      width: 0.6,
+      height: 1.8,
       yaw: 0,
       pitch: 0,
     },

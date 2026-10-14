@@ -26,6 +26,7 @@ import {
   type WorldBorder,
 } from '@arena/core';
 import type { Bot } from 'mineflayer';
+import { readCombatBody, readCombatSelfBody } from './combat-view.js';
 import { classifyItem } from './items.js';
 import { isTargetablePlayer, isVisibleEntity, isVisiblePosition, toBlockPosition } from './perception.js';
 import { ClientWorldBorder } from './world-border.js';
@@ -238,6 +239,7 @@ export class MineflayerObserver {
 
     return agentState({
       position: toBlockPosition(entity.position),
+      combat: readCombatSelfBody(entity),
       healthHalfHearts,
       hungerPoints: this.#bot.food,
       foodStacks: foods,
@@ -258,6 +260,7 @@ export class MineflayerObserver {
         entityId(entity.id),
         toBlockPosition(entity.position),
         this.#isRecentAttacker(entity.id),
+        readCombatBody(entity),
       ))
       .sort((first, second) => first.id - second.id);
     this.#lastOpponents = { value: opponents, observedAt: at };

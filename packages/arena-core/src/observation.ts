@@ -1,4 +1,11 @@
 import {
+  cloneCombatBody,
+  cloneCombatSelfBody,
+  combatBodyBlock,
+  type CombatBody,
+  type CombatSelfBody,
+} from './combat.js';
+import {
   blockPosition,
   type BlockPosition,
   type WorldBorder,
@@ -126,6 +133,7 @@ export function equipmentUpgrade(
 
 export interface AgentState {
   readonly position: BlockPosition;
+  readonly combat?: CombatSelfBody;
   readonly healthHalfHearts: number;
   readonly hungerPoints: number;
   readonly foodStacks: readonly FoodStack[];
@@ -135,6 +143,7 @@ export interface AgentState {
 
 export interface AgentStateInput {
   readonly position: BlockPosition;
+  readonly combat?: CombatSelfBody;
   readonly healthHalfHearts: number;
   readonly hungerPoints: number;
   readonly foodStacks: readonly FoodStack[];
@@ -150,7 +159,7 @@ export function agentState(input: AgentStateInput): AgentState {
     'foodStacks',
     'equipped',
     'upgrades',
-  ], 'agent state');
+  ], 'agent state', ['combat']);
 
   if (!Number.isSafeInteger(input.healthHalfHearts) || input.healthHalfHearts < 0 || input.healthHalfHearts > 40) {
     throw new RangeError(`health must be between 0 and 40 half-hearts, received ${input.healthHalfHearts}`);
@@ -160,6 +169,8 @@ export function agentState(input: AgentStateInput): AgentState {
   }
 
   const position = cloneBlockPosition(input.position);
+  const combat = input.combat === undefined ? undefined : cloneCombatSelfBody(input.combat);
+  if (combat !== undefined) assertBlockIdentity(position, combat, 'agent state');
   const equipped = cloneEquipmentSnapshot(input.equipped);
   const foodStacks = input.foodStacks.map(cloneFoodStack);
   const upgrades = input.upgrades.map(cloneEquipmentUpgrade);
@@ -179,6 +190,7 @@ export function agentState(input: AgentStateInput): AgentState {
 
   return Object.freeze({
     position,
+    ...(combat === undefined ? {} : { combat }),
     healthHalfHearts: input.healthHalfHearts,
     hungerPoints: input.hungerPoints,
     foodStacks: Object.freeze(foodStacks),
@@ -191,17 +203,23 @@ export interface VisibleOpponent {
   readonly id: EntityId;
   readonly position: BlockPosition;
   readonly attackingAgent: boolean;
+  readonly combat?: CombatBody;
 }
 
 export function visibleOpponent(
   id: EntityId,
   position: BlockPosition,
   attackingAgent: boolean,
+  combat?: CombatBody,
 ): VisibleOpponent {
+  const clonedPosition = cloneBlockPosition(position);
+  const clonedCombat = combat === undefined ? undefined : cloneCombatBody(combat);
+  if (clonedCombat !== undefined) assertBlockIdentity(clonedPosition, clonedCombat, 'visible opponent');
   return Object.freeze({
     id: entityId(id),
-    position: cloneBlockPosition(position),
+    position: clonedPosition,
     attackingAgent: assertBoolean(attackingAgent, 'attackingAgent'),
+    ...(clonedCombat === undefined ? {} : { combat: clonedCombat }),
   });
 }
 
@@ -384,8 +402,8 @@ function cloneWorldBorder(value: WorldBorder): WorldBorder {
 
 function cloneOpponents(values: readonly VisibleOpponent[]): readonly VisibleOpponent[] {
   return Object.freeze(values.map((value) => {
-    assertObjectKeys(value, ['id', 'position', 'attackingAgent'], 'visible opponent');
-    return visibleOpponent(value.id, value.position, value.attackingAgent);
+    assertObjectKeys(value, ['id', 'position', 'attackingAgent'], 'visible opponent', ['combat']);
+    return visibleOpponent(value.id, value.position, value.attackingAgent, value.combat);
   }));
 }
 
@@ -471,12 +489,24 @@ function assertBoolean(value: boolean, field: string): boolean {
   return value;
 }
 
-function assertObjectKeys(value: object, allowed: readonly string[], label: string): void {
+function assertBlockIdentity(position: BlockPosition, combat: CombatBody, label: string): void {
+  const block = combatBodyBlock(combat);
+  if (block.x !== position.x || block.y !== position.y || block.z !== position.z) {
+    throw new RangeError(`${label} block position must be the floor of its fractional combat position`);
+  }
+}
+
+function assertObjectKeys(
+  value: object,
+  allowed: readonly string[],
+  label: string,
+  optional: readonly string[] = [],
+): void {
   if (value === null || typeof value !== 'object') {
     throw new TypeError(`${label} must be an object`);
   }
   for (const key of Object.keys(value)) {
-    if (!allowed.includes(key)) {
+    if (!allowed.includes(key) && !optional.includes(key)) {
       throw new TypeError(`${label} contains unknown field ${key}`);
     }
   }

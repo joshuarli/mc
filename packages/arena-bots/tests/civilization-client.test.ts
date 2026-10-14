@@ -284,6 +284,7 @@ function makeBot(seat: number) {
     pitch: 0,
     eyeHeight: 1.62,
     height: 1.8,
+    width: 0.6,
     getDroppedItem: () => null,
   };
 

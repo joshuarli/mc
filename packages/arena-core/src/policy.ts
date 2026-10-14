@@ -1,4 +1,10 @@
 import {
+  FIXED_UNITS_PER_BLOCK,
+  MELEE_REACH_BLOCKS,
+  feetSquaredDistanceUnits,
+  isWithinMeleeReach,
+} from './combat.js';
+import {
   blockPosition,
   borderCenter,
   compareBlockPositions,
@@ -45,7 +51,6 @@ const MAX_FIGHT_RANGE_BLOCKS = 8;
 const MAX_OPPONENT_MEMORY_TICKS = 100;
 const MAX_LOOT_HYSTERESIS_BLOCKS = 16;
 const MAX_SEARCH_RADIUS_BLOCKS = 16;
-const MELEE_REACH_BLOCKS = 3;
 const LOOT_INTERACTION_DISTANCE_BLOCKS = 3n;
 const MAX_REMEMBERED_FAILED_TARGETS = 16;
 const MAX_POLICY_FEEDBACKS = 2;
@@ -53,6 +58,8 @@ const FAILED_EXPLORATION_APPROACH_BLOCKS = 8n;
 const CACHE_DEPARTURE_DISTANCE_BLOCKS = 8n;
 const MAX_CACHE_DEPARTURE_RADIUS_BLOCKS = 16;
 const MAX_HUNTER_PURSUE_BLOCKS = 12;
+const OUTNUMBERED_OPPONENT_COUNT = 2;
+const OUTNUMBERED_RETREAT_HEALTH_FACTOR = 2;
 
 export type PolicyParameterVersion = 1;
 
@@ -493,7 +500,18 @@ function decideWithSemantics(
   }
 
   const nearestThreat = nearestKnownThreat(observation, currentMemory, params.values, agent);
-  if (agent.healthHalfHearts <= params.values.retreatAtHealthHalfHeartsOrBelow && nearestThreat !== null) {
+  const outnumbered = semantics !== 'policy-input-v1'
+    && agent.combat !== undefined
+    && currentOpponents !== null
+    && agent.healthHalfHearts <= params.values.retreatAtHealthHalfHeartsOrBelow * OUTNUMBERED_RETREAT_HEALTH_FACTOR
+    && currentOpponents.filter((candidate) => isWithinFightRange(
+      agent,
+      candidate,
+      params.values.fightRangeBlocks,
+      semantics,
+    )).length >= OUTNUMBERED_OPPONENT_COUNT;
+  if ((agent.healthHalfHearts <= params.values.retreatAtHealthHalfHeartsOrBelow || outnumbered)
+      && nearestThreat !== null) {
     const tieBit = nearestThreat.id % 2 === 1;
     const retreat = retreatTarget(agent.position, nearestThreat.position, tieBit);
     if (retreat.ok === false) {
@@ -535,12 +553,12 @@ function decideWithSemantics(
 
   const opponent = currentOpponents === null || currentOpponents.length === 0
     ? null
-    : nearestOpponent(agent.position, currentOpponents);
+    : engagementOpponent(agent, currentOpponents, params.values.fightRangeBlocks, semantics);
   if (opponent !== null
       && agent.healthHalfHearts > params.values.retreatAtHealthHalfHeartsOrBelow
-      && squaredDistance(agent.position, opponent.position) <= BigInt(params.values.fightRangeBlocks) ** 2n) {
+      && isWithinFightRange(agent, opponent, params.values.fightRangeBlocks, semantics)) {
     const goal: Goal = Object.freeze({ kind: 'engageVisibleOpponent', target: opponent.id });
-    const intent: Intent = squaredDistance(agent.position, opponent.position) <= BigInt(MELEE_REACH_BLOCKS) ** 2n
+    const intent: Intent = isWithinMeleeReachOf(agent, opponent, semantics)
       ? { kind: 'attack', target: opponent.id }
       : { kind: 'approach', target: opponent.id };
     return finish(goal, intent, { ...currentMemory, lastGoal: goal });
@@ -554,7 +572,7 @@ function decideWithSemantics(
       return openingExploration(observation, currentMemory, random, semantics, openingStyle, openingState, params);
     }
     const goal: Goal = Object.freeze({ kind: 'engageVisibleOpponent', target: target.id });
-    const intent: Intent = squaredDistance(agent.position, target.position) <= BigInt(MELEE_REACH_BLOCKS) ** 2n
+    const intent: Intent = isWithinMeleeReachOf(agent, target, semantics)
       ? { kind: 'attack', target: target.id }
       : { kind: 'approach', target: target.id };
     return finish(goal, intent, { ...currentMemory, lastGoal: goal });
@@ -1013,6 +1031,52 @@ function validateSkillCancellation(value: string): void {
 
 function currentValue<T>(knowledge: Knowledge<T>): T | null {
   return knowledge.kind === 'current' ? knowledge.value : null;
+}
+
+function isWithinMeleeReachOf(agent: AgentState, opponent: VisibleOpponent, semantics: DecisionSemantics): boolean {
+  if (semantics !== 'policy-input-v1' && agent.combat !== undefined && opponent.combat !== undefined) {
+    return isWithinMeleeReach(agent.combat, opponent.combat);
+  }
+  return squaredDistance(agent.position, opponent.position) <= BigInt(MELEE_REACH_BLOCKS) ** 2n;
+}
+
+function isWithinFightRange(
+  agent: AgentState,
+  opponent: VisibleOpponent,
+  fightRangeBlocks: number,
+  semantics: DecisionSemantics,
+): boolean {
+  if (semantics !== 'policy-input-v1' && agent.combat !== undefined && opponent.combat !== undefined) {
+    const range = BigInt(fightRangeBlocks) * BigInt(FIXED_UNITS_PER_BLOCK);
+    return feetSquaredDistanceUnits(agent.combat, opponent.combat) <= range * range;
+  }
+  return squaredDistance(agent.position, opponent.position) <= BigInt(fightRangeBlocks) ** 2n;
+}
+
+function engagementOpponent(
+  agent: AgentState,
+  opponents: readonly VisibleOpponent[],
+  fightRangeBlocks: number,
+  semantics: DecisionSemantics,
+): VisibleOpponent {
+  if (semantics === 'policy-input-v1' || agent.combat === undefined) {
+    return nearestOpponent(agent.position, opponents);
+  }
+  const inRange = opponents.filter((opponent) => isWithinFightRange(agent, opponent, fightRangeBlocks, semantics));
+  const candidates = inRange.length === 0 ? opponents : inRange;
+  const ordered = [...candidates].sort((first, second) => {
+    if (first.attackingAgent !== second.attackingAgent) return first.attackingAgent ? -1 : 1;
+    const firstReach = isWithinMeleeReachOf(agent, first, semantics);
+    const secondReach = isWithinMeleeReachOf(agent, second, semantics);
+    if (firstReach !== secondReach) return firstReach ? -1 : 1;
+    const firstDistance = squaredDistance(agent.position, first.position);
+    const secondDistance = squaredDistance(agent.position, second.position);
+    if (firstDistance !== secondDistance) return firstDistance < secondDistance ? -1 : 1;
+    return compareNumbers(first.id, second.id);
+  });
+  const selected = ordered[0];
+  if (selected === undefined) throw new RangeError('engagement opponent requires a nonempty opponent list');
+  return selected;
 }
 
 function nearestOpponent(position: BlockPosition, opponents: readonly VisibleOpponent[]): VisibleOpponent {

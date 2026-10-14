@@ -1,5 +1,5 @@
 import { performance } from 'node:perf_hooks';
-import type { SkillCancellation, SkillFailure, SkillOutcome } from '@arena/core';
+import type { ActionFunnelMissReason, SkillCancellation, SkillFailure, SkillOutcome } from '@arena/core';
 import type { Bot, BotEvents } from 'mineflayer';
 
 export const ACTION_TIMEOUT_MS = 5_000;
@@ -28,11 +28,13 @@ export interface ActiveSkill {
 
 export class SkillFault extends Error {
   readonly failure: SkillFailure;
+  readonly miss: ActionFunnelMissReason | null;
 
-  constructor(cause: SkillFailure, message: string) {
+  constructor(cause: SkillFailure, message: string, miss: ActionFunnelMissReason | null = null) {
     super(message);
     this.name = 'SkillFault';
     this.failure = cause;
+    this.miss = miss;
   }
 }
 

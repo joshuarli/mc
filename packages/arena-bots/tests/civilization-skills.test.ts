@@ -723,7 +723,7 @@ function makeHarness() {
     yaw: 0,
     pitch: 0,
     eyeHeight: 1.62,
-    height: 1.8,
+    height: 1.8, width: 0.6, velocity: { x: 0, y: 0, z: 0 },
   };
   Object.assign(emitter, {
     _client: client,
@@ -833,7 +833,9 @@ function playerEntity(id: number, x: number, y: number, z: number) {
     id,
     type: 'player',
     position: new TestVector(x, y, z),
-    height: 1.8,
+    yaw: 0,
+    pitch: 0,
+    height: 1.8, width: 0.6, velocity: { x: 0, y: 0, z: 0 },
     getDroppedItem: () => null,
   };
 }
