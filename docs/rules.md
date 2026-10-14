@@ -26,8 +26,9 @@ before the server reports ready. The runner must create a fresh world for each
 plan because Paper only calls the generator for chunks that have not already
 been generated.
 
-The resolved plan allows at most 1,000,000 blocks, six spawns, 100,000 loot
-containers, and 27 one-item inventory entries per chest. Chunk preparation
+The resolved plan allows at most 1,000,000 blocks, six spawns (256 for a
+schema-3 natural plan), 100,000 loot containers, and 27 one-item inventory
+entries per chest. Chunk preparation
 includes the configured view-distance halo, limited to 32 chunks in each
 direction and 8,192 total prepared chunks.
 
@@ -54,9 +55,14 @@ map setup. It never reconnects. Socket I/O runs off the Paper thread; commands,
 world mutation, elimination resolution, and outcomes run at server tick end.
 
 `prepare` must carry the staged `map_semantic_id`, settings for one supported
-mode, and ordered bot competitors. Hunger Games accepts one to six seats;
-civilization requires all six. Each bot binds only when both its offline UUID
-and username match. Noncompetitor joins are spectators.
+mode, and ordered competitors. A legacy Hunger Games `prepare` accepts one to
+six bot seats; a Hunger Games `prepare` with `roster_version` 2 accepts one to
+256 seats, each a bot or an external client with a reserved username.
+Civilization requires exactly six bot seats. A roster-version-2 `prepare` is
+valid only against a schema-3 world plan whose roster has the same seats,
+controller kinds, and external usernames. Each competitor binds only when both
+its offline UUID and username match. Noncompetitor joins are spectators, and
+spectators never occupy a competitor seat.
 `start` requires every configured bot to be online before the countdown begins;
 competitive reconnects after countdown are spectators. Match configuration
 controls respawn, block breaking and placing, natural mob spawning, random
