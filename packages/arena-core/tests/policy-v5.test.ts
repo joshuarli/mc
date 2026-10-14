@@ -255,3 +255,28 @@ test('every improved decision on every recorded live input yields a legal feedba
   }
   equal(checked, 6);
 });
+
+test('travel targets are observed standable support points and prefer level ground over a drop toward the center', () => {
+  const ring = [[8, 0], [8, 4], [0, 8], [-4, 8], [-8, 0], [-8, -4], [0, -8], [4, -8]] as const;
+  const at = [380, 70, 600] as const;
+  const directions: DirectionSupport[] = ring.map(([dx, dz], index) => (
+    index === 0
+      ? { kind: 'supported', support: pos([at[0] + dx, 66, at[2] + dz]), hazard: false }
+      : index === 1
+        ? { kind: 'supported', support: pos([at[0] + dx, 70, at[2] + dz]), hazard: false }
+        : index === 4
+          ? { kind: 'supported', support: pos([at[0] + dx, 70, at[2] + dz]), hazard: true }
+          : { kind: 'blocked' }
+  ));
+  const { decision } = improved.explain(situation({ at, directions }), emptyPolicyMemory(), stream());
+  deepStrictEqual(decision.intent, { kind: 'navigate', target: pos([388, 70, 604]) });
+});
+
+test('travel keeps the highest level seen instead of ratcheting down into a pit', () => {
+  const memory = policyMemory({
+    ...emptyPolicyMemory(),
+    knowledge: { visitedRegions: [{ x: 26, z: 37 }], trail: [pos([405, 68, 600]), pos([400, 62, 602])] },
+  });
+  const { decision } = improved.explain(situation({ at: [398, 62, 602], tick: 150 }), memory, stream());
+  equal((decision.intent as { target: { y: number } }).target.y, 68);
+});

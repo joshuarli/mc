@@ -272,9 +272,37 @@ function centerTarget(
     !failed.some((position) => sameBlock(position, candidate))
     && !isNearOrOutsideBorder(border, candidate, EXPLORE_BORDER_MARGIN_BLOCKS)
   );
-  const at = (x: number, z: number) => blockPosition(x, agent.position.y, z);
-
   const regions = memory.knowledge?.visitedRegions.length ?? 0;
+  const visitedRegions = memory.knowledge?.visitedRegions ?? [];
+  const regionVisited = (candidate: BlockPosition): boolean => visitedRegions.some((region) => (
+    region.x === Math.floor(candidate.x / REGION_SIZE_BLOCKS) && region.z === Math.floor(candidate.z / REGION_SIZE_BLOCKS)
+  ));
+  const trailTop = (memory.knowledge?.trail ?? []).reduce((top, point) => Math.max(top, point.y), agent.position.y);
+  const at = (x: number, z: number) => blockPosition(x, Math.max(agent.position.y, trailTop), z);
+
+  const supportedPoints = (agent.directions ?? [])
+    .flatMap((direction) => (direction.kind === 'supported' && !direction.hazard ? [direction.support] : []))
+    .filter(usable);
+  if (supportedPoints.length > 0) {
+    const level = supportedPoints.filter((point) => point.y >= agent.position.y - 1);
+    const pool = level.length > 0 ? level : supportedPoints;
+    const squared = (from: BlockPosition, to: BlockPosition) => (from.x - to.x) ** 2 + (from.z - to.z) ** 2;
+    const confinedNow = chebyshev > ORBIT_ENTRY_BLOCKS && facts.tick >= CONFINED_AFTER_TICKS
+      && regions <= CONFINED_MAX_REGIONS;
+    const byCenter = [...pool].sort((first, second) => squared(first, center) - squared(second, center));
+    if (confinedNow) {
+      const start = Math.floor(facts.tick / CONFINED_DWELL_TICKS);
+      return { target: byCenter[start % byCenter.length]!, orbiting: false, confined: true };
+    }
+    if (chebyshev > ORBIT_ENTRY_BLOCKS) {
+      const fresh = byCenter.filter((point) => !regionVisited(point));
+      return { target: fresh[0] ?? byCenter[0]!, orbiting: false, confined: false };
+    }
+    const rotation = Math.floor(facts.tick / ORBIT_DWELL_TICKS);
+    const fresh = byCenter.filter((point) => !regionVisited(point));
+    const options = fresh.length > 0 ? fresh : byCenter;
+    return { target: options[rotation % options.length]!, orbiting: true, confined: false };
+  }
   if (chebyshev > ORBIT_ENTRY_BLOCKS && facts.tick >= CONFINED_AFTER_TICKS && regions <= CONFINED_MAX_REGIONS) {
     const ranked = DIRECTIONS.map((direction, index) => ({
       index,
@@ -313,10 +341,7 @@ function centerTarget(
   }
 
   const start = Math.floor(facts.tick / ORBIT_DWELL_TICKS) % DIRECTIONS.length;
-  const visited = memory.knowledge?.visitedRegions ?? [];
-  const isVisited = (candidate: BlockPosition): boolean => visited.some((region) => (
-    region.x === Math.floor(candidate.x / REGION_SIZE_BLOCKS) && region.z === Math.floor(candidate.z / REGION_SIZE_BLOCKS)
-  ));
+  const isVisited = regionVisited;
   const ring: BlockPosition[] = [];
   for (let offset = 0; offset < DIRECTIONS.length; offset += 1) {
     const direction = DIRECTIONS[(start + offset) % DIRECTIONS.length]!;
