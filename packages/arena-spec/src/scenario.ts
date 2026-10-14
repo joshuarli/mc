@@ -62,6 +62,28 @@ export interface SeatIr {
   readonly controller: SeatController;
 }
 
+export const SQUAD_ID_PATTERN = /^[a-z][a-z0-9_-]{0,15}$/;
+export const MIN_FRONTIER_EDIT_RADIUS_BLOCKS = 16;
+export const MAX_FRONTIER_EDIT_RADIUS_BLOCKS = 512;
+export const MAX_FRONTIER_EDITS_PER_SEAT = 100_000;
+export const MAX_SQUADS = 64;
+
+export interface SquadIr {
+  readonly id: string;
+  readonly seats: readonly number[];
+}
+
+/** Versioned rule mode of a schema-3 Hunger Games scenario; `classic` is the frozen rule set. */
+export type RuleModeIr =
+  | { readonly kind: "classic" }
+  | {
+    readonly kind: "frontier_survival";
+    readonly version: 1;
+    readonly editRadiusBlocks: number;
+    readonly maxBlockEditsPerSeat: number;
+  }
+  | { readonly kind: "squads"; readonly version: 1; readonly squads: readonly SquadIr[] };
+
 export interface Roster {
   readonly competitors: number;
   readonly spectatorCapacity: bigint;
@@ -201,6 +223,7 @@ export interface HungerGamesScenarioV3Ir extends ScenarioBaseIr {
   readonly border: ShrinkingBorderSettings;
   readonly map: Extract<MapIr, { readonly terrain: "vanilla" }>;
   readonly openingStyleCycle: OpeningStyleCycle;
+  readonly rules: RuleModeIr;
 }
 
 export type HungerGamesScenarioIr = HungerGamesScenarioV1Ir | HungerGamesScenarioV2Ir | HungerGamesScenarioV3Ir;
@@ -233,6 +256,7 @@ const SCENARIO_FIELDS = [
 ] as const;
 
 const OPTIONAL_SCENARIO_FIELDS = ["civilization"] as const;
+const OPTIONAL_SCENARIO_V3_FIELDS = ["civilization", "rules"] as const;
 
 /**
  * Validates the scenario root and returns its normalized map reference before
@@ -271,7 +295,10 @@ export function compileScenario(scenarioSource: string, mapSource: string): Scen
     ? parseCivilization(raw.field(root, "civilization", "scenario"))
     : undefined;
 
-  validateMode(mode, roster, matchSettings);
+  const rules: RuleModeIr = schemaVersion === 3 && root.has("rules")
+    ? parseRules(raw.field(root, "rules", "scenario"), roster)
+    : Object.freeze({ kind: "classic" });
+  validateMode(mode, roster, matchSettings, rules);
   const map = compileMap(mapSource);
   if (schemaVersion === 1 && map.terrain !== "planned") {
     throw new SpecError(SpecErrorKind.InvalidValue, "scenario.map", "schema version 1 requires a planned map");
@@ -295,6 +322,7 @@ export function compileScenario(scenarioSource: string, mapSource: string): Scen
       record,
       map.semanticId,
       openingStyleCycle,
+      rules,
     );
     const common = {
       name,
@@ -325,7 +353,8 @@ export function compileScenario(scenarioSource: string, mapSource: string): Scen
       schemaVersion,
       map,
       openingStyleCycle,
-    });
+      ...(schemaVersion === 3 ? { rules } : {}),
+    }) as HungerGamesScenarioIr;
   }
 
   if (schemaVersion !== 1 || map.terrain !== "planned") {
@@ -369,7 +398,8 @@ function parseScenarioRoot(source: string): raw.RawTable {
   const root = raw.asTable(raw.parseDocument(source, "scenario"), "scenario");
   const schemaVersion = readScenarioSchemaVersion(root);
   const fields = schemaVersion === 1 ? SCENARIO_FIELDS : [...SCENARIO_FIELDS, "opening_styles"];
-  raw.checkFields(root, [...fields, ...OPTIONAL_SCENARIO_FIELDS], fields, "scenario");
+  const optional = schemaVersion === 3 ? OPTIONAL_SCENARIO_V3_FIELDS : OPTIONAL_SCENARIO_FIELDS;
+  raw.checkFields(root, [...fields, ...optional], fields, "scenario");
   return root;
 }
 
@@ -791,12 +821,92 @@ function parseReference(value: raw.RawValue, path: string): ResourceReference {
   return components.join("/") as ResourceReference;
 }
 
-function validateMode(mode: GameMode, roster: Roster, settings: MatchSettings): void {
+function parseRules(value: raw.RawValue, roster: Roster): RuleModeIr {
+  const path = "scenario.rules";
+  const table = raw.asTable(value, path);
+  const kind = raw.string(raw.field(table, "kind", path), `${path}.kind`);
+  const version = raw.integer(raw.field(table, "version", path), `${path}.version`);
+  if (version !== 1n) {
+    throw new SpecError(SpecErrorKind.InvalidValue, `${path}.version`, "only rule version 1 is supported");
+  }
+  if (kind === "frontier_survival") {
+    raw.checkFields(table, ["kind", "version", "edit_radius_blocks", "max_block_edits_per_seat"],
+      ["kind", "version", "edit_radius_blocks", "max_block_edits_per_seat"], path);
+    return Object.freeze({
+      kind,
+      version: 1,
+      editRadiusBlocks: boundedNumber(raw.field(table, "edit_radius_blocks", path), `${path}.edit_radius_blocks`,
+        BigInt(MIN_FRONTIER_EDIT_RADIUS_BLOCKS), BigInt(MAX_FRONTIER_EDIT_RADIUS_BLOCKS)),
+      maxBlockEditsPerSeat: boundedNumber(raw.field(table, "max_block_edits_per_seat", path),
+        `${path}.max_block_edits_per_seat`, 1n, BigInt(MAX_FRONTIER_EDITS_PER_SEAT)),
+    });
+  }
+  if (kind === "squads") {
+    raw.checkFields(table, ["kind", "version", "squads"], ["kind", "version", "squads"], path);
+    return Object.freeze({ kind, version: 1, squads: parseSquads(raw.field(table, "squads", path), roster) });
+  }
+  throw new SpecError(SpecErrorKind.InvalidValue, `${path}.kind`, `unknown rule mode \`${kind}\``);
+}
+
+function parseSquads(value: raw.RawValue, roster: Roster): readonly SquadIr[] {
+  const path = "scenario.rules.squads";
+  const entries = raw.asArray(value, path);
+  if (entries.length < 2 || entries.length > MAX_SQUADS) {
+    throw new SpecError(SpecErrorKind.Range, path, `must declare 2 to ${MAX_SQUADS} squads`);
+  }
+  const ids = new Set<string>();
+  const assigned = new Set<number>();
+  const squads = entries.map((entry, index): SquadIr => {
+    const entryPath = `${path}[${index}]`;
+    const table = raw.asTable(entry, entryPath);
+    raw.checkFields(table, ["id", "seats"], ["id", "seats"], entryPath);
+    const id = raw.string(raw.field(table, "id", entryPath), `${entryPath}.id`);
+    if (!SQUAD_ID_PATTERN.test(id)) {
+      throw new SpecError(SpecErrorKind.InvalidValue, `${entryPath}.id`, "must be a lowercase identifier of at most 16 characters");
+    }
+    if (ids.has(id)) throw new SpecError(SpecErrorKind.Conflict, `${entryPath}.id`, "squad ids must be unique");
+    ids.add(id);
+    const seatValues = raw.asArray(raw.field(table, "seats", entryPath), `${entryPath}.seats`);
+    if (seatValues.length === 0) {
+      throw new SpecError(SpecErrorKind.Range, `${entryPath}.seats`, "a squad needs at least one seat");
+    }
+    let previous = -1;
+    const seats = seatValues.map((seatValue, seatIndex) => {
+      const seatPath = `${entryPath}.seats[${seatIndex}]`;
+      const seat = boundedNumber(seatValue, seatPath, 0n, BigInt(roster.competitors - 1));
+      if (seat <= previous) {
+        throw new SpecError(SpecErrorKind.Conflict, seatPath, "squad seats must be unique and ascending");
+      }
+      previous = seat;
+      if (assigned.has(seat)) {
+        throw new SpecError(SpecErrorKind.Conflict, seatPath, "a seat can belong to only one squad");
+      }
+      assigned.add(seat);
+      return seat;
+    });
+    return Object.freeze({ id, seats: Object.freeze(seats) });
+  });
+  if (assigned.size !== roster.competitors) {
+    throw new SpecError(SpecErrorKind.Conflict, path, "squads must assign every competitor seat");
+  }
+  return Object.freeze(squads);
+}
+
+function validateMode(mode: GameMode, roster: Roster, settings: MatchSettings, rules: RuleModeIr): void {
   if (settings.respawn) {
     throw new SpecError(SpecErrorKind.InvalidValue, "scenario.match.respawn", "Arena competitors do not respawn");
   }
   switch (mode) {
     case GameMode.HungerGames:
+      if (rules.kind === "frontier_survival") {
+        if (!settings.blockBreaking || !settings.blockPlacing) {
+          throw new SpecError(SpecErrorKind.InvalidValue, "scenario.match", "frontier survival enables block breaking and placing");
+        }
+        if (settings.naturalMobs || settings.naturalRandomTicks) {
+          throw new SpecError(SpecErrorKind.InvalidValue, "scenario.match", "frontier survival keeps natural mobs and random block ticks off");
+        }
+        break;
+      }
       if (settings.blockBreaking || settings.blockPlacing) {
         throw new SpecError(SpecErrorKind.InvalidValue, "scenario.match", "Hunger Games disables block breaking and placing");
       }
@@ -1042,6 +1152,7 @@ function hashScenario(
   record: RecordSettings,
   mapId: SemanticId,
   openingStyleCycle?: OpeningStyleCycle,
+  rules?: RuleModeIr,
 ): SemanticId {
   const hash = new CanonicalHasher(`arena.scenario.ir.v${schemaVersion}\0`);
   hash.u8(modeSettings.mode === GameMode.HungerGames ? 0 : 1);
@@ -1083,6 +1194,8 @@ function hashScenario(
     for (const style of openingStyleCycle) hash.string(style);
   }
   if (schemaVersion === 3) {
+    if (rules === undefined) throw new Error("schema-v3 scenario has no rule mode");
+    hashRules(hash, rules);
     for (const { seat, controller } of roster.seats) {
       hash.u16(seat);
       if (controller.kind === "bot") {
@@ -1094,6 +1207,29 @@ function hashScenario(
     }
   }
   return hash.finish();
+}
+
+function hashRules(hash: CanonicalHasher, rules: RuleModeIr): void {
+  switch (rules.kind) {
+    case "classic":
+      hash.u8(0);
+      return;
+    case "frontier_survival":
+      hash.u8(1);
+      hash.u8(rules.version);
+      hash.u16(rules.editRadiusBlocks);
+      hash.u64(BigInt(rules.maxBlockEditsPerSeat));
+      return;
+    case "squads":
+      hash.u8(2);
+      hash.u8(rules.version);
+      hash.u16(rules.squads.length);
+      for (const squad of rules.squads) {
+        hash.string(squad.id);
+        hash.u16(squad.seats.length);
+        for (const seat of squad.seats) hash.u16(seat);
+      }
+  }
 }
 
 function hashCivilizationRules(hash: CanonicalHasher, rules: CivilizationRulesIr): void {

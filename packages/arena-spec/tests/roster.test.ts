@@ -160,6 +160,96 @@ operations = [
   assert.match(error.message, /outside the initial border/);
 });
 
+const SCENARIO_12 = readRepoFile("scenarios/hunger-12.toml");
+const MAP_12 = readRepoFile("maps/hunger-12.toml");
+
+const FRONTIER_RULES = `
+[rules]
+kind = "frontier_survival"
+version = 1
+edit_radius_blocks = 96
+max_block_edits_per_seat = 2000
+`;
+
+function frontierScenario(): string {
+  return SCENARIO_12
+    .replace("block_breaking = false", "block_breaking = true")
+    .replace("block_placing = false", "block_placing = true")
+    + FRONTIER_RULES;
+}
+
+test("scenario_v3_compiles_hunger_12_as_classic_rules", () => {
+  const scenario = compileScenario(SCENARIO_12, MAP_12);
+
+  assert.equal(scenario.schemaVersion, 3);
+  if (scenario.schemaVersion !== 3) throw new Error("schema 3 expected");
+  assert.deepEqual(scenario.rules, { kind: "classic" });
+  assert.equal(scenario.roster.seats.length, 12);
+});
+
+test("scenario_v3_frontier_survival_requires_block_editing_without_random_ticks", () => {
+  const scenario = compileScenario(frontierScenario(), MAP_12);
+  if (scenario.schemaVersion !== 3) throw new Error("schema 3 expected");
+  assert.deepEqual(scenario.rules, {
+    kind: "frontier_survival", version: 1, editRadiusBlocks: 96, maxBlockEditsPerSeat: 2000,
+  });
+  assert.notEqual(scenario.semanticId, compileScenario(SCENARIO_12, MAP_12).semanticId);
+
+  const classicWithEdits = specError(() => compileScenario(
+    SCENARIO_12.replace("block_breaking = false", "block_breaking = true"), MAP_12));
+  assert.equal(classicWithEdits.path, "scenario.match");
+
+  const noEdits = specError(() => compileScenario(
+    frontierScenario().replace("block_breaking = true", "block_breaking = false"), MAP_12));
+  assert.equal(noEdits.path, "scenario.match");
+
+  const randomTicks = specError(() => compileScenario(
+    frontierScenario().replace("natural_random_ticks = false", "natural_random_ticks = true"), MAP_12));
+  assert.equal(randomTicks.path, "scenario.match");
+
+  const hugeRadius = specError(() => compileScenario(
+    frontierScenario().replace("edit_radius_blocks = 96", "edit_radius_blocks = 513"), MAP_12));
+  assert.equal(hugeRadius.path, "scenario.rules.edit_radius_blocks");
+
+  const unversioned = specError(() => compileScenario(
+    frontierScenario().replace("version = 1", "version = 2"), MAP_12));
+  assert.equal(unversioned.path, "scenario.rules.version");
+});
+
+test("scenario_v3_squads_partition_every_seat_into_named_teams", () => {
+  const squads = `
+[rules]
+kind = "squads"
+version = 1
+squads = [
+  { id = "alpha", seats = [0, 1, 2, 3, 4, 5] },
+  { id = "bravo", seats = [6, 7, 8, 9, 10, 11] },
+]
+`;
+  const scenario = compileScenario(SCENARIO_12 + squads, MAP_12);
+  if (scenario.schemaVersion !== 3 || scenario.rules.kind !== "squads") throw new Error("squads expected");
+  assert.deepEqual(scenario.rules.squads.map(({ id }) => id), ["alpha", "bravo"]);
+  assert.deepEqual(scenario.rules.squads[1]?.seats, [6, 7, 8, 9, 10, 11]);
+
+  const reject = (replacement: string, path: string): void => {
+    const error = specError(() => compileScenario(
+      SCENARIO_12 + squads.replace('{ id = "bravo", seats = [6, 7, 8, 9, 10, 11] }', replacement), MAP_12));
+    assert.equal(error.path, path, replacement);
+  };
+  reject('{ id = "bravo", seats = [6, 7, 8, 9, 10] }', "scenario.rules.squads");
+  reject('{ id = "bravo", seats = [5, 6, 7, 8, 9, 10, 11] }', "scenario.rules.squads[1].seats[0]");
+  reject('{ id = "alpha", seats = [6, 7, 8, 9, 10, 11] }', "scenario.rules.squads[1].id");
+  reject('{ id = "Bravo", seats = [6, 7, 8, 9, 10, 11] }', "scenario.rules.squads[1].id");
+  reject('{ id = "bravo", seats = [6, 7, 8, 9, 10, 12] }', "scenario.rules.squads[1].seats[5]");
+  reject('{ id = "bravo", seats = [] }', "scenario.rules.squads[1].seats");
+});
+
+test("scenario_v2_rejects_rule_tables", () => {
+  const error = specError(() => compileScenario(
+    SCENARIO_V2 + '\n[rules]\nkind = "frontier_survival"\nversion = 1\n', MAP_V2_SIX));
+  assert.equal(error.kind, SpecErrorKind.UnknownField);
+});
+
 function specError(operation: () => unknown): SpecError {
   try {
     operation();
