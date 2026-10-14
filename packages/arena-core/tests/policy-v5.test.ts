@@ -242,7 +242,7 @@ test('improved overrides the baseline on inputs recorded from a live match', () 
   }
 });
 
-test('a wounded seat disengages from a visible opponent and stays inside the border', () => {
+test('a wounded seat with food eats instead of leaving, and without food disengages inside the border', () => {
   const observation = situation({
     health: 8,
     at: [430, 70, 610],
@@ -253,9 +253,9 @@ test('a wounded seat disengages from a visible opponent and stays inside the bor
   equal(baseline.explain(observation, emptyPolicyMemory(), stream()).explanation.reason, 'delegatedBaselineRules');
   equal(baseline.decide(observation, emptyPolicyMemory(), stream()).goal.kind, 'retreatFromOpponent');
   const { decision, explanation } = improved.explain(observation, emptyPolicyMemory(), stream());
-  equal(explanation.reason, 'disengageWhenBehind');
-  deepStrictEqual(decision.goal, { kind: 'retreatFromOpponent', target: 5 });
-  deepStrictEqual(decision.intent, { kind: 'navigate', target: pos([426, 70, 610]) });
+  equal(explanation.reason, 'eatUnderPressure');
+  deepStrictEqual(decision.goal, { kind: 'recoverHunger' });
+  deepStrictEqual(decision.intent, { kind: 'eat', inventorySlot: 9 });
   const above = situation({
     health: 9,
     at: [430, 70, 610],
@@ -279,6 +279,20 @@ test('a wounded seat disengages from a visible opponent and stays inside the bor
   equal(edge.explanation.reason, 'disengageWhenBehind');
   deepStrictEqual(edge.decision.intent, { kind: 'navigate', target: pos([467, 70, 610]) });
   ok(edge.decision.intent.kind === 'navigate' && !isOutsideBorder(border, edge.decision.intent.target));
+});
+
+test('a wounded seat with no food disengages from a visible opponent', () => {
+  const observation = situation({
+    health: 8,
+    at: [430, 70, 610],
+    weapon: 4,
+    opponents: [{ id: 5, at: [432, 70, 610] }],
+  });
+  equal(baseline.decide(observation, emptyPolicyMemory(), stream()).goal.kind, 'retreatFromOpponent');
+  const { decision, explanation } = improved.explain(observation, emptyPolicyMemory(), stream());
+  equal(explanation.reason, 'disengageWhenBehind');
+  deepStrictEqual(decision.goal, { kind: 'retreatFromOpponent', target: 5 });
+  deepStrictEqual(decision.intent, { kind: 'navigate', target: pos([426, 70, 610]) });
 });
 
 test('a pressured seat eats the food stack that restores the most', () => {

@@ -1,4 +1,3 @@
-import { isWithinMeleeReach, MELEE_REACH_BLOCKS } from './combat.js';
 import {
   blockPosition,
   borderCenter,
@@ -6,7 +5,6 @@ import {
   isOutsideBorder,
   manhattanDistance,
   offsetBlockPosition,
-  squaredDistance,
   type BlockPosition,
   type WorldBorder,
 } from './geometry.js';
@@ -191,11 +189,7 @@ function chooseOverride(
       return lootOverride(nearestCache.opportunity, facts, 'lootBeforeUnarmedFight');
     }
     if (base.intent.kind === 'approach' && agent.ranged === undefined) {
-      const engaged = base.intent.target;
-      const target = facts.opponents.find((opponent) => opponent.id === engaged);
-      if (target === undefined || outsideMeleeReach(agent, target)) {
-        return { goal: base.goal, intent: { kind: 'attack', target: engaged }, reason: 'steadyMeleeEngagement' };
-      }
+      return { goal: base.goal, intent: { kind: 'attack', target: base.intent.target }, reason: 'steadyMeleeEngagement' };
     }
     return null;
   }
@@ -246,19 +240,19 @@ function chooseOverride(
 function underPressure(base: Decision, facts: Facts, retreatAt: number, eatAt: number): Override | null {
   if (base.goal.kind === 'escapeBorder') return null;
   const { agent, nearestOpponent } = facts;
-  if (agent.healthHalfHearts <= retreatAt && nearestOpponent !== null) {
-    const opponent = nearestOpponent.opponent;
-    return {
-      goal: Object.freeze({ kind: 'retreatFromOpponent', target: opponent.id }),
-      intent: { kind: 'navigate', target: awayInsideBorder(agent.position, opponent.position, facts.border) },
-      reason: 'disengageWhenBehind',
-    };
-  }
   if ((agent.hungerPoints <= eatAt || agent.healthHalfHearts <= retreatAt) && agent.foodStacks.length > 0) {
     return {
       goal: Object.freeze({ kind: 'recoverHunger' }),
       intent: { kind: 'eat', inventorySlot: preferredFood(agent.foodStacks).inventorySlot },
       reason: 'eatUnderPressure',
+    };
+  }
+  if (agent.healthHalfHearts <= retreatAt && nearestOpponent !== null && agent.foodStacks.length === 0) {
+    const opponent = nearestOpponent.opponent;
+    return {
+      goal: Object.freeze({ kind: 'retreatFromOpponent', target: opponent.id }),
+      intent: { kind: 'navigate', target: awayInsideBorder(agent.position, opponent.position, facts.border) },
+      reason: 'disengageWhenBehind',
     };
   }
   return null;
@@ -283,13 +277,6 @@ function awayInsideBorder(agent: BlockPosition, opponent: BlockPosition, border:
   const moved = offsetBlockPosition(agent, dx * AWAY_STEP_BLOCKS, 0, dz * AWAY_STEP_BLOCKS);
   if (moved.ok === false || isOutsideBorder(border, moved.value)) return agent;
   return moved.value;
-}
-
-function outsideMeleeReach(agent: AgentState, opponent: VisibleOpponent): boolean {
-  if (agent.combat !== undefined && opponent.combat !== undefined) {
-    return !isWithinMeleeReach(agent.combat, opponent.combat);
-  }
-  return squaredDistance(agent.position, opponent.position) > BigInt(MELEE_REACH_BLOCKS) ** 2n;
 }
 
 function isExplorationWait(reason: string): boolean {
