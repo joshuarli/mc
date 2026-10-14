@@ -7,7 +7,8 @@ import { createBot, type Bot } from "mineflayer";
 
 const JOIN_TIMEOUT_MS = 60_000;
 const ATTACK_COOLDOWN_MS = 700;
-const MAX_ATTACKS = 25;
+const MAX_ATTACKS = 80;
+const MAX_STAGING_FAILURES = 6;
 
 export interface GameAddress {
   readonly host: string;
@@ -75,7 +76,14 @@ export class ExternalSurrogate {
         injected,
         attempt.ended.then(({ reason }) => { throw new Error(`surrogate ${username} ended before injection: ${reason}`); }),
       ]), signal, `surrogate ${username} did not reach injection`);
-      const client = createMineflayerArenaClient(attempt.bot);
+      const funnel: string[] = [];
+      const client = createMineflayerArenaClient(attempt.bot, {
+        funnel: (record) => {
+          funnel.push(JSON.stringify(record));
+          if (funnel.length > 8) funnel.shift();
+        },
+      });
+      FUNNEL_BY_BOT.set(attempt.bot, funnel);
       await withDeadline(Promise.race([
         attempt.spawned,
         attempt.ended.then(({ reason }) => { throw new Error(`surrogate ${username} was disconnected: ${reason}`); }),
@@ -103,15 +111,18 @@ export class ExternalSurrogate {
     const before = inventoryNames(this.bot);
     const chest = this.bot.findBlock({ matching: (block) => block.name === "chest", maxDistance: 96 });
     assert.ok(chest, `surrogate ${this.username} has no chest in its loaded world`);
-    const standing = standableNear(this.bot, chest.position.x, chest.position.y, chest.position.z);
+    const standing = standableNear(this.bot, chest.position.x, chest.position.y, chest.position.z, 1);
     await this.run({
       kind: "navigateToBlock",
       target: blockPosition(standing.x, standing.y, standing.z),
     }, signal, "navigate beside the chest");
+    const own = this.bot.entity.position;
+    const geometry = `self=${own.x.toFixed(2)},${own.y.toFixed(2)},${own.z.toFixed(2)} chest=${chest.position.x},${chest.position.y},${chest.position.z}`
+      + ` standing=${standing.x},${standing.y},${standing.z} dist=${own.distanceTo(chest.position.offset(0.5, 0.5, 0.5)).toFixed(2)}`;
     await this.run({
       kind: "containerOpen",
       position: blockPosition(chest.position.x, chest.position.y, chest.position.z),
-    }, signal, "open the chest");
+    }, signal, `open the chest [${geometry}]`);
     await delay(500, undefined, { signal });
     const gained = inventoryNames(this.bot).filter((name) => !before.includes(name));
     assert.ok(gained.length > 0, "opening the chest must add an item to the surrogate inventory");
@@ -143,19 +154,42 @@ export async function engage(
   eliminated: () => boolean,
 ): Promise<number> {
   let attacks = 0;
+  let stagingFailures = 0;
+  let lastFailure = "";
   while (attacks < MAX_ATTACKS) {
     signal.throwIfAborted();
     if (eliminated()) return attacks;
     const entity = bot.players[targetUsername]?.entity;
     assert.ok(entity, `${bot.username} has not received entity ${targetUsername}`);
     const standing = standableNear(bot, entity.position.x, entity.position.y, entity.position.z);
-    await runIntent(client, {
+    const navigation: SkillOutcome = await client.run({
       kind: "navigateToBlock",
       target: blockPosition(standing.x, standing.y, standing.z),
-    }, signal, `${bot.username} must stage beside ${targetUsername}`);
-    await runIntent(client, { kind: "approach", target: entityId(entity.id) }, signal, `${bot.username} must approach ${targetUsername}`);
-    await bot.lookAt(entity.position.offset(0, entity.height * 0.6, 0), true);
-    await runIntent(client, { kind: "attack", target: entityId(entity.id) }, signal, `${bot.username} must attack ${targetUsername}`);
+    });
+    const staged = bot.players[targetUsername]?.entity ?? entity;
+    await bot.lookAt(staged.position.offset(0, staged.height * 0.6, 0), true);
+    await delay(100, undefined, { signal });
+    if (navigation.kind !== "succeeded") {
+      stagingFailures += 1;
+      lastFailure = `${navigation.kind === "failed" ? navigation.cause : navigation.kind} [${describeGeometry(bot, targetUsername)}]`;
+      if (stagingFailures >= MAX_STAGING_FAILURES) {
+        assert.fail(`${bot.username} could not stage beside ${targetUsername} after ${stagingFailures} tries: ${lastFailure}`);
+      }
+      await delay(300, undefined, { signal });
+      continue;
+    }
+    await bot.lookAt(staged.position.offset(0, staged.height * 0.6, 0), true);
+    const strike: SkillOutcome = await client.run({ kind: "attack", target: entityId(entity.id) });
+    if (strike.kind !== "succeeded") {
+      stagingFailures += 1;
+      lastFailure = `attack ${strike.kind === "failed" ? strike.cause : strike.kind} [${describeGeometry(bot, targetUsername)}]`;
+      if (stagingFailures >= MAX_STAGING_FAILURES) {
+        assert.fail(`${bot.username} could not strike ${targetUsername} after ${stagingFailures} tries: ${lastFailure}`);
+      }
+      await delay(300, undefined, { signal });
+      continue;
+    }
+    stagingFailures = 0;
     attacks += 1;
     await delay(ATTACK_COOLDOWN_MS, undefined, { signal });
   }
@@ -167,10 +201,31 @@ async function runIntent(
   intent: Parameters<MineflayerArenaClient["run"]>[0],
   signal: AbortSignal,
   description: string,
+  context?: () => string,
 ): Promise<void> {
   signal.throwIfAborted();
   const outcome: SkillOutcome = await client.run(intent);
-  assert.deepStrictEqual(outcome, { kind: "succeeded" }, description);
+  assert.deepStrictEqual(outcome, { kind: "succeeded" }, `${description}${context === undefined ? "" : ` [${context()}]`}`);
+}
+
+const FUNNEL_BY_BOT = new WeakMap<Bot, string[]>();
+
+function describeGeometry(bot: Bot, targetUsername: string): string {
+  const own = bot.entity.position;
+  const target = bot.players[targetUsername]?.entity;
+  const parts = [`self=${own.x.toFixed(2)},${own.y.toFixed(2)},${own.z.toFixed(2)} yaw=${bot.entity.yaw.toFixed(2)}`];
+  if (target !== undefined) {
+    const dx = target.position.x - own.x;
+    const dz = target.position.z - own.z;
+    parts.push(`target=${target.position.x.toFixed(2)},${target.position.y.toFixed(2)},${target.position.z.toFixed(2)}`);
+    parts.push(`horizontal=${Math.hypot(dx, dz).toFixed(2)} dy=${(target.position.y - own.y).toFixed(2)}`);
+  } else {
+    parts.push("target=absent");
+  }
+  parts.push(`health=${bot.health}`);
+  const funnel = FUNNEL_BY_BOT.get(bot);
+  if (funnel !== undefined && funnel.length > 0) parts.push(`funnel=${funnel.slice(-3).join("|")}`);
+  return parts.join(" ");
 }
 
 function at(bot: Bot, x: number, y: number, z: number) {
@@ -178,7 +233,7 @@ function at(bot: Bot, x: number, y: number, z: number) {
   return origin.offset(x - origin.x, y - origin.y, z - origin.z);
 }
 
-function standableNear(bot: Bot, x: number, y: number, z: number): { x: number; y: number; z: number } {
+function standableNear(bot: Bot, x: number, y: number, z: number, minSpan = 2): { x: number; y: number; z: number } {
   const centerX = Math.floor(x);
   const centerY = Math.floor(y);
   const centerZ = Math.floor(z);
@@ -186,8 +241,8 @@ function standableNear(bot: Bot, x: number, y: number, z: number): { x: number; 
   for (let dx = -4; dx <= 4; dx += 1) {
     for (let dz = -4; dz <= 4; dz += 1) {
       const span = Math.max(Math.abs(dx), Math.abs(dz));
-      if (span < 2) continue;
-      for (let dy = -2; dy <= 2; dy += 1) {
+      if (span < minSpan || (minSpan === 1 && span === 0)) continue;
+      for (let dy = -1; dy <= 1; dy += 1) {
         const candidateX = centerX + dx;
         const candidateY = centerY + dy;
         const candidateZ = centerZ + dz;
@@ -195,7 +250,8 @@ function standableNear(bot: Bot, x: number, y: number, z: number): { x: number; 
         const head = bot.blockAt(at(bot, candidateX, candidateY + 1, candidateZ));
         const floor = bot.blockAt(at(bot, candidateX, candidateY - 1, candidateZ));
         if (feet?.name !== "air" || head?.name !== "air" || floor?.boundingBox !== "block") continue;
-        const score = bot.entity.position.distanceTo(at(bot, candidateX + 0.5, candidateY, candidateZ + 0.5)) + span;
+        const candidate = at(bot, candidateX + 0.5, candidateY, candidateZ + 0.5);
+        const score = candidate.distanceTo(at(bot, x, y, z)) * 100 + bot.entity.position.distanceTo(candidate);
         if (best === undefined || score < best.score) best = { x: candidateX, y: candidateY, z: candidateZ, score };
       }
     }

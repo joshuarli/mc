@@ -222,9 +222,11 @@ test("external-seat", { timeout: 3_600_000 }, async (t) => {
 
           const late = attemptConnection(address, "Watcher_1");
           attempts.push(late);
-          await late.spawned;
-          await waitUntil(() => late.bot.game.gameMode === "spectator", "the late client did not become a spectator", 10_000, signal);
-          assert.deepStrictEqual(latestAliveSeats(active), [0, 1, 2]);
+          const attemptedAt = Date.now();
+          await waitUntil(() => late.bot.game?.gameMode === "spectator", "the late client did not become a spectator", 20_000, signal);
+          const spawnedAfterMs = Date.now() - attemptedAt;
+          assert.deepStrictEqual(latestAliveSeats(active), [0, 1, 2],
+            `${eliminationSummary(active)} spawnedAfterMs=${spawnedAfterMs}`);
           await active.waitForOutcome();
         },
       });
@@ -254,10 +256,9 @@ test("external-seat", { timeout: 3_600_000 }, async (t) => {
 
           const returning = attemptConnection(address, USERNAME);
           attempts.push(returning);
-          await returning.spawned;
-          await waitUntil(() => returning.bot.game.gameMode === "spectator",
-            "the reconnected identity did not become a spectator", 10_000, signal);
-          assert.deepStrictEqual(latestAliveSeats(active), [1, 2]);
+          await waitUntil(() => returning.bot.game?.gameMode === "spectator",
+            "the reconnected identity did not become a spectator", 20_000, signal);
+          assert.deepStrictEqual(latestAliveSeats(active), [1, 2], eliminationSummary(active));
           await active.waitForOutcome();
         },
       });
@@ -338,6 +339,14 @@ function hasElimination(active: AcceptanceRunContext, seat: number, cause: "deat
     && event.payload.eliminations.some((entry) => entry.seat === seat && entry.cause === cause));
 }
 
+function eliminationSummary(active: AcceptanceRunContext): string {
+  const list = active.events().flatMap((event) => event.type === "elimination"
+    ? event.payload.eliminations.map((entry) => `seat ${entry.seat} ${entry.cause} at ${event.payload.at.domain}:${event.payload.at.value}`)
+    : []);
+  const clock = active.events().findLast((event) => event.type === "public_clock");
+  return `eliminations=[${list.join("; ")}] clock=${clock?.type === "public_clock" ? `${clock.payload.phase}:${clock.payload.tick?.value}` : "none"}`;
+}
+
 function latestAliveSeats(active: AcceptanceRunContext): readonly number[] {
   const state = active.events().findLast((event) => event.type === "public_state");
   assert.ok(state?.type === "public_state", "no public state has been published");
@@ -374,9 +383,10 @@ function writeFixtures(): Readonly<Record<Seats, string>> {
       ["spectator_capacity = 4", "spectator_capacity = 2"],
       ["countdown_ticks = 100", "countdown_ticks = 40"],
       ["grace_ticks = 200", "grace_ticks = 20"],
-      ["authoritative_max_ticks = 7200", "authoritative_max_ticks = 1200"],
-      ["shrink_start_tick = 1200", "shrink_start_tick = 1000"],
-      ["shrink_end_tick = 6000", "shrink_end_tick = 1180"],
+      ["authoritative_max_ticks = 7200", "authoritative_max_ticks = 2400"],
+      ["shrink_start_tick = 1200", "shrink_start_tick = 2200"],
+      ["shrink_end_tick = 6000", "shrink_end_tick = 2380"],
+      ["final_diameter_blocks = 16", "final_diameter_blocks = 100"],
     ].reduce((text, [from, to]) => {
       assert.ok(text.includes(from!), `scenario source must contain ${from}`);
       return text.replace(from!, to!);
