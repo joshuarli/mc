@@ -13,7 +13,7 @@ import {
 import { PolicyCompetitorGate } from './policy-gate.js';
 import type { RuntimeCompetitorClient } from './clients.js';
 import type { ActionFunnelCollector } from './funnel.js';
-import type { CompiledCandidate } from '@arena/core';
+import { openingPolicyState, policyMemory, type CompiledCandidate, type PolicyMemoryInput } from '@arena/core';
 import { makeActionFunnelTraceRecord } from '../funnel-record.js';
 
 type PolicyCompetitor = Pick<RuntimeCompetitorClient, 'seat' | 'gameplay' | 'bot'>;
@@ -45,6 +45,12 @@ interface OwnedAction {
   cancelTask?: Promise<void>;
   startedAtNs: bigint | null;
   startedAtTick: number | null;
+}
+
+export interface SeatPolicyState {
+  readonly memory: unknown;
+  readonly rng_state: string;
+  readonly opening_state: OpeningPolicyState | null;
 }
 
 export class LivePolicyLoop {
@@ -89,6 +95,7 @@ export class LivePolicyLoop {
     onActivity?: (event: PolicyActivityEvent) => void;
     funnel?: ActionFunnelCollector;
     candidates?: ReadonlyMap<number, CompiledCandidate>;
+    restore?: ReadonlyMap<number, SeatPolicyState>;
   }>) {
     this.#trace = options.trace;
     this.#params = options.params;
@@ -101,6 +108,25 @@ export class LivePolicyLoop {
     this.#onActivity = options.onActivity;
     this.#funnel = options.funnel;
     this.#candidates = options.candidates;
+    for (const [seat, state] of options.restore ?? []) {
+      this.#memories.set(seat, policyMemory(state.memory as PolicyMemoryInput));
+      this.#randoms.set(seat, DeterministicRandom.fromState(BigInt(state.rng_state)));
+      if (state.opening_state !== null) this.#openingStates.set(seat, openingPolicyState(state.opening_state));
+    }
+  }
+
+  exportState(): ReadonlyMap<number, SeatPolicyState> {
+    const states = new Map<number, SeatPolicyState>();
+    for (const [seat, memory] of this.#memories) {
+      const random = this.#randoms.get(seat);
+      if (random === undefined) continue;
+      states.set(seat, Object.freeze({
+        memory: JSON.parse(JSON.stringify(memory, (_key, value: unknown) => typeof value === 'bigint' ? value.toString() : value)),
+        rng_state: random.snapshotState().toString(),
+        opening_state: this.#openingStates.get(seat) ?? null,
+      }));
+    }
+    return states;
   }
 
   onTick(tick: number, tickReceivedAtNs?: bigint): void {
