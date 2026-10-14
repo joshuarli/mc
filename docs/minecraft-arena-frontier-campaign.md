@@ -32,7 +32,7 @@ Honest scope: "UHC-style" means the ruleset and strategy mix (no natural regener
 
 Duel gates fixed now: self-inflicted attack rejections under 5% of issued attacks in duels; no unexplained idle span over 100 ticks in a duel; promoted candidate meets the D-train threshold; duel results are reproducible from the manifest and seeds.
 
-Quality gates fixed now: all six seeds terminate; at least 75% of seats loot a chest; at least 40% of eliminations are PvP; self-inflicted attack rejections under 5% of issued attacks in live matches; no seat idle for more than 600 ticks without a recorded waiting reason; candidate beats `baseline@1` per the league rule.
+Quality gates fixed now are the Hunger-24 gates row in Decisions plus: self-inflicted attack rejections under 5% of issued attacks in live matches, and a candidate must beat `baseline@1` per the league rule.
 
 ## Item status (2026-10-14)
 
@@ -40,8 +40,8 @@ Merged means on `campaign/frontier` and verified at least offline. Partial and p
 
 | State | Items |
 |---|---|
-| Merged and live-verified | G0, G1, G2 (baseline recorded), S1, S2, M0, M1 (melee curriculum), M2 (ranged curriculum), R1b, K1 plugin and runner (`checkpoint-resume` live), Q0, Q-loop |
-| Merged, offline only or partly live | S3/S3a, S4–S7, S8/S8b, S9, S10, S11, S13, M3, M3a, L1a, R2, R3, L1, B1, Q1 (v5 set), `steadyMeleeEngagement` |
+| Merged and live-verified | G0, G1, G2 (baseline recorded), S1, S2, M0, M1 (melee curriculum), M2 (ranged curriculum), K1 plugin and runner (`checkpoint-resume` live), Q0, Q-loop |
+| Merged, offline only or partly live | R1b (rules sent by the runner; no live run uses a rule mode), S3/S3a, S4–S7, S8/S8b, S9, S10, S11, S13, M3, M3a, L1a, R2, R3, L1, B1, Q1 (v5 set), `steadyMeleeEngagement` |
 | Partial / parked | C0 (craft defect), M4 (`curriculum-survival` unrun, calibration unmeasured), R1/R1c (`external-seat` row 1), S12 (seed matrix incomplete), Q1 (live comparison mixed) |
 | Not started | Q-engage, Q-resilience, Q-trapped, D-rules, D-pool, D-ladder, D-skills, D-train, Q2, C1–C5, H-SRV/MECH/RUN/CIV, O1, L2, Z1 |
 
@@ -100,7 +100,7 @@ The executor has this document and the repo. It runs from G0 to the last item wi
 - **Working state** lives under `.work/` (already in `.git/info/exclude`). Lane worktrees: `.work/wt/frontier-<lane>`. Scratch and `TMPDIR`: `.work/tmp`. Never `/tmp`. The eleven existing `.work/wt/*` directories (`civ-*`, `natural-*`, `opening-style-evidence`) are not registered worktrees; leave them alone and never reuse their names.
 - **Branches.** Integration branch `campaign/frontier` from `master`. Lane branches `campaign/frontier-<lane>`. A lane commits only files it owns. The coordinator rebases, fast-forwards, runs the touched-area checks on the merged tree, then `git worktree remove` and `git branch -d` the lane. A parked lane keeps its committed branch, not its worktree.
 - **Width and memory.** Host: 10 CPUs, 32 GiB, 84 GiB free disk at preflight. Static budget: 4 GiB per offline lane, 8 GiB for the one live-integration slot, 8 GiB headroom, so at most four offline lanes plus the live slot. Do not poll host memory. Phase width is the smaller of ready disjoint ownership sets and four.
-- **One live Paper at a time.** Live runs and timed measurements are serialized by the coordinator (one port, one measurement). Lanes work offline in parallel; the coordinator owns the live slot and hands results back.
+- **Serialized live work.** Timed measurements (bench, perf gates) and acceptance cases that bind port 25565 run one at a time under the lock; league and quality matches use ephemeral ports and follow the Live runs rule above. Lanes may run their own live cases under these rules; the coordinator owns shared evidence and hands results back.
 - **Disk.** No free-space gate. When free disk is under 20 GiB, run `./arena gc --dry-run`, then `./arena gc` on the owned terminal runs it lists. Never delete another path.
 - **Perf gates.** A time-based measurement (TPS, tick percentile, startup, runtime) runs only when `perf-gate-ready` exits 0, and again with `-1` straight after; an overlapped run is discarded. A busy host defers the gate: write "perf gate deferred: host busy", continue functional work, and do not call the campaign done. Memory and binary-size gates always run. Prefer CPU time, min of N, interleaved A/B, and fail only above the observed spread.
 - **Dependencies.** Allowed when a measured bottleneck or observed incompatibility justifies them. Each new runtime dependency is vetted (maintenance, license, transitive weight, whether the standard library or a few lines would do) with the reason in the commit body, and must keep: cold install/build CPU +10% or less, warm start CPU +5% or less against the preceding equivalent build and outside the spread, plugin jar at most 10 MiB. State the measured impact. Remove a dependency you stop using. No automatic upgrades; Paper, Minecraft, Java, Gradle, pnpm, TypeScript and Mineflayer pins do not change.
@@ -127,7 +127,7 @@ The executor has this document and the repo. It runs from G0 to the last item wi
 |---|---|
 | Keep Paper 26.1.2 build 74, Mineflayer 4.39.0, mineflayer-pathfinder 2.4.5, one Java plugin, four TypeScript packages with today's boundaries | Rebuilding the stack is the largest schedule risk and nothing observed contradicts it. Reverse only on a reproduced incompatibility. |
 | The plugin stays the only match and outcome authority. It observes mechanics and never steers, equips, heals, teleports or creates favorable outcomes. | Two authorities disagree. |
-| Competitor ceiling 256 (seats 0–255, matching `packages/arena-core/src/observation.ts:38`). Spectators use a separate identity space and never consume a seat. No 512 claim. | The existing core bound; widening needs a separate identifier migration. |
+| Competitor ceiling 256 (seats 0–255, matching `packages/arena-core/src/observation.ts:46`). Spectators use a separate identity space and never consume a seat. No 512 claim. | The existing core bound; widening needs a separate identifier migration. |
 | New behavior ships as **new schema versions**: scenario 3, world-plan 3, control wire next, trace 4. Old readers stay strict and keep reading frozen fixtures. | Old schemas must not silently accept new fields. |
 | Reuse the existing `competitive-v1` perception profile (120° horizontal, 90° vertical, 40 blocks, voxel line of sight; `docs/fairness.md`). A reaction delay or turn-rate limit is a new profile version, added only when a curriculum row needs it and never to the optimized variant alone. | The profile already exists and is tested; code today enforces no reaction delay or turn-rate limit. |
 | Human admission binds an exact username and offline UUID reserved in the roster before countdown. A wrong or duplicate identity is rejected. Join wait is bounded (default 120 s, then the run fails before countdown). Competitive disconnect eliminates the seat at the tick boundary; no competitive reconnect; an eliminated player is a spectator and cannot re-enter. | Replaces today's "any non-runtime username counts" gate (`external-player-gate.ts:62`). |
@@ -144,7 +144,7 @@ The executor has this document and the repo. It runs from G0 to the last item wi
 | Candidate promotion happens only through the league or duel ladder rule; `baseline@1` is never edited, and a promoted candidate becomes `baseline@2` by a new frozen record, with `baseline@1` kept as an opponent. | Keeps comparisons reproducible. |
 | Duel scoring is per seed pair with both seat assignments; the pool is fixed data and versioned; training never uses held-out seeds; hunger-six quality gates are the regression guard for any duel-trained candidate. | Prevents overfitting to one scripted opponent or one arena. |
 | `skills.ts` is split first (item M0): civilization-only handlers move to `civilization-skills.ts`, owned by the civilization lane. | One 1,300-line file owned by two lanes is the dominant merge risk. |
-| Rule modes are new scenario values: `frontier_survival`, `squads`, `frontier_war`, each versioned. `classic` is the existing `hunger_games`. No frozen scenario changes meaning. | Frozen baselines must stay reproducible. |
+| Rule modes are `kind` values of the optional schema-3 `[rules]` table (`frontier_survival`, `squads`, `uhc_duel`; `frontier_war` when C-items land), each versioned; absent means classic `hunger_games`. No frozen scenario changes meaning. | Frozen baselines must stay reproducible. |
 
 ### Delegated (decide inside the bound, log it)
 
@@ -181,7 +181,7 @@ The executor has this document and the repo. It runs from G0 to the last item wi
 | `report accepts a same-tick zero-survivor draw…` | `elimination_after_public_state` thrown |
 | `runtime trace persists actual pending records…` | `source` is a null-prototype object under Node 26.11.1; likely version-induced |
 
-**Open live failures (not re-run):** `civilization-rules` times out waiting for seat 1 to observe a mined block (run `b7e91e9e`, Paper checkpoint at tick 2716 shows the sixth oak log absent and one dropped item); server-crash cleanup ended with a cleanup failure; no clean live SIGINT proof; five of six natural seeds have no live terrain check; no current-source full suite, benchmark, fresh-checkout or Linux run.
+**Open live failures (not re-run):** `civilization-rules` times out waiting for seat 1 to observe a mined block (run `b7e91e9e`, Paper checkpoint at tick 2716 shows the sixth oak log absent and one dropped item); at that tip server-crash cleanup showed a cleanup failure and there was no clean live SIGINT proof (G2 later passed both `faults-sigint` and `faults-server-crash`); five of six natural seeds have no live terrain check; no current-source full suite, benchmark, fresh-checkout or Linux run.
 
 **Reference numbers for D3.** Frozen six-seed run: 6,231 attack actions, 5,576 `preconditionsNotMet` (89.5%), 339 succeeded, 341 local damage events. Fixture: `tests/fixtures/hunger-six-baseline/` (`481516.json`–`481521.json`, `hunger-six.tap`, `hunger-six-recheck.tap`). The frozen commit `296c3c9` no longer resolves in this history; the fixture is the evidence. Current-source recheck: five wins and one draw. These are action outcomes, not hit accuracy.
 
@@ -232,7 +232,7 @@ Wave 1 starts after G0. Wave 2 starts as each prerequisite merges.
 |---|---|---|---|---|
 | **S1** | SRV | L | G0 | Versioned roster, controller kind, factions, rule modes, limits to 256. Every six-seat bound audited and generalized: `scenario.ts:734`, `world-plan.ts:134`, `control/codec.ts:374`, Java `MapPlan.java:20`, `ControlProtocol.java` (278, 599, 662, 977, 1133, 1188, 1323, 1705, 1726), `MatchController.java:217`, `CivilizationMatchController.java` and `ArenaFoundationPlugin.java:924` (these two are CIV's; S1 only raises their bounds, merged before C1). Golden cross-language fixtures for the new roster. Validate-only `scenarios/hunger-24.toml`, `frontier-war-64.toml`, and a 256-seat boundary fixture. Proof: `spec` and `protocol` named cases, `java` unit, `./arena validate` on each scenario, old schemas reject new fields, frozen fixtures still read. |
 | **M0** | MECH | S | G1 | Civilization-only handlers extracted from `skills.ts` into `civilization-skills.ts`; no behavior change. Proof: existing `bots` and civilization tests pass unchanged. |
-| **M1** | MECH | L | M0, G2 | Action funnel with typed reasons (opportunity → choice → admission → local validation → issued → client response → evaluator-confirmed effect); fractional combat view (validated finite floats, integer block identity kept); engage skill coordinating pursuit, spacing, aim and attack under the existing exclusive skill owner; root cause of the 89.5% rejection shown by a failing test before the fix; the 3-block adapter reach (`skills.ts:40`) against the 4-block documented fight range (`docs/policies.md:71`) reconciled by one named constant. Curriculum rows 1–6 of §6 offline and live (`curriculum-melee`). |
+| **M1** | MECH | L | M0, G2 | Action funnel with typed reasons (opportunity → choice → admission → local validation → issued → client response → evaluator-confirmed effect); fractional combat view (validated finite floats, integer block identity kept); engage skill coordinating pursuit, spacing, aim and attack under the existing exclusive skill owner; root cause of the 89.5% rejection shown by a failing test before the fix; the 3-block adapter reach against the 4-block documented fight range reconciled by one named constant (`MELEE_REACH_BLOCKS` in `packages/arena-core/src/combat.ts`). Curriculum rows 1–6 of §6 offline and live (`curriculum-melee`). |
 | **S2** | SRV | M | S1 | Plugin binds exact username and UUID per seat before countdown; rejects wrong and duplicate identity; living competitor cannot become spectator and back; eliminated players cannot re-enter; spectator IDs never consume seats. Proof: `match-rules-*` cases plus new `external-seat` server rows. |
 | **R1** | RUN | L | S1, S2 | `./arena play` (substitutes one configured bot seat) and `./arena watch` (never consumes a seat), bounded join wait, cancellation cleanup, stderr connection and phase messages, run ID and evidence path on failure, an unattended protocol surrogate client. Proof: integration case `external-seat` covers loot, damage, damage taken, death, win, wrong identity, duplicate identity, timeout, cancellation, spectator attempt, late reconnect. |
 | **R2** | RUN | M | M1 (types), S1 | Funnel and proposed-versus-accepted records in trace 4 and the report; `./arena explain --run-id --seat`; bounded per-bot diagnostic rings that flush on failure. Proof: `replay-report` extended; old trace readers still reproduce `tests/fixtures/hunger-six-baseline`. |
@@ -383,15 +383,15 @@ Headless evaluator accounts are ordinary players. Administrative mutations are a
 
 ## 10. Reference
 
-### Verified code map (at `f479b16`)
+### Verified code map (refreshed at the second pause tip)
 
 | Area | Anchor |
 |---|---|
 | Launcher, usage, Node check | `arena:87` (`prepare_node`), usage block in `arena`; `scripts/run-named-tests.mjs` (case registry: integration and acceptance names are closed sets) |
-| CLI commands today | `doctor`, `gc`, `inspect`, `report`, `replay-policy`, `compare`, `prepare`, `validate`, `run` in `packages/arena-runner/src/cli.ts:43-71` |
+| CLI commands today | `doctor`, `gc`, `inspect`, `report`, `replay-policy`, `compare`, `explain`, `decision-diff`, `league`, `quality`, `bench`, `prepare`, `validate`, `run`, `play`, `watch`, `save`, `resume` in `packages/arena-runner/src/cli.ts` (`duel` is not implemented yet) |
 | Spectator wait | `packages/arena-runner/src/runtime/external-player-gate.ts`, `Makefile` target `server` |
-| Decision loop and dispositions | `packages/arena-runner/src/runtime/live-policy-loop.ts:233-252` (start, continue, defer, replace; `cleanupPending`, `lowerPriority`, `goalPersistence`, `hysteresis`) |
-| Melee admission | `packages/arena-bots/src/skills.ts:40` (`APPROACH_RANGE_BLOCKS = 3`), `:1166-1200` (`#approach`, `#attack`); `docs/policies.md:71` documents fight range 4 |
+| Decision loop and dispositions | `packages/arena-runner/src/runtime/live-policy-loop.ts` (`#disposition`) (start, continue, defer, replace; `cleanupPending`, `lowerPriority`, `goalPersistence`, `hysteresis`) |
+| Melee admission | `packages/arena-core/src/combat.ts` (`MELEE_REACH_BLOCKS = 3`, eye to bounding box); `packages/arena-bots/src/skills.ts` `#pursueAndStrike`; `docs/policies.md` fight range 4 versus reach 3 |
 | Seat bounds | `packages/arena-core/src/observation.ts:38` (0–255); six-seat caps listed in S1 |
 | Fairness boundary | `docs/fairness.md`, `packages/arena-bots/src/{observer,visibility,perception}.ts` |
 | Search budget | 3 ms of search per bot in a 10 ms window, queue time counted against its deadline (`docs/fairness.md`) |
