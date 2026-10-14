@@ -4,6 +4,7 @@ import { dirname, resolve } from "node:path";
 import test from "node:test";
 
 import { compilePolicy, compileScenario, scenarioMapReference } from "@arena/spec";
+import { plannedMap } from "./planned-map.js";
 
 const FIXTURE_DIRECTORY = "tests/acceptance/fixtures";
 
@@ -48,7 +49,7 @@ test("fairness fixtures keep both stationary competitors inside the final border
     assert.equal(scenario.mode, "hunger_games");
     if (scenario.mode !== "hunger_games") throw new Error("fairness fixtures require Hunger Games");
     const radius = scenario.border.finalDiameterBlocks / 2;
-    for (const spawn of scenario.map.spawns) {
+    for (const spawn of plannedMap(scenario.map).spawns) {
       assert.ok(Math.abs(spawn.position.x + 0.5 - centerX) + 0.3 < radius, `${name}: seat ${spawn.seat} must remain within the border in x`);
       assert.ok(Math.abs(spawn.position.z + 0.5 - centerZ) + 0.3 < radius, `${name}: seat ${spawn.seat} must remain within the border in z`);
     }

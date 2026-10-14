@@ -15,6 +15,7 @@ import {
   type SemanticWorldObservation,
 } from "./support/semantic-world.js";
 import { createMineflayerSemanticWorldReader, observePlayerInventory } from "./support/mineflayer-world.js";
+import { plannedMap } from "./support/planned-map.js";
 import { runOwnedAcceptanceScenario, type AcceptanceRunContext } from "./support/owned-run.js";
 
 const scenarioPath = "tests/acceptance/fixtures/maps-reset-scenario.toml";
@@ -30,7 +31,7 @@ test("maps-reset", { timeout: 300_000 }, async (t) => {
     const seatOne = duelCompetitorForSeat(active, 1);
     seatZeroUuid = seatZero.identity.offlineUuid;
     seatOneUuid = seatOne.identity.offlineUuid;
-    const map = active.preparedRun.scenario.map;
+    const map = plannedMap(active.preparedRun.scenario.map);
     await active.start();
     await waitForActivePhase(active, signal);
 
@@ -78,7 +79,7 @@ test("maps-reset", { timeout: 300_000 }, async (t) => {
     const resetRun = await runOwnedAcceptanceScenario(scenarioPath, runId, async (active, signal) => {
       const seatZero = duelCompetitorForSeat(active, 0);
       const seatOne = duelCompetitorForSeat(active, 1);
-      const map = active.preparedRun.scenario.map;
+      const map = plannedMap(active.preparedRun.scenario.map);
       await active.start();
       await waitForActivePhase(active, signal);
 

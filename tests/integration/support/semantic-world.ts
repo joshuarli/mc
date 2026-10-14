@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 
-import type { BlockPosition, MapIr } from "@arena/spec";
+import type { BlockPosition, PlannedMapIr } from "@arena/spec";
 
 export interface ObservedBlock {
   readonly position: { readonly x: number; readonly y: number; readonly z: number };
@@ -45,7 +45,7 @@ export interface PlayerDeathStatsObservation {
 }
 
 export interface SemanticWorldReader {
-  waitForMapChunks(map: MapIr, signal: AbortSignal): Promise<void>;
+  waitForMapChunks(map: PlannedMapIr, signal: AbortSignal): Promise<void>;
   readBlock(position: BlockPosition): ObservedBlock | null;
   readSpawn(seat: number, signal: AbortSignal): Promise<{
     readonly seat: number;
@@ -55,7 +55,7 @@ export interface SemanticWorldReader {
 }
 
 export async function captureSemanticWorld(
-  map: MapIr,
+  map: PlannedMapIr,
   reader: SemanticWorldReader,
   signal: AbortSignal,
 ): Promise<SemanticWorldObservation> {
@@ -89,7 +89,7 @@ export async function captureSemanticWorld(
 }
 
 export function assertSemanticWorldMatchesMap(
-  map: MapIr,
+  map: PlannedMapIr,
   observed: SemanticWorldObservation,
   registry: BlockStateRegistry,
 ): void {

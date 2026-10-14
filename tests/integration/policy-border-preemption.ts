@@ -9,6 +9,7 @@ import { replayPolicyJson } from "../../packages/arena-runner/src/policy-replay.
 import { readRunEvidence } from "../../packages/arena-runner/src/runtime/inspect.js";
 import type { PolicyActivityEvent } from "../../packages/arena-runner/src/runtime/live-policy-loop.js";
 import { runOwnedAcceptanceScenario } from "./support/owned-run.js";
+import { plannedMap } from "./support/planned-map.js";
 
 type DecisionReceipt = Extract<PolicyActivityEvent, { kind: "decision" }>;
 type ActionReceipt = Extract<PolicyActivityEvent, { kind: "action" }>;
@@ -23,7 +24,7 @@ test("policy-border-preemption", { timeout: 300_000 }, async (t) => {
     "policy-border-preemption",
     async (active) => {
       const scenario = active.preparedRun.scenario;
-      assert.deepStrictEqual(scenario.map.spawns.find(({ seat }) => seat === 0)?.position,
+      assert.deepStrictEqual(plannedMap(scenario.map).spawns.find(({ seat }) => seat === 0)?.position,
         { x: 4, y: 65, z: 32 });
       assert.equal(scenario.matchSettings.authoritativeMaxTicks, BigInt(MAX_TICKS));
       assert.equal(scenario.matchSettings.graceTicks, 0n);

@@ -14,6 +14,7 @@ import { test } from "node:test";
 import { waitForActivePhase } from "./support/duel.js";
 import { assertSamePolicyObservation } from "./support/fairness-oracle.js";
 import { createMineflayerSemanticWorldReader } from "./support/mineflayer-world.js";
+import { plannedMap } from "./support/planned-map.js";
 import { runOwnedAcceptanceScenario, type AcceptanceRunContext } from "./support/owned-run.js";
 
 const variants = [
@@ -85,7 +86,7 @@ async function runFairnessVariant(
 async function captureFairnessRun(active: AcceptanceRunContext, signal: AbortSignal) {
   const seatZero = competitorForSeat(active, 0);
   const seatOne = competitorForSeat(active, 1);
-  const map = active.preparedRun.scenario.map;
+  const map = plannedMap(active.preparedRun.scenario.map);
   const chest = map.lootContainers[0];
   assert.ok(chest, "fairness fixture must declare the hidden chest");
 

@@ -12,6 +12,7 @@ import {
   waitForActivePhase,
 } from "./support/duel.js";
 import { createMineflayerSemanticWorldReader, observePlayerInventory } from "./support/mineflayer-world.js";
+import { plannedMap } from "./support/planned-map.js";
 import { runOwnedAcceptanceScenario, type AcceptanceRunContext } from "./support/owned-run.js";
 
 const PHASE_TIMEOUT_MS = 20_000;
@@ -24,7 +25,7 @@ test("match-rules", { timeout: 300_000 }, async (t) => {
     async (active, signal) => {
       const seatZero = competitorForSeat(active, 0);
       const seatOne = competitorForSeat(active, 1);
-      const chest = active.preparedRun.scenario.map.lootContainers[0];
+      const chest = plannedMap(active.preparedRun.scenario.map).lootContainers[0];
       assert.ok(chest, "match-rules fixture must declare a chest within spawn reach");
       const healthBeforeGrace = seatOne.bot.health;
       let minimumHealth = healthBeforeGrace;

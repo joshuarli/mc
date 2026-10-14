@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 
 import type { Bot, Chest } from "mineflayer";
-import type { BlockPosition, MapIr } from "@arena/spec";
+import type { BlockPosition, PlannedMapIr } from "@arena/spec";
 
 import type {
   ObservedBlock,
@@ -127,7 +127,7 @@ export function observePlayerInventory(bot: Bot): PlayerInventoryObservation {
   return { items };
 }
 
-async function waitForMapChunks(bot: Bot, map: MapIr, signal: AbortSignal): Promise<void> {
+async function waitForMapChunks(bot: Bot, map: PlannedMapIr, signal: AbortSignal): Promise<void> {
   signal.throwIfAborted();
   const columns = new Map<string, { readonly x: number; readonly z: number }>();
   const positions: BlockPosition[] = [

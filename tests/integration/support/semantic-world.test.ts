@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { MapIr } from "@arena/spec";
+import type { PlannedMapIr } from "@arena/spec";
 
 import {
   assertPlayerDeathStatsReset,
@@ -12,7 +12,8 @@ import {
   type SemanticWorldObservation,
 } from "./semantic-world.js";
 
-const map: MapIr = {
+const map: PlannedMapIr = {
+  terrain: "planned",
   name: "semantic-world-oracle",
   dimensions: { width: 3, depth: 1, minY: 0, maxY: 1 },
   blocks: [
@@ -29,7 +30,7 @@ const map: MapIr = {
       inventory: ["minecraft:bread", "minecraft:stone_sword"],
     },
   ],
-  semanticId: "a".repeat(64) as MapIr["semanticId"],
+  semanticId: "a".repeat(64) as PlannedMapIr["semanticId"],
 };
 
 const blockRegistry = {

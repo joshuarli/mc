@@ -18,6 +18,7 @@ import {
   waitForActivePhase,
 } from "./support/duel.js";
 import { observePlayerInventory } from "./support/mineflayer-world.js";
+import { plannedMap } from "./support/planned-map.js";
 import {
   runOwnedAcceptanceScenario,
   type AcceptanceRunContext,
@@ -53,7 +54,7 @@ test("legal-player", { timeout: 300_000 }, async (t) => {
     async (active, signal) => {
       const seatZero = competitorForSeat(active, 0);
       const seatOne = competitorForSeat(active, 1);
-      const map = active.preparedRun.scenario.map;
+      const map = plannedMap(active.preparedRun.scenario.map);
       const chest = map.lootContainers[0];
       assert.ok(chest, "duel map must provide ordinary loot for the legal player route");
       const ramp = map.blocks.find(({ block, position }) =>
