@@ -41,6 +41,10 @@ const ORBIT_RING_BLOCKS = 10;
 const ORBIT_DWELL_TICKS = 60;
 const EXPLORE_BORDER_MARGIN_BLOCKS = 3;
 const REGION_SIZE_BLOCKS = 16;
+const CONFINED_AFTER_TICKS = 300;
+const CONFINED_MAX_REGIONS = 4;
+const CONFINED_DWELL_TICKS = 120;
+const CONFINED_PROBE_BLOCKS = 24;
 
 export type DecisionReason =
   | 'delegatedBaselineRules'
@@ -49,6 +53,7 @@ export type DecisionReason =
   | 'huntVisibleOpponentArmed'
   | 'travelToBorderCenter'
   | 'orbitBorderCenter'
+  | 'confinedProbeFarTarget'
   | 'directionsBlockedTravelToCenter';
 
 export type AlternativeCondition =
@@ -208,9 +213,11 @@ function chooseOverride(
   return {
     goal: Object.freeze({ kind: 'explore' }),
     intent: { kind: 'navigate', target: travel.target },
-    reason: travel.orbiting
-      ? 'orbitBorderCenter'
-      : allBlocked ? 'directionsBlockedTravelToCenter' : 'travelToBorderCenter',
+    reason: travel.confined
+      ? 'confinedProbeFarTarget'
+      : travel.orbiting
+        ? 'orbitBorderCenter'
+        : allBlocked ? 'directionsBlockedTravelToCenter' : 'travelToBorderCenter',
   };
 }
 
@@ -245,7 +252,7 @@ function resumableCache(prior: PolicyMemory, current: PolicyMemory, facts: Facts
 function centerTarget(
   facts: Facts,
   memory: PolicyMemory,
-): { readonly target: BlockPosition; readonly orbiting: boolean } {
+): { readonly target: BlockPosition; readonly orbiting: boolean; readonly confined: boolean } {
   const { agent, border } = facts;
   const center = borderCenter(border, agent.position.y);
   const dx = center.x - agent.position.x;
@@ -257,6 +264,23 @@ function centerTarget(
     && !isNearOrOutsideBorder(border, candidate, EXPLORE_BORDER_MARGIN_BLOCKS)
   );
   const at = (x: number, z: number) => blockPosition(x, agent.position.y, z);
+
+  const regions = memory.knowledge?.visitedRegions.length ?? 0;
+  if (chebyshev > ORBIT_ENTRY_BLOCKS && facts.tick >= CONFINED_AFTER_TICKS && regions <= CONFINED_MAX_REGIONS) {
+    const ranked = DIRECTIONS.map((direction, index) => ({
+      index,
+      alignment: direction[0] * dx + direction[1] * dz,
+      candidate: at(
+        agent.position.x + direction[0] * CONFINED_PROBE_BLOCKS,
+        agent.position.z + direction[1] * CONFINED_PROBE_BLOCKS,
+      ),
+    })).sort((first, second) => second.alignment - first.alignment || first.index - second.index);
+    const start = Math.floor(facts.tick / CONFINED_DWELL_TICKS);
+    for (let offset = 0; offset < ranked.length; offset += 1) {
+      const entry = ranked[(start + offset) % ranked.length]!;
+      if (usable(entry.candidate)) return { target: entry.candidate, orbiting: false, confined: true };
+    }
+  }
 
   if (chebyshev > ORBIT_ENTRY_BLOCKS) {
     const toward = DIRECTIONS.map((direction, index) => ({
@@ -272,11 +296,11 @@ function centerTarget(
       agent.position.x + Math.round((dx * step) / chebyshev),
       agent.position.z + Math.round((dz * step) / chebyshev),
     );
-    if (usable(direct)) return { target: direct, orbiting: false };
+    if (usable(direct)) return { target: direct, orbiting: false, confined: false };
     for (const entry of toward) {
-      if (entry.alignment > 0 && usable(entry.candidate)) return { target: entry.candidate, orbiting: false };
+      if (entry.alignment > 0 && usable(entry.candidate)) return { target: entry.candidate, orbiting: false, confined: false };
     }
-    return { target: center, orbiting: false };
+    return { target: center, orbiting: false, confined: false };
   }
 
   const start = Math.floor(facts.tick / ORBIT_DWELL_TICKS) % DIRECTIONS.length;
@@ -294,7 +318,7 @@ function centerTarget(
     if (usable(candidate)) ring.push(candidate);
   }
   const chosen = ring.find((candidate) => !isVisited(candidate)) ?? ring[0];
-  return { target: chosen ?? center, orbiting: true };
+  return { target: chosen ?? center, orbiting: true, confined: false };
 }
 
 function gatherFacts(observation: AgentObservation): Facts | null {

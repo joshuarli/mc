@@ -45,8 +45,8 @@ const pos = (value: readonly [number, number, number]) => blockPosition(value[0]
 function situation(setup: Setup): AgentObservation {
   const border = setup.border ?? [440, 610, 90];
   return agentObservation({
-    tick: tick(setup.tick ?? 300),
-    sequence: observationSequence((setup.tick ?? 300) + 1),
+    tick: tick(setup.tick ?? 150),
+    sequence: observationSequence((setup.tick ?? 150) + 1),
     agent: currentKnowledge(agentState({
       position: pos(setup.at ?? [425, 70, 620]),
       healthHalfHearts: setup.health ?? 40,
@@ -171,4 +171,20 @@ test('improved keeps border escape, retreat and eating ahead of every new behavi
     state: openingPolicyState({ cacheTakenAt: null }),
   });
   equal(opening.goal.kind, 'explore');
+});
+
+test('a seat that has not left a 16-block pocket for hundreds of ticks probes far targets in rotating directions', () => {
+  const pocket = policyMemory({
+    ...emptyPolicyMemory(),
+    knowledge: { visitedRegions: [{ x: 29, z: 36 }, { x: 30, z: 37 }], trail: [] },
+  });
+  const first = improved.explain(situation({ at: [483, 62, 596], tick: 480 }), pocket, stream());
+  equal(first.explanation.reason, 'confinedProbeFarTarget');
+  const later = improved.explain(situation({ at: [483, 62, 596], tick: 720 }), pocket, stream());
+  equal(later.explanation.reason, 'confinedProbeFarTarget');
+  notDeepStrictEqual(first.decision.intent, later.decision.intent);
+  const target = (first.decision.intent as { target: { x: number; z: number } }).target;
+  ok(Math.max(Math.abs(target.x - 483), Math.abs(target.z - 596)) >= 24);
+  const early = improved.explain(situation({ at: [483, 62, 596], tick: 100 }), pocket, stream());
+  equal(early.explanation.reason, 'travelToBorderCenter');
 });
