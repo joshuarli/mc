@@ -6,6 +6,7 @@ const WORLD_PLAN_SCHEMA_VERSION = 1;
 
 export type WorldPlanErrorKind =
   | 'invalid_run_id'
+  | 'unsupported_terrain'
   | 'too_many_spawns'
   | 'spawn_seat_outside_schema'
   | 'noncontiguous_spawn_seats'
@@ -19,6 +20,7 @@ export class WorldPlanError extends Error {
 
 export function encodeWorldPlanV1(runId: string, map: MapIr): Buffer {
   validateRunId(runId);
+  if (map.terrain !== 'planned') throw new WorldPlanError('unsupported_terrain');
   validateSpawnSeats(map);
 
   const writer = new BoundedJsonWriter(MAX_WORLD_PLAN_BYTES);

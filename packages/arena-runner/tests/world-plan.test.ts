@@ -19,6 +19,18 @@ operations = [
 ]
 `;
 
+const naturalFixtureMap = `
+schema = 2
+name = "natural-fixture"
+terrain = "vanilla"
+dimensions = { width = 1024, depth = 1024 }
+operations = [
+  { kind = "spawn", seat = 0, position = { x = 512, z = 500 } },
+  { kind = "spawn", seat = 1, position = { x = 512, z = 524 } },
+  { kind = "loot_container", position = { x = 510, z = 512 }, inventory = ["minecraft:apple"] }
+]
+`;
+
 test('world-plan-v1 preserves the Java MapPlanReader field shape and canonical arrays', async () => {
   const map = compileMap(fixtureMap);
   const encoded = encodeWorldPlanV1('fixture-run', map);
@@ -44,6 +56,16 @@ test('world-plan-v1 rejects sparse spawn seats instead of normalizing them', () 
   assert.throws(() => encodeWorldPlanV1('fixture-run', map), (error: unknown) => {
     assert.ok(error instanceof WorldPlanError);
     assert.equal(error.kind, 'noncontiguous_spawn_seats');
+    return true;
+  });
+});
+
+test('world-plan-v1 rejects natural maps instead of inventing surface heights', () => {
+  const map = compileMap(naturalFixtureMap);
+
+  assert.throws(() => encodeWorldPlanV1('fixture-run', map), (error: unknown) => {
+    assert.ok(error instanceof WorldPlanError);
+    assert.equal(error.kind, 'unsupported_terrain');
     return true;
   });
 });
