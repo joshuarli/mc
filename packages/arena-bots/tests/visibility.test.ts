@@ -46,6 +46,29 @@ test('accepts targets above and below when aligned with Mineflayer lookAt pitch'
   assert.equal(isInsidePerceptionCone({ ...viewer, pitch: -belowPitch }, below), false);
 });
 
+test('a level look misses a player nine blocks away and nineteen below while the downward path look includes them', () => {
+  const eyeHeight = 1.62;
+  const viewer = {
+    position: { x: 0, y: 62, z: 0 },
+    eyeHeight,
+    yaw: 0,
+    pitch: 0,
+  };
+  const player = { position: { x: 0, y: 43, z: -9 }, height: 1.8 };
+  assert.equal(isInsidePerceptionCone(viewer, player), false);
+
+  const eyeY = viewer.position.y + eyeHeight;
+  const lookTarget = { x: 0, y: eyeY - 12, z: -8 };
+  const dx = lookTarget.x - viewer.position.x;
+  const dy = lookTarget.y - eyeY;
+  const dz = lookTarget.z - viewer.position.z;
+  assert.equal(isInsidePerceptionCone({
+    ...viewer,
+    yaw: Math.atan2(-dx, -dz),
+    pitch: Math.atan2(dy, Math.hypot(dx, dz)),
+  }, player), true);
+});
+
 test('rejects incomplete or non-finite positions', () => {
   assert.equal(isInsidePerceptionCone(viewer, {
     position: { x: Number.NaN, y: 0, z: 1 },

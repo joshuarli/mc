@@ -63,6 +63,8 @@ const { version: PATHFINDER_VERSION } = createRequire(import.meta.url)('mineflay
 
 const MAX_PATH_SEARCH_RADIUS_BLOCKS = 16;
 const MAX_PATH_LEG_BLOCKS = 8;
+const TRAVEL_SIGHT_AHEAD_BLOCKS = 8;
+const TRAVEL_SIGHT_BELOW_EYE_BLOCKS = 12;
 const MAX_NAVIGATION_LEGS = 128;
 const MAX_PATH_THINK_MS = 1_000;
 const MAX_PATH_SLICE_PER_CLIENT_MS = 3;
@@ -850,6 +852,10 @@ export class SkillOwner {
         await waitForPathStop(this.#bot, ACTION_TIMEOUT_MS);
         active.resources.navigationActive = false;
         recordPathDiagnostic(this.#bot, { kind: 'navigation', active: false });
+      }
+      if (arrival.kind === 'withinRange' || arrival.kind === 'exactBlock') {
+        throwIfInterrupted(signal);
+        await this.#lookAt(active, 'look down the path', travelSightPoint(this.#bot, position));
       }
     }
     throw new Error('bounded navigation loop exited unexpectedly');
@@ -2149,6 +2155,19 @@ function hasArrived(
   return Math.floor(current.x) === Math.floor(target.x)
     && Math.floor(current.y) === Math.floor(target.y)
     && Math.floor(current.z) === Math.floor(target.z);
+}
+
+function travelSightPoint(bot: Bot, goal: NavigationPosition): Bot['entity']['position'] {
+  const position = bot.entity.position;
+  const eyeHeight = (bot.entity as MineflayerEntity & { readonly eyeHeight?: number }).eyeHeight;
+  if (typeof eyeHeight !== 'number' || !Number.isFinite(eyeHeight)) {
+    throw new TypeError('Mineflayer player entity has no eye height');
+  }
+  const dx = goal.x - position.x;
+  const dz = goal.z - position.z;
+  const horizontal = Math.hypot(dx, dz);
+  const scale = horizontal === 0 ? 0 : TRAVEL_SIGHT_AHEAD_BLOCKS / horizontal;
+  return position.offset(dx * scale, eyeHeight - TRAVEL_SIGHT_BELOW_EYE_BLOCKS, dz * scale);
 }
 
 function waypointToward(

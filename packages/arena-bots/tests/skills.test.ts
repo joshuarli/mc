@@ -94,6 +94,101 @@ test('navigate succeeds when the pathfinder ends on the cell its goal range acce
   }
 });
 
+test('travel navigation looks down between legs and melee pursuit does not', async () => {
+  const harness = makeHarness();
+  const events: string[] = [];
+  const looks: Array<{ x: number; y: number; z: number }> = [];
+  const setGoal = harness.pathfinder.setGoal;
+  harness.pathfinder.setGoal = (goal) => {
+    setGoal(goal);
+    if (goal !== null) events.push('goal');
+  };
+  const eyeHeight = 1.62;
+  Object.assign(harness.bot, {
+    entity: {
+      id: 1,
+      position: new TestPosition(0, 64, 0),
+      eyeHeight,
+    },
+    lookAt: async (point: { x: number; y: number; z: number }) => {
+      events.push('look');
+      looks.push({ x: point.x, y: point.y, z: point.z });
+    },
+  });
+
+  try {
+    const running = harness.owner.run({ kind: 'navigate', target: blockPosition(16, 64, 0) });
+    await waitUntil(() => events.length >= 1);
+    assert.deepEqual(events, ['goal']);
+    harness.bot.emit('goal_reached', harness.pathfinder.goal as never);
+    await waitUntil(() => events.length >= 3);
+    assert.deepEqual(events, ['goal', 'look', 'goal']);
+    const look = looks[0];
+    assert.ok(look);
+    assert.ok(Math.abs(look.x - 8) < 1e-9);
+    assert.ok(Math.abs(look.y - (64 + eyeHeight - 12)) < 1e-9);
+    assert.ok(Math.abs(look.z) < 1e-9);
+    const cancellation = harness.owner.cancel('shutdown');
+    assert.deepEqual(await running, { kind: 'cancelled', reason: 'shutdown' });
+    await cancellation;
+  } finally {
+    await harness.owner.close();
+    harness.observer.close();
+  }
+
+  const melee = makeHarness();
+  const meleeGoals: unknown[] = [];
+  let meleeLooks = 0;
+  const meleeSetGoal = melee.pathfinder.setGoal;
+  melee.pathfinder.setGoal = (goal) => {
+    meleeSetGoal(goal);
+    if (goal !== null) meleeGoals.push(goal);
+  };
+  const opponentPosition = new TestPosition(0, 64, -6);
+  const opponent = {
+    id: 2,
+    type: 'player',
+    position: opponentPosition,
+    velocity: new TestPosition(0, 0, 0),
+    yaw: 0,
+    pitch: 0,
+    width: 0.6,
+    height: 1.8,
+    getDroppedItem: () => null,
+  } as Bot['entity'];
+  Object.assign(melee.bot, {
+    entity: {
+      id: 1,
+      position: new TestPosition(0, 64, 0),
+      velocity: new TestPosition(0, 0, 0),
+      eyeHeight,
+      width: 0.6,
+      height: 1.8,
+      yaw: 0,
+      pitch: 0,
+    },
+    entities: { 2: opponent },
+    players: { rival: { entity: opponent, gamemode: 0 } },
+    blockAt: () => ({ name: 'stone', position: opponentPosition }),
+    lookAt: async () => { meleeLooks += 1; },
+  });
+
+  try {
+    const running = melee.owner.run({ kind: 'approach', target: entityId(2) });
+    await waitUntil(() => meleeGoals.length >= 1);
+    assert.equal(meleeLooks, 0);
+    melee.bot.emit('goal_reached', melee.pathfinder.goal as never);
+    await waitUntil(() => meleeGoals.length >= 2);
+    assert.equal(meleeLooks, 0);
+    const cancellation = melee.owner.cancel('shutdown');
+    assert.deepEqual(await running, { kind: 'cancelled', reason: 'shutdown' });
+    await cancellation;
+  } finally {
+    await melee.owner.close();
+    melee.observer.close();
+  }
+});
+
 test('eat waits for the consumed slot update after an early food update', async () => {
   const eating = prepareEating();
 
@@ -185,7 +280,9 @@ test('navigateToBlock requires the ramp top and the owned skill checks the obser
   assert.equal(goal.isEnd(pathfinderNode(31, 66, 21)), true);
 
   const harness = makeHarness();
-  Object.assign(harness.bot, { entity: { id: 1, position: new TestPosition(31.5, 66, 20.5) } });
+  Object.assign(harness.bot, {
+    entity: { id: 1, position: new TestPosition(31.5, 66, 20.5), eyeHeight: 1.62 },
+  });
 
   try {
     let settled = false;
@@ -1687,6 +1784,7 @@ function makeHarness(
     },
     blockAt: () => null,
     look: () => undefined,
+    lookAt: async () => undefined,
     setControlState: (control: keyof Bot['controlState'], state: boolean) => {
       const controlState = (botEmitter as unknown as { controlState?: Bot['controlState'] }).controlState;
       if (controlState !== undefined) controlState[control] = state;
