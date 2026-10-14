@@ -47,6 +47,7 @@ export interface LeagueManifest {
     maxSurvivalRegression: number;
     maxAttackIssueRegression: number;
     minAttacksForGate: number;
+    minSeeds: number | null;
   }>;
 }
 
@@ -110,7 +111,7 @@ export function parseLeagueManifest(source: string): LeagueManifestDraft {
 
   const promotion = asTable(root.promotion, resource, 'promotion');
   exact(promotion, ['min_mean', 'min_lower_bound', 'max_survival_regression', 'max_attack_issue_regression',
-    'min_attacks_for_gate'], ['min_mean', 'min_lower_bound', 'max_survival_regression', 'max_attack_issue_regression',
+    'min_attacks_for_gate', 'min_seeds'], ['min_mean', 'min_lower_bound', 'max_survival_regression', 'max_attack_issue_regression',
     'min_attacks_for_gate'], resource);
   const fraction = (value: TomlValue | undefined, name: string): number => {
     if (typeof value !== 'number' || value < 0 || value > 1) throw invalid(resource, `invalid_${name}`);
@@ -130,6 +131,7 @@ export function parseLeagueManifest(source: string): LeagueManifestDraft {
       maxSurvivalRegression: fraction(promotion.max_survival_regression, 'max_survival_regression'),
       maxAttackIssueRegression: fraction(promotion.max_attack_issue_regression, 'max_attack_issue_regression'),
       minAttacksForGate: integer(promotion.min_attacks_for_gate, resource, 'min_attacks_for_gate'),
+      minSeeds: promotion.min_seeds === undefined ? null : integer(promotion.min_seeds, resource, 'min_seeds'),
     }),
   });
 }

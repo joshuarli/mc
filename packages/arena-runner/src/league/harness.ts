@@ -256,6 +256,7 @@ export function buildReport(
   }
 
   const gates = manifest.promotion;
+  const minSeeds = gates.minSeeds ?? (set.role === 'heldout' ? 24 : 12);
   const analysisOf = (scored: readonly ScoredMatch[]) =>
     estimateMean(scored, manifest.analysis.method, manifest.analysis.resamples, manifest.analysis.bootstrapSeed);
   const pairReports = [...pairs.entries()].map(([pair, tally]) => {
@@ -270,6 +271,7 @@ export function buildReport(
     if (tally.failed > 0) reasons.push('incomplete_matches');
     if (tally.degraded > 0) reasons.push('degraded_matches');
     if (tally.disconnectMatches > 0) reasons.push('disconnects');
+    if (estimate.clusters < minSeeds) reasons.push('insufficient_seeds');
     if (estimate.mean === null || estimate.lower === null) reasons.push('insufficient_world_seeds');
     else {
       if (estimate.mean < gates.minMean) reasons.push('mean_below_threshold');
@@ -321,7 +323,7 @@ export function buildReport(
     seed_set: { name: set.name, role: set.role, first: set.first, last: set.last },
     candidate_set_digest: digest,
     analysis: { method: manifest.analysis.method, confidence: 0.95, grouping: 'world_seed' },
-    thresholds: gates,
+    thresholds: { ...gates, minSeeds },
     pairs: pairReports,
     candidates: byCandidate,
   };

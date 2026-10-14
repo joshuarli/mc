@@ -50,6 +50,10 @@ Matches run serially through the normal run path. Each completed or failed match
 
 The report keeps denominators: planned, completed, failed or censored (with reasons), degraded, and matches with disconnects. It gives the cluster mean, interval, effect size against an even match, the mean if censored matches count as losses, and survival and attack-issue gates against the opponent side. A candidate is promoted only when every match completed, the mean is at least `min_mean`, the interval lower bound exceeds `min_lower_bound`, no match was degraded or lost a seat to a disconnect, and neither gate regressed beyond its tolerance. Otherwise the verdict is `keep_baseline` with the reasons.
 
+`min_seeds` (default 12 for regression and development sets, 24 for held-out) is the fewest world seeds that may support a promotion; a smaller set can only yield `keep_baseline` with `insufficient_seeds`.
+
+Known limitation: the per-seed scenario is derived by substituting the `seed`, `map` and `policy` lines of the scenario text into a file under `.work/arena/league/<id>/scenarios/`; the roster is never edited. A spec-level seed override would replace this.
+
 A held-out seed set is evaluated once per frozen candidate set. Before the first match the harness writes `evaluation/heldout-ledger/<seed>.json` with the candidate-set digest. A different digest or league over a consumed seed fails with `heldout_seed_already_consumed`; the same digest resumes. To reuse the seeds, change their set to `role = "development"` in the seed manifest and add a new held-out set with fresh seeds.
 
 ## Remove run data

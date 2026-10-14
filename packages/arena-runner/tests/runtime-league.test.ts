@@ -164,9 +164,10 @@ test('league promotes only when the mean, interval, survival and integrity gates
   const winning = await runLeague({
     manifest, seeds: smallSeeds, store: new MemoryStore(),
     runner: runnerFrom((plan) => winner('candidate', plan)), signal: new AbortController().signal,
-  }) as { candidates: { verdict: string }[]; pairs: { score: any }[] };
+  }) as { candidates: { verdict: string }[]; pairs: { score: any; verdict_reasons?: string[] }[] };
   assert.equal(winning.pairs[0]!.score.mean, 1);
-  assert.equal(winning.candidates[0]!.verdict, 'promote');
+  assert.equal(winning.candidates[0]!.verdict, 'keep_baseline', 'four world seeds are below the minimum');
+  assert.deepEqual((winning.pairs[0]! as { verdict_reasons?: string[] }).verdict_reasons, ['insufficient_seeds']);
 
   const even = await runLeague({
     manifest, seeds: smallSeeds, store: new MemoryStore(),
