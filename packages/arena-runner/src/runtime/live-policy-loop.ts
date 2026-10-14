@@ -19,7 +19,7 @@ import { makeActionFunnelTraceRecord } from '../funnel-record.js';
 type PolicyCompetitor = Pick<RuntimeCompetitorClient, 'seat' | 'gameplay' | 'bot'>;
 type GameplayDecision = Decision | CivilizationDecision;
 type PolicyTrace = Pick<RuntimeTraceBuilder, 'recordPolicyDecision' | 'recordPolicyEffect' | 'checkpoint'>
-  & Partial<Pick<RuntimeTraceBuilder, 'recordActionFunnel'>>;
+  & Partial<Pick<RuntimeTraceBuilder, 'recordActionFunnel' | 'recordRunNote'>>;
 const ACTION_CLEANUP_TIMEOUT_MS = 5_000;
 
 export type PolicyActivityEvent =
@@ -225,6 +225,16 @@ export class LivePolicyLoop {
           rngStateAfter: step.rngStateAfter, disposition });
       }
       const frame = this.#trace.recordPolicyDecision(record);
+      if (step.mode === 'hunger_games' && this.#funnel !== undefined && this.#trace.recordRunNote !== undefined) {
+        const explanation = step.explanation();
+        this.#ownTask(this.#trace.recordRunNote({
+          schema: 'decision-explain-v1', version: explanation.version, seat, sequence: sequence.toString(), tick,
+          reason: explanation.reason, delegated_goal: explanation.delegatedGoal,
+          alternatives: explanation.alternatives.map((entry) => ({ goal: entry.goal, score: entry.score, condition: entry.condition })),
+          nearest_cache_blocks: explanation.nearestCacheBlocks, nearest_opponent_blocks: explanation.nearestOpponentBlocks,
+          border_center_blocks: explanation.borderCenterBlocks, armed: explanation.armed,
+        }));
+      }
       this.#observationCount += 1;
       if (this.#observationCount % 200 === 0) this.#checkpointTail = this.#trace.checkpoint(this.#observationCount);
       recorded = Promise.all([frame, this.#checkpointTail]).then(() => undefined);

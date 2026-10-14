@@ -29,7 +29,7 @@ import { replayPolicyJson } from './policy-replay.js';
 import { isValidRunId } from './run-id.js';
 import { inspectStoppedRun, readStoppedRunEvidence } from './runtime/inspect.js';
 import { explainSeatJson } from './funnel-report.js';
-import { matchQuality, renderQualityTable } from './seat-quality.js';
+import { matchQuality, renderQualityTable, renderSeatTimeline, seatTimeline } from './seat-quality.js';
 import { collectOwnedRuns, type RunGarbageCollectionMode } from './runtime/gc.js';
 import { runPreparedRun } from './runtime/run.js';
 import { createRuntimeRoster, type RuntimeSpectatorMode } from './runtime/roster.js';
@@ -468,6 +468,7 @@ async function explainCommand(args: readonly Buffer[]): Promise<CliResult> {
   if (!/^(0|[1-9][0-9]{0,2})$/.test(seatText) || Number(seatText) > 255) throw invalidInput('explain_invalid_seat');
   const helperPath = configuredAbsolutePath('ARENA_FS_HELPER', 'filesystem helper');
   const evidence = await readStoppedRunEvidence({ helperPath, ownedRoot: Buffer.from(process.cwd(), 'utf8'), runId });
+  writeProgress([renderSeatTimeline(Number(seatText), seatTimeline(evidence, Number(seatText)))]);
   return success(explainSeatJson(evidence, Number(seatText)));
 }
 

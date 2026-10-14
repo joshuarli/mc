@@ -2,6 +2,7 @@ import { canonicalJson } from './canonical.js';
 import { ControlCodecError, decodeControlEnvelope } from './control/index.js';
 import type { ControlMessage, PreparePayload } from './control/types.js';
 import { actionFunnelReport } from './funnel-report.js';
+import { RUN_NOTE_SCHEMAS } from './run-note.js';
 import { reconstructEventResult, type EventDerivedResult } from './event-report.js';
 import { MAX_EVIDENCE_BYTES, TraceError, type TraceRecord, type TraceSegment } from './trace.js';
 
@@ -115,8 +116,7 @@ export function reconstructRunEvidence(evidence: Evidence): ReconstructedRunEvid
     const recordNumber = index + 1;
     if (record.schema === 'policy-replay-v1' || record.schema === 'policy-replay-v2' || record.schema === 'policy-replay-v3' || record.schema === 'policy-replay-v4' || record.schema === 'policy-effect-v1' || record.schema === 'civilization-policy-replay-v1'
         || record.schema === 'civilization-policy-effect-v1' || record.schema === 'action-funnel-v1'
-        || record.schema === 'worker-topology-v1' || record.schema === 'worker-loss-v1'
-        || record.schema === 'client-diagnostic-v1' || record.schema === 'seat-policy-v1' || record.schema === 'resume-v1') continue;
+        || RUN_NOTE_SCHEMAS.includes(record.schema as string)) continue;
     const direction = record.direction;
     if (direction !== 'runner' && direction !== 'plugin') {
       throw eventRecordFailure('invalid_event_direction', recordNumber);

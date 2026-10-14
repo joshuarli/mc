@@ -56,6 +56,7 @@ export interface SeatQuality {
   readonly time_alive_ticks: number;
   readonly death: Readonly<{ tick: number; cause: string; by_seat: number | null; pvp: boolean }> | null;
   readonly pvp_share: number | null;
+  readonly reasons: Readonly<Record<string, number>>;
 }
 
 export interface MatchQuality {
@@ -64,6 +65,7 @@ export interface MatchQuality {
   readonly seats: readonly SeatQuality[];
   readonly pvp_engagements: number;
   readonly pvp_hits: number;
+  readonly reasons: Readonly<Record<string, number>>;
   readonly eliminations: Readonly<{ total: number; pvp: number; by_cause: Readonly<Record<string, number>> }>;
 }
 
@@ -71,6 +73,9 @@ interface Point { readonly x: number; readonly z: number }
 
 interface SeatDecision {
   readonly tick: number;
+  readonly sequence: string;
+  readonly goal: string;
+  readonly border: string;
   readonly position: Point | null;
   readonly intent: string;
   readonly waitReason: string | null;
@@ -87,7 +92,31 @@ interface DamageEntry {
   readonly amount: number;
 }
 
-export function matchQuality(evidence: Evidence): MatchQuality {
+interface Scan {
+  readonly decisionsBySeat: ReadonlyMap<number, readonly SeatDecision[]>;
+  readonly effects: ReadonlyMap<string, string>;
+  readonly candidates: ReadonlyMap<number, string>;
+  readonly funnelBySeat: ReadonlyMap<number, readonly FunnelOutcome[]>;
+  readonly notesBySeat: ReadonlyMap<number, readonly ExplainEntry[]>;
+  readonly damage: readonly DamageEntry[];
+  readonly eliminations: readonly { tick: number; seat: number; cause: string }[];
+  readonly endTick: number | null;
+}
+
+export interface ExplainEntry {
+  readonly sequence: string;
+  readonly tick: number;
+  readonly reason: string;
+  readonly delegated_goal: string;
+  readonly alternatives: readonly Readonly<{ goal: string; score: number; condition: string }>[];
+  readonly nearest_cache_blocks: number | null;
+  readonly nearest_opponent_blocks: number | null;
+  readonly border_center_blocks: number | null;
+  readonly armed: boolean | null;
+}
+
+function scan(evidence: Evidence): Scan {
+  const notesBySeat = new Map<number, ExplainEntry[]>();
   const decisionsBySeat = new Map<number, SeatDecision[]>();
   const effects = new Map<string, string>();
   const candidates = new Map<number, string>();
@@ -100,6 +129,12 @@ export function matchQuality(evidence: Evidence): MatchQuality {
   for (const [index, record] of evidence.records.entries()) {
     if (record.schema === 'seat-policy-v1' && typeof record.seat === 'number' && typeof record.candidate === 'string') {
       candidates.set(record.seat, record.candidate);
+      continue;
+    }
+    if (record.schema === 'decision-explain-v1' && typeof record.seat === 'number') {
+      const list = notesBySeat.get(record.seat) ?? [];
+      list.push(record as unknown as ExplainEntry);
+      notesBySeat.set(record.seat, list);
       continue;
     }
     if (record.schema === 'policy-effect-v1' && typeof record.decision_sequence === 'string') {
@@ -141,9 +176,14 @@ export function matchQuality(evidence: Evidence): MatchQuality {
     }
   }
   if (endTick === null && maxTick > 0) endTick = maxTick;
+  return { decisionsBySeat, effects, candidates, funnelBySeat, notesBySeat, damage, eliminations, endTick };
+}
 
+export function matchQuality(evidence: Evidence): MatchQuality {
+  const { decisionsBySeat, effects, candidates, funnelBySeat, notesBySeat, damage, eliminations, endTick } = scan(evidence);
   const seatIds = new Set<number>([...decisionsBySeat.keys(), ...funnelBySeat.keys(), ...candidates.keys(),
     ...eliminations.map((entry) => entry.seat)]);
+  const matchReasons: Record<string, number> = {};
   const seats = [...seatIds].sort((left, right) => left - right).map((seat): SeatQuality => {
     const decisions = decisionsBySeat.get(seat) ?? [];
     const death = deathOf(seat, eliminations, damage);
@@ -165,6 +205,7 @@ export function matchQuality(evidence: Evidence): MatchQuality {
       time_alive_ticks: alive,
       death,
       pvp_share: takenTotal === 0 ? null : round3(takenFromCompetitors / takenTotal),
+      reasons: reasonHistogram(notesBySeat.get(seat) ?? [], matchReasons),
     };
   });
 
@@ -190,8 +231,18 @@ export function matchQuality(evidence: Evidence): MatchQuality {
     seats,
     pvp_engagements: pairs.size,
     pvp_hits: hits,
+    reasons: matchReasons,
     eliminations: { total: eliminations.length, pvp, by_cause: byCause },
   };
+}
+
+function reasonHistogram(notes: readonly ExplainEntry[], total: Record<string, number>): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const note of notes) {
+    counts[note.reason] = (counts[note.reason] ?? 0) + 1;
+    total[note.reason] = (total[note.reason] ?? 0) + 1;
+  }
+  return counts;
 }
 
 function readDecision(record: TraceRecord, tick: number | null): SeatDecision | undefined {
@@ -203,8 +254,12 @@ function readDecision(record: TraceRecord, tick: number | null): SeatDecision | 
   const intentKind = decision.intent?.kind ?? 'unknown';
   const containerPosition = intentKind === 'containerOpen' && decision.intent?.position !== undefined
     ? `${decision.intent.position.x},${decision.intent.position.y},${decision.intent.position.z}` : null;
+  const observation = (record.input as { observation?: { border?: { kind?: string } } }).observation;
   return {
     tick,
+    sequence: String(record.sequence),
+    goal: (record.decision as { goal?: { kind?: string } }).goal?.kind ?? 'unknown',
+    border: observation?.border?.kind ?? 'unknown',
     position: position === null ? null : { x: position.x, z: position.z },
     intent: intentKind,
     waitReason: intentKind === 'hold' ? decision.intent?.reason ?? 'unspecified' : null,
@@ -391,6 +446,10 @@ export function renderQualityTable(matches: readonly Readonly<{ label: string; q
     const widths = header.map((title, column) => Math.max(title.length, ...rows.map((row) => row[column]!.length)));
     const format = (cells: readonly string[]): string => `  ${cells.map((cell, column) => cell.padEnd(widths[column]!)).join('  ')}`;
     lines.push(format(header), ...rows.map(format));
+    for (const seat of match.quality.seats) {
+      const entries = Object.entries(seat.reasons);
+      if (entries.length > 0) lines.push(`  seat ${seat.seat} reasons: ${entries.map(([reason, count]) => `${reason}=${count}`).join(' ')}`);
+    }
     const e = match.quality.eliminations;
     lines.push(`  pvp engagements ${match.quality.pvp_engagements}, hits ${match.quality.pvp_hits}, `
       + `eliminations ${e.total} (pvp ${e.pvp}), end tick ${match.quality.end_tick ?? '-'}`);
@@ -401,4 +460,118 @@ export function renderQualityTable(matches: readonly Readonly<{ label: string; q
 export function renderGates(gates: readonly QualityGateResult[]): string {
   return gates.map((entry) => `  [${entry.passed ? 'pass' : 'FAIL'}] ${entry.id}: ${entry.value ?? 'n/a'} `
     + `(${entry.reason}, threshold ${entry.threshold}) ${entry.description}`).join('\n');
+}
+
+export function seatTimeline(evidence: Evidence, seat: number): object {
+  const scanned = scan(evidence);
+  const decisions = scanned.decisionsBySeat.get(seat) ?? [];
+  const notes = new Map((scanned.notesBySeat.get(seat) ?? []).map((note) => [note.sequence, note]));
+  interface Range {
+    from_tick: number; to_tick: number; decisions: number; goal: string; intent: string; reason: string | null;
+    wait_reason: string | null; borders: Record<string, number>; dispositions: Record<string, number>;
+    from_position: Point | null; to_position: Point | null;
+    nearest_cache_blocks: number | null; nearest_opponent_blocks: number | null; border_center_blocks: number | null;
+    alternatives: ExplainEntry['alternatives'];
+  }
+  const ranges: Range[] = [];
+  for (const decision of decisions) {
+    const note = notes.get(decision.sequence);
+    const reason = note?.reason ?? null;
+    const last = ranges.at(-1);
+    if (last !== undefined && last.goal === decision.goal && last.intent === decision.intent && last.reason === reason
+        && last.wait_reason === decision.waitReason) {
+      last.to_tick = decision.tick;
+      last.decisions += 1;
+      last.to_position = decision.position;
+      last.borders[decision.border] = (last.borders[decision.border] ?? 0) + 1;
+      last.dispositions[decision.disposition] = (last.dispositions[decision.disposition] ?? 0) + 1;
+      if (note !== undefined) {
+        last.nearest_cache_blocks = note.nearest_cache_blocks;
+        last.nearest_opponent_blocks = note.nearest_opponent_blocks;
+        last.border_center_blocks = note.border_center_blocks;
+      }
+      continue;
+    }
+    ranges.push({
+      from_tick: decision.tick, to_tick: decision.tick, decisions: 1, goal: decision.goal, intent: decision.intent,
+      reason, wait_reason: decision.waitReason, borders: { [decision.border]: 1 }, dispositions: { [decision.disposition]: 1 },
+      from_position: decision.position, to_position: decision.position,
+      nearest_cache_blocks: note?.nearest_cache_blocks ?? null, nearest_opponent_blocks: note?.nearest_opponent_blocks ?? null,
+      border_center_blocks: note?.border_center_blocks ?? null, alternatives: note?.alternatives ?? [],
+    });
+  }
+
+  const engagements = new Map<number, { opponent: number; first_tick: number; last_tick: number; dealt: number; taken: number; hits_dealt: number; hits_taken: number }>();
+  for (const entry of scanned.damage) {
+    const other = entry.attacker === seat ? entry.victim : entry.victim === seat ? entry.attacker : null;
+    if (other === null) continue;
+    const tally = engagements.get(other) ?? { opponent: other, first_tick: entry.tick, last_tick: entry.tick, dealt: 0, taken: 0, hits_dealt: 0, hits_taken: 0 };
+    tally.last_tick = entry.tick;
+    if (entry.attacker === seat) { tally.dealt += entry.amount; tally.hits_dealt += 1; }
+    else { tally.taken += entry.amount; tally.hits_taken += 1; }
+    engagements.set(other, tally);
+  }
+  const quality = matchQuality(evidence).seats.find((entry) => entry.seat === seat);
+  return {
+    ranges,
+    idle_spans: idleSpans(decisions),
+    engagements: [...engagements.values()].sort((left, right) => left.first_tick - right.first_tick),
+    environment_damage: scanned.damage.filter((entry) => entry.victim === seat && entry.attacker === null)
+      .map((entry) => ({ tick: entry.tick, cause: entry.cause, amount: entry.amount })).slice(0, 200),
+    death: quality?.death ?? null,
+    reasons: quality?.reasons ?? {},
+  };
+}
+
+function idleSpans(decisions: readonly SeatDecision[]): readonly object[] {
+  const spans: { from_tick: number; to_tick: number; reason: string; explained: boolean }[] = [];
+  for (let index = 1; index < decisions.length; index += 1) {
+    const previous = decisions[index - 1]!;
+    const current = decisions[index]!;
+    const moved = displacement(previous, current);
+    if (current.tick <= previous.tick || moved === null || moved >= STATIONARY_BLOCKS || IN_PLACE_INTENTS.has(previous.intent)) continue;
+    let reason = `no_progress:${previous.intent}`;
+    let explained = false;
+    if (previous.waitReason !== null) { reason = `wait:${previous.waitReason}`; explained = true; }
+    else if (previous.disposition === 'hold' || previous.disposition.startsWith('defer:')) { reason = previous.disposition; explained = true; }
+    const last = spans.at(-1);
+    if (last !== undefined && last.reason === reason && last.to_tick === previous.tick) last.to_tick = current.tick;
+    else spans.push({ from_tick: previous.tick, to_tick: current.tick, reason, explained });
+  }
+  return spans.filter((span) => span.to_tick - span.from_tick >= 40).slice(0, 100);
+}
+
+export function renderSeatTimeline(seat: number, timeline: ReturnType<typeof seatTimeline>): string {
+  const value = timeline as {
+    ranges: { from_tick: number; to_tick: number; decisions: number; goal: string; intent: string; reason: string | null;
+      wait_reason: string | null; nearest_cache_blocks: number | null; nearest_opponent_blocks: number | null;
+      border_center_blocks: number | null; borders: Record<string, number>;
+      alternatives: { goal: string; score: number; condition: string }[] }[];
+    idle_spans: { from_tick: number; to_tick: number; reason: string; explained: boolean }[];
+    engagements: { opponent: number; first_tick: number; last_tick: number; dealt: number; taken: number }[];
+    death: SeatQuality['death'];
+  };
+  const lines = [`seat ${seat} timeline`];
+  for (const range of value.ranges) {
+    const distances = [
+      range.nearest_cache_blocks === null ? null : `cache ${range.nearest_cache_blocks}`,
+      range.nearest_opponent_blocks === null ? null : `opp ${range.nearest_opponent_blocks}`,
+      range.border_center_blocks === null ? null : `center ${range.border_center_blocks}`,
+    ].filter((entry) => entry !== null).join(' ');
+    const alternatives = range.alternatives.map((entry) => `${entry.goal}:${entry.score}:${entry.condition}`).join(' ');
+    lines.push(`  ${range.from_tick}-${range.to_tick} x${range.decisions} ${range.goal}/${range.intent}`
+      + `${range.wait_reason === null ? '' : `(${range.wait_reason})`}`
+      + ` ${range.reason ?? '-'}${distances === '' ? '' : ` [${distances}]`}${alternatives === '' ? '' : ` {${alternatives}}`}`);
+  }
+  for (const span of value.idle_spans) {
+    lines.push(`  idle ${span.from_tick}-${span.to_tick} ${span.reason}${span.explained ? '' : ' UNEXPLAINED'}`);
+  }
+  for (const engagement of value.engagements) {
+    lines.push(`  engagement with seat ${engagement.opponent} ${engagement.first_tick}-${engagement.last_tick} `
+      + `dealt ${engagement.dealt} taken ${engagement.taken}`);
+  }
+  if (value.death !== null) {
+    lines.push(`  death at ${value.death.tick}: ${value.death.cause}${value.death.by_seat === null ? '' : ` by seat ${value.death.by_seat}`}`);
+  }
+  return lines.join('\n');
 }

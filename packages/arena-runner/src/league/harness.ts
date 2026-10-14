@@ -374,6 +374,7 @@ export interface LeagueQualityReport {
   readonly matches_planned: number;
   readonly max_concurrency: number;
   readonly timing_sensitive: boolean;
+  readonly reasons_by_policy: Readonly<Record<string, Readonly<Record<string, number>>>>;
 }
 
 export function leagueQuality(plans: readonly MatchPlan[], byId: ReadonlyMap<string, StoredMatch>): LeagueQualityReport {
@@ -386,12 +387,20 @@ export function leagueQuality(plans: readonly MatchPlan[], byId: ReadonlyMap<str
     };
   });
   const maxConcurrency = Math.max(1, ...plans.map((plan) => byId.get(plan.matchId)?.concurrency ?? 1));
+  const reasons: Record<string, Record<string, number>> = {};
+  for (const input of inputs) {
+    for (const seat of input.quality?.seats ?? []) {
+      const bucket = reasons[seat.candidate ?? 'default'] ??= {};
+      for (const [reason, count] of Object.entries(seat.reasons)) bucket[reason] = (bucket[reason] ?? 0) + count;
+    }
+  }
   return {
     gates: qualityGates(inputs),
     matches_with_quality: inputs.filter((entry) => entry.quality !== null).length,
     matches_planned: plans.length,
     max_concurrency: maxConcurrency,
     timing_sensitive: maxConcurrency > 1,
+    reasons_by_policy: reasons,
   };
 }
 
@@ -407,6 +416,8 @@ export function renderLeagueQuality(plans: readonly MatchPlan[], byId: ReadonlyM
     renderQualityTable(tables),
     `quality gates over ${report.matches_with_quality}/${report.matches_planned} matches`
       + `${report.timing_sensitive ? ' (timing-sensitive outcomes: matches ran concurrently)' : ''}`,
+    ...Object.entries(report.reasons_by_policy).map(([policy, counts]) =>
+      `reasons ${policy}: ${Object.entries(counts).map(([reason, count]) => `${reason}=${count}`).join(' ')}`),
     renderGates(report.gates),
   ].join('\n');
 }

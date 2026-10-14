@@ -2,6 +2,7 @@ import { ACTION_FUNNEL_STAGES, type ActionFunnelAction } from '@arena/core';
 import type { Evidence } from './evidence.js';
 import { FUNNEL_ACTIONS, readActionFunnelTraceRecord, type ActionFunnelTraceRecordV1 } from './funnel-record.js';
 import type { TraceRecord } from './trace.js';
+import { seatTimeline } from './seat-quality.js';
 
 export const ATTRIBUTION_WINDOW_TICKS = 100;
 
@@ -275,6 +276,7 @@ export function explainSeatJson(evidence: Evidence, seat: number): object {
       return skill !== null && skill.kind === 'failed';
     }),
     own_eliminations: deaths.filter((death) => death.seat === seat),
+    timeline: seatTimeline(evidence, seat),
   };
 }
 

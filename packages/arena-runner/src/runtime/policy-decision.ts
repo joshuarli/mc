@@ -6,6 +6,9 @@ import {
   PolicyParams as CorePolicyParams,
   type AgentObservation,
   type CompiledCandidate,
+  compileCandidate,
+  DeterministicRandom as CoreDeterministicRandom,
+  type DecisionExplanation,
   type Decision,
   type DeterministicRandom,
   type OpeningPolicyContext,
@@ -22,6 +25,7 @@ export interface RuntimePolicyDecision {
   readonly input: PolicyReplayInputV4;
   readonly decision: Decision;
   readonly rngStateAfter: bigint;
+  explanation(): DecisionExplanation;
 }
 
 export interface RuntimeOpeningPolicyDecision {
@@ -29,6 +33,13 @@ export interface RuntimeOpeningPolicyDecision {
   readonly decision: Decision;
   readonly openingState: OpeningPolicyState;
   readonly rngStateAfter: bigint;
+  explanation(): DecisionExplanation;
+}
+
+let baselineExplainer: CompiledCandidate | undefined;
+function baselineCandidate(): CompiledCandidate {
+  baselineExplainer ??= compileCandidate('baseline');
+  return baselineExplainer;
 }
 
 export function isStrategyDecisionTick(tick: bigint, intervalTicks: bigint): boolean {
@@ -43,8 +54,12 @@ export function decideRuntimePolicy(
   feedback: PolicyFeedbackBatch = [],
 ): RuntimePolicyDecision {
   const input = normalizePolicyReplayInputV4({ observation, memory, params, random, feedback });
+  const before = random.snapshotState();
   const decision = decide(observation, memory, params, random, feedback);
-  return Object.freeze({ input, decision, rngStateAfter: random.snapshotState() });
+  return Object.freeze({
+    input, decision, rngStateAfter: random.snapshotState(),
+    explanation: () => baselineCandidate().explain(observation, memory, CoreDeterministicRandom.fromState(before), feedback).explanation,
+  });
 }
 
 export function decideRuntimeOpeningPolicy(
@@ -64,9 +79,14 @@ export function decideRuntimeOpeningPolicy(
   const opening: OpeningPolicyContext = { style: assignment.style, state: assignment.state };
   const input = normalizeOpeningPolicyReplayInputV4({ observation, memory, feedback, params, random,
     opening: { seed: assignment.seed, style: assignment.style, cycle: assignment.cycle, state: assignment.state } });
+  const before = random.snapshotState();
   const result = decideOpening(observation, memory, params, random, feedback, opening);
   const { openingState, ...decision } = result;
-  return Object.freeze({ input, decision, openingState, rngStateAfter: random.snapshotState() });
+  return Object.freeze({
+    input, decision, openingState, rngStateAfter: random.snapshotState(),
+    explanation: () => baselineCandidate().explainOpening(observation, memory, CoreDeterministicRandom.fromState(before),
+      feedback, opening).explanation,
+  });
 }
 
 const candidateParams = new Map<string, CorePolicyParams>();
@@ -100,8 +120,8 @@ export function decideRuntimeCandidatePolicy(
   const input = normalizePolicyReplayInputV4({
     observation, memory, params: candidatePolicyParams(candidate), random, feedback,
   });
-  const decision = candidate.decide(observation, memory, random, feedback);
-  return Object.freeze({ input, decision, rngStateAfter: random.snapshotState() });
+  const { decision, explanation } = candidate.explain(observation, memory, random, feedback);
+  return Object.freeze({ input, decision, rngStateAfter: random.snapshotState(), explanation: () => explanation });
 }
 
 export function decideRuntimeCandidateOpening(
@@ -122,8 +142,10 @@ export function decideRuntimeCandidateOpening(
     observation, memory, feedback, params: candidatePolicyParams(candidate), random,
     opening: { seed: assignment.seed, style: assignment.style, cycle: assignment.cycle, state: assignment.state },
   });
-  const result = candidate.decideOpening(observation, memory, random, feedback,
+  const explained = candidate.explainOpening(observation, memory, random, feedback,
     { style: assignment.style, state: assignment.state });
-  const { openingState, ...decision } = result;
-  return Object.freeze({ input, decision, openingState, rngStateAfter: random.snapshotState() });
+  const { openingState, ...decision } = explained.decision;
+  return Object.freeze({
+    input, decision, openingState, rngStateAfter: random.snapshotState(), explanation: () => explained.explanation,
+  });
 }

@@ -5,6 +5,7 @@ import { TextDecoder } from 'node:util';
 import { sha256Json } from './canonical.js';
 import { parseStrictJson, StrictJsonError, type StrictJsonValue } from './control/strict-json.js';
 import { RunnerError } from './errors.js';
+import { RUN_NOTE_SCHEMAS } from './run-note.js';
 
 export const TRACE_SCHEMA_VERSION = 3;
 export const FUNNEL_TRACE_SCHEMA_VERSION = 4;
@@ -132,8 +133,7 @@ export function parseSegment(input: string | Uint8Array): TraceSegment {
     throw traceFailure('unsupported_policy_schema');
   }
   if (root.schema !== FUNNEL_TRACE_SCHEMA_VERSION && records.some((record) => record.schema === 'action-funnel-v1'
-    || record.schema === 'worker-topology-v1' || record.schema === 'worker-loss-v1'
-    || record.schema === 'client-diagnostic-v1' || record.schema === 'seat-policy-v1' || record.schema === 'resume-v1')) {
+    || RUN_NOTE_SCHEMAS.includes(record.schema as string))) {
     throw traceFailure('unsupported_funnel_schema');
   }
   if (root.schema !== FUNNEL_TRACE_SCHEMA_VERSION && records.some((record) => record.schema === 'policy-replay-v4')) {

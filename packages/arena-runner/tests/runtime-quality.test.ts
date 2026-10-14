@@ -2,7 +2,17 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
+import { EventEmitter } from 'node:events';
+import type { Bot } from 'mineflayer';
+import {
+  agentObservation, agentState, blockPosition, compileCandidate, currentKnowledge, emptyEquipment, observationSequence,
+  PolicyParams, tick, unknownKnowledge, worldBorder,
+} from '@arena/core';
+import type { MineflayerArenaClient } from '@arena/bots';
 import { compileCandidateProfile } from '@arena/spec';
+import { ActionFunnelCollector } from '../src/runtime/funnel.js';
+import { LivePolicyLoop } from '../src/runtime/live-policy-loop.js';
+import type { RunNoteRecord } from '../src/run-note.js';
 import { mapBounded, parseConcurrency } from '../src/bounded.js';
 import type { Evidence } from '../src/evidence.js';
 import { runLeague, type LeagueStore, type MatchObservation, type MatchPlan, type MatchRunner, type StoredMatch, type HeldoutLedgerEntry } from '../src/league/harness.js';
@@ -11,7 +21,7 @@ import {
 } from '../src/league/manifest.js';
 import { planQualityMatches, runQuality } from '../src/league/quality.js';
 import { reserveEphemeralGamePort } from '../src/runtime/game-port.js';
-import { matchQuality, qualityGates, renderQualityTable } from '../src/seat-quality.js';
+import { matchQuality, qualityGates, renderQualityTable, seatTimeline } from '../src/seat-quality.js';
 import type { TraceRecord } from '../src/trace.js';
 
 const read = (path: string) => readFileSync(join(process.cwd(), path), 'utf8');
@@ -209,4 +219,70 @@ test('quality seat table counts loot, distance, idle reasons, attacks, damage an
   assert.equal(byId.self_inflicted_rejections!.value, 1);
   assert.equal(byId.no_unexplained_idle!.passed, true);
   assert.match(renderQualityTable([{ label: 'm', quality }]), /melee@110<-0/);
+});
+
+function idleCompetitor(seat: number) {
+  const bot = Object.assign(new EventEmitter(), { health: 20, game: { gameMode: 'survival' } }) as unknown as Bot;
+  const client: MineflayerArenaClient = {
+    observe: (value) => agentObservation({
+      tick: tick(value), sequence: observationSequence(value + 1),
+      agent: currentKnowledge(agentState({
+        position: blockPosition(99, 64, 0), healthHalfHearts: 40, hungerPoints: 20,
+        foodStacks: [], equipped: emptyEquipment(), upgrades: [],
+      })),
+      border: currentKnowledge(worldBorder(0, 0, 100)),
+      opponents: currentKnowledge([]), loot: unknownKnowledge(),
+    }),
+    run: async () => ({ kind: 'succeeded' }),
+    cancel: async () => {},
+    close: async () => {},
+  };
+  return { seat, bot, client, gameplay: { mode: 'hunger_games' as const, client } };
+}
+
+test('quality live loop writes versioned decision explanations for candidate and baseline seats', async () => {
+  const notes: RunNoteRecord[] = [];
+  const competitors = [idleCompetitor(0), idleCompetitor(1)];
+  const loop = new LivePolicyLoop({
+    trace: {
+      recordPolicyDecision: async () => {},
+      recordPolicyEffect: async () => {},
+      checkpoint: async () => {},
+      recordRunNote: async (note) => { notes.push(note); },
+    },
+    params: PolicyParams.baseline(), seed: 1n, strategyIntervalTicks: 1n, recordPolicy: true,
+    competitors: () => competitors, fail: (error) => { throw error; },
+    funnel: new ActionFunnelCollector(new Map([['a', 0], ['b', 1]])),
+    candidates: new Map([[0, compileCandidate('improved')]]),
+  });
+  loop.onTick(0);
+  loop.onTick(1);
+  for (let index = 0; index < 30; index += 1) await Promise.resolve();
+  await loop.stopAndJoin();
+  const explained = notes.filter((note) => note.schema === 'decision-explain-v1');
+  assert.equal(explained.length, 4);
+  const bySeat = (seat: number) => explained.filter((note) => note.seat === seat);
+  assert.deepEqual(bySeat(1).map((note) => note.reason), ['delegatedBaselineRules', 'delegatedBaselineRules']);
+  assert.ok(bySeat(0).every((note) => note.version === 1 && note.alternatives.length <= 4));
+  assert.deepEqual(bySeat(0).map((note) => note.sequence), ['1', '3']);
+});
+
+test('quality seat timeline collapses equal decisions into tick ranges with reason codes', () => {
+  const note = (sequence: number, reason: string) => ({
+    schema: 'decision-explain-v1', version: 1, seat: 0, sequence: String(sequence), tick: sequence * 20, reason,
+    delegated_goal: 'explore', alternatives: [{ goal: 'explore', score: 20, condition: 'chosen' }],
+    nearest_cache_blocks: 12, nearest_opponent_blocks: null, border_center_blocks: 30, armed: false,
+  }) as unknown as TraceRecord;
+  const records = [
+    replay(0, 1, 20, 0, { kind: 'navigate', target: { x: 5, y: 65, z: 0 } }, { kind: 'start', action_sequence: '1' }), note(1, 'travelToBorderCenter'),
+    replay(0, 2, 40, 5, { kind: 'navigate', target: { x: 5, y: 65, z: 0 } }, { kind: 'continue', action_sequence: '1' }), note(2, 'travelToBorderCenter'),
+    replay(0, 3, 60, 5, { kind: 'hold', reason: 'awaitingLoot' }, { kind: 'hold' }), note(3, 'delegatedBaselineRules'),
+    replay(0, 4, 100, 5, { kind: 'hold', reason: 'awaitingLoot' }, { kind: 'hold' }), note(4, 'delegatedBaselineRules'),
+  ];
+  const timeline = seatTimeline(evidenceOf(records), 0) as { ranges: { from_tick: number; to_tick: number; decisions: number; reason: string }[]; reasons: Record<string, number> };
+  assert.deepEqual(timeline.ranges.map((range) => [range.from_tick, range.to_tick, range.decisions, range.reason]), [
+    [20, 40, 2, 'travelToBorderCenter'],
+    [60, 100, 2, 'delegatedBaselineRules'],
+  ]);
+  assert.deepEqual(timeline.reasons, { travelToBorderCenter: 2, delegatedBaselineRules: 2 });
 });
