@@ -36,6 +36,7 @@ export type {
   ControlMessage,
   EmberFaction,
   EliminationPayload,
+  ExternalCompetitor,
   FactionId,
   FactionScores,
   FactionWinnerOutcome,
@@ -44,11 +45,13 @@ export type {
   HungerGamesDrawOutcome,
   HungerGamesPreparePayload,
   HungerGamesPrepareSettings,
+  HungerGamesV2PreparePayload,
   MatchSettings,
   MetricsPayload,
   OutcomePayload,
   PreparePayload,
   PublicStatePayload,
   ReadyPayload,
+  RosterCompetitor,
   TideFaction
 } from "./types.js";

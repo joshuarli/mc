@@ -1,0 +1,1 @@
+{"protocol":1,"run_id":"fixture-run","sequence":"6","type":"elimination","payload":{"at":{"domain":"match","value":"18"},"eliminations":[{"seat":17,"cause":"death"},{"seat":255,"cause":"disconnect"}]}}

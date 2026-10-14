@@ -1,4 +1,4 @@
-export const CONTROL_CAPABILITIES = Object.freeze(["hunger_games_v1", "civilization_v1"] as const);
+export const CONTROL_CAPABILITIES = Object.freeze(["hunger_games_v1", "civilization_v1", "hunger_games_roster_v2"] as const);
 export type ControlCapability = typeof CONTROL_CAPABILITIES[number];
 export type FactionId = "ember" | "tide";
 export type CivilizationRole = "gatherer_crafter" | "builder" | "defender_scout";
@@ -46,6 +46,16 @@ export interface BotCompetitor {
   readonly username: string;
   readonly offline_uuid: string;
 }
+
+export interface ExternalCompetitor {
+  readonly kind: "external";
+  readonly seat: number;
+  readonly participant_id: string;
+  readonly username: string;
+  readonly offline_uuid: string;
+}
+
+export type RosterCompetitor = BotCompetitor | ExternalCompetitor;
 
 export interface MatchSettings {
   readonly countdown_ticks: bigint;
@@ -150,6 +160,14 @@ export type PreparePayload = {
   readonly mode: "civilization";
   readonly settings: CivilizationPrepareSettings;
   readonly roster: readonly BotCompetitor[];
+} | {
+  readonly map_semantic_id: string;
+  readonly scenario_semantic_id: string;
+  readonly seed: bigint;
+  readonly mode: "hunger_games";
+  readonly roster_version: 2;
+  readonly settings: HungerGamesPrepareSettings;
+  readonly roster: readonly RosterCompetitor[];
 };
 
 export type FactionScores = readonly [
@@ -188,6 +206,7 @@ export interface CivilizationDrawOutcome extends HungerGamesDrawOutcome {
 
 export type HungerGamesPreparePayload = Extract<PreparePayload, { readonly mode: "hunger_games" }>;
 export type CivilizationPreparePayload = Extract<PreparePayload, { readonly mode: "civilization" }>;
+export type HungerGamesV2PreparePayload = Extract<PreparePayload, { readonly roster_version: 2 }>;
 
 export type OutcomePayload =
   | {

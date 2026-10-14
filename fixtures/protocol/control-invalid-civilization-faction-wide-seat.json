@@ -1,0 +1,1 @@
+{"protocol":1,"run_id":"fixture-run","sequence":"7","type":"outcome","payload":{"kind":"faction_winner","winner_faction_id":"tide","reason":"elimination","scores":[{"faction_id":"ember","points":"0"},{"faction_id":"tide","points":"5"}],"survivors":[9],"at":{"domain":"match","value":"7200"}}}

@@ -1,3 +1,7 @@
+import { createHash } from "node:crypto";
+
+import { EXTERNAL_USERNAME_PATTERN, LEGACY_MAX_COMPETITORS, MAX_COMPETITORS } from "@arena/spec";
+
 import {
   isWellFormedUnicode,
   parseStrictJson,
@@ -39,10 +43,15 @@ import type {
   PreparePayload,
   PublicStatePayload,
   ReadyPayload,
+  RosterCompetitor,
   TideFaction
 } from "./types.js";
 
 export const MAX_CONTROL_FRAME_BYTES = 1_048_576;
+
+const CIVILIZATION_SEAT_COUNT = 6;
+const MAX_SEAT = MAX_COMPETITORS - 1;
+const RESERVED_RUNNER_USERNAME = /^arena(?:bot|spec)/i;
 
 const MAX_U64 = 18_446_744_073_709_551_615n;
 const U64_DECIMAL = /^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0][0-9]|1844674407370955161[0-5]|18446744073709551615)$/;
@@ -358,20 +367,37 @@ function readBuildProgress(value: StrictJsonValue): BuildProgressPayload {
 }
 
 function readPrepare(value: StrictJsonValue): PreparePayload {
-  const payload = readObject(value, "payload", ["map_semantic_id", "scenario_semantic_id", "seed", "mode", "settings", "roster"],
+  const payload = readObject(value, "payload",
+    ["map_semantic_id", "scenario_semantic_id", "seed", "mode", "settings", "roster", "roster_version"],
     ["map_semantic_id", "scenario_semantic_id", "seed", "mode", "settings", "roster"]);
   const mode = readString(payload.mode, "payload.mode", 1, 64);
   if (mode !== "hunger_games" && mode !== "civilization") invalid("payload.mode", "mode is unsupported by control-v1");
-  const roster = readRoster(payload.roster);
+  const generalizedRoster = Object.hasOwn(payload, "roster_version");
+  if (generalizedRoster) {
+    if (mode !== "hunger_games") invalid("payload.roster_version", "only Hunger Games supports the generalized roster");
+    readSafeInteger(payload.roster_version, "payload.roster_version", 2, 2, payload, "roster_version");
+  }
   const common = {
     map_semantic_id: readString(payload.map_semantic_id, "payload.map_semantic_id", 64, 64, /^[0-9a-f]{64}$/),
     scenario_semantic_id: readString(payload.scenario_semantic_id, "payload.scenario_semantic_id", 64, 64, /^[0-9a-f]{64}$/),
     seed: readU64(payload.seed, "payload.seed", false)
   };
+  if (generalizedRoster) {
+    return {
+      ...common,
+      mode: "hunger_games",
+      roster_version: 2,
+      settings: readHungerGamesPrepareSettings(payload.settings),
+      roster: readGeneralizedRoster(payload.roster)
+    };
+  }
+  const roster = readBotRoster(payload.roster);
   if (mode === "hunger_games") {
     return { ...common, mode, settings: readHungerGamesPrepareSettings(payload.settings), roster };
   }
-  if (roster.length !== 6) invalid("payload.roster", "civilization requires exactly six bot competitors");
+  if (roster.length !== CIVILIZATION_SEAT_COUNT) {
+    invalid("payload.roster", "civilization requires exactly six bot competitors");
+  }
   return { ...common, mode, settings: readCivilizationPrepareSettings(payload.settings), roster };
 }
 
@@ -590,33 +616,85 @@ function readBlueprintAnchor(
   return { position: readBlockPosition(anchor.position, `${path}.position`), rotation_degrees: rotation };
 }
 
-function readRoster(value: StrictJsonValue | undefined): readonly BotCompetitor[] {
-  const entries = readArray(value, "payload.roster", 1, 6);
+function readBotRoster(value: StrictJsonValue | undefined): readonly BotCompetitor[] {
+  const entries = readArray(value, "payload.roster", 1, LEGACY_MAX_COMPETITORS);
   const participants = new Set<string>();
   const usernames = new Set<string>();
   const offlineUuids = new Set<string>();
-  const roster = entries.map((entry, index): BotCompetitor => {
+  return entries.map((entry, index): BotCompetitor => {
     const path = `payload.roster[${index}]`;
-    const member = readObject(entry, path,
-      ["kind", "seat", "participant_id", "username", "offline_uuid"],
-      ["kind", "seat", "participant_id", "username", "offline_uuid"]);
+    const member = readRosterObject(entry, path);
     const kind = readString(member.kind, `${path}.kind`, 1, 16);
-    const seat = readSafeInteger(member.seat, `${path}.seat`, 0, 5, member, "seat");
-    const participant = readString(member.participant_id, `${path}.participant_id`, 1, 128, /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/);
-    if (participants.has(participant)) invalid(`${path}.participant_id`, "participant ids must be unique");
-    participants.add(participant);
+    const seat = readSafeInteger(member.seat, `${path}.seat`, 0, LEGACY_MAX_COMPETITORS - 1, member, "seat");
+    const participant = readParticipantId(member, path, participants);
     if (seat !== index) invalid(`${path}.seat`, "roster seats must be ordered and contiguous from zero");
 
     if (kind !== "bot") invalid(`${path}.kind`, "all roster members must be bots");
     const username = readString(member.username, `${path}.username`, 1, 16, /^[A-Za-z0-9_]+$/);
-    const offlineUuid = readString(member.offline_uuid, `${path}.offline_uuid`, 36, 36,
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    const offlineUuid = readOfflineUuid(member, path);
     if (usernames.has(username) || offlineUuids.has(offlineUuid)) invalid(path, "bot usernames and offline UUIDs must be unique");
     usernames.add(username);
     offlineUuids.add(offlineUuid);
     return { kind, seat, participant_id: participant, username, offline_uuid: offlineUuid };
   });
-  return roster;
+}
+
+function readGeneralizedRoster(value: StrictJsonValue | undefined): readonly RosterCompetitor[] {
+  const entries = readArray(value, "payload.roster", 1, MAX_COMPETITORS);
+  const participants = new Set<string>();
+  const usernames = new Set<string>();
+  const offlineUuids = new Set<string>();
+  return entries.map((entry, index): RosterCompetitor => {
+    const path = `payload.roster[${index}]`;
+    const member = readRosterObject(entry, path);
+    const kind = readString(member.kind, `${path}.kind`, 1, 16);
+    const seat = readSafeInteger(member.seat, `${path}.seat`, 0, MAX_SEAT, member, "seat");
+    const participant = readParticipantId(member, path, participants);
+    if (seat !== index) invalid(`${path}.seat`, "roster seats must be ordered and contiguous from zero");
+    if (kind !== "bot" && kind !== "external") invalid(`${path}.kind`, "roster controller kind must be bot or external");
+    const username = readString(member.username, `${path}.username`, 1, 16, /^[A-Za-z0-9_]+$/);
+    if (kind === "external"
+        && (!EXTERNAL_USERNAME_PATTERN.test(username) || RESERVED_RUNNER_USERNAME.test(username))) {
+      invalid(`${path}.username`, "external usernames must be 3 to 16 characters outside the runner identity space");
+    }
+    const offlineUuid = readOfflineUuid(member, path);
+    if (offlineUuid !== minecraftOfflineUuid(username)) {
+      invalid(`${path}.offline_uuid`, "offline UUID must derive from the username");
+    }
+    const folded = username.toLowerCase();
+    if (usernames.has(folded) || offlineUuids.has(offlineUuid)) {
+      invalid(path, "roster usernames and offline UUIDs must be unique ignoring case");
+    }
+    usernames.add(folded);
+    offlineUuids.add(offlineUuid);
+    return { kind, seat, participant_id: participant, username, offline_uuid: offlineUuid };
+  });
+}
+
+function readRosterObject(entry: StrictJsonValue | undefined, path: string) {
+  return readObject(entry, path,
+    ["kind", "seat", "participant_id", "username", "offline_uuid"],
+    ["kind", "seat", "participant_id", "username", "offline_uuid"]);
+}
+
+function readParticipantId(member: StrictJsonObject, path: string, seen: Set<string>): string {
+  const participant = readString(member.participant_id, `${path}.participant_id`, 1, 128, /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/);
+  if (seen.has(participant)) invalid(`${path}.participant_id`, "participant ids must be unique");
+  seen.add(participant);
+  return participant;
+}
+
+function readOfflineUuid(member: StrictJsonObject, path: string): string {
+  return readString(member.offline_uuid, `${path}.offline_uuid`, 36, 36,
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+}
+
+function minecraftOfflineUuid(username: string): string {
+  const bytes = createHash("md5").update(`OfflinePlayer:${username}`, "utf8").digest();
+  bytes[6] = (bytes[6]! & 0x0f) | 0x30;
+  bytes[8] = (bytes[8]! & 0x3f) | 0x80;
+  const hex = bytes.toString("hex");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
 function readAbort(value: StrictJsonValue): { readonly reason: AbortReason } {
@@ -650,12 +728,12 @@ function readPublicState(value: StrictJsonValue): PublicStatePayload {
 
 function readElimination(value: StrictJsonValue): EliminationPayload {
   const payload = readObject(value, "payload", ["at", "eliminations"], ["at", "eliminations"]);
-  const events = readArray(payload.eliminations, "payload.eliminations", 1, 6);
+  const events = readArray(payload.eliminations, "payload.eliminations", 1, MAX_COMPETITORS);
   let previousSeat = -1;
   const eliminations = events.map((entry, index) => {
     const path = `payload.eliminations[${index}]`;
     const elimination = readObject(entry, path, ["seat", "cause"], ["seat", "cause"]);
-    const seat = readSafeInteger(elimination.seat, `${path}.seat`, 0, 5, elimination, "seat");
+    const seat = readSafeInteger(elimination.seat, `${path}.seat`, 0, MAX_SEAT, elimination, "seat");
     if (seat <= previousSeat) invalid(`${path}.seat`, "eliminations must be ordered by unique seat");
     previousSeat = seat;
     const cause = readEliminationCause(elimination.cause, `${path}.cause`);
@@ -697,7 +775,7 @@ function readOutcome(value: StrictJsonValue): OutcomePayload {
     if (at === null) {
       invalid("payload", "winner outcome requires a winner seat and authoritative tick only");
     }
-    const winnerSeat = readSafeInteger(payload.winner_seat, "payload.winner_seat", 0, 5, payload, "winner_seat");
+    const winnerSeat = readSafeInteger(payload.winner_seat, "payload.winner_seat", 0, MAX_SEAT, payload, "winner_seat");
     if (survivors.length !== 1 || survivors[0] !== winnerSeat) invalid("payload.survivors", "winner must be the sole survivor");
     return { kind, winner_seat: winnerSeat, survivors: [winnerSeat], at };
   }
@@ -783,6 +861,7 @@ function readFactionId(value: StrictJsonValue | undefined, path: string, nullabl
 }
 
 function factionForSeat(seat: number): FactionId {
+  if (seat >= CIVILIZATION_SEAT_COUNT) invalid("payload.survivors", "civilization seats range from 0 through 5");
   return seat < 3 ? "ember" : "tide";
 }
 
@@ -822,10 +901,10 @@ function readTick(value: StrictJsonValue | undefined, path: string): Authoritati
 }
 
 function readSeatList(value: StrictJsonValue | undefined, path: string): readonly number[] {
-  const values = readArray(value, path, 0, 6);
+  const values = readArray(value, path, 0, MAX_COMPETITORS);
   let previous = -1;
   return values.map((entry, index) => {
-    const seat = readSafeInteger(entry, `${path}[${index}]`, 0, 5, values, index);
+    const seat = readSafeInteger(entry, `${path}[${index}]`, 0, MAX_SEAT, values, index);
     if (seat <= previous) invalid(`${path}[${index}]`, "seats must be ordered and unique");
     previous = seat;
     return seat;

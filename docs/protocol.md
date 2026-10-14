@@ -32,7 +32,8 @@ response correlation equals the initiating message's sequence.
 
 The plugin's first message is authenticated `hello`, advertising its supported
 capabilities. `CONTROL_CAPABILITIES` exposes the runner's closed supported wire
-set, currently `hunger_games_v1` and `civilization_v1`; the capability type and
+set, currently `hunger_games_v1`, `civilization_v1`, and
+`hunger_games_roster_v2`; the capability type and
 codec validation derive from that immutable tuple. A plugin may advertise both
 regardless of the selected match mode. The runner acknowledges that sequence, then the plugin sends
 `ready` with the acknowledgment sequence as its correlation and the Paper,
@@ -72,10 +73,11 @@ under `fixtures/protocol/control-*.json`.
   `prepare` carries `map_semantic_id`, `scenario_semantic_id`, `seed`, `mode`,
   `settings`, and `roster`. Hunger Games settings contain the resolved scenario
   `match` and `border` fields. Civilization settings are defined below.
-- Every roster entry is a fixed bot identity with `kind`, `seat`,
-  `participant_id`, `username`, and `offline_uuid`. Seats are ordered,
-  contiguous, and bounded to zero through five. Non-roster players are
-  spectators and cannot claim a competitive seat.
+- Every roster entry has `kind`, `seat`, `participant_id`, `username`, and
+  `offline_uuid`. A legacy roster holds one to six `bot` entries with seats
+  ordered, contiguous, and bounded to zero through five. The generalized roster
+  is defined below. Non-roster players are spectators and cannot claim a
+  competitive seat.
 - `public_clock` reports phase, authoritative countdown/match tick, and border
   diameter. `public_state` reports alive seat IDs. `elimination` reports the
   ordered seat and cause at one authoritative tick. `outcome` is the sole
@@ -101,6 +103,33 @@ events. They must not be copied unfiltered into a policy observation. A policy
 gets only its own Mineflayer client's received observations and explicit team
 messages; the control channel's public state does not authorize access to
 hidden world data, entities, health, inventories, or seed.
+
+## Generalized roster
+
+The closed `hunger_games_roster_v2` capability gates the generalized roster.
+The envelope `protocol` stays 1. A Hunger Games `prepare` selects it with the
+required field `roster_version: 2`; the field is rejected on every other
+variant, including civilization, and any value other than 2 is rejected. The
+`mode` stays `hunger_games` and `settings` keep their shape.
+
+The roster holds one to 256 entries with seats ordered, contiguous, and
+bounded to zero through 255. Each entry's `kind` is `bot` or `external`. Every
+`offline_uuid` must equal the Minecraft offline UUID derived from the entry's
+`username` (MD5 of `OfflinePlayer:<username>` with version-3 and variant bits).
+Usernames and UUIDs are unique ignoring case. An `external` username has 3
+through 16 ASCII letters, digits, or underscores and cannot begin with
+`ArenaBot` or `ArenaSpec` in any case, so spectator identities and runner bot
+identities never collide with external seats. The plugin only accepts a
+roster-version-2 `prepare` against a schema-3 world plan with the same seats,
+kinds, and external usernames; a legacy `prepare` is only accepted against a
+schema-1 or schema-2 plan.
+
+`public_state`, `elimination`, and winner outcomes accept seats zero through
+255, up to 256 per list. The codec cannot know the roster size, so the
+runtime and plugin still require every reported seat to belong to the prepared
+roster. Civilization events and settings keep seats zero through five.
+`fixtures/protocol/control-prepare-roster-v2*.json` and the
+`control-invalid-roster-*` fixtures define the interoperable shapes.
 
 ## Civilization control-v1
 
