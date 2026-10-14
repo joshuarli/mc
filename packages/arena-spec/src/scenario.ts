@@ -37,6 +37,7 @@ export const OPENING_STYLES = ["explorer", "scavenger", "hunter"] as const;
 export type OpeningStyle = (typeof OPENING_STYLES)[number];
 export type OpeningStyleCycle = readonly [OpeningStyle, OpeningStyle, OpeningStyle];
 
+const CIVILIZATION_SEAT_COUNT = 6 as const;
 const CIVILIZATION_MAP_DIAMETER_BLOCKS = 192 as const;
 const CIVILIZATION_CAPTURE_UNCONTESTED_TICKS = 200 as const;
 const CIVILIZATION_SCORE_POINTS_PER_TICK = 1 as const;
@@ -47,9 +48,24 @@ const CIVILIZATION_STARTING_KIT = Object.freeze([
   Object.freeze({ item: "minecraft:wooden_sword", count: 1 } as const),
 ] as const);
 
+export const MAX_COMPETITORS = 256 as const;
+export const LEGACY_MAX_COMPETITORS = 6 as const;
+export const EXTERNAL_USERNAME_PATTERN = /^[A-Za-z0-9_]{3,16}$/;
+const RESERVED_USERNAME_PREFIXES = ["arenabot", "arenaspec"] as const;
+
+export type SeatController =
+  | { readonly kind: "bot" }
+  | { readonly kind: "external"; readonly username: string };
+
+export interface SeatIr {
+  readonly seat: number;
+  readonly controller: SeatController;
+}
+
 export interface Roster {
   readonly competitors: number;
   readonly spectatorCapacity: bigint;
+  readonly seats: readonly SeatIr[];
 }
 
 /** Locked-server settings supplied by a scenario. */
@@ -147,7 +163,7 @@ export type ResourceReference = string & { readonly [resourceReferenceBrand]: tr
 
 /** Shared validated scenario settings that do not depend on game mode. */
 interface ScenarioBaseIr {
-  readonly schemaVersion: 1 | 2;
+  readonly schemaVersion: 1 | 2 | 3;
   readonly name: string;
   readonly seed: bigint;
   readonly mapReference: ResourceReference;
@@ -178,7 +194,16 @@ export interface HungerGamesScenarioV2Ir extends ScenarioBaseIr {
   readonly openingStyleCycle: OpeningStyleCycle;
 }
 
-export type HungerGamesScenarioIr = HungerGamesScenarioV1Ir | HungerGamesScenarioV2Ir;
+/** Fully validated schema-v3 Hunger Games settings with a generalized seat roster. */
+export interface HungerGamesScenarioV3Ir extends ScenarioBaseIr {
+  readonly schemaVersion: 3;
+  readonly mode: typeof GameMode.HungerGames;
+  readonly border: ShrinkingBorderSettings;
+  readonly map: Extract<MapIr, { readonly terrain: "vanilla" }>;
+  readonly openingStyleCycle: OpeningStyleCycle;
+}
+
+export type HungerGamesScenarioIr = HungerGamesScenarioV1Ir | HungerGamesScenarioV2Ir | HungerGamesScenarioV3Ir;
 
 /** Fully validated civilization rules and compiled map IR. */
 export interface CivilizationScenarioIr extends ScenarioBaseIr {
@@ -224,19 +249,19 @@ export function compileScenario(scenarioSource: string, mapSource: string): Scen
 
   const name = raw.string(raw.field(root, "name", "scenario"), "scenario.name");
   const mode = parseMode(raw.field(root, "mode", "scenario"));
-  if (schemaVersion === 2 && mode !== GameMode.HungerGames) {
-    throw new SpecError(SpecErrorKind.InvalidValue, "scenario.schema", "schema version 2 is only supported for Hunger Games");
+  if (schemaVersion >= 2 && mode !== GameMode.HungerGames) {
+    throw new SpecError(SpecErrorKind.InvalidValue, "scenario.schema", `schema version ${schemaVersion} is only supported for Hunger Games`);
   }
   if (mode === GameMode.HungerGames && root.has("civilization")) {
     throw new SpecError(SpecErrorKind.InvalidValue, "scenario.civilization", "is only valid for civilization mode");
   }
-  const openingStyleCycle = schemaVersion === 2
+  const openingStyleCycle = schemaVersion >= 2
     ? parseOpeningStyleCycle(raw.field(root, "opening_styles", "scenario"))
     : undefined;
   const seed = nonnegativeU64(raw.field(root, "seed", "scenario"), "scenario.seed");
   const mapReference = parseReference(raw.field(root, "map", "scenario"), "scenario.map");
   const policyReference = parseReference(raw.field(root, "policy", "scenario"), "scenario.policy");
-  const roster = parseRoster(raw.field(root, "roster", "scenario"));
+  const roster = parseRoster(raw.field(root, "roster", "scenario"), schemaVersion);
   const server = parseServer(raw.field(root, "server", "scenario"));
   const matchSettings = parseMatch(raw.field(root, "match", "scenario"));
   const border = parseModeBorder(mode, raw.field(root, "border", "scenario"), matchSettings);
@@ -251,8 +276,8 @@ export function compileScenario(scenarioSource: string, mapSource: string): Scen
   if (schemaVersion === 1 && map.terrain !== "planned") {
     throw new SpecError(SpecErrorKind.InvalidValue, "scenario.map", "schema version 1 requires a planned map");
   }
-  if (schemaVersion === 2 && map.terrain !== "vanilla") {
-    throw new SpecError(SpecErrorKind.InvalidValue, "scenario.map", "schema version 2 requires a natural terrain map");
+  if (schemaVersion >= 2 && map.terrain !== "vanilla") {
+    throw new SpecError(SpecErrorKind.InvalidValue, "scenario.map", `schema version ${schemaVersion} requires a natural terrain map`);
   }
   validateSpawnSeats(map, roster.competitors, "scenario.roster.competitors");
   validatePreparedChunks(map, server.viewDistanceChunks);
@@ -348,10 +373,10 @@ function parseScenarioRoot(source: string): raw.RawTable {
   return root;
 }
 
-function readScenarioSchemaVersion(root: raw.RawTable): 1 | 2 {
+function readScenarioSchemaVersion(root: raw.RawTable): 1 | 2 | 3 {
   const schema = raw.integer(raw.field(root, "schema", "scenario"), "scenario.schema");
-  if (schema === 1n || schema === 2n) return Number(schema) as 1 | 2;
-  throw new SpecError(SpecErrorKind.InvalidValue, "scenario.schema", "supported schema versions are 1 and 2");
+  if (schema === 1n || schema === 2n || schema === 3n) return Number(schema) as 1 | 2 | 3;
+  throw new SpecError(SpecErrorKind.InvalidValue, "scenario.schema", "supported schema versions are 1, 2, and 3");
 }
 
 function parseOpeningStyleCycle(value: raw.RawValue): OpeningStyleCycle {
@@ -379,13 +404,62 @@ function parseMode(value: raw.RawValue): GameMode {
   throw new SpecError(SpecErrorKind.InvalidValue, "scenario.mode", `unknown mode \`${mode}\``);
 }
 
-function parseRoster(value: raw.RawValue): Roster {
+function parseRoster(value: raw.RawValue, schemaVersion: 1 | 2 | 3): Roster {
   const path = "scenario.roster";
   const table = raw.asTable(value, path);
-  raw.checkFields(table, ["competitors", "spectator_capacity"], ["competitors", "spectator_capacity"], path);
-  const competitors = boundedNumber(raw.field(table, "competitors", path), "scenario.roster.competitors", 1n, 6n);
+  const required = ["competitors", "spectator_capacity"];
+  raw.checkFields(table, schemaVersion === 3 ? [...required, "external"] : required, required, path);
+  const maxCompetitors = schemaVersion === 3 ? MAX_COMPETITORS : LEGACY_MAX_COMPETITORS;
+  const competitors = boundedNumber(
+    raw.field(table, "competitors", path),
+    "scenario.roster.competitors",
+    1n,
+    BigInt(maxCompetitors),
+  );
   const spectatorCapacity = nonnegativeU64(raw.field(table, "spectator_capacity", path), "scenario.roster.spectator_capacity");
-  return Object.freeze({ competitors, spectatorCapacity });
+  const externalSeats = schemaVersion === 3 && table.has("external")
+    ? parseExternalSeats(raw.field(table, "external", path), competitors)
+    : new Map<number, string>();
+  const seats = Object.freeze(Array.from({ length: competitors }, (_, seat): SeatIr => {
+    const username = externalSeats.get(seat);
+    const controller: SeatController = username === undefined
+      ? Object.freeze({ kind: "bot" })
+      : Object.freeze({ kind: "external", username });
+    return Object.freeze({ seat, controller });
+  }));
+  return Object.freeze({ competitors, spectatorCapacity, seats });
+}
+
+function parseExternalSeats(value: raw.RawValue, competitors: number): ReadonlyMap<number, string> {
+  const path = "scenario.roster.external";
+  const entries = raw.asArray(value, path);
+  const seats = new Map<number, string>();
+  const usernames = new Set<string>();
+  let previousSeat = -1;
+  for (const [index, entry] of entries.entries()) {
+    const entryPath = `${path}[${index}]`;
+    const table = raw.asTable(entry, entryPath);
+    raw.checkFields(table, ["seat", "username"], ["seat", "username"], entryPath);
+    const seat = boundedNumber(raw.field(table, "seat", entryPath), `${entryPath}.seat`, 0n, BigInt(competitors - 1));
+    if (seat <= previousSeat) {
+      throw new SpecError(SpecErrorKind.Conflict, `${entryPath}.seat`, "external seats must be unique and in ascending order");
+    }
+    previousSeat = seat;
+    const username = raw.string(raw.field(table, "username", entryPath), `${entryPath}.username`);
+    if (!EXTERNAL_USERNAME_PATTERN.test(username)) {
+      throw new SpecError(SpecErrorKind.InvalidValue, `${entryPath}.username`, "must be 3 to 16 ASCII letters, digits, or underscores");
+    }
+    const folded = username.toLowerCase();
+    if (RESERVED_USERNAME_PREFIXES.some((prefix) => folded.startsWith(prefix))) {
+      throw new SpecError(SpecErrorKind.Conflict, `${entryPath}.username`, "collides with the runner's bot and spectator identity space");
+    }
+    if (usernames.has(folded)) {
+      throw new SpecError(SpecErrorKind.Conflict, `${entryPath}.username`, "external usernames must be unique ignoring case");
+    }
+    usernames.add(folded);
+    seats.set(seat, username);
+  }
+  return seats;
 }
 
 function parseServer(value: raw.RawValue): ServerSettings {
@@ -731,7 +805,7 @@ function validateMode(mode: GameMode, roster: Roster, settings: MatchSettings): 
       }
       break;
     case GameMode.Civilization:
-      if (roster.competitors !== 6) {
+      if (roster.competitors !== CIVILIZATION_SEAT_COUNT) {
         throw new SpecError(SpecErrorKind.Range, "scenario.roster.competitors", "civilization scenarios require six competitor seats");
       }
       if (!settings.blockBreaking || !settings.blockPlacing) {
@@ -957,7 +1031,7 @@ type ScenarioHashMode =
   | { readonly mode: typeof GameMode.Civilization; readonly border: FixedBorderSettings; readonly civilization: CivilizationRulesIr };
 
 function hashScenario(
-  schemaVersion: 1 | 2,
+  schemaVersion: 1 | 2 | 3,
   modeSettings: ScenarioHashMode,
   seed: bigint,
   policy: ResourceReference,
@@ -969,7 +1043,7 @@ function hashScenario(
   mapId: SemanticId,
   openingStyleCycle?: OpeningStyleCycle,
 ): SemanticId {
-  const hash = new CanonicalHasher(schemaVersion === 1 ? "arena.scenario.ir.v1\0" : "arena.scenario.ir.v2\0");
+  const hash = new CanonicalHasher(`arena.scenario.ir.v${schemaVersion}\0`);
   hash.u8(modeSettings.mode === GameMode.HungerGames ? 0 : 1);
   hash.u64(seed);
   hash.string(policy);
@@ -1004,9 +1078,20 @@ function hashScenario(
   hash.u8(Number(record.worldOutcomes));
   hash.bytes(Buffer.from(mapId, "hex"));
   if (modeSettings.mode === GameMode.Civilization) hashCivilizationRules(hash, modeSettings.civilization);
-  if (schemaVersion === 2) {
-    if (openingStyleCycle === undefined) throw new Error("schema-v2 scenario has no opening style cycle");
+  if (schemaVersion >= 2) {
+    if (openingStyleCycle === undefined) throw new Error(`schema-v${schemaVersion} scenario has no opening style cycle`);
     for (const style of openingStyleCycle) hash.string(style);
+  }
+  if (schemaVersion === 3) {
+    for (const { seat, controller } of roster.seats) {
+      hash.u16(seat);
+      if (controller.kind === "bot") {
+        hash.u8(0);
+      } else {
+        hash.u8(1);
+        hash.string(controller.username);
+      }
+    }
   }
   return hash.finish();
 }

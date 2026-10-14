@@ -16,7 +16,15 @@ export type {
   SurfaceLootContainer,
   SurfaceSpawnPoint,
 } from "./map.js";
-export { GameMode, OPENING_STYLES, compileScenario, scenarioMapReference } from "./scenario.js";
+export {
+  EXTERNAL_USERNAME_PATTERN,
+  GameMode,
+  LEGACY_MAX_COMPETITORS,
+  MAX_COMPETITORS,
+  OPENING_STYLES,
+  compileScenario,
+  scenarioMapReference,
+} from "./scenario.js";
 export type {
   BorderSettings,
   BlueprintAnchorIr,
@@ -31,6 +39,7 @@ export type {
   HungerGamesScenarioIr,
   HungerGamesScenarioV1Ir,
   HungerGamesScenarioV2Ir,
+  HungerGamesScenarioV3Ir,
   ItemStackIr,
   MatchSettings,
   OpeningStyle,
@@ -39,6 +48,8 @@ export type {
   RecordSettings,
   ResourceReference,
   Roster,
+  SeatController,
+  SeatIr,
   ScenarioIr,
   ServerSettings,
   ShrinkingBorderSettings,

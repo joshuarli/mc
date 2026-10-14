@@ -1,0 +1,364 @@
+schema = 2
+name = "hunger-24"
+terrain = "vanilla"
+dimensions = { width = 1024, depth = 1024 }
+
+[[operations]]
+kind = "spawn"
+seat = 0
+position = { x = 652, z = 512 }
+
+[[operations]]
+kind = "spawn"
+seat = 1
+position = { x = 647, z = 548 }
+
+[[operations]]
+kind = "spawn"
+seat = 2
+position = { x = 633, z = 582 }
+
+[[operations]]
+kind = "spawn"
+seat = 3
+position = { x = 611, z = 611 }
+
+[[operations]]
+kind = "spawn"
+seat = 4
+position = { x = 582, z = 633 }
+
+[[operations]]
+kind = "spawn"
+seat = 5
+position = { x = 548, z = 647 }
+
+[[operations]]
+kind = "spawn"
+seat = 6
+position = { x = 512, z = 652 }
+
+[[operations]]
+kind = "spawn"
+seat = 7
+position = { x = 476, z = 647 }
+
+[[operations]]
+kind = "spawn"
+seat = 8
+position = { x = 442, z = 633 }
+
+[[operations]]
+kind = "spawn"
+seat = 9
+position = { x = 413, z = 611 }
+
+[[operations]]
+kind = "spawn"
+seat = 10
+position = { x = 391, z = 582 }
+
+[[operations]]
+kind = "spawn"
+seat = 11
+position = { x = 377, z = 548 }
+
+[[operations]]
+kind = "spawn"
+seat = 12
+position = { x = 372, z = 512 }
+
+[[operations]]
+kind = "spawn"
+seat = 13
+position = { x = 377, z = 476 }
+
+[[operations]]
+kind = "spawn"
+seat = 14
+position = { x = 391, z = 442 }
+
+[[operations]]
+kind = "spawn"
+seat = 15
+position = { x = 413, z = 413 }
+
+[[operations]]
+kind = "spawn"
+seat = 16
+position = { x = 442, z = 391 }
+
+[[operations]]
+kind = "spawn"
+seat = 17
+position = { x = 476, z = 377 }
+
+[[operations]]
+kind = "spawn"
+seat = 18
+position = { x = 512, z = 372 }
+
+[[operations]]
+kind = "spawn"
+seat = 19
+position = { x = 548, z = 377 }
+
+[[operations]]
+kind = "spawn"
+seat = 20
+position = { x = 582, z = 391 }
+
+[[operations]]
+kind = "spawn"
+seat = 21
+position = { x = 611, z = 413 }
+
+[[operations]]
+kind = "spawn"
+seat = 22
+position = { x = 633, z = 442 }
+
+[[operations]]
+kind = "spawn"
+seat = 23
+position = { x = 647, z = 476 }
+
+[[operations]]
+kind = "loot_container"
+position = { x = 601, z = 524 }
+inventory = ["minecraft:bread", "minecraft:stone_sword"]
+
+[[operations]]
+kind = "loot_container"
+position = { x = 595, z = 546 }
+inventory = ["minecraft:bread", "minecraft:leather_helmet"]
+
+[[operations]]
+kind = "loot_container"
+position = { x = 583, z = 567 }
+inventory = ["minecraft:bread", "minecraft:stone_axe"]
+
+[[operations]]
+kind = "loot_container"
+position = { x = 567, z = 583 }
+inventory = ["minecraft:bread", "minecraft:leather_chestplate"]
+
+[[operations]]
+kind = "loot_container"
+position = { x = 546, z = 595 }
+inventory = ["minecraft:bread", "minecraft:stone_sword"]
+
+[[operations]]
+kind = "loot_container"
+position = { x = 524, z = 601 }
+inventory = ["minecraft:bread", "minecraft:leather_helmet"]
+
+[[operations]]
+kind = "loot_container"
+position = { x = 500, z = 601 }
+inventory = ["minecraft:bread", "minecraft:stone_axe"]
+
+[[operations]]
+kind = "loot_container"
+position = { x = 478, z = 595 }
+inventory = ["minecraft:bread", "minecraft:leather_chestplate"]
+
+[[operations]]
+kind = "loot_container"
+position = { x = 457, z = 583 }
+inventory = ["minecraft:bread", "minecraft:stone_sword"]
+
+[[operations]]
+kind = "loot_container"
+position = { x = 441, z = 567 }
+inventory = ["minecraft:bread", "minecraft:leather_helmet"]
+
+[[operations]]
+kind = "loot_container"
+position = { x = 429, z = 546 }
+inventory = ["minecraft:bread", "minecraft:stone_axe"]
+
+[[operations]]
+kind = "loot_container"
+position = { x = 423, z = 524 }
+inventory = ["minecraft:bread", "minecraft:leather_chestplate"]
+
+[[operations]]
+kind = "loot_container"
+position = { x = 423, z = 500 }
+inventory = ["minecraft:bread", "minecraft:stone_sword"]
+
+[[operations]]
+kind = "loot_container"
+position = { x = 429, z = 478 }
+inventory = ["minecraft:bread", "minecraft:leather_helmet"]
+
+[[operations]]
+kind = "loot_container"
+position = { x = 441, z = 457 }
+inventory = ["minecraft:bread", "minecraft:stone_axe"]
+
+[[operations]]
+kind = "loot_container"
+position = { x = 457, z = 441 }
+inventory = ["minecraft:bread", "minecraft:leather_chestplate"]
+
+[[operations]]
+kind = "loot_container"
+position = { x = 478, z = 429 }
+inventory = ["minecraft:bread", "minecraft:stone_sword"]
+
+[[operations]]
+kind = "loot_container"
+position = { x = 500, z = 423 }
+inventory = ["minecraft:bread", "minecraft:leather_helmet"]
+
+[[operations]]
+kind = "loot_container"
+position = { x = 524, z = 423 }
+inventory = ["minecraft:bread", "minecraft:stone_axe"]
+
+[[operations]]
+kind = "loot_container"
+position = { x = 546, z = 429 }
+inventory = ["minecraft:bread", "minecraft:leather_chestplate"]
+
+[[operations]]
+kind = "loot_container"
+position = { x = 567, z = 441 }
+inventory = ["minecraft:bread", "minecraft:stone_sword"]
+
+[[operations]]
+kind = "loot_container"
+position = { x = 583, z = 457 }
+inventory = ["minecraft:bread", "minecraft:leather_helmet"]
+
+[[operations]]
+kind = "loot_container"
+position = { x = 595, z = 478 }
+inventory = ["minecraft:bread", "minecraft:stone_axe"]
+
+[[operations]]
+kind = "loot_container"
+position = { x = 601, z = 500 }
+inventory = ["minecraft:bread", "minecraft:leather_chestplate"]
+
+[[operations]]
+kind = "loot_container"
+position = { x = 682, z = 512 }
+inventory = ["minecraft:bread", "minecraft:stone_sword"]
+
+[[operations]]
+kind = "loot_container"
+position = { x = 676, z = 556 }
+inventory = ["minecraft:bread", "minecraft:leather_helmet"]
+
+[[operations]]
+kind = "loot_container"
+position = { x = 659, z = 597 }
+inventory = ["minecraft:bread", "minecraft:stone_axe"]
+
+[[operations]]
+kind = "loot_container"
+position = { x = 632, z = 632 }
+inventory = ["minecraft:bread", "minecraft:leather_chestplate"]
+
+[[operations]]
+kind = "loot_container"
+position = { x = 597, z = 659 }
+inventory = ["minecraft:bread", "minecraft:stone_sword"]
+
+[[operations]]
+kind = "loot_container"
+position = { x = 556, z = 676 }
+inventory = ["minecraft:bread", "minecraft:leather_helmet"]
+
+[[operations]]
+kind = "loot_container"
+position = { x = 512, z = 682 }
+inventory = ["minecraft:bread", "minecraft:stone_axe"]
+
+[[operations]]
+kind = "loot_container"
+position = { x = 468, z = 676 }
+inventory = ["minecraft:bread", "minecraft:leather_chestplate"]
+
+[[operations]]
+kind = "loot_container"
+position = { x = 427, z = 659 }
+inventory = ["minecraft:bread", "minecraft:stone_sword"]
+
+[[operations]]
+kind = "loot_container"
+position = { x = 392, z = 632 }
+inventory = ["minecraft:bread", "minecraft:leather_helmet"]
+
+[[operations]]
+kind = "loot_container"
+position = { x = 365, z = 597 }
+inventory = ["minecraft:bread", "minecraft:stone_axe"]
+
+[[operations]]
+kind = "loot_container"
+position = { x = 348, z = 556 }
+inventory = ["minecraft:bread", "minecraft:leather_chestplate"]
+
+[[operations]]
+kind = "loot_container"
+position = { x = 342, z = 512 }
+inventory = ["minecraft:bread", "minecraft:stone_sword"]
+
+[[operations]]
+kind = "loot_container"
+position = { x = 348, z = 468 }
+inventory = ["minecraft:bread", "minecraft:leather_helmet"]
+
+[[operations]]
+kind = "loot_container"
+position = { x = 365, z = 427 }
+inventory = ["minecraft:bread", "minecraft:stone_axe"]
+
+[[operations]]
+kind = "loot_container"
+position = { x = 392, z = 392 }
+inventory = ["minecraft:bread", "minecraft:leather_chestplate"]
+
+[[operations]]
+kind = "loot_container"
+position = { x = 427, z = 365 }
+inventory = ["minecraft:bread", "minecraft:stone_sword"]
+
+[[operations]]
+kind = "loot_container"
+position = { x = 468, z = 348 }
+inventory = ["minecraft:bread", "minecraft:leather_helmet"]
+
+[[operations]]
+kind = "loot_container"
+position = { x = 512, z = 342 }
+inventory = ["minecraft:bread", "minecraft:stone_axe"]
+
+[[operations]]
+kind = "loot_container"
+position = { x = 556, z = 348 }
+inventory = ["minecraft:bread", "minecraft:leather_chestplate"]
+
+[[operations]]
+kind = "loot_container"
+position = { x = 597, z = 365 }
+inventory = ["minecraft:bread", "minecraft:stone_sword"]
+
+[[operations]]
+kind = "loot_container"
+position = { x = 632, z = 392 }
+inventory = ["minecraft:bread", "minecraft:leather_helmet"]
+
+[[operations]]
+kind = "loot_container"
+position = { x = 659, z = 427 }
+inventory = ["minecraft:bread", "minecraft:stone_axe"]
+
+[[operations]]
+kind = "loot_container"
+position = { x = 676, z = 468 }
+inventory = ["minecraft:bread", "minecraft:leather_chestplate"]

@@ -1,0 +1,1364 @@
+schema = 2
+name = "hunger-256-boundary"
+terrain = "vanilla"
+dimensions = { width = 1024, depth = 1024 }
+
+[[operations]]
+kind = "spawn"
+seat = 0
+position = { x = 250, z = 250 }
+
+[[operations]]
+kind = "spawn"
+seat = 1
+position = { x = 290, z = 250 }
+
+[[operations]]
+kind = "spawn"
+seat = 2
+position = { x = 330, z = 250 }
+
+[[operations]]
+kind = "spawn"
+seat = 3
+position = { x = 370, z = 250 }
+
+[[operations]]
+kind = "spawn"
+seat = 4
+position = { x = 410, z = 250 }
+
+[[operations]]
+kind = "spawn"
+seat = 5
+position = { x = 450, z = 250 }
+
+[[operations]]
+kind = "spawn"
+seat = 6
+position = { x = 490, z = 250 }
+
+[[operations]]
+kind = "spawn"
+seat = 7
+position = { x = 530, z = 250 }
+
+[[operations]]
+kind = "spawn"
+seat = 8
+position = { x = 570, z = 250 }
+
+[[operations]]
+kind = "spawn"
+seat = 9
+position = { x = 610, z = 250 }
+
+[[operations]]
+kind = "spawn"
+seat = 10
+position = { x = 650, z = 250 }
+
+[[operations]]
+kind = "spawn"
+seat = 11
+position = { x = 690, z = 250 }
+
+[[operations]]
+kind = "spawn"
+seat = 12
+position = { x = 730, z = 250 }
+
+[[operations]]
+kind = "spawn"
+seat = 13
+position = { x = 770, z = 250 }
+
+[[operations]]
+kind = "spawn"
+seat = 14
+position = { x = 810, z = 250 }
+
+[[operations]]
+kind = "spawn"
+seat = 15
+position = { x = 850, z = 250 }
+
+[[operations]]
+kind = "spawn"
+seat = 16
+position = { x = 250, z = 290 }
+
+[[operations]]
+kind = "spawn"
+seat = 17
+position = { x = 290, z = 290 }
+
+[[operations]]
+kind = "spawn"
+seat = 18
+position = { x = 330, z = 290 }
+
+[[operations]]
+kind = "spawn"
+seat = 19
+position = { x = 370, z = 290 }
+
+[[operations]]
+kind = "spawn"
+seat = 20
+position = { x = 410, z = 290 }
+
+[[operations]]
+kind = "spawn"
+seat = 21
+position = { x = 450, z = 290 }
+
+[[operations]]
+kind = "spawn"
+seat = 22
+position = { x = 490, z = 290 }
+
+[[operations]]
+kind = "spawn"
+seat = 23
+position = { x = 530, z = 290 }
+
+[[operations]]
+kind = "spawn"
+seat = 24
+position = { x = 570, z = 290 }
+
+[[operations]]
+kind = "spawn"
+seat = 25
+position = { x = 610, z = 290 }
+
+[[operations]]
+kind = "spawn"
+seat = 26
+position = { x = 650, z = 290 }
+
+[[operations]]
+kind = "spawn"
+seat = 27
+position = { x = 690, z = 290 }
+
+[[operations]]
+kind = "spawn"
+seat = 28
+position = { x = 730, z = 290 }
+
+[[operations]]
+kind = "spawn"
+seat = 29
+position = { x = 770, z = 290 }
+
+[[operations]]
+kind = "spawn"
+seat = 30
+position = { x = 810, z = 290 }
+
+[[operations]]
+kind = "spawn"
+seat = 31
+position = { x = 850, z = 290 }
+
+[[operations]]
+kind = "spawn"
+seat = 32
+position = { x = 250, z = 330 }
+
+[[operations]]
+kind = "spawn"
+seat = 33
+position = { x = 290, z = 330 }
+
+[[operations]]
+kind = "spawn"
+seat = 34
+position = { x = 330, z = 330 }
+
+[[operations]]
+kind = "spawn"
+seat = 35
+position = { x = 370, z = 330 }
+
+[[operations]]
+kind = "spawn"
+seat = 36
+position = { x = 410, z = 330 }
+
+[[operations]]
+kind = "spawn"
+seat = 37
+position = { x = 450, z = 330 }
+
+[[operations]]
+kind = "spawn"
+seat = 38
+position = { x = 490, z = 330 }
+
+[[operations]]
+kind = "spawn"
+seat = 39
+position = { x = 530, z = 330 }
+
+[[operations]]
+kind = "spawn"
+seat = 40
+position = { x = 570, z = 330 }
+
+[[operations]]
+kind = "spawn"
+seat = 41
+position = { x = 610, z = 330 }
+
+[[operations]]
+kind = "spawn"
+seat = 42
+position = { x = 650, z = 330 }
+
+[[operations]]
+kind = "spawn"
+seat = 43
+position = { x = 690, z = 330 }
+
+[[operations]]
+kind = "spawn"
+seat = 44
+position = { x = 730, z = 330 }
+
+[[operations]]
+kind = "spawn"
+seat = 45
+position = { x = 770, z = 330 }
+
+[[operations]]
+kind = "spawn"
+seat = 46
+position = { x = 810, z = 330 }
+
+[[operations]]
+kind = "spawn"
+seat = 47
+position = { x = 850, z = 330 }
+
+[[operations]]
+kind = "spawn"
+seat = 48
+position = { x = 250, z = 370 }
+
+[[operations]]
+kind = "spawn"
+seat = 49
+position = { x = 290, z = 370 }
+
+[[operations]]
+kind = "spawn"
+seat = 50
+position = { x = 330, z = 370 }
+
+[[operations]]
+kind = "spawn"
+seat = 51
+position = { x = 370, z = 370 }
+
+[[operations]]
+kind = "spawn"
+seat = 52
+position = { x = 410, z = 370 }
+
+[[operations]]
+kind = "spawn"
+seat = 53
+position = { x = 450, z = 370 }
+
+[[operations]]
+kind = "spawn"
+seat = 54
+position = { x = 490, z = 370 }
+
+[[operations]]
+kind = "spawn"
+seat = 55
+position = { x = 530, z = 370 }
+
+[[operations]]
+kind = "spawn"
+seat = 56
+position = { x = 570, z = 370 }
+
+[[operations]]
+kind = "spawn"
+seat = 57
+position = { x = 610, z = 370 }
+
+[[operations]]
+kind = "spawn"
+seat = 58
+position = { x = 650, z = 370 }
+
+[[operations]]
+kind = "spawn"
+seat = 59
+position = { x = 690, z = 370 }
+
+[[operations]]
+kind = "spawn"
+seat = 60
+position = { x = 730, z = 370 }
+
+[[operations]]
+kind = "spawn"
+seat = 61
+position = { x = 770, z = 370 }
+
+[[operations]]
+kind = "spawn"
+seat = 62
+position = { x = 810, z = 370 }
+
+[[operations]]
+kind = "spawn"
+seat = 63
+position = { x = 850, z = 370 }
+
+[[operations]]
+kind = "spawn"
+seat = 64
+position = { x = 250, z = 410 }
+
+[[operations]]
+kind = "spawn"
+seat = 65
+position = { x = 290, z = 410 }
+
+[[operations]]
+kind = "spawn"
+seat = 66
+position = { x = 330, z = 410 }
+
+[[operations]]
+kind = "spawn"
+seat = 67
+position = { x = 370, z = 410 }
+
+[[operations]]
+kind = "spawn"
+seat = 68
+position = { x = 410, z = 410 }
+
+[[operations]]
+kind = "spawn"
+seat = 69
+position = { x = 450, z = 410 }
+
+[[operations]]
+kind = "spawn"
+seat = 70
+position = { x = 490, z = 410 }
+
+[[operations]]
+kind = "spawn"
+seat = 71
+position = { x = 530, z = 410 }
+
+[[operations]]
+kind = "spawn"
+seat = 72
+position = { x = 570, z = 410 }
+
+[[operations]]
+kind = "spawn"
+seat = 73
+position = { x = 610, z = 410 }
+
+[[operations]]
+kind = "spawn"
+seat = 74
+position = { x = 650, z = 410 }
+
+[[operations]]
+kind = "spawn"
+seat = 75
+position = { x = 690, z = 410 }
+
+[[operations]]
+kind = "spawn"
+seat = 76
+position = { x = 730, z = 410 }
+
+[[operations]]
+kind = "spawn"
+seat = 77
+position = { x = 770, z = 410 }
+
+[[operations]]
+kind = "spawn"
+seat = 78
+position = { x = 810, z = 410 }
+
+[[operations]]
+kind = "spawn"
+seat = 79
+position = { x = 850, z = 410 }
+
+[[operations]]
+kind = "spawn"
+seat = 80
+position = { x = 250, z = 450 }
+
+[[operations]]
+kind = "spawn"
+seat = 81
+position = { x = 290, z = 450 }
+
+[[operations]]
+kind = "spawn"
+seat = 82
+position = { x = 330, z = 450 }
+
+[[operations]]
+kind = "spawn"
+seat = 83
+position = { x = 370, z = 450 }
+
+[[operations]]
+kind = "spawn"
+seat = 84
+position = { x = 410, z = 450 }
+
+[[operations]]
+kind = "spawn"
+seat = 85
+position = { x = 450, z = 450 }
+
+[[operations]]
+kind = "spawn"
+seat = 86
+position = { x = 490, z = 450 }
+
+[[operations]]
+kind = "spawn"
+seat = 87
+position = { x = 530, z = 450 }
+
+[[operations]]
+kind = "spawn"
+seat = 88
+position = { x = 570, z = 450 }
+
+[[operations]]
+kind = "spawn"
+seat = 89
+position = { x = 610, z = 450 }
+
+[[operations]]
+kind = "spawn"
+seat = 90
+position = { x = 650, z = 450 }
+
+[[operations]]
+kind = "spawn"
+seat = 91
+position = { x = 690, z = 450 }
+
+[[operations]]
+kind = "spawn"
+seat = 92
+position = { x = 730, z = 450 }
+
+[[operations]]
+kind = "spawn"
+seat = 93
+position = { x = 770, z = 450 }
+
+[[operations]]
+kind = "spawn"
+seat = 94
+position = { x = 810, z = 450 }
+
+[[operations]]
+kind = "spawn"
+seat = 95
+position = { x = 850, z = 450 }
+
+[[operations]]
+kind = "spawn"
+seat = 96
+position = { x = 250, z = 490 }
+
+[[operations]]
+kind = "spawn"
+seat = 97
+position = { x = 290, z = 490 }
+
+[[operations]]
+kind = "spawn"
+seat = 98
+position = { x = 330, z = 490 }
+
+[[operations]]
+kind = "spawn"
+seat = 99
+position = { x = 370, z = 490 }
+
+[[operations]]
+kind = "spawn"
+seat = 100
+position = { x = 410, z = 490 }
+
+[[operations]]
+kind = "spawn"
+seat = 101
+position = { x = 450, z = 490 }
+
+[[operations]]
+kind = "spawn"
+seat = 102
+position = { x = 490, z = 490 }
+
+[[operations]]
+kind = "spawn"
+seat = 103
+position = { x = 530, z = 490 }
+
+[[operations]]
+kind = "spawn"
+seat = 104
+position = { x = 570, z = 490 }
+
+[[operations]]
+kind = "spawn"
+seat = 105
+position = { x = 610, z = 490 }
+
+[[operations]]
+kind = "spawn"
+seat = 106
+position = { x = 650, z = 490 }
+
+[[operations]]
+kind = "spawn"
+seat = 107
+position = { x = 690, z = 490 }
+
+[[operations]]
+kind = "spawn"
+seat = 108
+position = { x = 730, z = 490 }
+
+[[operations]]
+kind = "spawn"
+seat = 109
+position = { x = 770, z = 490 }
+
+[[operations]]
+kind = "spawn"
+seat = 110
+position = { x = 810, z = 490 }
+
+[[operations]]
+kind = "spawn"
+seat = 111
+position = { x = 850, z = 490 }
+
+[[operations]]
+kind = "spawn"
+seat = 112
+position = { x = 250, z = 530 }
+
+[[operations]]
+kind = "spawn"
+seat = 113
+position = { x = 290, z = 530 }
+
+[[operations]]
+kind = "spawn"
+seat = 114
+position = { x = 330, z = 530 }
+
+[[operations]]
+kind = "spawn"
+seat = 115
+position = { x = 370, z = 530 }
+
+[[operations]]
+kind = "spawn"
+seat = 116
+position = { x = 410, z = 530 }
+
+[[operations]]
+kind = "spawn"
+seat = 117
+position = { x = 450, z = 530 }
+
+[[operations]]
+kind = "spawn"
+seat = 118
+position = { x = 490, z = 530 }
+
+[[operations]]
+kind = "spawn"
+seat = 119
+position = { x = 530, z = 530 }
+
+[[operations]]
+kind = "spawn"
+seat = 120
+position = { x = 570, z = 530 }
+
+[[operations]]
+kind = "spawn"
+seat = 121
+position = { x = 610, z = 530 }
+
+[[operations]]
+kind = "spawn"
+seat = 122
+position = { x = 650, z = 530 }
+
+[[operations]]
+kind = "spawn"
+seat = 123
+position = { x = 690, z = 530 }
+
+[[operations]]
+kind = "spawn"
+seat = 124
+position = { x = 730, z = 530 }
+
+[[operations]]
+kind = "spawn"
+seat = 125
+position = { x = 770, z = 530 }
+
+[[operations]]
+kind = "spawn"
+seat = 126
+position = { x = 810, z = 530 }
+
+[[operations]]
+kind = "spawn"
+seat = 127
+position = { x = 850, z = 530 }
+
+[[operations]]
+kind = "spawn"
+seat = 128
+position = { x = 250, z = 570 }
+
+[[operations]]
+kind = "spawn"
+seat = 129
+position = { x = 290, z = 570 }
+
+[[operations]]
+kind = "spawn"
+seat = 130
+position = { x = 330, z = 570 }
+
+[[operations]]
+kind = "spawn"
+seat = 131
+position = { x = 370, z = 570 }
+
+[[operations]]
+kind = "spawn"
+seat = 132
+position = { x = 410, z = 570 }
+
+[[operations]]
+kind = "spawn"
+seat = 133
+position = { x = 450, z = 570 }
+
+[[operations]]
+kind = "spawn"
+seat = 134
+position = { x = 490, z = 570 }
+
+[[operations]]
+kind = "spawn"
+seat = 135
+position = { x = 530, z = 570 }
+
+[[operations]]
+kind = "spawn"
+seat = 136
+position = { x = 570, z = 570 }
+
+[[operations]]
+kind = "spawn"
+seat = 137
+position = { x = 610, z = 570 }
+
+[[operations]]
+kind = "spawn"
+seat = 138
+position = { x = 650, z = 570 }
+
+[[operations]]
+kind = "spawn"
+seat = 139
+position = { x = 690, z = 570 }
+
+[[operations]]
+kind = "spawn"
+seat = 140
+position = { x = 730, z = 570 }
+
+[[operations]]
+kind = "spawn"
+seat = 141
+position = { x = 770, z = 570 }
+
+[[operations]]
+kind = "spawn"
+seat = 142
+position = { x = 810, z = 570 }
+
+[[operations]]
+kind = "spawn"
+seat = 143
+position = { x = 850, z = 570 }
+
+[[operations]]
+kind = "spawn"
+seat = 144
+position = { x = 250, z = 610 }
+
+[[operations]]
+kind = "spawn"
+seat = 145
+position = { x = 290, z = 610 }
+
+[[operations]]
+kind = "spawn"
+seat = 146
+position = { x = 330, z = 610 }
+
+[[operations]]
+kind = "spawn"
+seat = 147
+position = { x = 370, z = 610 }
+
+[[operations]]
+kind = "spawn"
+seat = 148
+position = { x = 410, z = 610 }
+
+[[operations]]
+kind = "spawn"
+seat = 149
+position = { x = 450, z = 610 }
+
+[[operations]]
+kind = "spawn"
+seat = 150
+position = { x = 490, z = 610 }
+
+[[operations]]
+kind = "spawn"
+seat = 151
+position = { x = 530, z = 610 }
+
+[[operations]]
+kind = "spawn"
+seat = 152
+position = { x = 570, z = 610 }
+
+[[operations]]
+kind = "spawn"
+seat = 153
+position = { x = 610, z = 610 }
+
+[[operations]]
+kind = "spawn"
+seat = 154
+position = { x = 650, z = 610 }
+
+[[operations]]
+kind = "spawn"
+seat = 155
+position = { x = 690, z = 610 }
+
+[[operations]]
+kind = "spawn"
+seat = 156
+position = { x = 730, z = 610 }
+
+[[operations]]
+kind = "spawn"
+seat = 157
+position = { x = 770, z = 610 }
+
+[[operations]]
+kind = "spawn"
+seat = 158
+position = { x = 810, z = 610 }
+
+[[operations]]
+kind = "spawn"
+seat = 159
+position = { x = 850, z = 610 }
+
+[[operations]]
+kind = "spawn"
+seat = 160
+position = { x = 250, z = 650 }
+
+[[operations]]
+kind = "spawn"
+seat = 161
+position = { x = 290, z = 650 }
+
+[[operations]]
+kind = "spawn"
+seat = 162
+position = { x = 330, z = 650 }
+
+[[operations]]
+kind = "spawn"
+seat = 163
+position = { x = 370, z = 650 }
+
+[[operations]]
+kind = "spawn"
+seat = 164
+position = { x = 410, z = 650 }
+
+[[operations]]
+kind = "spawn"
+seat = 165
+position = { x = 450, z = 650 }
+
+[[operations]]
+kind = "spawn"
+seat = 166
+position = { x = 490, z = 650 }
+
+[[operations]]
+kind = "spawn"
+seat = 167
+position = { x = 530, z = 650 }
+
+[[operations]]
+kind = "spawn"
+seat = 168
+position = { x = 570, z = 650 }
+
+[[operations]]
+kind = "spawn"
+seat = 169
+position = { x = 610, z = 650 }
+
+[[operations]]
+kind = "spawn"
+seat = 170
+position = { x = 650, z = 650 }
+
+[[operations]]
+kind = "spawn"
+seat = 171
+position = { x = 690, z = 650 }
+
+[[operations]]
+kind = "spawn"
+seat = 172
+position = { x = 730, z = 650 }
+
+[[operations]]
+kind = "spawn"
+seat = 173
+position = { x = 770, z = 650 }
+
+[[operations]]
+kind = "spawn"
+seat = 174
+position = { x = 810, z = 650 }
+
+[[operations]]
+kind = "spawn"
+seat = 175
+position = { x = 850, z = 650 }
+
+[[operations]]
+kind = "spawn"
+seat = 176
+position = { x = 250, z = 690 }
+
+[[operations]]
+kind = "spawn"
+seat = 177
+position = { x = 290, z = 690 }
+
+[[operations]]
+kind = "spawn"
+seat = 178
+position = { x = 330, z = 690 }
+
+[[operations]]
+kind = "spawn"
+seat = 179
+position = { x = 370, z = 690 }
+
+[[operations]]
+kind = "spawn"
+seat = 180
+position = { x = 410, z = 690 }
+
+[[operations]]
+kind = "spawn"
+seat = 181
+position = { x = 450, z = 690 }
+
+[[operations]]
+kind = "spawn"
+seat = 182
+position = { x = 490, z = 690 }
+
+[[operations]]
+kind = "spawn"
+seat = 183
+position = { x = 530, z = 690 }
+
+[[operations]]
+kind = "spawn"
+seat = 184
+position = { x = 570, z = 690 }
+
+[[operations]]
+kind = "spawn"
+seat = 185
+position = { x = 610, z = 690 }
+
+[[operations]]
+kind = "spawn"
+seat = 186
+position = { x = 650, z = 690 }
+
+[[operations]]
+kind = "spawn"
+seat = 187
+position = { x = 690, z = 690 }
+
+[[operations]]
+kind = "spawn"
+seat = 188
+position = { x = 730, z = 690 }
+
+[[operations]]
+kind = "spawn"
+seat = 189
+position = { x = 770, z = 690 }
+
+[[operations]]
+kind = "spawn"
+seat = 190
+position = { x = 810, z = 690 }
+
+[[operations]]
+kind = "spawn"
+seat = 191
+position = { x = 850, z = 690 }
+
+[[operations]]
+kind = "spawn"
+seat = 192
+position = { x = 250, z = 730 }
+
+[[operations]]
+kind = "spawn"
+seat = 193
+position = { x = 290, z = 730 }
+
+[[operations]]
+kind = "spawn"
+seat = 194
+position = { x = 330, z = 730 }
+
+[[operations]]
+kind = "spawn"
+seat = 195
+position = { x = 370, z = 730 }
+
+[[operations]]
+kind = "spawn"
+seat = 196
+position = { x = 410, z = 730 }
+
+[[operations]]
+kind = "spawn"
+seat = 197
+position = { x = 450, z = 730 }
+
+[[operations]]
+kind = "spawn"
+seat = 198
+position = { x = 490, z = 730 }
+
+[[operations]]
+kind = "spawn"
+seat = 199
+position = { x = 530, z = 730 }
+
+[[operations]]
+kind = "spawn"
+seat = 200
+position = { x = 570, z = 730 }
+
+[[operations]]
+kind = "spawn"
+seat = 201
+position = { x = 610, z = 730 }
+
+[[operations]]
+kind = "spawn"
+seat = 202
+position = { x = 650, z = 730 }
+
+[[operations]]
+kind = "spawn"
+seat = 203
+position = { x = 690, z = 730 }
+
+[[operations]]
+kind = "spawn"
+seat = 204
+position = { x = 730, z = 730 }
+
+[[operations]]
+kind = "spawn"
+seat = 205
+position = { x = 770, z = 730 }
+
+[[operations]]
+kind = "spawn"
+seat = 206
+position = { x = 810, z = 730 }
+
+[[operations]]
+kind = "spawn"
+seat = 207
+position = { x = 850, z = 730 }
+
+[[operations]]
+kind = "spawn"
+seat = 208
+position = { x = 250, z = 770 }
+
+[[operations]]
+kind = "spawn"
+seat = 209
+position = { x = 290, z = 770 }
+
+[[operations]]
+kind = "spawn"
+seat = 210
+position = { x = 330, z = 770 }
+
+[[operations]]
+kind = "spawn"
+seat = 211
+position = { x = 370, z = 770 }
+
+[[operations]]
+kind = "spawn"
+seat = 212
+position = { x = 410, z = 770 }
+
+[[operations]]
+kind = "spawn"
+seat = 213
+position = { x = 450, z = 770 }
+
+[[operations]]
+kind = "spawn"
+seat = 214
+position = { x = 490, z = 770 }
+
+[[operations]]
+kind = "spawn"
+seat = 215
+position = { x = 530, z = 770 }
+
+[[operations]]
+kind = "spawn"
+seat = 216
+position = { x = 570, z = 770 }
+
+[[operations]]
+kind = "spawn"
+seat = 217
+position = { x = 610, z = 770 }
+
+[[operations]]
+kind = "spawn"
+seat = 218
+position = { x = 650, z = 770 }
+
+[[operations]]
+kind = "spawn"
+seat = 219
+position = { x = 690, z = 770 }
+
+[[operations]]
+kind = "spawn"
+seat = 220
+position = { x = 730, z = 770 }
+
+[[operations]]
+kind = "spawn"
+seat = 221
+position = { x = 770, z = 770 }
+
+[[operations]]
+kind = "spawn"
+seat = 222
+position = { x = 810, z = 770 }
+
+[[operations]]
+kind = "spawn"
+seat = 223
+position = { x = 850, z = 770 }
+
+[[operations]]
+kind = "spawn"
+seat = 224
+position = { x = 250, z = 810 }
+
+[[operations]]
+kind = "spawn"
+seat = 225
+position = { x = 290, z = 810 }
+
+[[operations]]
+kind = "spawn"
+seat = 226
+position = { x = 330, z = 810 }
+
+[[operations]]
+kind = "spawn"
+seat = 227
+position = { x = 370, z = 810 }
+
+[[operations]]
+kind = "spawn"
+seat = 228
+position = { x = 410, z = 810 }
+
+[[operations]]
+kind = "spawn"
+seat = 229
+position = { x = 450, z = 810 }
+
+[[operations]]
+kind = "spawn"
+seat = 230
+position = { x = 490, z = 810 }
+
+[[operations]]
+kind = "spawn"
+seat = 231
+position = { x = 530, z = 810 }
+
+[[operations]]
+kind = "spawn"
+seat = 232
+position = { x = 570, z = 810 }
+
+[[operations]]
+kind = "spawn"
+seat = 233
+position = { x = 610, z = 810 }
+
+[[operations]]
+kind = "spawn"
+seat = 234
+position = { x = 650, z = 810 }
+
+[[operations]]
+kind = "spawn"
+seat = 235
+position = { x = 690, z = 810 }
+
+[[operations]]
+kind = "spawn"
+seat = 236
+position = { x = 730, z = 810 }
+
+[[operations]]
+kind = "spawn"
+seat = 237
+position = { x = 770, z = 810 }
+
+[[operations]]
+kind = "spawn"
+seat = 238
+position = { x = 810, z = 810 }
+
+[[operations]]
+kind = "spawn"
+seat = 239
+position = { x = 850, z = 810 }
+
+[[operations]]
+kind = "spawn"
+seat = 240
+position = { x = 250, z = 850 }
+
+[[operations]]
+kind = "spawn"
+seat = 241
+position = { x = 290, z = 850 }
+
+[[operations]]
+kind = "spawn"
+seat = 242
+position = { x = 330, z = 850 }
+
+[[operations]]
+kind = "spawn"
+seat = 243
+position = { x = 370, z = 850 }
+
+[[operations]]
+kind = "spawn"
+seat = 244
+position = { x = 410, z = 850 }
+
+[[operations]]
+kind = "spawn"
+seat = 245
+position = { x = 450, z = 850 }
+
+[[operations]]
+kind = "spawn"
+seat = 246
+position = { x = 490, z = 850 }
+
+[[operations]]
+kind = "spawn"
+seat = 247
+position = { x = 530, z = 850 }
+
+[[operations]]
+kind = "spawn"
+seat = 248
+position = { x = 570, z = 850 }
+
+[[operations]]
+kind = "spawn"
+seat = 249
+position = { x = 610, z = 850 }
+
+[[operations]]
+kind = "spawn"
+seat = 250
+position = { x = 650, z = 850 }
+
+[[operations]]
+kind = "spawn"
+seat = 251
+position = { x = 690, z = 850 }
+
+[[operations]]
+kind = "spawn"
+seat = 252
+position = { x = 730, z = 850 }
+
+[[operations]]
+kind = "spawn"
+seat = 253
+position = { x = 770, z = 850 }
+
+[[operations]]
+kind = "spawn"
+seat = 254
+position = { x = 810, z = 850 }
+
+[[operations]]
+kind = "spawn"
+seat = 255
+position = { x = 850, z = 850 }
+
+[[operations]]
+kind = "loot_container"
+position = { x = 270, z = 270 }
+inventory = ["minecraft:bread"]
+
+[[operations]]
+kind = "loot_container"
+position = { x = 310, z = 310 }
+inventory = ["minecraft:bread"]
+
+[[operations]]
+kind = "loot_container"
+position = { x = 350, z = 350 }
+inventory = ["minecraft:bread"]
+
+[[operations]]
+kind = "loot_container"
+position = { x = 390, z = 390 }
+inventory = ["minecraft:bread"]
+
+[[operations]]
+kind = "loot_container"
+position = { x = 430, z = 430 }
+inventory = ["minecraft:bread"]
+
+[[operations]]
+kind = "loot_container"
+position = { x = 470, z = 470 }
+inventory = ["minecraft:bread"]
+
+[[operations]]
+kind = "loot_container"
+position = { x = 510, z = 510 }
+inventory = ["minecraft:bread"]
+
+[[operations]]
+kind = "loot_container"
+position = { x = 550, z = 550 }
+inventory = ["minecraft:bread"]
+
+[[operations]]
+kind = "loot_container"
+position = { x = 590, z = 590 }
+inventory = ["minecraft:bread"]
+
+[[operations]]
+kind = "loot_container"
+position = { x = 630, z = 630 }
+inventory = ["minecraft:bread"]
+
+[[operations]]
+kind = "loot_container"
+position = { x = 670, z = 670 }
+inventory = ["minecraft:bread"]
+
+[[operations]]
+kind = "loot_container"
+position = { x = 710, z = 710 }
+inventory = ["minecraft:bread"]
+
+[[operations]]
+kind = "loot_container"
+position = { x = 750, z = 750 }
+inventory = ["minecraft:bread"]
+
+[[operations]]
+kind = "loot_container"
+position = { x = 790, z = 790 }
+inventory = ["minecraft:bread"]
+
+[[operations]]
+kind = "loot_container"
+position = { x = 830, z = 830 }
+inventory = ["minecraft:bread"]
+
+[[operations]]
+kind = "loot_container"
+position = { x = 870, z = 870 }
+inventory = ["minecraft:bread"]
