@@ -142,7 +142,7 @@ test('an armed healthy seat hunts a lone visible opponent beyond the baseline fi
   });
   notDeepStrictEqual(baseline.decide(observation, emptyPolicyMemory(), stream()).goal.kind, 'engageVisibleOpponent');
   const { decision, explanation } = improved.explain(observation, emptyPolicyMemory(), stream());
-  deepStrictEqual(decision.intent, { kind: 'approach', target: 5 });
+  deepStrictEqual(decision.intent, { kind: 'attack', target: 5 });
   equal(explanation.reason, 'huntVisibleOpponentArmed');
   equal(explanation.alternatives[0]!.goal, 'engageVisibleOpponent');
   equal(explanation.alternatives[0]!.condition, 'chosen');
@@ -206,4 +206,16 @@ test('improved overrides the baseline on inputs recorded from a live match', () 
     );
     equal(explained.explanation.reason, reason);
   }
+});
+
+test('a melee engagement keeps one attack intent across the reach boundary so knockback cannot cancel the strike', () => {
+  const inReach = situation({ at: [430, 70, 610], weapon: 4, foods: 2, opponents: [{ id: 5, at: [431, 70, 610], attacking: true }] });
+  const justOut = situation({ at: [430, 70, 610], weapon: 4, foods: 2, opponents: [{ id: 5, at: [434, 70, 610], attacking: true }] });
+  equal(baseline.decide(inReach, emptyPolicyMemory(), stream()).intent.kind, 'attack');
+  equal(baseline.decide(justOut, emptyPolicyMemory(), stream()).intent.kind, 'approach');
+  const a = improved.explain(inReach, emptyPolicyMemory(), stream());
+  const b = improved.explain(justOut, emptyPolicyMemory(), stream());
+  deepStrictEqual(a.decision.intent, { kind: 'attack', target: 5 });
+  deepStrictEqual(b.decision.intent, a.decision.intent);
+  equal(b.explanation.reason, 'steadyMeleeEngagement');
 });

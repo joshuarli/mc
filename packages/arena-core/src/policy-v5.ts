@@ -51,6 +51,7 @@ export type DecisionReason =
   | 'cacheResumedOutOfSight'
   | 'lootBeforeUnarmedFight'
   | 'huntVisibleOpponentArmed'
+  | 'steadyMeleeEngagement'
   | 'travelToBorderCenter'
   | 'orbitBorderCenter'
   | 'confinedProbeFarTarget'
@@ -178,6 +179,9 @@ function chooseOverride(
         && base.intent.kind !== 'attack') {
       return lootOverride(nearestCache.opportunity, facts, 'lootBeforeUnarmedFight');
     }
+    if (base.intent.kind === 'approach' && agent.ranged === undefined) {
+      return { goal: base.goal, intent: { kind: 'attack', target: base.intent.target }, reason: 'steadyMeleeEngagement' };
+    }
     return null;
   }
   const exploring = base.goal.kind === 'explore'
@@ -191,7 +195,9 @@ function chooseOverride(
     const target = nearestOpponent.opponent;
     return {
       goal: Object.freeze({ kind: 'engageVisibleOpponent', target: target.id }),
-      intent: { kind: 'approach', target: target.id },
+      intent: agent.ranged === undefined
+        ? { kind: 'attack', target: target.id }
+        : { kind: 'approach', target: target.id },
       reason: 'huntVisibleOpponentArmed',
     };
   }
