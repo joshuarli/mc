@@ -845,8 +845,8 @@ function readEliminationCause(value: StrictJsonValue | undefined, path: string):
 }
 
 function readEmpty(value: StrictJsonValue, path: string): Record<string, never> {
-  const object = readObject(value, path, [], []);
-  return object as Record<string, never>;
+  readObject(value, path, [], []);
+  return {};
 }
 
 function readObject<const Keys extends readonly string[]>(
