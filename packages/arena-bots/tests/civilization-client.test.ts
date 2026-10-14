@@ -259,7 +259,7 @@ function makeBot(seat: number) {
       readonly position: ReturnType<typeof vector>;
       readonly velocity: ReturnType<typeof vector>;
     };
-    entities: Readonly<Record<number, { readonly velocity: ReturnType<typeof vector> }>>;
+    entities: Readonly<Record<number, { readonly velocity: ReturnType<typeof vector>; getDroppedItem(): null }>>;
   };
   const client = new EventEmitter();
   const world = makeLocalWorld();
@@ -284,6 +284,7 @@ function makeBot(seat: number) {
     pitch: 0,
     eyeHeight: 1.62,
     height: 1.8,
+    getDroppedItem: () => null,
   };
 
   Object.assign(bot, {
