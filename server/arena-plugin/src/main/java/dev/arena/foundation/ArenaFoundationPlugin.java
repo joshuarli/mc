@@ -246,7 +246,15 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
     @EventHandler
     public void onWorldLoad(WorldLoadEvent event) {
         if (ARENA_WORLD.equals(event.getWorld().getName())) {
-            initializeWorld(event.getWorld());
+            try {
+                initializeWorld(event.getWorld());
+            } catch (RuntimeException setupFailure) {
+                if (startupMode == StartupMode.PLAN) {
+                    getLogger().severe("ARENA_SETUP_FAILED|" + setupFailure.getMessage());
+                    Bukkit.shutdown();
+                }
+                throw setupFailure;
+            }
         }
     }
 
@@ -533,23 +541,26 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
             }
             PaperNaturalWorldAccess access = new PaperNaturalWorldAccess(searchWorld);
             try {
-                resolvedSpawns = NaturalWorldSetup.resolveSpawns(natural, access,
+                NaturalWorldSetup.ResolvedWorld resolved = NaturalWorldSetup.resolveWorld(natural, access,
                         ArenaChunkGenerator.paperMaterialCatalog(), searchWorld.getViewDistance(),
-                        prepare.initialBorderDiameterBlocks() / 2.0);
+                        prepare.initialBorderDiameterBlocks() / 2.0, loadedCheckpoint == null);
+                resolvedSpawns = resolved.spawns();
+                resolvedLootContainers = resolved.lootContainers();
+                if (loadedCheckpoint == null) {
+                    naturalWorldIdentity = resolved.worldIdentity();
+                }
             } catch (IllegalStateException unresolvable) {
                 String message = unresolvable.getMessage();
                 throw new CommandFailure(ControlProtocol.ErrorCode.INVALID_WORLD,
                         message.length() > 1000 ? message.substring(0, 1000) : message, unresolvable);
             }
-            if (loadedCheckpoint == null) {
-                access.setWorldSpawn(resolvedSpawns.getFirst().position());
-                naturalWorldIdentity = NaturalWorldSetup.worldIdentity(natural,
-                        NaturalWorldSetup.BOUNDED_SEARCH_RECIPE, resolvedSpawns, resolvedLootContainers);
-            }
             getLogger().info("ARENA_NATURAL_WORLD|recipe=" + NaturalWorldSetup.BOUNDED_SEARCH_RECIPE
                     + "|world_identity=" + naturalWorldIdentity
                     + "|spawns=" + resolvedSpawns.stream()
                             .map(spawn -> spawn.seat() + ":" + spawn.position().x() + "," + spawn.position().z())
+                            .collect(java.util.stream.Collectors.joining(";"))
+                    + "|caches=" + resolvedLootContainers.stream()
+                            .map(cache -> cache.position().x() + "," + cache.position().z())
                             .collect(java.util.stream.Collectors.joining(";")));
         }
         if (prepare.roster().size() > resolvedSpawns.size()) {

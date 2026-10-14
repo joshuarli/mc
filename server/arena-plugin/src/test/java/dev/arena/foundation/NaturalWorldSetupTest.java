@@ -310,7 +310,48 @@ final class NaturalWorldSetupTest {
 
     private static List<MapPlan.SpawnPoint> resolve(NaturalMapPlan plan, TestWorld world) {
         NaturalWorldSetup.prepare(plan, world, 2, TEST_MATERIALS);
-        return NaturalWorldSetup.resolveSpawns(plan, world, TEST_MATERIALS, 6, 0.0);
+        return NaturalWorldSetup.resolveWorld(plan, world, TEST_MATERIALS, 6, 0.0, true).spawns();
+    }
+
+    @Test
+    void cacheSearchMovesAChestOffWaterToTheNearestSafeColumnAndFailsLoudlyWhenExhausted() {
+        NaturalMapPlan plan = searchPlan(List.of(spawn(0, 100, 100)), List.of(loot(300, 300)));
+        TestWorld water = new TestWorld();
+        water.waterColumns.add(columnKey(300, 300));
+
+        NaturalWorldSetup.prepare(plan, water, 2, TEST_MATERIALS);
+        NaturalWorldSetup.ResolvedWorld resolved = NaturalWorldSetup.resolveWorld(plan, water, TEST_MATERIALS, 6, 0.0, true);
+
+        MapPlan.Position chest = resolved.lootContainers().getFirst().position();
+        assertEquals(new MapPlan.Position(299, 65, 299), chest);
+        assertEquals(List.of(new PlacedChest(chest, List.of(Material.APPLE))), water.placedChests);
+        assertTrue(resolved.recipe().startsWith("world-search-v6"));
+
+        TestWorld lake = new TestWorld();
+        for (int x = 250; x <= 350; x++) {
+            for (int z = 250; z <= 350; z++) {
+                lake.waterColumns.add(columnKey(x, z));
+            }
+        }
+        IllegalStateException failure = assertThrows(IllegalStateException.class,
+                () -> NaturalWorldSetup.resolveWorld(plan, lake, TEST_MATERIALS, 6, 0.0, true));
+        assertTrue(failure.getMessage().contains("cache declared at (300,300) examined"));
+        assertTrue(failure.getMessage().contains("unsafe-column="));
+        assertEquals(List.of(), lake.placedChests);
+    }
+
+    @Test
+    void cacheSearchSkipsDeclaredSpawnColumnsAndDuplicates() {
+        NaturalMapPlan plan = searchPlan(List.of(spawn(0, 100, 100)), List.of(loot(100, 100), loot(100, 101)));
+        TestWorld world = new TestWorld();
+        NaturalWorldSetup.prepare(plan, world, 2, TEST_MATERIALS);
+
+        NaturalWorldSetup.ResolvedWorld resolved = NaturalWorldSetup.resolveWorld(plan, world, TEST_MATERIALS, 6, 0.0, false);
+
+        List<MapPlan.Position> positions = resolved.lootContainers().stream().map(MapPlan.LootContainer::position).toList();
+        assertEquals(2, positions.stream().distinct().count());
+        assertTrue(positions.stream().noneMatch(position -> position.x() == 100 && position.z() == 100));
+        assertEquals(List.of(), world.placedChests);
     }
 
     @Test
@@ -324,15 +365,15 @@ final class NaturalWorldSetupTest {
         }
         NaturalWorldSetup.prepare(plan, lake, 2, TEST_MATERIALS);
 
-        List<MapPlan.SpawnPoint> wide = NaturalWorldSetup.resolveSpawns(plan, lake, TEST_MATERIALS, 6, 0.0);
+        List<MapPlan.SpawnPoint> wide = NaturalWorldSetup.resolveWorld(plan, lake, TEST_MATERIALS, 6, 0.0, true).spawns();
         assertTrue(Math.abs(wide.getFirst().position().x() - 100) > 10
                 || Math.abs(wide.getFirst().position().z() - 100) > 10);
 
         IllegalStateException tight = assertThrows(IllegalStateException.class,
-                () -> NaturalWorldSetup.resolveSpawns(plan, lake, TEST_MATERIALS, 6, 6.0));
+                () -> NaturalWorldSetup.resolveWorld(plan, lake, TEST_MATERIALS, 6, 6.0, true));
         assertTrue(tight.getMessage().contains("seat 0 declared at (100,100)"));
         assertThrows(IllegalStateException.class,
-                () -> NaturalWorldSetup.resolveSpawns(plan, lake, TEST_MATERIALS, 0, 0.0));
+                () -> NaturalWorldSetup.resolveWorld(plan, lake, TEST_MATERIALS, 0, 0.0, true));
     }
 
     private static NaturalMapPlan searchPlan(

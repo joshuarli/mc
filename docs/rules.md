@@ -34,8 +34,15 @@ direction and 8,192 total prepared chunks.
 
 For a schema-3 natural plan the plugin resolves each seat with a bounded,
 deterministic candidate search instead of requiring the declared column to
-be safe. World setup prepares chunks and places the caches; the search runs
-when `prepare` arrives, because only then is the initial border known.
+be safe. World setup only prepares chunks; both searches run when
+`prepare` arrives, because only then is the initial border known. Cache
+chests are resolved first: each declared chest column, then rings of radius 1
+through 24 (at most the view-distance halo) in the same order, takes the first
+column inside the border with safe support, clear headroom, no hazard within
+one block, a safe adjacent access position, no declared spawn column, and no
+chest already chosen; an exhausted cache is rejected with per-reason counts
+like a seat. Chests are placed only after both searches succeed, and a resumed
+match searches again without placing.
 Candidates are the declared column, then Chebyshev rings of radius 1 through
 48 (at most the view-distance halo, so inside the prepared chunks) ordered by
 distance to the border center, then x, then z, keeping at most 2,048 per seat

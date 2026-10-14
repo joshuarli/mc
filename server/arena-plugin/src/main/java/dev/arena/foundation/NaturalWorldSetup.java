@@ -17,9 +17,10 @@ final class NaturalWorldSetup {
     static final String DECLARED_COLUMN_RECIPE = "declared-columns-v1";
     static final int SEARCH_RING_RADIUS_BLOCKS = 48;
     static final int SEARCH_MAX_CANDIDATES_PER_SEAT = 2048;
+    static final int CACHE_SEARCH_RING_RADIUS_BLOCKS = 24;
     static final double SEARCH_BORDER_INSET_BLOCKS = 1.0;
     static final String DEFERRED_SEARCH_RECIPE = "spawn-search-deferred";
-    static final String BOUNDED_SEARCH_RECIPE = "spawn-search-v5;ring-radius=" + SEARCH_RING_RADIUS_BLOCKS
+    static final String BOUNDED_SEARCH_RECIPE = "world-search-v6;cache-radius=" + CACHE_SEARCH_RING_RADIUS_BLOCKS + ";ring-radius=" + SEARCH_RING_RADIUS_BLOCKS
             + ";max-candidates=" + SEARCH_MAX_CANDIDATES_PER_SEAT
             + ";border-inset=1;order=declared,chebyshev-ring,center-distance,x-then-z;preference=no-cliff-edge";
     private static final Set<Material> HAZARDS = Set.of(
@@ -44,6 +45,12 @@ final class NaturalWorldSetup {
 
         void setWorldSpawn(MapPlan.Position position);
     }
+
+    record ResolvedWorld(
+            List<MapPlan.SpawnPoint> spawns,
+            List<MapPlan.LootContainer> lootContainers,
+            String recipe,
+            String worldIdentity) {}
 
     record PreparedWorld(
             List<MapPlan.SpawnPoint> spawns,
@@ -80,9 +87,11 @@ final class NaturalWorldSetup {
         world.prepareChunks(chunks);
 
         boolean searching = plan.schemaVersion() == NaturalMapPlan.SCHEMA_VERSION_GENERALIZED_ROSTER;
-        List<MapPlan.SpawnPoint> resolvedSpawns = searching
-                ? provisionalSpawns(plan, world)
-                : resolveDeclaredSpawns(plan, world, materials);
+        if (searching) {
+            return new PreparedWorld(provisionalSpawns(plan, world), List.of(), chunks.size(),
+                    DEFERRED_SEARCH_RECIPE, "");
+        }
+        List<MapPlan.SpawnPoint> resolvedSpawns = resolveDeclaredSpawns(plan, world, materials);
 
         List<MapPlan.LootContainer> resolvedLoot = new ArrayList<>(plan.lootContainers().size());
         List<List<Material>> contents = new ArrayList<>(plan.lootContainers().size());
@@ -90,9 +99,6 @@ final class NaturalWorldSetup {
         for (NaturalMapPlan.SurfaceLootContainer container : plan.lootContainers()) {
             MapPlan.Position chestPosition = resolveLootPosition(world, container.column());
             validateChest(world, chestPosition, materials);
-            if (searching && hazardNear(world, chestPosition)) {
-                throw new IllegalStateException("natural cache chest is adjacent to a hazard at " + chestPosition);
-            }
             if (!chestPositions.add(chestPosition)) {
                 throw new IllegalStateException("natural cache columns resolve to the same chest position");
             }
@@ -113,9 +119,105 @@ final class NaturalWorldSetup {
             }
             world.setWorldSpawn(resolvedSpawns.getFirst().position());
         }
-        String recipe = searching ? DEFERRED_SEARCH_RECIPE : DECLARED_COLUMN_RECIPE;
-        return new PreparedWorld(resolvedSpawns, resolvedLoot, chunks.size(), recipe,
-                worldIdentity(plan, recipe, resolvedSpawns, resolvedLoot));
+        return new PreparedWorld(resolvedSpawns, resolvedLoot, chunks.size(), DECLARED_COLUMN_RECIPE,
+                worldIdentity(plan, DECLARED_COLUMN_RECIPE, resolvedSpawns, resolvedLoot));
+    }
+
+    static ResolvedWorld resolveWorld(
+            NaturalMapPlan plan,
+            SurfaceAccess world,
+            ArenaChunkGenerator.MaterialCatalog materials,
+            int viewDistanceChunks,
+            double initialBorderRadiusBlocks,
+            boolean placeCaches) {
+        int halo = Math.max(0, viewDistanceChunks) * 16;
+        List<MapPlan.LootContainer> loot = searchCaches(plan, world, materials,
+                Math.min(CACHE_SEARCH_RING_RADIUS_BLOCKS, halo), initialBorderRadiusBlocks);
+        Set<NaturalMapPlan.SurfaceColumn> cacheColumns = loot.stream()
+                .map(container -> new NaturalMapPlan.SurfaceColumn(container.position().x(), container.position().z()))
+                .collect(Collectors.toSet());
+        List<MapPlan.SpawnPoint> spawns = searchSpawns(plan, world, materials,
+                Math.min(SEARCH_RING_RADIUS_BLOCKS, halo), initialBorderRadiusBlocks, cacheColumns);
+        if (placeCaches) {
+            for (int index = 0; index < loot.size(); index++) {
+                List<Material> items = loot.get(index).inventory().stream()
+                        .map(resourceId -> ArenaChunkGenerator.requireItemMaterial(resourceId, materials))
+                        .toList();
+                world.placeLootChest(loot.get(index).position(), items);
+            }
+            world.setWorldSpawn(spawns.getFirst().position());
+        }
+        return new ResolvedWorld(spawns, loot, BOUNDED_SEARCH_RECIPE,
+                worldIdentity(plan, BOUNDED_SEARCH_RECIPE, spawns, loot));
+    }
+
+    private static List<MapPlan.LootContainer> searchCaches(
+            NaturalMapPlan plan,
+            SurfaceAccess world,
+            ArenaChunkGenerator.MaterialCatalog materials,
+            int searchRadius,
+            double borderRadius) {
+        Set<NaturalMapPlan.SurfaceColumn> spawnColumns = plan.spawns().stream()
+                .map(NaturalMapPlan.SurfaceSpawnPoint::column)
+                .collect(Collectors.toSet());
+        List<MapPlan.LootContainer> chosen = new ArrayList<>(plan.lootContainers().size());
+        Set<MapPlan.Position> chosenPositions = new HashSet<>();
+        List<String> failures = new ArrayList<>();
+        for (NaturalMapPlan.SurfaceLootContainer container : plan.lootContainers()) {
+            Map<String, Integer> rejections = new LinkedHashMap<>();
+            MapPlan.Position found = null;
+            List<NaturalMapPlan.SurfaceColumn> candidates = searchCandidates(
+                    container.column(), plan.footprint(), plan.borderCenter(), searchRadius, borderRadius);
+            for (NaturalMapPlan.SurfaceColumn candidate : candidates) {
+                String rejection = null;
+                MapPlan.Position position = null;
+                if (spawnColumns.contains(candidate)) {
+                    rejection = "spawn-column";
+                } else {
+                    try {
+                        position = resolveLootPosition(world, candidate);
+                        validateChest(world, position, materials);
+                    } catch (IllegalStateException unsafe) {
+                        rejection = "unsafe-column";
+                    }
+                }
+                if (rejection == null && hazardNear(world, position)) {
+                    rejection = "hazard";
+                }
+                if (rejection == null && chosenPositions.contains(position)) {
+                    rejection = "duplicate";
+                }
+                if (rejection == null) {
+                    Set<MapPlan.Position> withCandidate = new HashSet<>(chosenPositions);
+                    withCandidate.add(position);
+                    try {
+                        validateChestAccess(world, position, withCandidate, materials);
+                    } catch (IllegalStateException blocked) {
+                        rejection = "no-access";
+                    }
+                }
+                if (rejection == null) {
+                    found = position;
+                    break;
+                }
+                rejections.merge(rejection, 1, Integer::sum);
+            }
+            if (found == null) {
+                failures.add("cache declared at (" + container.column().x() + "," + container.column().z()
+                        + ") examined " + candidates.size() + " candidates, rejections " + rejections);
+            } else {
+                chosenPositions.add(found);
+                chosen.add(new MapPlan.LootContainer(found, container.inventory()));
+            }
+        }
+        if (!failures.isEmpty()) {
+            throw new IllegalStateException("natural cache search failed with recipe " + BOUNDED_SEARCH_RECIPE
+                    + " for world seed " + plan.worldSeed() + ": " + String.join("; ", failures));
+        }
+        for (MapPlan.LootContainer container : chosen) {
+            validateChestAccess(world, container.position(), chosenPositions, materials);
+        }
+        return chosen;
     }
 
     private static List<MapPlan.SpawnPoint> provisionalSpawns(NaturalMapPlan plan, SurfaceAccess world) {
@@ -124,16 +226,6 @@ final class NaturalWorldSetup {
             provisional.add(new MapPlan.SpawnPoint(spawn.seat(), resolveSpawnPosition(world, spawn.column())));
         }
         return provisional;
-    }
-
-    static List<MapPlan.SpawnPoint> resolveSpawns(
-            NaturalMapPlan plan,
-            SurfaceAccess world,
-            ArenaChunkGenerator.MaterialCatalog materials,
-            int viewDistanceChunks,
-            double initialBorderRadiusBlocks) {
-        int radius = Math.min(SEARCH_RING_RADIUS_BLOCKS, Math.max(0, viewDistanceChunks) * 16);
-        return searchSpawns(plan, world, materials, radius, initialBorderRadiusBlocks);
     }
 
     private static List<MapPlan.SpawnPoint> resolveDeclaredSpawns(
@@ -222,10 +314,8 @@ final class NaturalWorldSetup {
             SurfaceAccess world,
             ArenaChunkGenerator.MaterialCatalog materials,
             int searchRadius,
-            double borderRadius) {
-        Set<NaturalMapPlan.SurfaceColumn> cacheColumns = plan.lootContainers().stream()
-                .map(NaturalMapPlan.SurfaceLootContainer::column)
-                .collect(Collectors.toSet());
+            double borderRadius,
+            Set<NaturalMapPlan.SurfaceColumn> cacheColumns) {
         List<MapPlan.SpawnPoint> chosen = new ArrayList<>(plan.spawns().size());
         List<String> failures = new ArrayList<>();
         for (NaturalMapPlan.SurfaceSpawnPoint spawn : plan.spawns()) {
