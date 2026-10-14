@@ -131,11 +131,12 @@ test("checkpoint-resume", { timeout: 3_000_000 }, async (t) => {
 
 function writeFixture(): void {
   const root = process.cwd();
-  const scenario = readFileSync(join(root, "scenarios/hunger-12.toml"), "utf8");
-  const map = readFileSync(join(root, "maps/hunger-12.toml"), "utf8");
+  const scenario = readFileSync(join(root, "scenarios/hunger-six.toml"), "utf8");
+  const map = readFileSync(join(root, "maps/hunger-six.toml"), "utf8");
   mkdirSync(join(root, FIXTURE_DIRECTORY), { recursive: true });
   const text = [
-    ['map = "../maps/hunger-12.toml"', 'map = "map.toml"'],
+    ["schema = 2", "schema = 3"],
+    ['map = "../maps/hunger-six.toml"', 'map = "map.toml"'],
     ['policy = "../policies/baseline.toml"', 'policy = "../../../policies/baseline.toml"'],
     ["countdown_ticks = 100", "countdown_ticks = 40"],
     ["grace_ticks = 200", "grace_ticks = 100"],

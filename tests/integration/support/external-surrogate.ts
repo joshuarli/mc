@@ -8,7 +8,7 @@ import { createBot, type Bot } from "mineflayer";
 const JOIN_TIMEOUT_MS = 60_000;
 const ATTACK_COOLDOWN_MS = 700;
 const MAX_ATTACKS = 80;
-const MAX_STAGING_FAILURES = 6;
+const MAX_STAGING_FAILURES = 10;
 
 export interface GameAddress {
   readonly host: string;
@@ -156,12 +156,13 @@ export async function engage(
   let attacks = 0;
   let stagingFailures = 0;
   let lastFailure = "";
+  const failedTiles = new Set<string>();
   while (attacks < MAX_ATTACKS) {
     signal.throwIfAborted();
     if (eliminated()) return attacks;
     const entity = bot.players[targetUsername]?.entity;
     assert.ok(entity, `${bot.username} has not received entity ${targetUsername}`);
-    const standing = standableNear(bot, entity.position.x, entity.position.y, entity.position.z);
+    const standing = standableNear(bot, entity.position.x, entity.position.y, entity.position.z, 2, failedTiles);
     const navigation: SkillOutcome = await client.run({
       kind: "navigateToBlock",
       target: blockPosition(standing.x, standing.y, standing.z),
@@ -182,6 +183,7 @@ export async function engage(
     const strike: SkillOutcome = await client.run({ kind: "attack", target: entityId(entity.id) });
     if (strike.kind !== "succeeded") {
       stagingFailures += 1;
+      failedTiles.add(`${standing.x},${standing.y},${standing.z}`);
       lastFailure = `attack ${strike.kind === "failed" ? strike.cause : strike.kind} [${describeGeometry(bot, targetUsername)}]`;
       if (stagingFailures >= MAX_STAGING_FAILURES) {
         assert.fail(`${bot.username} could not strike ${targetUsername} after ${stagingFailures} tries: ${lastFailure}`);
@@ -233,7 +235,14 @@ function at(bot: Bot, x: number, y: number, z: number) {
   return origin.offset(x - origin.x, y - origin.y, z - origin.z);
 }
 
-function standableNear(bot: Bot, x: number, y: number, z: number, minSpan = 2): { x: number; y: number; z: number } {
+function standableNear(
+  bot: Bot,
+  x: number,
+  y: number,
+  z: number,
+  minSpan = 2,
+  excluded: ReadonlySet<string> = new Set(),
+): { x: number; y: number; z: number } {
   const centerX = Math.floor(x);
   const centerY = Math.floor(y);
   const centerZ = Math.floor(z);
@@ -250,6 +259,7 @@ function standableNear(bot: Bot, x: number, y: number, z: number, minSpan = 2): 
         const head = bot.blockAt(at(bot, candidateX, candidateY + 1, candidateZ));
         const floor = bot.blockAt(at(bot, candidateX, candidateY - 1, candidateZ));
         if (feet?.name !== "air" || head?.name !== "air" || floor?.boundingBox !== "block") continue;
+        if (excluded.has(`${candidateX},${candidateY},${candidateZ}`)) continue;
         const candidate = at(bot, candidateX + 0.5, candidateY, candidateZ + 0.5);
         const score = candidate.distanceTo(at(bot, x, y, z)) * 100 + bot.entity.position.distanceTo(candidate);
         if (best === undefined || score < best.score) best = { x: candidateX, y: candidateY, z: candidateZ, score };
