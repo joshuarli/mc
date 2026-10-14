@@ -317,6 +317,7 @@ usage:
   ./arena decision-diff --run-id <id> --candidate <id> [--baseline <id>] [--seat <n>]
   ./arena league --manifest <path> --accept-minecraft-eula [--concurrency <1-4>]
   ./arena quality --scenario <path> --seeds <a,b,c> --accept-minecraft-eula [--candidate <id>] [--concurrency <1-4>]
+  ./arena duel --scenario <path> --candidate <id> --opponent <id|pool> --seeds <a,b,c> --rounds <1-3> --accept-minecraft-eula [--concurrency <1-4>]
   ./arena bench --profile scale-v1 --accept-minecraft-eula [--workloads <list>] [--layouts <1,2,4>] [--regimes <list>] [--max-level <n>]
   ./arena save --run-id <id> [--checkpoint-id <id>]
   ./arena resume --checkpoint <id> --accept-minecraft-eula [--run-id <id>]
@@ -358,7 +359,7 @@ launch_runner() {
     cli="$root/.work/build/packages/arena-runner/src/cli.js"
     [ -f "$cli" ] || fail "runner CLI is not built at $cli"
     case "$cli_command" in
-        run|play|watch|resume|league|quality|bench) needs_runtime=1 ;;
+        run|play|watch|resume|league|quality|duel|bench) needs_runtime=1 ;;
         *) needs_runtime=0 ;;
     esac
     if [ "$needs_runtime" = 1 ]; then
@@ -553,7 +554,7 @@ case "$command" in
     build) build_command "$@" ;;
     check) check_command "$@" ;;
     test) test_command "$@" ;;
-    report|inspect|compare|prepare|validate|doctor|run|play|watch|explain|decision-diff|league|quality|bench|save|resume|replay-policy|gc)
+    report|inspect|compare|prepare|validate|doctor|run|play|watch|explain|decision-diff|league|quality|duel|bench|save|resume|replay-policy|gc)
         launch_runner "$command" "$@"
         ;;
     help|-h|--help)

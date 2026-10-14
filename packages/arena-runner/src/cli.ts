@@ -19,6 +19,7 @@ import { commandPerfGate } from './bench/perf-gate.js';
 import { profileById, WORKLOAD_KINDS, type WorkerLayout, type WorkloadKind, type WorldRegime } from './bench/profile.js';
 import { parseConcurrency } from './bounded.js';
 import { runLeague } from './league/harness.js';
+import { DUEL_MAX_ROUNDS, DUEL_MAX_SEEDS, runDuel } from './league/duel.js';
 import { runQuality } from './league/quality.js';
 import { LiveMatchRunner } from './league/live-runner.js';
 import { parseLeagueManifest, parseSeedManifest, profileSpec, resolveLeagueManifest, type CandidateSpec } from './league/manifest.js';
@@ -92,6 +93,7 @@ async function dispatchCliBytes(args: readonly Buffer[]): Promise<CliResult> {
   if (command === 'decision-diff') return await decisionDiffCommand(rest);
   if (command === 'league') return await leagueCommand(rest);
   if (command === 'quality') return await qualityCommand(rest);
+  if (command === 'duel') return await duelCommand(rest);
   if (command === 'bench') return await benchCommand(rest);
   if (command === 'prepare') return await prepareCommand(rest);
   if (command === 'validate') return await validateCommand(rest);
@@ -455,6 +457,90 @@ async function qualityCommand(args: readonly Buffer[]): Promise<CliResult> {
     });
     writeProgress([text]);
     const store = new OwnedLeagueStore({ helperPath, ownedRoot, leagueId: 'quality' });
+    const path = await store.writeReport(report);
+    return success({ ...report, report_path: path });
+  });
+}
+
+async function duelCommand(args: readonly Buffer[]): Promise<CliResult> {
+  let scenarioArgument: Buffer | undefined;
+  let seedsText: string | undefined;
+  let candidateText: string | undefined;
+  let opponentText: string | undefined;
+  let roundsText: string | undefined;
+  let concurrency = 1;
+  let accepted = false;
+  for (let index = 0; index < args.length;) {
+    const option = argumentText(args[index]!, index + 1);
+    if (option === '--accept-minecraft-eula') {
+      if (accepted) throw invalidInput('duel_accept_minecraft_eula_repeated');
+      accepted = true;
+      index += 1;
+      continue;
+    }
+    if (index + 1 >= args.length) throw invalidInput('duel_option_requires_value');
+    const value = args[index + 1]!;
+    if (option === '--scenario' && scenarioArgument === undefined) scenarioArgument = value;
+    else if (option === '--seeds' && seedsText === undefined) seedsText = argumentText(value, index + 2);
+    else if (option === '--candidate' && candidateText === undefined) candidateText = argumentText(value, index + 2);
+    else if (option === '--opponent' && opponentText === undefined) opponentText = argumentText(value, index + 2);
+    else if (option === '--rounds' && roundsText === undefined) roundsText = argumentText(value, index + 2);
+    else if (option === '--concurrency') {
+      const parsed = parseConcurrency(argumentText(value, index + 2));
+      if (parsed === undefined) throw invalidInput('duel_invalid_concurrency');
+      concurrency = parsed;
+    } else throw invalidInput('unexpected_argument');
+    index += 2;
+  }
+  if (opponentText === 'pool') throw invalidInput('duel_opponent_pool_unavailable');
+  if (scenarioArgument === undefined) throw invalidInput('duel_requires_scenario');
+  if (seedsText === undefined) throw invalidInput('duel_requires_seeds');
+  if (candidateText === undefined) throw invalidInput('duel_requires_candidate');
+  if (opponentText === undefined) throw invalidInput('duel_requires_opponent');
+  if (roundsText === undefined) throw invalidInput('duel_requires_rounds');
+  const seeds = seedsText.split(',').map((entry) => {
+    if (!/^(0|[1-9][0-9]{0,15})$/.test(entry)) throw invalidInput('duel_invalid_seed');
+    return Number(entry);
+  });
+  if (seeds.length === 0 || seeds.length > DUEL_MAX_SEEDS || new Set(seeds).size !== seeds.length) {
+    throw invalidInput('duel_invalid_seeds');
+  }
+  if (!/^[1-9][0-9]?$/.test(roundsText)) throw invalidInput('duel_invalid_rounds');
+  const rounds = Number(roundsText);
+  if (rounds > DUEL_MAX_ROUNDS) throw invalidInput('duel_invalid_rounds');
+  const ids = CANDIDATE_IDS as readonly string[];
+  if (!ids.includes(candidateText)) throw invalidInput('duel_unknown_candidate');
+  if (!ids.includes(opponentText)) throw invalidInput('duel_unknown_opponent');
+  if (!accepted) throw new RunnerError('missing_prerequisite', 'Minecraft EULA', { kind: 'missing_eula' });
+  const scenarioPath = normalizeScenarioPath(scenarioArgument);
+  const helperPath = configuredAbsolutePath('ARENA_FS_HELPER', 'filesystem helper');
+  const ownedRoot = Buffer.from(process.cwd(), 'utf8');
+  return await withProcessAbortSignal(async (signal) => {
+    const inputs = await compileScenarioAndPolicy(helperPath, ownedRoot, scenarioPath, signal);
+    if (inputs.scenario.mode !== 'hunger_games') throw invalidInput('duel_requires_hunger_games');
+    if (inputs.scenario.roster.competitors !== 2) throw invalidInput('duel_requires_two_competitors');
+    const javaHome = configuredAbsolutePath('ARENA_JAVA_HOME', 'Java runtime');
+    const paperJarPath = configuredAbsolutePath('ARENA_PAPER_JAR', 'Paper server JAR');
+    const pluginJarPath = configuredAbsolutePath('ARENA_PLUGIN_JAR', 'Arena plugin JAR');
+    const scenarioSource = decodeSource(await readSource(helperPath, ownedRoot, scenarioPath, 'scenario input', signal), 'scenario input');
+    const runner = new LiveMatchRunner({
+      helperPath, ownedRoot, javaExecutable: resolve(javaHome, 'bin', 'java'), paperJarPath, pluginJarPath,
+      leagueId: 'duel', scenarioPath, scenarioSource,
+    });
+    const { report, text } = await runDuel({
+      request: {
+        scenario: scenarioPath.toString('utf8'),
+        seeds,
+        rounds,
+        candidate: { id: candidateText as CandidateSpec['id'], params: {} },
+        opponent: { id: opponentText as CandidateSpec['id'], params: {} },
+        runTag: randomBytes(3).toString('hex'),
+      },
+      runner, concurrency, signal,
+      progress: (message) => writeProgress([`Duel: ${message}`]),
+    });
+    writeProgress([text]);
+    const store = new OwnedLeagueStore({ helperPath, ownedRoot, leagueId: 'duel' });
     const path = await store.writeReport(report);
     return success({ ...report, report_path: path });
   });
@@ -1029,6 +1115,7 @@ function helpJson(): object {
       'resume --checkpoint <id> --accept-minecraft-eula [--run-id <id>] [--join-timeout-seconds <n>]': 'Resume a saved match in a new run at the next epoch.',
       'league --manifest <path> --accept-minecraft-eula [--concurrency <1-4>]': 'Run or resume a league of candidate policies against frozen opponents and report the paired analysis, per-seat quality, and quality gates.',
       'quality --scenario <path> --seeds <a,b,c> --accept-minecraft-eula [--candidate <id>] [--concurrency <1-4>]': 'Run one Hunger Games match per seed, concurrently on ephemeral ports, and report the per-seat quality table and quality gates.',
+      'duel --scenario <path> --candidate <id> --opponent <id|pool> --seeds <a,b,c> --rounds <1-3> --accept-minecraft-eula [--concurrency <1-4>]': 'Run both seat assignments of a two-competitor Hunger Games duel for each seed and round, and report the paired score. --opponent pool is rejected until a frozen opponent pool exists.',
       'prepare --scenario <path> --run-id <id>': 'Compile a scenario and stage its world plan in a new run directory.',
       'validate --scenario <path>': 'Compile the scenario, map, and policy without staging a run.',
       'run --scenario <path> --accept-minecraft-eula [--run-id <id>] [--reserve-external-spectator-slot] [--wait-for-external-player] [--join-timeout-seconds <n>] [--workers <n>]': 'Run a match and report its stopped result.',
