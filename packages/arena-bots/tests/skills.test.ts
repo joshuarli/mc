@@ -253,6 +253,82 @@ test('travel navigation looks down between legs and melee pursuit does not', asy
     blocked.observer.close();
   }
 
+  const hole = openRivalTravel({ solid: true, standableStep: false });
+  try {
+    const running = hole.owner.run({ kind: 'navigate', target: blockPosition(16, 64, 0) });
+    await waitUntil(() => hole.events.includes('goal'));
+    hole.bot.emit('goal_reached', hole.pathfinder.goal as never);
+    await waitUntil(() => hole.events.filter((event) => event === 'goal').length >= 2);
+    const floorY = 64;
+    const inset = 0.3;
+    const nearEdgeX = 0.5;
+    const nearEdgeZ = 1 - inset;
+    const holeStep = { x: 0, y: floorY, z: 1 };
+    const nextGoal = hole.pathfinder.goal;
+    assert.ok(nextGoal !== null && typeof nextGoal === 'object');
+    const goalRecord = nextGoal as { readonly x?: unknown; readonly y?: unknown; readonly z?: unknown };
+    const edgeX = goalRecord.x;
+    const edgeY = goalRecord.y;
+    const edgeZ = goalRecord.z;
+    assert.equal(typeof edgeX, 'number');
+    assert.equal(typeof edgeY, 'number');
+    assert.equal(typeof edgeZ, 'number');
+    if (typeof edgeX !== 'number' || typeof edgeY !== 'number' || typeof edgeZ !== 'number') {
+      throw new Error('missing edge goal');
+    }
+    assert.ok(Math.abs(edgeX - nearEdgeX) < 1e-9);
+    assert.equal(edgeY, floorY);
+    assert.ok(Math.abs(edgeZ - nearEdgeZ) < 1e-9);
+    assert.ok(edgeX !== holeStep.x || edgeY !== holeStep.y || edgeZ !== holeStep.z);
+    const cancellation = hole.owner.cancel('shutdown');
+    assert.deepEqual(await running, { kind: 'cancelled', reason: 'shutdown' });
+    await cancellation;
+  } finally {
+    await hole.owner.close();
+    hole.observer.close();
+  }
+
+  const repeated = openRivalTravel({ solid: true });
+  const repeatedGoals: Array<{ readonly x: number; readonly y: number; readonly z: number }> = [];
+  const repeatedSetGoal = repeated.pathfinder.setGoal.bind(repeated.pathfinder);
+  repeated.pathfinder.setGoal = (goal) => {
+    repeatedSetGoal(goal);
+    if (goal === null || typeof goal !== 'object') return;
+    const goalRecord = goal as { readonly x?: unknown; readonly y?: unknown; readonly z?: unknown };
+    const x = goalRecord.x;
+    const y = goalRecord.y;
+    const z = goalRecord.z;
+    if (typeof x !== 'number' || typeof y !== 'number' || typeof z !== 'number') return;
+    repeatedGoals.push({ x, y, z });
+  };
+  try {
+    const running = repeated.owner.run({ kind: 'navigate', target: blockPosition(16, 64, 0) });
+    await waitUntil(() => repeatedGoals.length >= 1);
+    repeated.bot.emit('path_update', { status: 'noPath' } as never);
+    await waitUntil(() => repeatedGoals.length >= 2);
+    repeated.bot.emit('path_update', { status: 'noPath' } as never);
+    await waitUntil(() => repeatedGoals.length >= 3);
+    const originalGoal = repeatedGoals[0];
+    const failedStep = repeatedGoals[1];
+    const continuedGoal = repeatedGoals[2];
+    if (originalGoal === undefined || failedStep === undefined || continuedGoal === undefined) {
+      throw new Error('missing repeated travel goal');
+    }
+    assert.equal(failedStep.x, 0);
+    assert.equal(failedStep.y, 64);
+    assert.equal(failedStep.z, 1);
+    assert.equal(continuedGoal.x, originalGoal.x);
+    assert.equal(continuedGoal.y, originalGoal.y);
+    assert.equal(continuedGoal.z, originalGoal.z);
+    assert.ok(continuedGoal.x !== failedStep.x || continuedGoal.y !== failedStep.y || continuedGoal.z !== failedStep.z);
+    const cancellation = repeated.owner.cancel('shutdown');
+    assert.deepEqual(await running, { kind: 'cancelled', reason: 'shutdown' });
+    await cancellation;
+  } finally {
+    await repeated.owner.close();
+    repeated.observer.close();
+  }
+
   const trapped = openRivalTravel({ solid: false });
   try {
     const running = trapped.owner.run({ kind: 'navigate', target: blockPosition(16, 64, 0) });
@@ -1839,7 +1915,7 @@ function prepareEating(name = 'bread', food = 10) {
   };
 }
 
-function openRivalTravel(options: { readonly solid: boolean }) {
+function openRivalTravel(options: { readonly solid: boolean; readonly standableStep?: boolean }) {
   const eyeHeight = 1.62;
   const harness = makeHarness();
   const events: string[] = [];
@@ -1880,7 +1956,14 @@ function openRivalTravel(options: { readonly solid: boolean }) {
     },
     entities: { 2: rival },
     players: { rival: { entity: rival, gamemode: 0 } },
-    blockAt: () => options.solid ? solid : { name: 'air' },
+    blockAt: (point: Bot['entity']['position']) => {
+      if (!options.solid || options.standableStep === false) return { name: 'air', boundingBox: 'empty', position: point };
+      const x = Math.floor(point.x);
+      const y = Math.floor(point.y);
+      const z = Math.floor(point.z);
+      if (x === 0 && z === 1 && (y === 64 || y === 65)) return { name: 'air', boundingBox: 'empty', position: point };
+      return { name: 'stone', boundingBox: 'block', position: point };
+    },
     lookAt: async (point: Bot['entity']['position']) => {
       events.push('look');
       const eye = harness.bot.entity.position.offset(0, eyeHeight, 0);
