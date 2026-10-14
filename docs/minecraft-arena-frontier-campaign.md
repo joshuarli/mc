@@ -1,6 +1,6 @@
 # Arena Frontier: from a six-bot experiment to competitive worlds
 
-**Status:** paused 2026-10-14. Active priorities: bot quality and UHC-style duel training (Priority override). Resume from the Handoff. Written against `master` at `f479b16` (2026-10-14). It supersedes the earlier agent campaign plans, which G0 deleted.
+**Status:** resumed 2026-10-14. Active priorities: bot quality and UHC-style duel training (Priority override). Integration branch `campaign/frontier` at `43969c6` (fast-forward of the pause tip plus the three docs commits that were already on `master`). In flight: Q-engage, D-rules, D-ladder, Q-trapped. Q-resilience waits on Q-engage (`skills.ts`). D-pool and D-skills wait on the strike rewrite. Written against `master` at `f479b16` (2026-10-14). It supersedes the earlier agent campaign plans, which G0 deleted.
 
 ## Priority override (2026-10-14, owner)
 
@@ -492,6 +492,7 @@ Do not spend a research phase rediscovering launchers, server replacements, bot 
 - 2026-10-14 S3: rule modes are a `[rules]` table in scenario 3; squads outcome stays last-survivor by seat.
 - 2026-10-14 M3: introduced `policy-input-v4`; merge held until the runner migration (R2) landed.
 - 2026-10-14 S7: natural hunger-six moved to scenario schema 3 so the spawn search applies; schema 1/2 stay strict.
+- 2026-10-14 resume: Q-resilience stays behind Q-engage (shared `skills.ts`); D-ladder accepts any two-seat hunger scenario until `uhc_duel` merges; Q-trapped runs beside D-ladder because it only edits seat quality.
 
 ## 12. Campaign log (append-only, one line per phase end or parked item)
 
@@ -499,6 +500,7 @@ Do not spend a research phase rediscovering launchers, server replacements, bot 
 - 2026-10-14 P1 partial: S1–S10, M0–M3a, L1a, R1–R3, L1, K1, B1 merged; C0 and M4 parked partial (craft defect, survival case unrun).
 - 2026-10-14 paused: campaign wound down at owner request; see Handoff.
 - 2026-10-14 quality sprint: Q0 baseline, Q-loop, policy-v5/improved, S11/S13 spawn fixes merged; melee engage rewrite planned not implemented; second pause at owner request.
+- 2026-10-14 resumed: wave is Q-engage (`campaign/frontier-engage`), D-rules (`campaign/frontier-duel-rules`), D-ladder (`campaign/frontier-duel-ladder`), Q-trapped (`campaign/frontier-trapped`). Worktrees under `.work/wt/frontier-*`. Q-resilience waits on Q-engage because both edit `skills.ts`. D-pool and D-skills wait for the same reason. D-ladder does not depend on the `uhc_duel` kind; it accepts any two-seat hunger scenario until D-rules merges.
 
 ## 13. For the owner afterwards
 
