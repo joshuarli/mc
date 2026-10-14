@@ -37,6 +37,8 @@ import {
 import { createPreparePayload, createRuntimeRoster, type RuntimeSpectatorMode } from './roster.js';
 import { externalSeats } from '../effective-scenario.js';
 import { ActionFunnelCollector, flushDiagnosticRings } from './funnel.js';
+import { launchWorkerProcess, WorkerCohort, type WorkerLauncher } from '../workers/cohort.js';
+import { parseWorkerCount } from '../workers/assignment.js';
 import { assertEventSeatsInRoster } from './roster-bounds.js';
 import {
   paperArguments,
@@ -111,6 +113,8 @@ export interface RunPreparedRunOptions {
   readonly spectatorMode?: RuntimeSpectatorMode;
   readonly waitForExternalPlayer?: true;
   readonly externalJoinTimeoutMs?: number;
+  readonly workers?: number;
+  readonly workerLauncher?: WorkerLauncher;
   readonly onExternalAdmitted?: (username: string) => void;
   readonly onUnexpectedPlayer?: (username: string) => void;
   readonly onPhase?: (phase: ClockPayload['phase']) => void;
@@ -155,6 +159,7 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
   let trace: RuntimeTraceBuilder | undefined;
   let coordinator: ControlCoordinator | undefined;
   let funnel: ActionFunnelCollector | undefined;
+  let cohort: WorkerCohort | undefined;
   let clients: readonly RuntimeCompetitorClient[] = [];
   let spectators: readonly RuntimeSpectatorClient[] = [];
   let evaluatorAbort: AbortController | undefined;
@@ -174,9 +179,18 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
       throw new RunnerError('invalid_input', 'competitor driver', { kind: 'evaluator_missing' });
     }
     const javaTmpDir = validateJavaTempDirectory(options.ownedRoot);
-    const policy = await loadPolicy(options, runSignal);
+    const workerCount = parseWorkerCount(options.workers ?? 1);
+    if (workerCount > 1 && (scenario.mode !== 'hunger_games' || competitorDriver !== 'baselinePolicy'
+        || options.evaluate !== undefined)) {
+      throw new RunnerError('invalid_input', 'worker count', { kind: 'workers_require_unattended_hunger_games' });
+    }
+    const loadedPolicy = await loadPolicy(options, runSignal);
+    const policy = loadedPolicy.policy;
     const recordsActionFunnel = scenario.mode === 'hunger_games' && scenario.record.policyReplay
       && competitorDriver === 'baselinePolicy';
+    if (workerCount > 1 && !recordsActionFunnel) {
+      throw new RunnerError('invalid_input', 'worker count', { kind: 'workers_require_policy_replay_recording' });
+    }
     const serverInputs: RuntimeServerInputs = { ...options, javaTmpDir, signal: runSignal };
     const pluginIdentity = await readRuntimePluginIdentity(serverInputs);
     const pluginBytes = await readRuntimePluginJar(serverInputs);
@@ -282,7 +296,7 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
       processFailure,
       abortPromise,
       leaseLost,
-      policy: competitorDriver === 'baselinePolicy' ? policy : undefined,
+      policy: competitorDriver === 'baselinePolicy' && workerCount === 1 ? policy : undefined,
       policySeed: scenario.seed,
       strategyIntervalTicks: scenario.bots.strategyIntervalTicks,
       ...(scenario.mode === 'hunger_games' && scenario.schemaVersion !== 1
@@ -295,6 +309,32 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
       recordPolicy: scenario.record.policyReplay,
       ...(funnel === undefined ? {} : { funnel }),
     });
+    if (workerCount > 1) {
+      cohort = new WorkerCohort({
+        workerCount,
+        seats: roster.botCompetitors.map((entry) => ({
+          seat: entry.seat, username: entry.username, offline_uuid: entry.offline_uuid,
+        })),
+        launcher: options.workerLauncher ?? launchWorkerProcess(),
+        trace: runtimeTrace,
+        ...(funnel === undefined ? {} : { collector: funnel }),
+        currentTick: () => coordinator!.lastMatchTick,
+        base: {
+          host: CLIENT_HOST,
+          port: GAME_PORT,
+          minecraft: scenario.server.minecraft,
+          view_distance_chunks: scenario.server.viewDistanceChunks,
+          seed: scenario.seed.toString(),
+          strategy_interval_ticks: scenario.bots.strategyIntervalTicks.toString(),
+          opening_style_cycle: scenario.schemaVersion !== 1 && scenario.mode === 'hunger_games'
+            ? [...scenario.openingStyleCycle] as [string, string, string] : null,
+          record_policy: scenario.record.policyReplay,
+          policy_source: loadedPolicy.source,
+          roster: roster.competitors.map((entry) => ({ seat: entry.seat, username: entry.username })),
+        },
+      });
+      coordinator.attachCohort(cohort);
+    }
     coordinator.startPump();
 
     const prepareEnvelope = await coordinator.send({ type: 'prepare', payload: preparePayload });
@@ -303,7 +343,7 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
     }
     const clientOptions = { host: CLIENT_HOST, port: GAME_PORT, scenario, signal: runSignal,
       publicRoster: roster.botCompetitors.map((entry) => ({ seat: entry.seat, username: entry.username, offlineUuid: entry.offline_uuid })) } as const;
-    clients = roster.botCompetitors.map((competitor) => new RuntimeCompetitorClient(
+    clients = (cohort !== undefined ? [] : roster.botCompetitors).map((competitor) => new RuntimeCompetitorClient(
       competitor.seat,
       roster.competitorIdentities[competitor.seat]!,
       funnel === undefined ? clientOptions : { ...clientOptions, funnel: funnel.sink(competitor.seat) },
@@ -312,6 +352,7 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
     await raceWithRunState(
       Promise.all([
         ...clients.map((competitor) => connectCompetitor(competitor)),
+        ...(cohort === undefined ? [] : [cohort.start()]),
         ...spectators.map((spectator) => connectSpectator(spectator, clientOptions)),
       ]),
       abortPromise,
@@ -463,6 +504,7 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
       competitors: roster.competitorIdentities,
       spectators: roster.spectators,
       stats,
+      ...(cohort !== undefined && cohort.losses.length > 0 ? { degraded: cohort.losses } : {}),
     });
   } catch (error) {
     const failure = runSignal.reason instanceof RunnerError ? runSignal.reason : error;
@@ -479,6 +521,7 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
       spectators,
       coordinator,
       funnel,
+      cohort,
       helperPath: options.helperPath,
       ownedRoot: options.ownedRoot,
       runDirectoryPath: options.preparedRun.runDirectoryPath,
@@ -519,6 +562,9 @@ class ControlCoordinator {
   readonly #rosterSize: number;
   readonly #onPhase: ((phase: ClockPayload['phase']) => void) | undefined;
   #phase: ClockPayload['phase'] | undefined;
+  #cohort: WorkerCohort | undefined;
+  #cohortStopped = false;
+  #lastMatchTick: number | null = null;
   #failure: unknown;
   #pending: { readonly correlation: bigint; readonly acknowledgment: Deferred<ControlMessage> } | undefined;
   #runnerSequence: bigint;
@@ -581,6 +627,15 @@ class ControlCoordinator {
     return this.#failureState.promise;
   }
 
+  get lastMatchTick(): number | null {
+    return this.#lastMatchTick;
+  }
+
+  attachCohort(cohort: WorkerCohort): void {
+    this.#cohort = cohort;
+    void cohort.failure.catch((error: unknown) => this.#fail(error));
+  }
+
   get outcomeReceived(): boolean {
     return this.#outcomeReceived;
   }
@@ -639,10 +694,13 @@ class ControlCoordinator {
   }
 
   async stopPolicyTasks(): Promise<void> {
+    this.#cohortStopped = true;
     await this.#policyLoop?.stopAndJoin();
+    await this.#cohort?.stopAndDrain();
   }
 
   stopPolicyLaunching(): void {
+    this.#cohortStopped = true;
     this.#policyLoop?.stopLaunching();
   }
 
@@ -656,6 +714,7 @@ class ControlCoordinator {
         const tickReceivedAtNs = this.#measurePolicyActivity && message.type === 'public_clock' ? process.hrtime.bigint() : undefined;
         if (message.type === 'outcome') {
           this.#outcomeReceived = true;
+          this.#cohortStopped = true;
           this.#policyLoop?.stopLaunching();
         }
         await this.#traceOrder.run(async () => {
@@ -691,12 +750,14 @@ class ControlCoordinator {
           }
         });
 
-        if (message.type === 'public_clock' && this.#policyLoop !== undefined
-            && message.payload.tick?.domain === 'match'
-            && (message.payload.phase === 'grace' || message.payload.phase === 'active')) {
+        if (message.type === 'public_clock' && message.payload.tick?.domain === 'match') {
           const value = Number(message.payload.tick.value);
           if (!Number.isSafeInteger(value)) throw new RunnerError('runtime_failure', 'policy clock', { kind: 'tick_out_of_range' });
-          this.#policyLoop.onTick(value, tickReceivedAtNs);
+          this.#lastMatchTick = value;
+          if (message.payload.phase === 'grace' || message.payload.phase === 'active') {
+            this.#policyLoop?.onTick(value, tickReceivedAtNs);
+            if (!this.#cohortStopped) this.#cohort?.onTick(value);
+          }
         }
       }
       if (!this.#outcomeReceived) throw new RunnerError('runtime_failure', 'control session', { kind: 'outcome_missing' });
@@ -752,7 +813,7 @@ async function loadPolicy(options: RunPreparedRunOptions, signal: AbortSignal) {
     throw new RunnerError('invalid_input', 'policy input', { kind: 'invalid_utf8' });
   }
   try {
-    return compilePolicy(text);
+    return { policy: compilePolicy(text), source: text };
   } catch (error) {
     if (!(error instanceof SpecError)) throw error;
     throw new RunnerError('invalid_input', 'policy input', {
@@ -881,6 +942,7 @@ async function cleanupOwnedRun(options: Readonly<{
   spectators: readonly RuntimeSpectatorClient[];
   coordinator: ControlCoordinator | undefined;
   funnel: ActionFunnelCollector | undefined;
+  cohort: WorkerCohort | undefined;
   helperPath: string;
   ownedRoot: Buffer;
   runDirectoryPath: Buffer;
@@ -914,6 +976,10 @@ async function cleanupOwnedRun(options: Readonly<{
     } catch (error) {
       failure ??= cleanupErrorUnlessPrimary(error, options.primaryFailure);
     }
+  }
+  if (options.cohort !== undefined) {
+    try { await options.cohort.terminate(); }
+    catch (error) { failure ??= cleanupErrorUnlessPrimary(error, options.primaryFailure); }
   }
   const clientsClosed = await Promise.allSettled([
     ...options.clients.map((client) => client.close()),

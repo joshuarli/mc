@@ -16,6 +16,7 @@ import {
   TRACE_SCHEMA_VERSION,
   type TraceRecord,
 } from '../trace.js';
+import { WORKER_RECORD_SCHEMAS, type WorkerEventRecord } from '../worker-record.js';
 import { ACTION_FUNNEL_RECORD_SCHEMA, type ActionFunnelTraceRecordV1 } from '../funnel-record.js';
 import { isAuthenticatedControlMessage, type RunnerCommandEnvelope } from './session.js';
 import {
@@ -100,6 +101,19 @@ export class RuntimeTraceBuilder {
     this.#ownedRoot = Buffer.from(options.ownedRoot);
     this.#runDirectoryPath = Buffer.from(options.preparedRun.runDirectoryPath);
     this.#schemaVersion = options.actionFunnel === true ? FUNNEL_TRACE_SCHEMA_VERSION : TRACE_SCHEMA_VERSION;
+  }
+
+  recordWorkerEvent(record: WorkerEventRecord): Promise<void> {
+    return this.#enqueue(async () => {
+      this.#assertMutable();
+      if (this.#schemaVersion !== FUNNEL_TRACE_SCHEMA_VERSION || !WORKER_RECORD_SCHEMAS.includes(record.schema)) {
+        throw new RunnerError('runtime_failure', 'run trace', { kind: 'worker_record_not_enabled' });
+      }
+      if (!this.#hasReady || !this.#hasPrepare) {
+        throw new RunnerError('runtime_failure', 'run trace', { kind: 'worker_record_out_of_order' });
+      }
+      await this.#append(toTraceRecord(undefined, record));
+    });
   }
 
   recordActionFunnel(record: ActionFunnelTraceRecordV1): Promise<void> {

@@ -86,4 +86,5 @@ export interface CompletedOwnedRun {
   readonly competitors: readonly PlayerIdentity[];
   readonly spectators: readonly PlayerIdentity[];
   readonly stats: readonly StoppedPlayerStats[];
+  readonly degraded?: readonly import('../workers/cohort.js').WorkerLoss[];
 }

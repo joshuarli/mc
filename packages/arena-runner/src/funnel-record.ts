@@ -33,6 +33,7 @@ export interface ActionFunnelTraceRecordV1 {
   readonly border: BorderKnowledgeKind;
   readonly skill: 'succeeded' | 'failed' | 'cancelled' | 'progress' | 'pending';
   readonly funnel: ActionFunnelTraceOutcome | null;
+  readonly source?: Readonly<{ worker: number; epoch: number; sequence: number; tick: number | null }>;
 }
 
 export function makeActionFunnelTraceRecord(input: Readonly<{
@@ -75,8 +76,17 @@ const ACTIONS = new Set<string>(FUNNEL_ACTIONS);
 
 export function readActionFunnelTraceRecord(record: TraceRecord, recordNumber: number): ActionFunnelTraceRecordV1 {
   const fail = (field: string): TraceError => new TraceError({ kind: 'invalid_action_funnel_record', record: recordNumber, field });
-  const keys = Object.keys(record);
+  const keys = Object.keys(record).filter((key) => key !== 'source');
   if (keys.length !== FIELDS.length || keys.some((key) => !FIELDS.includes(key))) throw fail('fields');
+  let source: ActionFunnelTraceRecordV1['source'];
+  if (Object.hasOwn(record, 'source')) {
+    const value = record.source as TraceRecord | null;
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) throw fail('source');
+    const parts = ['worker', 'epoch', 'sequence'].map((name) => value[name]);
+    if (parts.some((part) => typeof part !== 'number' || !Number.isSafeInteger(part) || part < 0)
+        || (value.tick !== null && (typeof value.tick !== 'number' || !Number.isSafeInteger(value.tick)))) throw fail('source');
+    source = Object.freeze({ worker: parts[0] as number, epoch: parts[1] as number, sequence: parts[2] as number, tick: value.tick as number | null });
+  }
   const integer = (value: unknown, field: string, nullable: boolean): number | null => {
     if (value === null && nullable) return null;
     if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) throw fail(field);
@@ -125,5 +135,6 @@ export function readActionFunnelTraceRecord(record: TraceRecord, recordNumber: n
     border: record.border as BorderKnowledgeKind,
     skill: record.skill as ActionFunnelTraceRecordV1['skill'],
     funnel,
+    ...(source === undefined ? {} : { source }),
   });
 }

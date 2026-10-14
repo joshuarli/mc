@@ -8,6 +8,7 @@ import { consumeRawArgv, RawArgvError, rawArgumentText } from './owned-files/raw
 import { comparisonJson, inspectJson, reconstruct, reportJson, type Evidence } from './evidence.js';
 import { canonicalJson } from './canonical.js';
 import { RunnerError } from './errors.js';
+import { parseWorkerCount } from './workers/assignment.js';
 import { withExternalSeat, type ExternalSeatRequest } from './effective-scenario.js';
 import { prepareRun, resolveScenarioResource } from './prepare.js';
 import { replayPolicyJson } from './policy-replay.js';
@@ -266,6 +267,7 @@ interface MatchArguments {
   readonly waitForExternalPlayer: boolean;
   readonly externalSeat: ExternalSeatRequest | undefined;
   readonly joinTimeoutMs: number | undefined;
+  readonly workers: number;
 }
 
 const MAX_JOIN_TIMEOUT_SECONDS = 3600;
@@ -279,6 +281,7 @@ function parseMatchArguments(command: MatchCommand, args: readonly Buffer[]): Ma
   let username: string | undefined;
   let seat: number | undefined;
   let joinTimeoutMs: number | undefined;
+  let workers: number | undefined;
   const takesLegacyFlags = command === 'run';
   for (let index = 0; index < args.length;) {
     const option = argumentText(args[index]!, index + 1);
@@ -307,6 +310,13 @@ function parseMatchArguments(command: MatchCommand, args: readonly Buffer[]): Ma
       const seconds = /^[1-9][0-9]{0,3}$/.test(text) ? Number(text) : 0;
       if (seconds < 1 || seconds > MAX_JOIN_TIMEOUT_SECONDS) throw invalidInput(`${command}_invalid_join_timeout`);
       joinTimeoutMs = seconds * 1000;
+      index += 2;
+      continue;
+    }
+    if (option === '--workers') {
+      const text = hasValue ? argumentText(args[index + 1]!, index + 2) : '';
+      if (workers !== undefined || !/^[1-9][0-9]?$/.test(text)) throw invalidInput(`${command}_invalid_workers`);
+      try { workers = parseWorkerCount(Number(text)); } catch { throw invalidInput(`${command}_invalid_workers`); }
       index += 2;
       continue;
     }
@@ -349,6 +359,7 @@ function parseMatchArguments(command: MatchCommand, args: readonly Buffer[]): Ma
     waitForExternalPlayer: command === 'watch' || waitForExternalPlayer,
     externalSeat: command === 'play' ? { seat: seat ?? 0, username: username! } : undefined,
     joinTimeoutMs,
+    workers: workers ?? 1,
   });
 }
 
@@ -404,6 +415,7 @@ async function matchCommand(command: MatchCommand, args: readonly Buffer[]): Pro
             spectatorMode: parsed.spectatorMode,
             ...(parsed.waitForExternalPlayer ? { waitForExternalPlayer: true as const } : {}),
             ...(parsed.joinTimeoutMs === undefined ? {} : { externalJoinTimeoutMs: parsed.joinTimeoutMs }),
+            workers: parsed.workers,
             signal,
             coldStartDeadline,
             onRosterReady: (details) => {
@@ -458,6 +470,12 @@ async function matchCommand(command: MatchCommand, args: readonly Buffer[]): Pro
           run_id: completed.runId,
           scenario_semantic_id: preparedRun.scenario.semanticId,
           role,
+          ...(completed.degraded === undefined ? {} : {
+            degraded: true,
+            worker_losses: completed.degraded.map((loss) => ({
+              worker: loss.worker, epoch: loss.epoch, seats: loss.seats, reason: loss.reason,
+            })),
+          }),
           created_paths: {
             run_directory: preparedRun.runDirectoryPath.toString('utf8'),
             world_plan: preparedRun.worldPlanPath.toString('utf8'),
@@ -663,9 +681,9 @@ function helpJson(): object {
       'explain --run-id <id> --seat <n>': 'Tie one seat\'s recorded decisions to permitted evidence, skill outcomes, funnel stages, and authoritative effects.',
       'prepare --scenario <path> --run-id <id>': 'Compile a scenario and stage its world plan in a new run directory.',
       'validate --scenario <path>': 'Compile the scenario, map, and policy without staging a run.',
-      'run --scenario <path> --accept-minecraft-eula [--run-id <id>] [--reserve-external-spectator-slot] [--wait-for-external-player] [--join-timeout-seconds <n>]': 'Run a match and report its stopped result.',
-      'play --scenario <path> --username <name> [--seat <n>] --accept-minecraft-eula [--run-id <id>] [--join-timeout-seconds <n>]': 'Run a match in which one external client holds the reserved competitive seat (default 0).',
-      'watch --scenario <path> --accept-minecraft-eula [--run-id <id>] [--join-timeout-seconds <n>]': 'Run a match with one reserved spectator slot and wait for an external client before the countdown.',
+      'run --scenario <path> --accept-minecraft-eula [--run-id <id>] [--reserve-external-spectator-slot] [--wait-for-external-player] [--join-timeout-seconds <n>] [--workers <n>]': 'Run a match and report its stopped result.',
+      'play --scenario <path> --username <name> [--seat <n>] --accept-minecraft-eula [--run-id <id>] [--join-timeout-seconds <n>] [--workers <n>]': 'Run a match in which one external client holds the reserved competitive seat (default 0).',
+      'watch --scenario <path> --accept-minecraft-eula [--run-id <id>] [--join-timeout-seconds <n>] [--workers <n>]': 'Run a match with one reserved spectator slot and wait for an external client before the countdown.',
       'replay-policy <segment>...': 'Replay recorded core policy decisions and validate correlated skill/path effect records.',
     },
     errors: {

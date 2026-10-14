@@ -312,9 +312,9 @@ usage:
   ./arena check <compatibility|build-script|lint>
   ./arena test --suite <core|spec|bots|owned-files|runtime|runner|protocol|integration|acceptance|java> --case <name>
   ./arena <report|inspect|compare|prepare|validate|doctor|run|replay-policy|gc> <arguments...>
-  ./arena play --scenario <path> --username <name> [--seat <n>] --accept-minecraft-eula [--join-timeout-seconds <n>]
+  ./arena play --scenario <path> --username <name> [--seat <n>] --accept-minecraft-eula [--join-timeout-seconds <n>] [--workers <n>]
   ./arena explain --run-id <id> --seat <n>
-  ./arena watch --scenario <path> --accept-minecraft-eula [--join-timeout-seconds <n>]
+  ./arena watch --scenario <path> --accept-minecraft-eula [--join-timeout-seconds <n>] [--workers <n>]
 EOF
 }
 

@@ -19,10 +19,15 @@ import type { PlayerIdentity } from './observations.js';
 const CLIENT_SPAWN_TIMEOUT_MS = 30_000;
 const MAX_RECEIPT_EVENTS = 4_096;
 
+export interface HungerGamesClientView {
+  readonly mode: 'hunger_games';
+  readonly server: ScenarioIr['server'];
+}
+
 export interface RuntimeClientOptions {
   readonly host: '127.0.0.1';
   readonly port: number;
-  readonly scenario: ScenarioIr;
+  readonly scenario: ScenarioIr | HungerGamesClientView;
   readonly signal: AbortSignal;
   readonly publicRoster: readonly CivilizationRosterMember[];
   readonly funnel?: ActionFunnelSink;
@@ -31,7 +36,7 @@ export interface RuntimeClientOptions {
 export class RuntimeCompetitorClient implements RuntimeCompetitorHandle {
   readonly seat: number;
   readonly identity: PlayerIdentity;
-  readonly #scenario: ScenarioIr;
+  readonly #scenario: ScenarioIr | HungerGamesClientView;
   readonly #connectionOptions: RuntimeClientOptions;
   readonly #connections: RuntimeBotConnection[] = [];
   #connection: RuntimeBotConnection | undefined;
