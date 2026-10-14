@@ -15,3 +15,7 @@ The acceptance helper temporarily adds `-Darena.civilization-evaluator=true` thr
 The material stream starts with a match-tick-zero checkpoint. At each later match-tick boundary, the producer emits a checkpoint when the tracked material state changes. After any successful ordinary player death, the producer also emits a checkpoint at that death's match tick, even when the tracked state is unchanged. One checkpoint can close several death-cargo records from the same tick.
 
 The reader requires that same-tick checkpoint after each death-cargo record. It does not treat a missing checkpoint as evidence that a zero-cargo death left material unchanged. Unchanged checkpoints without pending same-tick death-cargo records remain invalid.
+
+## Open defect: inventory crafting on the live server
+
+`civilization-rules` reaches the sixteen-plank craft and fails there. Mineflayer's `bot.craft` sends the 2x2 grid clicks for the second and later iterations before the server's acknowledgements arrive. Each click carries a stale state id, so the server answers with a full `window_items` resync and an offhand `set_slot` per click, and the client's local model drifts. Observed outcomes are a five-second timeout with eight to twelve planks, and one run that crafted an `oak_button` from a plank left in the grid. The next step is to craft one iteration per owned operation and wait for the result slot and the consumed log count before the next click, or to use `_syncWindow` between iterations, then rerun `civilization-rules`, `civilization-six`, and `civilization-baseline`.

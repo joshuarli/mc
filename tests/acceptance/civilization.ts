@@ -379,7 +379,15 @@ export async function prepareCivilizationFactionMaterials(
   const crafted = await recordCivilizationAction(actions, gathererSeat,
     { kind: "craftMaterial", item: "oak_planks", resultCount: 16 }, craftIntent,
     () => runCivilizationSkill(gatherer, craftIntent, signal));
-  assertSucceeded(crafted, `seat ${gathererSeat} must craft the ordinary sixteen-plank recipe`);
+  if (crafted.kind !== "succeeded") {
+    const craftBot = active.competitors.find((candidate) => candidate.seat === gathererSeat)?.bot;
+    throw new Error(`seat ${gathererSeat} must craft the ordinary sixteen-plank recipe; ${JSON.stringify({
+      outcome: crafted,
+      slots: craftBot?.inventory.slots.flatMap((stack, slot) => stack === null || stack === undefined ? []
+        : [`${slot}:${stack.name}x${stack.count}`]),
+      cursor: craftBot?.inventory.selectedItem?.name ?? null,
+    })}`);
+  }
   observation = await waitForCivilizationObservation(active, gatherer, signal,
     `seat ${gathererSeat} to observe crafted planks`,
     (current) => current.ownMaterials.kind === "current"
