@@ -1036,6 +1036,10 @@ class ControlCoordinator {
         throw new RunnerError('runtime_failure', 'control session', { kind: 'outcome_missing' });
       }
     } catch (error) {
+      if (this.#checkpointed && error instanceof ControlSessionError
+          && (error.code === 'control_disconnected' || error.code === 'control_closed')) {
+        return;
+      }
       this.#pending?.acknowledgment.reject(error);
       this.#pending = undefined;
       this.#outcome.reject(error);
