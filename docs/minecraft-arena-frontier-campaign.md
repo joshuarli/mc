@@ -1,6 +1,6 @@
 # Arena Frontier: from a six-bot experiment to competitive worlds
 
-**Status:** active 2026-10-14, bot-quality sprint is the top priority (see Priority override). Written against `master` at `f479b16` (2026-10-14). It supersedes the earlier agent campaign plans, which G0 deleted.
+**Status:** winding down. Written against `master` at `f479b16` (2026-10-14). It supersedes the earlier agent campaign plans, which G0 deleted.
 
 ## Priority override (2026-10-14, owner)
 
