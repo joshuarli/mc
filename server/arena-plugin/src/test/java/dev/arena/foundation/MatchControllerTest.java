@@ -113,6 +113,18 @@ final class MatchControllerTest {
     }
 
     @Test
+    void competitorCountIsBoundedByTheSeatLimitAndExternalAuthorityStaysAtSixSeats() {
+        MatchController full = new MatchController(settings(0, 0, 6), MatchController.MAX_COMPETITORS);
+        assertEquals(MatchController.MAX_COMPETITORS, full.aliveSeats().size());
+
+        assertThrows(IllegalArgumentException.class,
+                () -> new MatchController(settings(0, 0, 6), MatchController.MAX_COMPETITORS + 1));
+        assertThrows(IllegalArgumentException.class, () -> new MatchController(
+                new Settings(BigInteger.ZERO, BigInteger.ZERO, BigInteger.valueOf(2), new FixedBorder(192)), 7,
+                OutcomeAuthority.EXTERNAL));
+    }
+
+    @Test
     void externalFactionOutcomeKeepsTheMatchActiveAfterOneSeatRemains() {
         MatchController match = new MatchController(new Settings(BigInteger.ZERO, BigInteger.ZERO,
                 BigInteger.valueOf(2), new FixedBorder(192)), 6, OutcomeAuthority.EXTERNAL);

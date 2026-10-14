@@ -385,6 +385,31 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
         }
     }
 
+    private void requireRosterMatchesPlan(ControlProtocol.PreparePayload prepare) {
+        boolean generalizedPlan = generationPlan instanceof NaturalMapPlan natural
+                && natural.schemaVersion() == NaturalMapPlan.SCHEMA_VERSION_GENERALIZED_ROSTER;
+        boolean generalizedPrepare = prepare.rosterVersion() == ControlProtocol.RosterVersion.GENERALIZED;
+        if (generalizedPlan != generalizedPrepare) {
+            throw new CommandFailure(ControlProtocol.ErrorCode.INVALID_WORLD,
+                    "prepare roster version does not match the staged world-plan schema");
+        }
+        if (!generalizedPlan) {
+            return;
+        }
+        List<NaturalMapPlan.RosterSeat> planned = ((NaturalMapPlan) generationPlan).roster();
+        boolean matches = planned.size() == prepare.roster().size();
+        for (int index = 0; matches && index < planned.size(); index++) {
+            NaturalMapPlan.RosterSeat seat = planned.get(index);
+            ControlProtocol.Competitor competitor = prepare.roster().get(index);
+            matches = seat.seat() == competitor.seat() && seat.kind() == competitor.kind()
+                    && (seat.kind() == ControllerKind.BOT || seat.username().equals(competitor.username()));
+        }
+        if (!matches) {
+            throw new CommandFailure(ControlProtocol.ErrorCode.INVALID_WORLD,
+                    "prepare roster does not match the staged world-plan roster");
+        }
+    }
+
     private void prepareMatch(ControlProtocol.PreparePayload prepare) {
         if (!worldInitialized || startupMode != StartupMode.PLAN || matchController != null) {
             throw new CommandFailure(ControlProtocol.ErrorCode.INVALID_STATE,
@@ -404,6 +429,7 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
             throw new CommandFailure(ControlProtocol.ErrorCode.INVALID_WORLD,
                     "prepare does not identify the staged arena map");
         }
+        requireRosterMatchesPlan(prepare);
         if (prepare.roster().size() > resolvedSpawns.size()) {
             throw new CommandFailure(ControlProtocol.ErrorCode.INVALID_WORLD,
                     "the staged map has no spawn point for every configured seat");
@@ -575,7 +601,7 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
         if (preparedMatch == null || isRunningMatch()) {
             return false;
         }
-        for (ControlProtocol.BotCompetitor bot : preparedMatch.roster()) {
+        for (ControlProtocol.Competitor bot : preparedMatch.roster()) {
             if (bot.offlineUuid().equals(player.getUniqueId()) && bot.username().equals(player.getName())) {
                 UUID previous = playersBySeat.get(bot.seat());
                 if (previous != null && !previous.equals(player.getUniqueId())) {
@@ -654,7 +680,7 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
     }
 
     private boolean allConfiguredBotsAreOnline() {
-        for (ControlProtocol.BotCompetitor bot : preparedMatch.roster()) {
+        for (ControlProtocol.Competitor bot : preparedMatch.roster()) {
             if (!bot.offlineUuid().equals(playersBySeat.get(bot.seat()))
                     || Bukkit.getPlayer(bot.offlineUuid()) == null) {
                 return false;
@@ -921,8 +947,8 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
         }
         CivilizationMaterialCensus.requireLoadedChunks(
                 civilizationMaterialCensusMapChunks, world::isChunkLoaded);
-        List<CivilizationMaterialCensus.InventorySnapshot> inventories = new ArrayList<>(6);
-        for (int seat = 0; seat < 6; seat++) {
+        List<CivilizationMaterialCensus.InventorySnapshot> inventories = new ArrayList<>(CivilizationMatchController.SEAT_COUNT);
+        for (int seat = 0; seat < CivilizationMatchController.SEAT_COUNT; seat++) {
             UUID playerId = playersBySeat.get(seat);
             Player player = playerId == null ? null : Bukkit.getPlayer(playerId);
             if (player == null || !player.isOnline()) {

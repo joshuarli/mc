@@ -11,6 +11,8 @@ import java.util.TreeMap;
 import java.util.TreeSet;
 
 final class MatchController {
+    static final int MAX_COMPETITORS = 256;
+
     enum Phase {
         WAITING,
         COUNTDOWN,
@@ -214,10 +216,12 @@ final class MatchController {
     }
 
     MatchController(Settings settings, int competitorCount, OutcomeAuthority outcomeAuthority) {
-        if (settings == null || competitorCount < 1 || competitorCount > 6) {
-            throw new IllegalArgumentException("competitor count must be between one and six");
+        if (settings == null || competitorCount < 1 || competitorCount > MAX_COMPETITORS) {
+            throw new IllegalArgumentException(
+                    "competitor count must be between one and " + MAX_COMPETITORS);
         }
-        if (outcomeAuthority == null || (outcomeAuthority == OutcomeAuthority.EXTERNAL && competitorCount != 6)) {
+        if (outcomeAuthority == null || (outcomeAuthority == OutcomeAuthority.EXTERNAL
+                && competitorCount != CivilizationMatchController.SEAT_COUNT)) {
             throw new IllegalArgumentException("external outcome resolution requires six configured competitors");
         }
         this.settings = settings;

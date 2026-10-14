@@ -34,6 +34,9 @@ final class ControlProtocol {
     private static final String SEMANTIC_ID_PATTERN = "[0-9a-f]{64}";
     private static final String PARTICIPANT_PATTERN = "[A-Za-z0-9][A-Za-z0-9._:-]{0,127}";
     private static final String USERNAME_PATTERN = "[A-Za-z0-9_]{1,16}";
+    private static final String EXTERNAL_USERNAME_PATTERN = "[A-Za-z0-9_]{3,16}";
+    static final int LEGACY_MAX_COMPETITORS = 6;
+    static final int MAX_SEAT = MatchController.MAX_COMPETITORS - 1;
     private static final String TOKEN_PATTERN = "[A-Za-z0-9_-]+";
 
     private ControlProtocol() {}
@@ -77,9 +80,10 @@ final class ControlProtocol {
 
     enum Capability {
         HUNGER_GAMES_V1("hunger_games_v1"),
-        CIVILIZATION_V1("civilization_v1");
+        CIVILIZATION_V1("civilization_v1"),
+        HUNGER_GAMES_ROSTER_V2("hunger_games_roster_v2");
 
-        static final List<Capability> SUPPORTED = List.of(HUNGER_GAMES_V1, CIVILIZATION_V1);
+        static final List<Capability> SUPPORTED = List.of(HUNGER_GAMES_V1, CIVILIZATION_V1, HUNGER_GAMES_ROSTER_V2);
 
         private final String wireName;
 
@@ -275,7 +279,7 @@ final class ControlProtocol {
         }
 
         static FactionId forSeat(int seat) {
-            if (seat < 0 || seat >= 6) {
+            if (seat < 0 || seat >= CivilizationMatchController.SEAT_COUNT) {
                 throw new IllegalArgumentException("civilization seat is out of range");
             }
             return seat < 3 ? EMBER : TIDE;
@@ -371,12 +375,32 @@ final class ControlProtocol {
         }
     }
 
-    record BotCompetitor(int seat, String participantId, String username, UUID offlineUuid) {
-        BotCompetitor {
-            require(seat >= 0 && seat <= 5, "bot seat is out of range");
+    record Competitor(int seat, ControllerKind kind, String participantId, String username, UUID offlineUuid) {
+        Competitor {
+            require(seat >= 0 && seat <= MAX_SEAT, "competitor seat is out of range");
+            Objects.requireNonNull(kind, "competitor controller kind");
             require(participantId != null && participantId.matches(PARTICIPANT_PATTERN), "invalid participant id");
-            require(username != null && username.matches(USERNAME_PATTERN), "invalid bot username");
-            Objects.requireNonNull(offlineUuid, "bot offline UUID");
+            require(username != null && username.matches(USERNAME_PATTERN), "invalid competitor username");
+            Objects.requireNonNull(offlineUuid, "competitor offline UUID");
+        }
+
+        Competitor(int seat, String participantId, String username, UUID offlineUuid) {
+            this(seat, ControllerKind.BOT, participantId, username, offlineUuid);
+        }
+    }
+
+    enum RosterVersion {
+        BOTS_ONLY(LEGACY_MAX_COMPETITORS),
+        GENERALIZED(MatchController.MAX_COMPETITORS);
+
+        private final int maxCompetitors;
+
+        RosterVersion(int maxCompetitors) {
+            this.maxCompetitors = maxCompetitors;
+        }
+
+        int maxCompetitors() {
+            return maxCompetitors;
         }
     }
 
@@ -482,7 +506,8 @@ final class ControlProtocol {
 
     record FactionMember(int seat, CivilizationRole role) {
         FactionMember {
-            require(seat >= 0 && seat <= 5, "civilization faction seat is out of range");
+            require(seat >= 0 && seat < CivilizationMatchController.SEAT_COUNT,
+                    "civilization faction seat is out of range");
             Objects.requireNonNull(role, "civilization role");
         }
     }
@@ -587,16 +612,29 @@ final class ControlProtocol {
             String scenarioSemanticId,
             BigInteger seed,
             PrepareSettings settings,
-            List<BotCompetitor> roster) implements Payload {
+            RosterVersion rosterVersion,
+            List<Competitor> roster) implements Payload {
+        PreparePayload(
+                String mapSemanticId,
+                String scenarioSemanticId,
+                BigInteger seed,
+                PrepareSettings settings,
+                List<Competitor> roster) {
+            this(mapSemanticId, scenarioSemanticId, seed, settings, RosterVersion.BOTS_ONLY, roster);
+        }
+
         PreparePayload {
             require(mapSemanticId != null && mapSemanticId.matches(SEMANTIC_ID_PATTERN), "invalid map semantic id");
             require(scenarioSemanticId != null && scenarioSemanticId.matches(SEMANTIC_ID_PATTERN),
                     "invalid scenario semantic id");
             require(isU64(seed), "invalid prepare seed");
             Objects.requireNonNull(settings, "prepare settings");
+            Objects.requireNonNull(rosterVersion, "roster version");
             roster = List.copyOf(Objects.requireNonNull(roster, "roster"));
-            validateRoster(roster);
-            require(!(settings instanceof CivilizationPrepareSettings) || roster.size() == 6,
+            validateRoster(roster, rosterVersion);
+            require(!(settings instanceof CivilizationPrepareSettings)
+                            || (rosterVersion == RosterVersion.BOTS_ONLY
+                                    && roster.size() == CivilizationMatchController.SEAT_COUNT),
                     "civilization requires exactly six bot competitors");
         }
 
@@ -650,7 +688,7 @@ final class ControlProtocol {
 
     record Elimination(int seat, EliminationCause cause) {
         Elimination {
-            require(seat >= 0 && seat <= 5, "elimination seat is out of range");
+            require(seat >= 0 && seat <= MAX_SEAT, "elimination seat is out of range");
             Objects.requireNonNull(cause, "elimination cause");
         }
     }
@@ -659,7 +697,8 @@ final class ControlProtocol {
         EliminationPayload {
             Objects.requireNonNull(at, "elimination tick");
             eliminations = List.copyOf(Objects.requireNonNull(eliminations, "eliminations"));
-            require(!eliminations.isEmpty() && eliminations.size() <= 6, "invalid elimination count");
+            require(!eliminations.isEmpty() && eliminations.size() <= MatchController.MAX_COMPETITORS,
+                    "invalid elimination count");
             int previousSeat = -1;
             for (Elimination elimination : eliminations) {
                 Objects.requireNonNull(elimination, "elimination");
@@ -733,7 +772,7 @@ final class ControlProtocol {
 
     record WinnerOutcome(int winnerSeat, List<Integer> survivors, Tick tick) implements Outcome {
         WinnerOutcome {
-            require(winnerSeat >= 0 && winnerSeat <= 5, "winner seat is out of range");
+            require(winnerSeat >= 0 && winnerSeat <= MAX_SEAT, "winner seat is out of range");
             survivors = orderedSeats(survivors, "winner survivors");
             require(survivors.equals(List.of(winnerSeat)), "winner must be its sole survivor");
             Objects.requireNonNull(tick, "winner tick");
@@ -967,14 +1006,23 @@ final class ControlProtocol {
 
     private static Payload readPrepare(Object value) throws IOException {
         Map<String, Object> payload = object(value, "payload",
-                Set.of("map_semantic_id", "scenario_semantic_id", "seed", "mode", "settings", "roster"),
+                Set.of("map_semantic_id", "scenario_semantic_id", "seed", "mode", "settings", "roster",
+                        "roster_version"),
                 Set.of("map_semantic_id", "scenario_semantic_id", "seed", "mode", "settings", "roster"));
         String mode = readString(payload.get("mode"), "payload.mode", 1, 64, null);
-        List<BotCompetitor> roster = readRoster(payload.get("roster"));
+        RosterVersion rosterVersion = RosterVersion.BOTS_ONLY;
+        if (payload.containsKey("roster_version")) {
+            if (!"hunger_games".equals(mode)) {
+                throw invalid("payload.roster_version", "only Hunger Games supports the generalized roster");
+            }
+            readInteger(payload.get("roster_version"), "payload.roster_version", 2, 2);
+            rosterVersion = RosterVersion.GENERALIZED;
+        }
+        List<Competitor> roster = readRoster(payload.get("roster"), rosterVersion);
         PrepareSettings settings = switch (mode) {
             case "hunger_games" -> readHungerGamesPrepareSettings(payload.get("settings"));
             case "civilization" -> {
-                if (roster.size() != 6) {
+                if (roster.size() != CivilizationMatchController.SEAT_COUNT) {
                     throw invalid("payload.roster", "civilization requires exactly six bot competitors");
                 }
                 yield readCivilizationPrepareSettings(payload.get("settings"));
@@ -986,6 +1034,7 @@ final class ControlProtocol {
                 readString(payload.get("scenario_semantic_id"), "payload.scenario_semantic_id", 64, 64, SEMANTIC_ID_PATTERN),
                 readU64String(payload.get("seed"), "payload.seed", false),
                 settings,
+                rosterVersion,
                 roster);
     }
 
@@ -1070,7 +1119,7 @@ final class ControlProtocol {
                 Map<String, Object> member = object(members.get(memberIndex), memberPath,
                         Set.of("seat", "role"), Set.of("seat", "role"));
                 parsedMembers.add(new FactionMember(
-                        readInteger(member.get("seat"), memberPath + ".seat", 0, 5),
+                        readInteger(member.get("seat"), memberPath + ".seat", 0, CivilizationMatchController.SEAT_COUNT - 1),
                         CivilizationRole.fromWire(readString(member.get("role"), memberPath + ".role", 1, 32, null),
                                 memberPath + ".role")));
             }
@@ -1129,22 +1178,28 @@ final class ControlProtocol {
                 readIntegerLong(position.get("z"), path + ".z", 0, MAX_SAFE_INTEGER_LONG));
     }
 
-    private static List<BotCompetitor> readRoster(Object value) throws IOException {
-        List<Object> entries = array(value, "payload.roster", 1, 6);
-        List<BotCompetitor> roster = new ArrayList<>(entries.size());
+    private static List<Competitor> readRoster(Object value, RosterVersion version) throws IOException {
+        List<Object> entries = array(value, "payload.roster", 1, version.maxCompetitors());
+        List<Competitor> roster = new ArrayList<>(entries.size());
         for (int index = 0; index < entries.size(); index++) {
             String path = "payload.roster[" + index + "]";
             Map<String, Object> member = object(entries.get(index), path,
                     Set.of("kind", "seat", "participant_id", "username", "offline_uuid"),
                     Set.of("kind", "seat", "participant_id", "username", "offline_uuid"));
-            String kind = readString(member.get("kind"), path + ".kind", 1, 16, null);
-            int seat = readInteger(member.get("seat"), path + ".seat", 0, 5);
+            String kindText = readString(member.get("kind"), path + ".kind", 1, 16, null);
+            int seat = readInteger(member.get("seat"), path + ".seat", 0, version.maxCompetitors() - 1);
             String participantId = readString(member.get("participant_id"), path + ".participant_id", 1, 128,
                     PARTICIPANT_PATTERN);
             if (seat != index) {
                 throw invalid(path + ".seat", "roster seats must be ordered and contiguous from zero");
             }
-            if (!"bot".equals(kind)) {
+            ControllerKind kind;
+            try {
+                kind = ControllerKind.fromWire(kindText);
+            } catch (IllegalArgumentException unknownKind) {
+                throw invalid(path + ".kind", unknownKind.getMessage());
+            }
+            if (version == RosterVersion.BOTS_ONLY && kind != ControllerKind.BOT) {
                 throw invalid(path + ".kind", "all roster members must be bots");
             }
             String username = readString(member.get("username"), path + ".username", 1, 16, USERNAME_PATTERN);
@@ -1156,9 +1211,13 @@ final class ControlProtocol {
             } catch (IllegalArgumentException invalidUuid) {
                 throw invalid(path + ".offline_uuid", "invalid offline UUID");
             }
-            roster.add(new BotCompetitor(seat, participantId, username, uuid));
+            roster.add(new Competitor(seat, kind, participantId, username, uuid));
         }
-        validateRoster(roster);
+        try {
+            validateRoster(roster, version);
+        } catch (IllegalArgumentException invalidRoster) {
+            throw invalid("payload.roster", invalidRoster.getMessage());
+        }
         return List.copyOf(roster);
     }
 
@@ -1185,14 +1244,14 @@ final class ControlProtocol {
 
     private static Payload readElimination(Object value) throws IOException {
         Map<String, Object> payload = object(value, "payload", Set.of("at", "eliminations"), Set.of("at", "eliminations"));
-        List<Object> values = array(payload.get("eliminations"), "payload.eliminations", 1, 6);
+        List<Object> values = array(payload.get("eliminations"), "payload.eliminations", 1, MatchController.MAX_COMPETITORS);
         List<Elimination> eliminations = new ArrayList<>(values.size());
         for (int index = 0; index < values.size(); index++) {
             String path = "payload.eliminations[" + index + "]";
             Map<String, Object> elimination = object(values.get(index), path,
                     Set.of("seat", "cause"), Set.of("seat", "cause"));
             eliminations.add(new Elimination(
-                    readInteger(elimination.get("seat"), path + ".seat", 0, 5),
+                    readInteger(elimination.get("seat"), path + ".seat", 0, MAX_SEAT),
                     EliminationCause.fromWire(readString(elimination.get("cause"), path + ".cause", 1, 32, null),
                             path + ".cause")));
         }
@@ -1246,7 +1305,7 @@ final class ControlProtocol {
             if (!payload.keySet().equals(Set.of("kind", "winner_seat", "survivors", "at")) || tick.isEmpty()) {
                 throw invalid("payload", "winner outcome requires a winner seat and authoritative tick only");
             }
-            return new WinnerOutcome(readInteger(payload.get("winner_seat"), "payload.winner_seat", 0, 5), survivors,
+            return new WinnerOutcome(readInteger(payload.get("winner_seat"), "payload.winner_seat", 0, MAX_SEAT), survivors,
                     tick.orElseThrow());
         }
         if ("faction_winner".equals(kind)) {
@@ -1320,10 +1379,10 @@ final class ControlProtocol {
     }
 
     private static List<Integer> readSeatList(Object value, String path) throws IOException {
-        List<Object> values = array(value, path, 0, 6);
+        List<Object> values = array(value, path, 0, MatchController.MAX_COMPETITORS);
         List<Integer> seats = new ArrayList<>(values.size());
         for (int index = 0; index < values.size(); index++) {
-            seats.add(readInteger(values.get(index), path + "[" + index + "]", 0, 5));
+            seats.add(readInteger(values.get(index), path + "[" + index + "]", 0, MAX_SEAT));
         }
         return orderedSeats(seats, path);
     }
@@ -1368,13 +1427,17 @@ final class ControlProtocol {
                         "border", object("kind", "fixed", "diameter_blocks", civilization.border().diameterBlocks()),
                         "civilization", civilizationSettingsValue(civilization.civilization()));
             }
-            return object(
+            Map<String, Object> prepareValue = object(
                     "map_semantic_id", prepare.mapSemanticId(),
                     "scenario_semantic_id", prepare.scenarioSemanticId(),
                     "seed", prepare.seed().toString(),
                     "mode", prepare.mode(),
                     "settings", modeSettings,
                     "roster", prepare.roster().stream().map(ControlProtocol::competitorValue).toList());
+            if (prepare.rosterVersion() == RosterVersion.GENERALIZED) {
+                prepareValue.put("roster_version", 2);
+            }
+            return prepareValue;
         }
         if (payload instanceof AbortPayload abort) {
             return object("reason", abort.reason().wireName());
@@ -1476,9 +1539,10 @@ final class ControlProtocol {
                 object("faction_id", FactionId.TIDE.wireName(), "points", scores.tidePoints().toString()));
     }
 
-    private static Object competitorValue(BotCompetitor bot) {
-        return object("kind", "bot", "seat", bot.seat(), "participant_id", bot.participantId(),
-                "username", bot.username(), "offline_uuid", bot.offlineUuid().toString());
+    private static Object competitorValue(Competitor competitor) {
+        return object("kind", competitor.kind().wireName(), "seat", competitor.seat(),
+                "participant_id", competitor.participantId(), "username", competitor.username(),
+                "offline_uuid", competitor.offlineUuid().toString());
     }
 
     private static Object tickValue(Tick tick) {
@@ -1701,18 +1765,37 @@ final class ControlProtocol {
         };
     }
 
-    private static void validateRoster(List<BotCompetitor> roster) {
-        require(!roster.isEmpty() && roster.size() <= 6, "roster must contain one to six competitors");
+    private static void validateRoster(List<Competitor> roster, RosterVersion version) {
+        require(!roster.isEmpty() && roster.size() <= version.maxCompetitors(),
+                "roster must contain one to " + version.maxCompetitors() + " competitors");
         Set<String> participants = new HashSet<>();
         Set<String> usernames = new HashSet<>();
         Set<UUID> uuids = new HashSet<>();
         for (int index = 0; index < roster.size(); index++) {
-            BotCompetitor bot = Objects.requireNonNull(roster.get(index), "roster competitor");
-            require(bot.seat() == index, "roster seats must be ordered and contiguous from zero");
-            require(participants.add(bot.participantId()), "participant ids must be unique");
-            require(usernames.add(bot.username()), "bot usernames must be unique");
-            require(uuids.add(bot.offlineUuid()), "bot offline UUIDs must be unique");
+            Competitor competitor = Objects.requireNonNull(roster.get(index), "roster competitor");
+            require(competitor.seat() == index, "roster seats must be ordered and contiguous from zero");
+            require(participants.add(competitor.participantId()), "participant ids must be unique");
+            if (version == RosterVersion.BOTS_ONLY) {
+                require(competitor.kind() == ControllerKind.BOT, "all roster members must be bots");
+                require(usernames.add(competitor.username()), "bot usernames must be unique");
+            } else {
+                require(usernames.add(competitor.username().toLowerCase(java.util.Locale.ROOT)),
+                        "competitor usernames must be unique ignoring case");
+                require(competitor.offlineUuid().equals(offlineUuid(competitor.username())),
+                        "offline UUID must derive from the username");
+                if (competitor.kind() == ControllerKind.EXTERNAL) {
+                    String folded = competitor.username().toLowerCase(java.util.Locale.ROOT);
+                    require(competitor.username().matches(EXTERNAL_USERNAME_PATTERN)
+                                    && !folded.startsWith("arenabot") && !folded.startsWith("arenaspec"),
+                            "external usernames must be 3 to 16 characters outside the runner identity space");
+                }
+            }
+            require(uuids.add(competitor.offlineUuid()), "competitor offline UUIDs must be unique");
         }
+    }
+
+    static UUID offlineUuid(String username) {
+        return UUID.nameUUIDFromBytes(("OfflinePlayer:" + username).getBytes(StandardCharsets.UTF_8));
     }
 
     private static <T> List<T> distinctList(List<T> values, String label) {
@@ -1723,10 +1806,12 @@ final class ControlProtocol {
 
     private static List<Integer> orderedSeats(List<Integer> values, String label) {
         List<Integer> copy = List.copyOf(Objects.requireNonNull(values, label));
-        require(copy.size() <= 6, label + " cannot contain more than six seats");
+        require(copy.size() <= MatchController.MAX_COMPETITORS, label + " cannot contain more than "
+                + MatchController.MAX_COMPETITORS + " seats");
         int previous = -1;
         for (Integer seat : copy) {
-            require(seat != null && seat >= 0 && seat <= 5 && seat > previous, label + " must be ordered and unique");
+            require(seat != null && seat >= 0 && seat <= MAX_SEAT && seat > previous,
+                    label + " must be ordered and unique");
             previous = seat;
         }
         return copy;

@@ -15,6 +15,9 @@ import java.util.TreeSet;
 
 final class NaturalMapPlan extends WorldPlan {
     private static final long NATURAL_FOOTPRINT_BLOCKS = 1024;
+    static final int SCHEMA_VERSION_LEGACY_ROSTER = 2;
+    static final int SCHEMA_VERSION_GENERALIZED_ROSTER = 3;
+    static final int MAX_LEGACY_SPAWNS = MapPlan.MAX_PLANNED_SPAWNS;
     static final int MAX_LOOT_CONTAINERS = MapPlan.MAX_LOOT_CONTAINERS;
     static final int MAX_PREPARED_CHUNKS = MapPlan.MAX_PREPARED_CHUNKS;
     static final BigInteger MAX_WORLD_SEED = BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE);
@@ -26,6 +29,25 @@ final class NaturalMapPlan extends WorldPlan {
     record SurfaceColumn(int x, int z) {}
 
     record BorderCenter(double x, double z) {}
+
+    record RosterSeat(int seat, ControllerKind kind, String username) {
+        RosterSeat {
+            if (seat < 0 || seat >= MatchController.MAX_COMPETITORS || kind == null
+                    || (kind == ControllerKind.BOT) != (username == null)
+                    || (username != null && !username.matches("[A-Za-z0-9_]{3,16}"))) {
+                throw new IllegalArgumentException(
+                        "roster seats require a seat in range and a username only for external controllers");
+            }
+        }
+
+        static RosterSeat bot(int seat) {
+            return new RosterSeat(seat, ControllerKind.BOT, null);
+        }
+
+        static RosterSeat external(int seat, String username) {
+            return new RosterSeat(seat, ControllerKind.EXTERNAL, username);
+        }
+    }
 
     record SurfaceSpawnPoint(int seat, SurfaceColumn column) {
         SurfaceSpawnPoint {
@@ -53,12 +75,14 @@ final class NaturalMapPlan extends WorldPlan {
         }
     }
 
+    private final int schemaVersion;
     private final String runId;
     private final BigInteger worldSeed;
     private final String mapSemanticId;
     private final Footprint footprint;
     private final List<SurfaceSpawnPoint> spawns;
     private final List<SurfaceLootContainer> lootContainers;
+    private final List<RosterSeat> roster;
 
     NaturalMapPlan(
             String runId,
@@ -67,6 +91,25 @@ final class NaturalMapPlan extends WorldPlan {
             Footprint footprint,
             Collection<SurfaceSpawnPoint> spawns,
             Collection<SurfaceLootContainer> lootContainers) {
+        this(SCHEMA_VERSION_LEGACY_ROSTER, runId, worldSeed, mapSemanticId, footprint, spawns, lootContainers,
+                List.of());
+    }
+
+    NaturalMapPlan(
+            int schemaVersion,
+            String runId,
+            BigInteger worldSeed,
+            String mapSemanticId,
+            Footprint footprint,
+            Collection<SurfaceSpawnPoint> spawns,
+            Collection<SurfaceLootContainer> lootContainers,
+            Collection<RosterSeat> roster) {
+        if (schemaVersion != SCHEMA_VERSION_LEGACY_ROSTER && schemaVersion != SCHEMA_VERSION_GENERALIZED_ROSTER) {
+            throw new IllegalArgumentException("unsupported natural world-plan schema version");
+        }
+        int maxSpawns = schemaVersion == SCHEMA_VERSION_LEGACY_ROSTER
+                ? MAX_LEGACY_SPAWNS
+                : MatchController.MAX_COMPETITORS;
         requireRunId(runId);
         requireSemanticId(mapSemanticId);
         if (worldSeed == null || worldSeed.signum() < 0 || worldSeed.compareTo(MAX_WORLD_SEED) > 0) {
@@ -75,11 +118,13 @@ final class NaturalMapPlan extends WorldPlan {
         if (footprint == null || footprint.width() != NATURAL_FOOTPRINT_BLOCKS
                 || footprint.depth() != NATURAL_FOOTPRINT_BLOCKS
                 || spawns == null || lootContainers == null
-                || spawns.isEmpty() || spawns.size() > MapPlan.MAX_SPAWNS
+                || spawns.isEmpty() || spawns.size() > maxSpawns
                 || lootContainers.isEmpty() || lootContainers.size() > MAX_LOOT_CONTAINERS) {
             throw new IllegalArgumentException("natural map plans require a 1024 by 1024 footprint and bounded world content");
         }
 
+        this.schemaVersion = schemaVersion;
+        this.roster = validatedRoster(schemaVersion, spawns.size(), roster);
         this.runId = runId;
         this.worldSeed = worldSeed;
         this.mapSemanticId = mapSemanticId;
@@ -96,6 +141,14 @@ final class NaturalMapPlan extends WorldPlan {
     @Override
     String runId() {
         return runId;
+    }
+
+    int schemaVersion() {
+        return schemaVersion;
+    }
+
+    List<RosterSeat> roster() {
+        return roster;
     }
 
     BigInteger worldSeed() {
@@ -180,6 +233,37 @@ final class NaturalMapPlan extends WorldPlan {
         } catch (NoSuchAlgorithmException impossible) {
             throw new IllegalStateException("SHA-256 is unavailable", impossible);
         }
+    }
+
+    private static List<RosterSeat> validatedRoster(int schemaVersion, int spawnCount, Collection<RosterSeat> roster) {
+        if (roster == null) {
+            throw new IllegalArgumentException("natural world-plan roster cannot be null");
+        }
+        if (schemaVersion == SCHEMA_VERSION_LEGACY_ROSTER) {
+            if (!roster.isEmpty()) {
+                throw new IllegalArgumentException("legacy natural world plans carry no roster");
+            }
+            return List.of();
+        }
+        List<RosterSeat> seats = List.copyOf(roster);
+        if (seats.size() != spawnCount) {
+            throw new IllegalArgumentException("natural world-plan roster must cover every spawn seat");
+        }
+        Set<String> usernames = new HashSet<>();
+        for (int index = 0; index < seats.size(); index++) {
+            RosterSeat seat = seats.get(index);
+            if (seat.seat() != index) {
+                throw new IllegalArgumentException("natural world-plan roster seats must be contiguous from zero");
+            }
+            if (seat.kind() == ControllerKind.EXTERNAL) {
+                String folded = seat.username().toLowerCase(java.util.Locale.ROOT);
+                if (folded.startsWith("arenabot") || folded.startsWith("arenaspec") || !usernames.add(folded)) {
+                    throw new IllegalArgumentException(
+                            "external usernames must be unique and outside the runner identity space");
+                }
+            }
+        }
+        return seats;
     }
 
     private void validateColumns() {

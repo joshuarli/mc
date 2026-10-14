@@ -15,6 +15,17 @@ import org.junit.jupiter.api.Test;
 final class MapPlanReaderTest {
     private static final Path FIXTURE = Path.of("../../tests/fixtures/world-plan/world-plan-v1.json");
     private static final Path NATURAL_FIXTURE = Path.of("../../tests/fixtures/world-plan/world-plan-v2.json");
+    private static final Path ROSTER_FIXTURE = Path.of("../../tests/fixtures/world-plan/world-plan-v3.json");
+    private static final Path ROSTER_256_FIXTURE = Path.of("../../tests/fixtures/world-plan/world-plan-v3-256.json");
+    private static final List<String> INVALID_ROSTER_FIXTURES = List.of(
+            "world-plan-v2-invalid-roster-field.json",
+            "world-plan-v3-invalid-257-seats.json",
+            "world-plan-v3-invalid-bot-username.json",
+            "world-plan-v3-invalid-missing-roster.json",
+            "world-plan-v3-invalid-reserved-username.json",
+            "world-plan-v3-invalid-roster-count.json",
+            "world-plan-v3-invalid-roster-gap.json",
+            "world-plan-v3-invalid-unknown-kind.json");
 
     @Test
     void readsTheCrossLanguageWorldPlanFixtureAndChecksItsSemanticId() throws IOException {
@@ -39,6 +50,51 @@ final class MapPlanReaderTest {
         assertEquals(1024, plan.footprint().width());
         assertEquals(new NaturalMapPlan.SurfaceColumn(0, 0), plan.spawns().getFirst().column());
         assertEquals(List.of("minecraft:apple"), plan.lootContainers().getFirst().inventory());
+    }
+
+    @Test
+    void readsTheGeneralizedRosterFixtureAndKeepsExternalUsernames() throws IOException {
+        NaturalMapPlan plan = assertInstanceOf(NaturalMapPlan.class, MapPlanReader.read(ROSTER_FIXTURE));
+
+        assertEquals(NaturalMapPlan.SCHEMA_VERSION_GENERALIZED_ROSTER, plan.schemaVersion());
+        assertEquals("9a2cc5434a477dffdcb672f54e9744e0349e3440a6f84ea18b4487ec3e07e656", plan.mapSemanticId());
+        assertEquals(List.of(
+                NaturalMapPlan.RosterSeat.bot(0),
+                NaturalMapPlan.RosterSeat.external(1, "Alex_Fixture"),
+                NaturalMapPlan.RosterSeat.bot(2)), plan.roster());
+    }
+
+    @Test
+    void readsTheFullCompetitorLimitWithTheTypeScriptSemanticId() throws IOException {
+        NaturalMapPlan plan = assertInstanceOf(NaturalMapPlan.class, MapPlanReader.read(ROSTER_256_FIXTURE));
+
+        assertEquals(MatchController.MAX_COMPETITORS, plan.spawns().size());
+        assertEquals(MatchController.MAX_COMPETITORS, plan.roster().size());
+        assertEquals("c219e478cd6f44d35c76c6b036c1e001ad06354a88d1f72c6bf6f4fc9a2ffd72", plan.mapSemanticId());
+        assertEquals(NaturalMapPlan.RosterSeat.external(255, "Last_Seat"), plan.roster().getLast());
+    }
+
+    @Test
+    void rejectsEveryInvalidRosterWorldPlanFixture() {
+        for (String name : INVALID_ROSTER_FIXTURES) {
+            Path fixture = Path.of("../../tests/fixtures/world-plan").resolve(name);
+            assertThrows(IOException.class, () -> MapPlanReader.read(fixture), name);
+        }
+    }
+
+    @Test
+    void legacyNaturalPlansStayBoundedAtSixSeats() {
+        List<NaturalMapPlan.SurfaceSpawnPoint> spawns = java.util.stream.IntStream.range(0, 7)
+                .mapToObj(seat -> new NaturalMapPlan.SurfaceSpawnPoint(seat,
+                        new NaturalMapPlan.SurfaceColumn(seat * 4, 0)))
+                .toList();
+        List<NaturalMapPlan.SurfaceLootContainer> loot = List.of(new NaturalMapPlan.SurfaceLootContainer(
+                new NaturalMapPlan.SurfaceColumn(2, 2), List.of("minecraft:apple")));
+        WorldPlan.Footprint footprint = new WorldPlan.Footprint(1024, 1024);
+        String id = NaturalMapPlan.computeSemanticId(footprint, spawns, loot);
+
+        assertThrows(IllegalArgumentException.class, () -> new NaturalMapPlan(
+                "fixture-run", java.math.BigInteger.ONE, id, footprint, spawns, loot));
     }
 
     @Test

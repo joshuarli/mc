@@ -25,7 +25,9 @@ final class MapPlanReader {
     static final String GENERATION_PLAN_PROPERTY = "arena.generation-plan";
     static final long MAX_PLAN_BYTES = 128L * 1024 * 1024;
     private static final Set<String> ROOT_FIELDS = Set.of(
-            "schema", "run_id", "world_seed", "map_semantic_id", "terrain", "dimensions", "blocks", "spawns", "loot_containers");
+            "schema", "run_id", "world_seed", "map_semantic_id", "terrain", "dimensions", "blocks", "roster", "spawns",
+            "loot_containers");
+    private static final Set<String> ROSTER_SEAT_FIELDS = Set.of("seat", "kind", "username");
     private static final Set<String> PLANNED_ROOT_FIELDS = Set.of(
             "schema", "run_id", "map_semantic_id", "dimensions", "blocks", "spawns", "loot_containers");
     private static final Set<String> NATURAL_ROOT_FIELDS = Set.of(
@@ -122,6 +124,7 @@ final class MapPlanReader {
         List<MapPlan.BlockPlacement> blocks = null;
         List<SpawnInput> spawns = null;
         List<LootInput> lootContainers = null;
+        List<NaturalMapPlan.RosterSeat> roster = null;
         json.beginObject();
         while (json.hasNext()) {
             String field = field(json, seen, ROOT_FIELDS, "world plan");
@@ -133,6 +136,7 @@ final class MapPlanReader {
                 case "terrain" -> terrain = string(json, "world plan.terrain");
                 case "dimensions" -> dimensions = readDimensions(json);
                 case "blocks" -> blocks = readBlocks(json);
+                case "roster" -> roster = readRosterSeats(json);
                 case "spawns" -> spawns = readSpawnInputs(json);
                 case "loot_containers" -> lootContainers = readLootInputs(json);
                 default -> throw new IllegalStateException("unreachable world-plan field");
@@ -141,7 +145,10 @@ final class MapPlanReader {
         json.endObject();
         WorldPlan plan = switch (schema) {
             case 1 -> readPlannedPlan(seen, runId, mapSemanticId, dimensions, blocks, spawns, lootContainers);
-            case 2 -> readNaturalPlan(seen, runId, worldSeed, mapSemanticId, terrain, dimensions, blocks, spawns, lootContainers);
+            case 2 -> readNaturalPlan(NaturalMapPlan.SCHEMA_VERSION_LEGACY_ROSTER, seen, runId, worldSeed,
+                    mapSemanticId, terrain, dimensions, blocks, spawns, lootContainers, null);
+            case 3 -> readNaturalPlan(NaturalMapPlan.SCHEMA_VERSION_GENERALIZED_ROSTER, seen, runId, worldSeed,
+                    mapSemanticId, terrain, dimensions, blocks, spawns, lootContainers, roster);
             default -> throw new IllegalArgumentException("unsupported world-plan schema version");
         };
         if (json.peek() != JsonToken.END_DOCUMENT) {
@@ -189,6 +196,7 @@ final class MapPlanReader {
     }
 
     private static WorldPlan readNaturalPlan(
+            int schemaVersion,
             Set<String> seen,
             String runId,
             String worldSeed,
@@ -197,9 +205,12 @@ final class MapPlanReader {
             DimensionsInput dimensions,
             List<MapPlan.BlockPlacement> blocks,
             List<SpawnInput> spawns,
-            List<LootInput> lootContainers) throws IOException {
-        requireExactFields(seen, NATURAL_ROOT_FIELDS, "world plan");
-        if (dimensions == null || blocks == null || spawns == null || lootContainers == null) {
+            List<LootInput> lootContainers,
+            List<NaturalMapPlan.RosterSeat> roster) throws IOException {
+        boolean generalized = schemaVersion == NaturalMapPlan.SCHEMA_VERSION_GENERALIZED_ROSTER;
+        requireExactFields(seen, generalized ? ROOT_FIELDS : NATURAL_ROOT_FIELDS, "world plan");
+        if (dimensions == null || blocks == null || spawns == null || lootContainers == null
+                || (generalized && roster == null)) {
             throw invalid("natural world plan is incomplete");
         }
         if (!"vanilla".equals(terrain)) {
@@ -233,7 +244,8 @@ final class MapPlanReader {
             }
             naturalLoot.add(container);
         }
-        return new NaturalMapPlan(runId, seed, mapSemanticId, footprint, naturalSpawns, naturalLoot);
+        return new NaturalMapPlan(schemaVersion, runId, seed, mapSemanticId, footprint, naturalSpawns, naturalLoot,
+                generalized ? roster : List.of());
     }
 
     private static BigInteger parseWorldSeed(String value) throws IOException {
@@ -310,8 +322,8 @@ final class MapPlanReader {
         List<SpawnInput> spawns = new ArrayList<>();
         json.beginArray();
         while (json.hasNext()) {
-            if (spawns.size() == MapPlan.MAX_SPAWNS) {
-                throw invalid("world plan.spawns exceeds six seats");
+            if (spawns.size() == MatchController.MAX_COMPETITORS) {
+                throw invalid("world plan.spawns exceeds the competitor seat limit");
             }
             expect(json, JsonToken.BEGIN_OBJECT, "spawns[]");
             Set<String> seen = new HashSet<>();
@@ -363,6 +375,46 @@ final class MapPlanReader {
         }
         json.endArray();
         return List.copyOf(containers);
+    }
+
+    private static List<NaturalMapPlan.RosterSeat> readRosterSeats(JsonReader json) throws IOException {
+        expect(json, JsonToken.BEGIN_ARRAY, "world plan.roster");
+        List<NaturalMapPlan.RosterSeat> seats = new ArrayList<>();
+        json.beginArray();
+        while (json.hasNext()) {
+            if (seats.size() == MatchController.MAX_COMPETITORS) {
+                throw invalid("world plan.roster exceeds the competitor seat limit");
+            }
+            expect(json, JsonToken.BEGIN_OBJECT, "roster[]");
+            Set<String> seen = new HashSet<>();
+            int seat = -1;
+            String kind = null;
+            String username = null;
+            json.beginObject();
+            while (json.hasNext()) {
+                String field = field(json, seen, ROSTER_SEAT_FIELDS, "roster[]");
+                switch (field) {
+                    case "seat" -> seat = integer(json, "roster[].seat");
+                    case "kind" -> kind = string(json, "roster[].kind");
+                    case "username" -> username = string(json, "roster[].username");
+                    default -> throw new IllegalStateException("unreachable roster field");
+                }
+            }
+            json.endObject();
+            requireFields(seen, Set.of("seat", "kind"), "roster[]");
+            ControllerKind controller;
+            try {
+                controller = ControllerKind.fromWire(kind);
+            } catch (IllegalArgumentException unknownKind) {
+                throw invalid("roster[].kind must be bot or external");
+            }
+            if ((controller == ControllerKind.EXTERNAL) != seen.contains("username")) {
+                throw invalid("roster[] carries a username only for external controllers");
+            }
+            seats.add(new NaturalMapPlan.RosterSeat(seat, controller, username));
+        }
+        json.endArray();
+        return List.copyOf(seats);
     }
 
     private static NaturalMapPlan.SurfaceColumn readColumn(JsonReader json, String path) throws IOException {

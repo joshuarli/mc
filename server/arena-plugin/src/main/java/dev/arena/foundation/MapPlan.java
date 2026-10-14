@@ -17,7 +17,7 @@ final class MapPlan extends WorldPlan {
     static final int SCHEMA_VERSION = 1;
     static final int MAX_BLOCK_PLACEMENTS = 1_000_000;
     static final int MAX_LOOT_CONTAINERS = 100_000;
-    static final int MAX_SPAWNS = 6;
+    static final int MAX_PLANNED_SPAWNS = 6;
     static final int MAX_PREPARED_CHUNKS = 8_192;
     static final int MAX_CHEST_ITEMS = 27;
 
@@ -106,7 +106,7 @@ final class MapPlan extends WorldPlan {
         requireSemanticId(mapSemanticId, "map");
         if (dimensions == null || blocks == null || spawns == null || lootContainers == null
                 || blocks.isEmpty() || blocks.size() > MAX_BLOCK_PLACEMENTS
-                || spawns.isEmpty() || spawns.size() > MAX_SPAWNS
+                || spawns.isEmpty() || spawns.size() > MAX_PLANNED_SPAWNS
                 || lootContainers.isEmpty() || lootContainers.size() > MAX_LOOT_CONTAINERS) {
             throw new IllegalArgumentException("map plan is missing bounded resolved world content");
         }

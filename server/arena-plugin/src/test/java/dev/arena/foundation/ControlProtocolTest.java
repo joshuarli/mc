@@ -21,6 +21,7 @@ final class ControlProtocolTest {
             "control-build-progress.json",
             "control-civilization-state.json",
             "control-elimination.json",
+            "control-elimination-wide-seats.json",
             "control-error.json",
             "control-heartbeat.json",
             "control-hello.json",
@@ -30,15 +31,21 @@ final class ControlProtocolTest {
             "control-outcome-faction-winner.json",
             "control-outcome-runtime-timeout.json",
             "control-outcome-winner.json",
+            "control-outcome-winner-wide-seat.json",
             "control-prepare-bots.json",
+            "control-prepare-roster-v2.json",
+            "control-prepare-roster-v2-256.json",
             "control-prepare-civilization.json",
             "control-public-clock.json",
             "control-public-state.json",
+            "control-public-state-wide-seats.json",
             "control-ready.json",
             "control-start.json");
 
     private static final List<String> INVALID_FIXTURES = List.of(
             "control-invalid-civilization.json",
+            "control-invalid-civilization-faction-wide-seat.json",
+            "control-invalid-civilization-roster-v2.json",
             "control-invalid-duplicate-key.json",
             "control-invalid-dynamic-capability.json",
             "control-invalid-finish.json",
@@ -46,6 +53,15 @@ final class ControlProtocolTest {
             "control-invalid-human-wait-timeout.json",
             "control-invalid-leading-zero.json",
             "control-invalid-roster-gap.json",
+            "control-invalid-roster-v1-external.json",
+            "control-invalid-roster-v1-seven-seats.json",
+            "control-invalid-roster-v2-257.json",
+            "control-invalid-roster-v2-case-duplicate.json",
+            "control-invalid-roster-v2-reserved-username.json",
+            "control-invalid-roster-v2-unknown-kind.json",
+            "control-invalid-roster-v2-uuid-mismatch.json",
+            "control-invalid-roster-v2-version.json",
+            "control-invalid-seat-256.json",
             "control-invalid-sequence-number.json",
             "control-invalid-u64-overflow.json",
             "control-invalid-unknown-field.json");
@@ -87,6 +103,29 @@ final class ControlProtocolTest {
         assertEquals(200, settings.civilization().captureZone().uncontestedTicks());
         assertEquals(List.of(0, 1, 2), settings.civilization().factions().getFirst().members().stream()
                 .map(ControlProtocol.FactionMember::seat).toList());
+    }
+
+    @Test
+    void generalizedRosterCarriesExternalSeatsUpToTheCompetitorLimit() throws IOException {
+        ControlProtocol.PreparePayload small = (ControlProtocol.PreparePayload) ControlProtocol.decodeBody(
+                Files.readAllBytes(fixturePath("control-prepare-roster-v2.json"))).payload();
+        assertEquals(ControlProtocol.RosterVersion.GENERALIZED, small.rosterVersion());
+        assertEquals(List.of(3, 6), small.roster().stream()
+                .filter(competitor -> competitor.kind() == ControllerKind.EXTERNAL)
+                .map(ControlProtocol.Competitor::seat).toList());
+
+        ControlProtocol.PreparePayload full = (ControlProtocol.PreparePayload) ControlProtocol.decodeBody(
+                Files.readAllBytes(fixturePath("control-prepare-roster-v2-256.json"))).payload();
+        assertEquals(MatchController.MAX_COMPETITORS, full.roster().size());
+        assertEquals(ControllerKind.EXTERNAL, full.roster().getLast().kind());
+    }
+
+    @Test
+    void legacyPrepareKeepsItsSixBotSeatContract() throws IOException {
+        ControlProtocol.PreparePayload legacy = (ControlProtocol.PreparePayload) ControlProtocol.decodeBody(
+                Files.readAllBytes(fixturePath("control-prepare-bots.json"))).payload();
+        assertEquals(ControlProtocol.RosterVersion.BOTS_ONLY, legacy.rosterVersion());
+        assertEquals(6, legacy.roster().size());
     }
 
     @Test
