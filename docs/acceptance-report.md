@@ -1,6 +1,6 @@
 # Acceptance report
 
-**Status: campaign execution continues.** Frozen M1 and current-source legal-player and six-seed checks pass. The latest Civilization rules run, civilization-rules-b7e91e9e-9621-4ca4-8375-1d983f543cba, timed out waiting for seat 1 to observe a mined block; cleanup succeeded. C1 is not accepted. The TypeScript tooling migration is in place; natural-terrain Hunger work is in progress. Node.js 26.8.2 replaces the former Node 24 bootstrap; the two-client stack smoke now passes on Node 26.8.2.
+**Status: campaign execution continues.** Frozen M1 and current-source legal-player and six-seed checks pass. The latest Civilization rules run, civilization-rules-b7e91e9e-9621-4ca4-8375-1d983f543cba, timed out waiting for seat 1 to observe a mined block; cleanup succeeded. C1 is not accepted. The TypeScript tooling migration is in place; natural-terrain Hunger work is in progress. Node.js 26.11.1 replaces the former Node 24 bootstrap; the two-client stack smoke passes on Node 26.11.1.
 
 ## Verified
 

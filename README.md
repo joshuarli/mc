@@ -4,7 +4,7 @@ Arena runs Minecraft competitions with headless Mineflayer bots and an authorita
 
 ## Install
 
-Install Node.js 26.8.2 and pnpm 12.13.0. From the repository root, install the workspace and check the launcher:
+Install Node.js 26.11.1 and pnpm 12.13.0. From the repository root, install the workspace and check the launcher:
 
 ```sh
 pnpm install --frozen-lockfile

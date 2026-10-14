@@ -5,7 +5,7 @@ Arena is a headless Minecraft competition stack. Build with `./arena build --pac
 ## Invariants
 
 - `packages/arena-core` has no runtime, network, filesystem, or server dependencies; `arena-spec` may depend on core, `arena-bots` may depend on core, Mineflayer, and `mineflayer-pathfinder`, and `arena-runner` owns process and filesystem effects.
-- Keep competitors and automated spectators headless; an external native client may spectate, and Arena adds no human competitors, GUI, renderer, or protocol bridge.
+- Bot competitors and automated spectators are headless; one external ordinary client may occupy an admitted competitive seat or spectate on loopback, and Arena adds no GUI, renderer, or protocol bridge.
 - The Paper plugin owns match state and outcomes; bots use only their own Mineflayer observations and permitted team messages.
 - Use the Node.js and pnpm versions in [compatibility](docs/compatibility.md); `versions.lock.toml` owns Paper, Minecraft, Node.js, Java, and Gradle versions, and `pnpm-lock.yaml` owns workspace package versions.
 - Keep caches, toolchains, generated output, server files, test worlds, and temporary files under `.work/`; set `TMPDIR` to `.work/tmp`.
@@ -25,4 +25,4 @@ Arena is a headless Minecraft competition stack. Build with `./arena build --pac
 - Owned files and path safety: [filesystem](docs/filesystem.md).
 - Trace formats, replay, and reports: [determinism](docs/determinism.md).
 - Current verification status: [acceptance report](docs/acceptance-report.md), [civilization acceptance](docs/civilization-acceptance.md).
-- Campaign instructions and decisions: [campaign plan](docs/minecraft-arena-agent-campaign.md).
+- Campaign instructions and decisions: [campaign plan](docs/minecraft-arena-frontier-campaign.md).
