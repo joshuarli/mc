@@ -119,10 +119,12 @@ bounded to zero through 255. Each entry's `kind` is `bot` or `external`. Every
 Usernames and UUIDs are unique ignoring case. An `external` username has 3
 through 16 ASCII letters, digits, or underscores and cannot begin with
 `ArenaBot` or `ArenaSpec` in any case, so spectator identities and runner bot
-identities never collide with external seats. The plugin only accepts a
-roster-version-2 `prepare` against a schema-3 world plan with the same seats,
-kinds, and external usernames; a legacy `prepare` is only accepted against a
-schema-1 or schema-2 plan.
+identities never collide with external seats. The plugin accepts a roster-version-2 `prepare` against a schema-3 natural
+plan when the seats, kinds, and external usernames match that plan. It also
+accepts that prepare against a schema-1 planned plan when `rules.kind` is
+`uhc_duel` and the roster seats match the planned spawns. Any other
+roster-version-2 prepare is rejected against a schema-1 plan. A legacy
+`prepare` is accepted against a schema-1 or schema-2 plan.
 
 `public_state`, `elimination`, and winner outcomes accept seats zero through
 255, up to 256 per list. The codec cannot know the roster size, so the
@@ -149,8 +151,11 @@ kit items, a per-seat kit field, a missing required kit field, and any other
 roster size. The plugin gives that one kit to each admitted competitor and
 sets natural regeneration off. Classic prepares without `rules` are unchanged.
 The codec and the plugin both check these cross-field rules. Scenario schema
-4 does not add a control field. A planned uhc laboratory is world-plan schema
-1, and a legacy prepare still cannot carry `rules`.
+4 adds no control field. A planned uhc laboratory stays world-plan schema 1
+and sends the same roster-version-2 `rules` object as a natural uhc duel, so
+the plugin applies that one kit and turns natural regeneration off. A legacy
+prepare still rejects `rules`. A schema-1 hunger scenario stays on the legacy
+prepare.
 
 ## Tick metrics
 

@@ -1,7 +1,7 @@
 schema = 4
 name = "uhc-cover"
 mode = "hunger_games"
-seed = 260114
+seed = 710114
 map = "../maps/uhc-cover.toml"
 policy = "../policies/baseline.toml"
 opening_styles = ["explorer", "scavenger", "hunter"]

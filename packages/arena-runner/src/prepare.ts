@@ -135,6 +135,7 @@ export async function prepareRun(
 
 export function encodeScenarioWorldPlan(runId: string, scenario: ScenarioIr): Buffer {
   const generalizedRoster = scenario.schemaVersion === 3
+    || (scenario.schemaVersion === 4 && scenario.mode === 'hunger_games' && scenario.rules.kind === 'uhc_duel')
     || scenario.roster.seats.some(({ controller }) => controller.kind === 'external');
   if (generalizedRoster && scenario.map.terrain === 'vanilla') {
     return encodeWorldPlanV3(runId, scenario.seed, scenario.map, scenario.roster.seats);

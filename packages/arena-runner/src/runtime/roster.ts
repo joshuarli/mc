@@ -1,5 +1,12 @@
 import { createHash } from 'node:crypto';
-import type { CivilizationFactionMemberIr, CivilizationScenarioIr, RuleModeIr, ScenarioIr } from '@arena/spec';
+import type {
+  CivilizationFactionMemberIr,
+  CivilizationScenarioIr,
+  HungerGamesScenarioV3Ir,
+  HungerGamesScenarioV4Ir,
+  RuleModeIr,
+  ScenarioIr,
+} from '@arena/spec';
 import type { BotCompetitor, ExternalCompetitor, PreparePayload, PrepareRules, RosterCompetitor } from '../control/index.js';
 import { RunnerError } from '../errors.js';
 import type { PlayerIdentity } from './observations.js';
@@ -100,8 +107,8 @@ export function createPreparePayload(scenario: ScenarioIr, roster: readonly Rost
       final_diameter_blocks: scenario.border.finalDiameterBlocks,
     }),
   });
-  if (scenario.schemaVersion === 3 || roster.some((competitor) => competitor.kind === 'external')) {
-    const rules = scenario.schemaVersion === 3 ? preparedRules(scenario.rules) : undefined;
+  if (hungerRulesOnWire(scenario) || roster.some((competitor) => competitor.kind === 'external')) {
+    const rules = hungerRulesOnWire(scenario) ? preparedRules(scenario.rules) : undefined;
     return Object.freeze({
       ...common,
       mode: 'hunger_games',
@@ -112,6 +119,15 @@ export function createPreparePayload(scenario: ScenarioIr, roster: readonly Rost
     });
   }
   return Object.freeze({ ...common, mode: 'hunger_games', settings, roster: botOnlyRoster(roster) });
+}
+
+function hungerRulesOnWire(
+  scenario: ScenarioIr,
+): scenario is HungerGamesScenarioV3Ir | HungerGamesScenarioV4Ir {
+  return scenario.mode === 'hunger_games' && (
+    scenario.schemaVersion === 3
+    || (scenario.schemaVersion === 4 && scenario.rules.kind === 'uhc_duel')
+  );
 }
 
 function preparedRules(rules: RuleModeIr): PrepareRules | undefined {

@@ -75,8 +75,8 @@ damage, reach, or teleport rule. Last survivor still wins, and a tick limit
 with both competitors alive is still a draw. Schema 3 keeps the arena on the natural 1024 by 1024 plan and has no
 superflat world; the declared spawns mirror across the border center.
 Schema 4 is the planned-uhc exception: the same kit and the same
-natural-regeneration rule, on a small planned footprint encoded as
-world-plan schema 1. Last-survivor outcomes are unchanged.
+natural-regeneration rule, carried on the roster-version-2 prepare, on a
+small planned footprint encoded as world-plan schema 1. Last-survivor outcomes are unchanged.
 
 A checkpointed match resumes in a new runtime epoch. The plugin loads the
 complete record at startup and skips the loot-chest placement and world-spawn

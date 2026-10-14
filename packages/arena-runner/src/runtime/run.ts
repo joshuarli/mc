@@ -88,7 +88,9 @@ function requiredControlCapabilities(
   scenario: PreparedRun['scenario'],
 ): readonly ControlCapability[] {
   switch (scenario.mode) {
-    case 'hunger_games': return scenario.schemaVersion === 3 || externalSeats(scenario).length > 0
+    case 'hunger_games': return scenario.schemaVersion === 3
+      || (scenario.schemaVersion === 4 && scenario.rules.kind === 'uhc_duel')
+      || externalSeats(scenario).length > 0
       ? ['hunger_games_v1', 'hunger_games_roster_v2']
       : ['hunger_games_v1'];
     case 'civilization': return ['civilization_v1'];

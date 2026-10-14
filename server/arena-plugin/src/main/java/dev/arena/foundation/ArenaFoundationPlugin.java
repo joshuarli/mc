@@ -490,17 +490,34 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
     }
 
     private void requireRosterMatchesPlan(ControlProtocol.PreparePayload prepare) {
-        boolean generalizedPlan = generationPlan instanceof NaturalMapPlan natural
+        rosterPlanMismatch(generationPlan, prepare).ifPresent(message -> {
+            throw new CommandFailure(ControlProtocol.ErrorCode.INVALID_WORLD, message);
+        });
+    }
+
+    static Optional<String> rosterPlanMismatch(WorldPlan plan, ControlProtocol.PreparePayload prepare) {
+        if (plan instanceof MapPlan planned
+                && prepare.rosterVersion() == ControlProtocol.RosterVersion.GENERALIZED
+                && prepare.rules().orElse(null) instanceof ControlProtocol.UhcDuelRules) {
+            List<MapPlan.SpawnPoint> spawns = planned.spawns();
+            boolean matches = spawns.size() == prepare.roster().size();
+            for (int index = 0; matches && index < spawns.size(); index++) {
+                matches = spawns.get(index).seat() == prepare.roster().get(index).seat();
+            }
+            return matches
+                    ? Optional.empty()
+                    : Optional.of("prepare roster does not match the staged world-plan roster");
+        }
+        boolean generalizedPlan = plan instanceof NaturalMapPlan natural
                 && natural.schemaVersion() == NaturalMapPlan.SCHEMA_VERSION_GENERALIZED_ROSTER;
         boolean generalizedPrepare = prepare.rosterVersion() == ControlProtocol.RosterVersion.GENERALIZED;
         if (generalizedPlan != generalizedPrepare) {
-            throw new CommandFailure(ControlProtocol.ErrorCode.INVALID_WORLD,
-                    "prepare roster version does not match the staged world-plan schema");
+            return Optional.of("prepare roster version does not match the staged world-plan schema");
         }
         if (!generalizedPlan) {
-            return;
+            return Optional.empty();
         }
-        List<NaturalMapPlan.RosterSeat> planned = ((NaturalMapPlan) generationPlan).roster();
+        List<NaturalMapPlan.RosterSeat> planned = ((NaturalMapPlan) plan).roster();
         boolean matches = planned.size() == prepare.roster().size();
         for (int index = 0; matches && index < planned.size(); index++) {
             NaturalMapPlan.RosterSeat seat = planned.get(index);
@@ -508,10 +525,9 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
             matches = seat.seat() == competitor.seat() && seat.kind() == competitor.kind()
                     && (seat.kind() == ControllerKind.BOT || seat.username().equals(competitor.username()));
         }
-        if (!matches) {
-            throw new CommandFailure(ControlProtocol.ErrorCode.INVALID_WORLD,
-                    "prepare roster does not match the staged world-plan roster");
-        }
+        return matches
+                ? Optional.empty()
+                : Optional.of("prepare roster does not match the staged world-plan roster");
     }
 
     private void prepareMatch(ControlProtocol.PreparePayload prepare) {

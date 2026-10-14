@@ -1,7 +1,7 @@
 schema = 4
 name = "uhc-melee"
 mode = "hunger_games"
-seed = 260114
+seed = 710114
 map = "../maps/uhc-melee.toml"
 policy = "../policies/baseline.toml"
 opening_styles = ["explorer", "scavenger", "hunter"]

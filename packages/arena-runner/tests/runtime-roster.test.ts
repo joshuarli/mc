@@ -5,6 +5,7 @@ import test from 'node:test';
 import { compileScenario } from '@arena/spec';
 import { withExternalSeat } from '../src/effective-scenario.js';
 import { decodeControlEnvelope, encodeControlEnvelope } from '../src/control/index.js';
+import { encodeScenarioWorldPlan } from '../src/prepare.js';
 import type { ControlMessage } from '../src/control/types.js';
 import { RunnerError } from '../src/errors.js';
 import { createPreparePayload, createRuntimeRoster } from '../src/runtime/roster.js';
@@ -210,6 +211,50 @@ test('uhc duel rules prepare one shared kit for two seats', () => {
     assert.fail('uhc prepare expected');
   }
   assert.equal(decoded.payload.rules.kit.shield, true);
+});
+
+test('schema 4 planned uhc prepare carries the shared uhc kit', () => {
+  const scenario = compileScenario(
+    readFileSync(join(repositoryRoot, 'scenarios/uhc-melee.toml'), 'utf8'),
+    readFileSync(join(repositoryRoot, 'maps/uhc-melee.toml'), 'utf8'),
+  );
+  assert.equal(scenario.schemaVersion, 4);
+  assert.equal(scenario.seed, 710114n);
+  const prepare = createPreparePayload(scenario, createRuntimeRoster(scenario).competitors);
+  assert.equal('roster_version' in prepare ? prepare.roster_version : undefined, 2);
+  assert.equal(prepare.settings.match.respawn, false);
+  assert.deepEqual('rules' in prepare ? prepare.rules : undefined, {
+    kind: 'uhc_duel',
+    version: 1,
+    kit: {
+      armor: 'iron',
+      sword: 'iron',
+      arrows: 16,
+      golden_apples: 2,
+      food: 'minecraft:cooked_beef',
+      food_count: 8,
+      shield: true,
+    },
+  });
+  const plan = JSON.parse(encodeScenarioWorldPlan('planned-uhc', scenario).toString('utf8')) as { schema: number };
+  assert.equal(plan.schema, 1);
+  const decoded = decodeControlEnvelope(encodeControlEnvelope({
+    protocol: 1, run_id: 'rules-run', sequence: 1n, type: 'prepare', payload: prepare,
+  } as ControlMessage));
+  if (decoded.type !== 'prepare' || !('rules' in decoded.payload) || decoded.payload.rules?.kind !== 'uhc_duel') {
+    assert.fail('uhc prepare expected');
+  }
+
+  const classic = compileScenario(
+    readFileSync(join(repositoryRoot, 'scenarios/duel.toml'), 'utf8'),
+    readFileSync(join(repositoryRoot, 'maps/duel.toml'), 'utf8'),
+  );
+  const classicPrepare = createPreparePayload(classic, createRuntimeRoster(classic).competitors);
+  assert.equal('roster_version' in classicPrepare, false);
+  assert.equal('rules' in classicPrepare, false);
+  assert.throws(() => decodeControlEnvelope(readFileSync(join(
+    repositoryRoot, 'fixtures/protocol/control-invalid-rules-without-roster-version.json',
+  ))));
 });
 
 test('frontier survival rules map the spec fields onto the wire names', () => {

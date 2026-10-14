@@ -14,6 +14,7 @@ import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
+import java.util.Optional;
 import org.bukkit.Material;
 import org.junit.jupiter.api.Test;
 
@@ -210,6 +211,56 @@ final class ControlProtocolTest {
                 "iron", "iron", 1, 1, "minecraft:mushroom_stew", 2, false));
         assertThrows(IllegalArgumentException.class, () -> new ControlProtocol.UhcKit(
                 "iron", "iron", 1, 1, "minecraft:diamond_sword", 1, false));
+    }
+
+    @Test
+    void plannedSchema1UhcPrepareCarriesRulesAndLegacyPrepareDoesNot() throws IOException {
+        ControlProtocol.PreparePayload uhc = (ControlProtocol.PreparePayload) ControlProtocol.decodeBody(
+                Files.readAllBytes(fixturePath("control-prepare-rules-uhc.json"))).payload();
+        MapPlan plan = twoSpawnPlan();
+        assertEquals(Optional.empty(), ArenaFoundationPlugin.rosterPlanMismatch(plan, uhc));
+        assertFalse(ControlProtocol.naturalRegeneration(uhc.rules()));
+
+        ControlProtocol.PreparePayload classicRoster = (ControlProtocol.PreparePayload) ControlProtocol.decodeBody(
+                Files.readAllBytes(fixturePath("control-prepare-roster-v2.json"))).payload();
+        assertEquals("prepare roster version does not match the staged world-plan schema",
+                ArenaFoundationPlugin.rosterPlanMismatch(plan, classicRoster).orElseThrow());
+
+        ControlProtocol.PreparePayload legacy = (ControlProtocol.PreparePayload) ControlProtocol.decodeBody(
+                Files.readAllBytes(fixturePath("control-prepare-bots.json"))).payload();
+        assertEquals(Optional.empty(), ArenaFoundationPlugin.rosterPlanMismatch(plan, legacy));
+        assertTrue(legacy.rules().isEmpty());
+        assertThrows(IOException.class, () -> ControlProtocol.decodeBody(
+                Files.readAllBytes(fixturePath("control-invalid-rules-without-roster-version.json"))));
+
+        MapPlan.Dimensions dimensions = new MapPlan.Dimensions(64, 64, 0, 128);
+        List<MapPlan.BlockPlacement> blocks = List.of(
+                new MapPlan.BlockPlacement(new MapPlan.Position(0, 64, 0), "minecraft:stone"),
+                new MapPlan.BlockPlacement(new MapPlan.Position(1, 64, 0), "minecraft:stone"),
+                new MapPlan.BlockPlacement(new MapPlan.Position(1, 65, 0), "minecraft:chest"));
+        List<MapPlan.SpawnPoint> spawns = List.of(new MapPlan.SpawnPoint(0, new MapPlan.Position(0, 65, 0)));
+        List<MapPlan.LootContainer> loot = List.of(
+                new MapPlan.LootContainer(new MapPlan.Position(1, 65, 0), List.of("minecraft:bread")));
+        MapPlan oneSpawn = new MapPlan(1, "test-run", MapPlan.computeSemanticId(dimensions, blocks, spawns, loot),
+                dimensions, blocks, spawns, loot);
+        assertEquals("prepare roster does not match the staged world-plan roster",
+                ArenaFoundationPlugin.rosterPlanMismatch(oneSpawn, uhc).orElseThrow());
+    }
+
+    private static MapPlan twoSpawnPlan() {
+        MapPlan.Dimensions dimensions = new MapPlan.Dimensions(64, 64, 0, 128);
+        List<MapPlan.BlockPlacement> blocks = List.of(
+                new MapPlan.BlockPlacement(new MapPlan.Position(0, 64, 0), "minecraft:stone"),
+                new MapPlan.BlockPlacement(new MapPlan.Position(4, 64, 0), "minecraft:stone"),
+                new MapPlan.BlockPlacement(new MapPlan.Position(1, 64, 0), "minecraft:stone"),
+                new MapPlan.BlockPlacement(new MapPlan.Position(1, 65, 0), "minecraft:chest"));
+        List<MapPlan.SpawnPoint> spawns = List.of(
+                new MapPlan.SpawnPoint(0, new MapPlan.Position(0, 65, 0)),
+                new MapPlan.SpawnPoint(1, new MapPlan.Position(4, 65, 0)));
+        List<MapPlan.LootContainer> loot = List.of(
+                new MapPlan.LootContainer(new MapPlan.Position(1, 65, 0), List.of("minecraft:bread")));
+        return new MapPlan(1, "test-run", MapPlan.computeSemanticId(dimensions, blocks, spawns, loot),
+                dimensions, blocks, spawns, loot);
     }
 
     @Test
