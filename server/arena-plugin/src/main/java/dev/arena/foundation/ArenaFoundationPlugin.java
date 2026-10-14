@@ -1705,7 +1705,10 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
         }
         List<LoginGuard.OnlineIdentity> online = new ArrayList<>();
         for (Player player : Bukkit.getOnlinePlayers()) {
-            online.add(new LoginGuard.OnlineIdentity(player.getName(), player.getUniqueId()));
+            Integer seat = seatsByPlayer.get(player.getUniqueId());
+            boolean livingSeat = seat != null && matchController != null
+                    && matchController.aliveSeats().contains(seat);
+            online.add(new LoginGuard.OnlineIdentity(player.getName(), player.getUniqueId(), livingSeat));
         }
         Optional<String> denial = LoginGuard.denial(online, event.getName(), event.getUniqueId());
         if (denial.isPresent()) {
