@@ -9,6 +9,11 @@ import { comparisonJson, inspectJson, reconstruct, reportJson, type Evidence } f
 import { canonicalJson } from './canonical.js';
 import { RunnerError } from './errors.js';
 import { parseWorkerCount } from './workers/assignment.js';
+import { compileCandidateProfile } from '@arena/spec';
+import { runLeague } from './league/harness.js';
+import { LiveMatchRunner } from './league/live-runner.js';
+import { parseLeagueManifest, parseSeedManifest, profileSpec, resolveLeagueManifest, type CandidateSpec } from './league/manifest.js';
+import { OwnedLeagueStore } from './league/store.js';
 import { withExternalSeat, type ExternalSeatRequest } from './effective-scenario.js';
 import { prepareRun, resolveScenarioResource } from './prepare.js';
 import { replayPolicyJson } from './policy-replay.js';
@@ -70,6 +75,7 @@ async function dispatchCliBytes(args: readonly Buffer[]): Promise<CliResult> {
     return success(comparisonJson(left, right));
   }
   if (command === 'explain') return await explainCommand(rest);
+  if (command === 'league') return await leagueCommand(rest);
   if (command === 'prepare') return await prepareCommand(rest);
   if (command === 'validate') return await validateCommand(rest);
   if (command === 'run' || command === 'play' || command === 'watch') return await matchCommand(command, rest);
@@ -178,6 +184,73 @@ async function inspectRunCommand(args: readonly Buffer[]): Promise<CliResult> {
     runId,
   });
   return success(inspection);
+}
+
+async function leagueCommand(args: readonly Buffer[]): Promise<CliResult> {
+  let manifestArgument: Buffer | undefined;
+  let accepted = false;
+  for (let index = 0; index < args.length;) {
+    const option = argumentText(args[index]!, index + 1);
+    if (option === '--manifest') {
+      if (manifestArgument !== undefined || index + 1 >= args.length) throw invalidInput('league_requires_manifest');
+      manifestArgument = args[index + 1]!;
+      index += 2;
+    } else if (option === '--accept-minecraft-eula') {
+      if (accepted) throw invalidInput('league_accept_minecraft_eula_repeated');
+      accepted = true;
+      index += 1;
+    } else {
+      throw invalidInput('unexpected_argument');
+    }
+  }
+  if (manifestArgument === undefined) throw invalidInput('league_requires_manifest');
+  if (!accepted) throw new RunnerError('missing_prerequisite', 'Minecraft EULA', { kind: 'missing_eula' });
+  const manifestPath = normalizeScenarioPath(manifestArgument);
+  const helperPath = configuredAbsolutePath('ARENA_FS_HELPER', 'filesystem helper');
+  const javaHome = configuredAbsolutePath('ARENA_JAVA_HOME', 'Java runtime');
+  const paperJarPath = configuredAbsolutePath('ARENA_PAPER_JAR', 'Paper server JAR');
+  const pluginJarPath = configuredAbsolutePath('ARENA_PLUGIN_JAR', 'Arena plugin JAR');
+  const ownedRoot = Buffer.from(process.cwd(), 'utf8');
+  const resolveFrom = (base: Buffer, reference: string) =>
+    resolveScenarioResource({ scenarioPath: base, reference: reference as Parameters<typeof resolveScenarioResource>[0]['reference'] });
+  const readText = async (path: Buffer, resource: string, signal?: AbortSignal) =>
+    decodeSource(await readSource(helperPath, ownedRoot, path, resource, signal), resource);
+
+  return await withProcessAbortSignal(async (signal) => {
+    const draft = parseLeagueManifest(await readText(manifestPath, 'league manifest', signal));
+    const seeds = parseSeedManifest(await readText(resolveFrom(manifestPath, draft.seeds), 'seed manifest', signal));
+    const profiles = new Map<string, CandidateSpec>();
+    for (const entry of [...draft.candidateEntries, ...draft.opponentEntries]) {
+      if (entry.kind !== 'profile' || profiles.has(entry.path)) continue;
+      const source = await readText(resolveFrom(manifestPath, entry.path), 'candidate profile', signal);
+      try {
+        const profile = compileCandidateProfile(source);
+        profiles.set(entry.path, profileSpec({ id: profile.id, params: profile.params }));
+      } catch (error) {
+        throw mapSpecError(error);
+      }
+    }
+    const manifest = resolveLeagueManifest(draft, profiles);
+    const scenarioPath = resolveFrom(manifestPath, manifest.scenario);
+    const scenarioSource = await readText(scenarioPath, 'scenario input', signal);
+    const runner = new LiveMatchRunner({
+      helperPath, ownedRoot, javaExecutable: resolve(javaHome, 'bin', 'java'), paperJarPath, pluginJarPath,
+      leagueId: manifest.id, scenarioPath, scenarioSource,
+    });
+    const store = new OwnedLeagueStore({ helperPath, ownedRoot, leagueId: manifest.id });
+    const report = await runLeague({
+      manifest, seeds, store, runner, signal,
+      progress: {
+        matchStarted: (plan, index, total) => writeProgress([
+          `League ${manifest.id}: match ${index + 1}/${total} ${plan.matchId} (${plan.candidate.id} vs ${plan.opponent.label}, seed ${plan.worldSeed})`,
+        ]),
+        matchSettled: (plan, observation, reused) => writeProgress([
+          `League ${manifest.id}: ${plan.matchId} ${reused ? 'reused' : observation.status}`,
+        ]),
+      },
+    });
+    return success(report);
+  });
 }
 
 async function explainCommand(args: readonly Buffer[]): Promise<CliResult> {
@@ -679,6 +752,7 @@ function helpJson(): object {
       'report <segment>...': 'Reconstruct the terminal result from prepared-roster and authoritative event records.',
       'compare <left-segment> <right-segment>': 'Compare two single-segment record streams exactly.',
       'explain --run-id <id> --seat <n>': 'Tie one seat\'s recorded decisions to permitted evidence, skill outcomes, funnel stages, and authoritative effects.',
+      'league --manifest <path> --accept-minecraft-eula': 'Run or resume a league of candidate policies against frozen opponents and report the paired analysis.',
       'prepare --scenario <path> --run-id <id>': 'Compile a scenario and stage its world plan in a new run directory.',
       'validate --scenario <path>': 'Compile the scenario, map, and policy without staging a run.',
       'run --scenario <path> --accept-minecraft-eula [--run-id <id>] [--reserve-external-spectator-slot] [--wait-for-external-player] [--join-timeout-seconds <n>] [--workers <n>]': 'Run a match and report its stopped result.',

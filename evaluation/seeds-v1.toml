@@ -1,0 +1,19 @@
+schema = 1
+
+[[set]]
+name = "mechanics"
+role = "regression"
+first = 481516
+last = 481521
+
+[[set]]
+name = "development"
+role = "development"
+first = 500001
+last = 500012
+
+[[set]]
+name = "heldout-v1"
+role = "heldout"
+first = 600001
+last = 600024

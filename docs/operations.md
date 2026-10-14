@@ -40,6 +40,18 @@ Progress goes to stderr: run ID, Minecraft version, address, mode, role and seat
 
 `./arena explain --run-id <id> --seat <n>` prints one seat's recorded decisions, skill outcomes, action-funnel stages, and authoritative effects for a stopped run. It needs a schema 4 trace for funnel and effect fields and states only what the trace records. See [determinism](determinism.md).
 
+## League
+
+`./arena league --manifest evaluation/league-v1.toml --accept-minecraft-eula` runs candidate policies against frozen opponents on hunger-six and prints a paired report. A league unit is one natural match: three candidate seats against three opponent seats, played twice per world seed with the seat parity swapped. A match scores 1 for a last survivor on the candidate side, 0.5 for a draw, 0 otherwise.
+
+The manifest (`schema = 1`, strict TOML) lists `[[candidate]]` and `[[opponent]]` entries, each either `id` with optional `params` or `profile = "<path to policies/candidates/<id>.toml>"`, the seed file and set (`evaluation/seeds-v1.toml`: mechanics regression `481516..481521`, development `500001..500012`, held-out `600001..600024`), the analysis method (`bootstrap` or `tInterval`, 95% interval, grouped by world seed), and the promotion thresholds. The frozen baseline must be an opponent.
+
+Matches run serially through the normal run path. Each completed or failed match is published atomically as `.work/arena/league/<id>/matches/<match>.json`; a rerun skips published matches and refuses a record whose plan digest no longer matches the manifest. Per-seat candidate identity is written into each trace as `seat-policy-v1`.
+
+The report keeps denominators: planned, completed, failed or censored (with reasons), degraded, and matches with disconnects. It gives the cluster mean, interval, effect size against an even match, the mean if censored matches count as losses, and survival and attack-issue gates against the opponent side. A candidate is promoted only when every match completed, the mean is at least `min_mean`, the interval lower bound exceeds `min_lower_bound`, no match was degraded or lost a seat to a disconnect, and neither gate regressed beyond its tolerance. Otherwise the verdict is `keep_baseline` with the reasons.
+
+A held-out seed set is evaluated once per frozen candidate set. Before the first match the harness writes `evaluation/heldout-ledger/<seed>.json` with the candidate-set digest. A different digest or league over a consumed seed fails with `heldout_seed_already_consumed`; the same digest resumes. To reuse the seeds, change their set to `role = "development"` in the seed manifest and add a new held-out set with fresh seeds.
+
 ## Remove run data
 
 Use `gc --dry-run` to review selected run directories. Use `gc --apply` to archive eligible evidence and remove selected directories. The command does not select unrelated runs for removal.

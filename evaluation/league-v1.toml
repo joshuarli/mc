@@ -1,0 +1,27 @@
+schema = 1
+id = "league-v1"
+scenario = "../scenarios/hunger-six.toml"
+seeds = "seeds-v1.toml"
+seed_set = "development"
+
+[[candidate]]
+profile = "../policies/candidates/cautious-survivor.toml"
+
+[[candidate]]
+profile = "../policies/candidates/melee-duelist.toml"
+
+[[opponent]]
+id = "baseline"
+
+[analysis]
+method = "bootstrap"
+confidence = 0.95
+resamples = 2000
+bootstrap_seed = 1
+
+[promotion]
+min_mean = 0.65
+min_lower_bound = 0.5
+max_survival_regression = 0.1
+max_attack_issue_regression = 0.1
+min_attacks_for_gate = 20
