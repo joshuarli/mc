@@ -1,6 +1,36 @@
 # Arena Frontier: from a six-bot experiment to competitive worlds
 
-**Status:** winding down. Written against `master` at `f479b16` (2026-10-14). It supersedes `docs/minecraft-arena-agent-campaign.md` and the root `minecraft-arena-agent-campaign.md`; item G0 deletes both.
+**Status:** paused 2026-10-14. Written against `master` at `f479b16` (2026-10-14). It supersedes the earlier agent campaign plans, which G0 deleted.
+
+## Handoff (paused 2026-10-14)
+
+**Resume.** Prompt: `Execute docs/minecraft-arena-frontier-campaign.md from the Handoff "Not started" list on branch campaign/frontier; finish every deliverable; never push.` First command: `git switch campaign/frontier && ./arena build --package all`. No lane worktrees exist; recreate them under `.work/wt/frontier-<lane>` with `git worktree add .work/wt/frontier-<lane> -b campaign/frontier-<lane> campaign/frontier`, then `pnpm install --frozen-lockfile --offline --store-dir <repo>/.work/arena/pnpm-store` and `git checkout pnpm-lock.yaml` (pnpm adds `@pnpm/exe` there; never commit it). Clone `.work/arena/{toolchains,downloads,gradle}` into a lane that runs live cases with `cp -cR`.
+
+**State.** Branch `campaign/frontier` (tip `55514ba` plus this handoff commit); `master` is untouched at `f479b16` plus the user's `f` commit. Merged: G0 (Node lock 26.11.1, docs and AGENTS invariant), G1 (nine baseline reds), G2 (live baseline), S1 (scenario 3, world plan 3, roster v2 wire, 256 seats), S2 (exact seat binding), S3/S3a (spawn search, rule modes `[rules]`, hunger-12/24, integer border center), S4 (`withExternalSeat`), S5 (`damage_events_v1`), S6 (candidate profiles), S7 (hunger-six on schema 3), S8 (duplicate login deny), S9 (`tick_metrics_v1`), S10 (spawn resolution at prepare, wider search, `tests/acceptance/spawn-setup.ts`), K1 plugin (checkpoint/resume), M0–M3, M2 (bow, shield, eating guard), M3a (border diagnostic), L1a (candidate registry), R1/R1b/R1c (play, watch, exact admission, `external-seat`), R2 (trace 4, funnel, `explain`), R3 (worker cohorts), L1 (league), K1 runner (`save`/`resume`), B1 (`bench` harness), C0 partial (navigation arrival, pickup reach, collect-while-falling, canopy-free acceptance layout), M4 partial (`curriculum-melee`, `curriculum-ranged`).
+
+**Known red on the branch.**
+- `integration civilization-rules` fails at the sixteen-plank craft (`{failed, timedOut}` about 5 s): mineflayer `bot.craft` sends iteration 2+ clicks before the server acknowledges the first, so stale state IDs resync and the local model drifts. Fix belongs in `craftCivilizationMaterial` (`civilization-skills.ts`): one iteration per owned operation, wait for result slot and consumed log count. `civilization-six` and `civilization-baseline` were never run.
+- `acceptance hunger-six`: seeds 481516 and 481517 pass live; 481518 failed before the S10 widening; 481519–481521 never ran; no clean six-seed pass on the final plugin.
+- Unverified live: S8 (`external-seat` row 4), S9 (metrics), hunger-12/24 end to end, `--workers 2`, `./arena league` smoke, frontier rule-mode edit probes, `curriculum-survival` (written, never run).
+- Offline suite 607/607, `./arena check lint` clean, Java unit green, live `stack` and `legal-player` pass at the tip.
+
+**Open lanes.** None. All lane branches were merged by cherry-pick and deleted; no unmerged work remains.
+
+**Retained worktrees.** None.
+
+**Not started (in order).**
+1. C0 craft fix, then `civilization-rules`, `civilization-six`, `civilization-baseline`.
+2. Live verification at the tip, serialized under the lock: `external-seat`, `curriculum-survival` (fix what it reveals), `hunger-six` six seeds, the S10 setup table (`ARENA_SETUP_SCENARIOS`/`ARENA_SETUP_SEEDS`), `hunger-12`/`hunger-24`, a `--workers 2` run, a league smoke.
+3. Runner: consume `tick_metrics_v1`; plugin: attribute arrow damage to the shooter in `ARENA_DAMAGE`; calibrate cooldown, bow draw, arrow speed and gravity, reach, shield reduction and record them in `docs/policies.md`.
+4. C1 (finite technology chain, renewable food, jobs and claims, hauling, ledger), C2, C3, C4, C5, then H-SRV, H-MECH, H-RUN, H-CIV, O1, L2, Z1 (the `acceptance`, `hunger-12/24`, `frontier-*` acceptance cases are still unwritten).
+5. Refresh `docs/acceptance-report.md` with the results above.
+
+**Operational notes.** Live acceptance cases bind port 25565: run one at a time, wrap in `until mkdir .work/live.lock 2>/dev/null; do sleep 10; done; <cmd>; rmdir .work/live.lock`, and wait for the port to be free. `./arena build --package all` does not build the `arena-fs` helper; `make -C native/arena-fs build` does. The eleven unregistered `.work/wt/*` directories from before the campaign are untouched.
+
+**Owner decisions owed.** None blocking. Logged calls to review: rule modes are a `[rules]` table in scenario 3 rather than new `mode` values; squads outcome stays last-survivor by seat; held-out seed set `600001..600024` is not yet consumed; `hunger-six` moved to scenario schema 3.
+
+**Verified at pause.** Worktrees pruned and none registered besides the main checkout; no campaign process or live lock; no unmerged campaign branches; the doc and handoff are committed; `.work/` is ignored through `.git/info/exclude`.
+
 
 **Goal.** The owner opens an ordinary Minecraft client and plays against capable, fair opponents in a large Hunger Games match, or joins a faction whose economy, construction, reconnaissance and military decisions continue without them. Headless, scripted, no LLM, no paid inference, no GPU, no public listener.
 
@@ -402,7 +432,18 @@ Do not spend a research phase rediscovering launchers, server replacements, bot 
 
 ## 11. Decision log (append-only, one line per judgment call)
 
+- 2026-10-14 G0: bumped Node lock to 26.11.1 per owner; moved this doc to `docs/` and deleted both predecessors.
+- 2026-10-14 G2: `./arena` integration cases now build `all` before `stack`; a fresh worktree failed on missing package output otherwise.
+- 2026-10-14 S3a: border center is the floored mean spawn column (fractional centers made every policy hold `borderUnknown`).
+- 2026-10-14 S3: rule modes are a `[rules]` table in scenario 3; squads outcome stays last-survivor by seat.
+- 2026-10-14 M3: introduced `policy-input-v4`; merge held until the runner migration (R2) landed.
+- 2026-10-14 S7: natural hunger-six moved to scenario schema 3 so the spawn search applies; schema 1/2 stay strict.
+
 ## 12. Campaign log (append-only, one line per phase end or parked item)
+
+- 2026-10-14 P0 end: G0 and G1 merged, G2 baseline recorded (legal-player pass; civilization-rules and hunger-six red).
+- 2026-10-14 P1 partial: S1–S10, M0–M3a, L1a, R1–R3, L1, K1, B1 merged; C0 and M4 parked partial (craft defect, survival case unrun).
+- 2026-10-14 paused: campaign wound down at owner request; see Handoff.
 
 ## 13. For the owner afterwards
 
