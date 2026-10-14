@@ -1,6 +1,6 @@
 # Arena Frontier: from a six-bot experiment to competitive worlds
 
-**Status:** paused 2026-10-14 (bot-quality sprint in progress; see Handoff). Written against `master` at `f479b16` (2026-10-14). It supersedes the earlier agent campaign plans, which G0 deleted.
+**Status:** paused 2026-10-14. Active priorities: bot quality and UHC-style duel training (Priority override). Resume from the Handoff. Written against `master` at `f479b16` (2026-10-14). It supersedes the earlier agent campaign plans, which G0 deleted.
 
 ## Priority override (2026-10-14, owner)
 
@@ -11,6 +11,9 @@ Bot quality is the top immediate priority; every other item waits unless it unbl
 | **Q0** | Live measurement of the tip: `acceptance hunger-six` on 481516..481521 plus per-seat quality table (loot, distance, idle ticks, attacks issued/rejected from the funnel, damage dealt/taken, death causes and ticks, PvP share). Recorded in `docs/acceptance-report.md`. |
 | **Q-loop** | Quality loop speed: league and acceptance matches run on ephemeral game ports with up to 3 concurrent matches (10 CPUs, 32 GiB), one world template per seed; a development league of 12 seeds finishes in under 30 minutes. |
 | **Q1** | Policy and skill defects found from Q0 traces (idle seats, stalls, stuck spawns, no-loot seats, rejected attacks) fixed with failing regressions first. The frozen baseline is copied once as `baseline@1` before any change; improvements ship as a new implementation id compared against it. |
+| **Q-engage** (engage) | Strike-phase rewrite of the melee skill so hits land in dynamic fights (plan and numbers in the Handoff). Proof: offline orbit/knockback simulation hit-rate before/after, `curriculum-melee`, and `./arena quality` self-inflicted rejection share under 5%. |
+| **Q-resilience** (MECH/RUN) | One client's window desync or quarantine must not fail a whole match (Decisions: quarantine row). Proof: injected-desync test keeps the run valid, seat eliminated, run marked `degraded`. |
+| **Q-trapped** (RUN) | `trapped` classification (zero displacement with failed navigation each cycle) in seat quality, kept out of the unexplained-idle gate but counted and listed. |
 | **Q2** | Candidate tuning on development seeds 500001..500012 with the existing search helper; one held-out evaluation of 600001..600024 per frozen candidate set; promote only at mean ≥ 0.65 and lower bound > 0.5. |
 
 **UHC-style 1v1 duel training (owner, 2026-10-14, top priority after Q-engage).** PvP skill has a lot of nuanced strategy; the bots must become strong duelists, and 1v1 UHC-style duels are the training and evaluation ground. "Training" here is the campaign's CPU-only loop: scripted policy families with bounded tunable parameters, searched and evaluated on a duel ladder against a fixed opponent pool. No LLM, neural network, GPU or paid inference.
@@ -30,6 +33,17 @@ Honest scope: "UHC-style" means the ruleset and strategy mix (no natural regener
 Duel gates fixed now: self-inflicted attack rejections under 5% of issued attacks in duels; no unexplained idle span over 100 ticks in a duel; promoted candidate meets the D-train threshold; duel results are reproducible from the manifest and seeds.
 
 Quality gates fixed now: all six seeds terminate; at least 75% of seats loot a chest; at least 40% of eliminations are PvP; self-inflicted attack rejections under 5% of issued attacks in live matches; no seat idle for more than 600 ticks without a recorded waiting reason; candidate beats `baseline@1` per the league rule.
+
+## Item status (2026-10-14)
+
+Merged means on `campaign/frontier` and verified at least offline. Partial and parked items carry their next step in the Handoff.
+
+| State | Items |
+|---|---|
+| Merged and live-verified | G0, G1, G2 (baseline recorded), S1, S2, M0, M1 (melee curriculum), M2 (ranged curriculum), R1b, K1 plugin and runner (`checkpoint-resume` live), Q0, Q-loop |
+| Merged, offline only or partly live | S3/S3a, S4–S7, S8/S8b, S9, S10, S11, S13, M3, M3a, L1a, R2, R3, L1, B1, Q1 (v5 set), `steadyMeleeEngagement` |
+| Partial / parked | C0 (craft defect), M4 (`curriculum-survival` unrun, calibration unmeasured), R1/R1c (`external-seat` row 1), S12 (seed matrix incomplete), Q1 (live comparison mixed) |
+| Not started | Q-engage, Q-resilience, Q-trapped, D-rules, D-pool, D-ladder, D-skills, D-train, Q2, C1–C5, H-SRV/MECH/RUN/CIV, O1, L2, Z1 |
 
 ## Handoff (paused 2026-10-14, second pause)
 
@@ -76,6 +90,10 @@ The executor has this document and the repo. It runs from G0 to the last item wi
 - **Parity before optimization.** Phases P1 and P2 finish every feature and every test. Performance budgets in P1 and P2 are measured and logged, never gating. Item O1 and later are the only optimization work.
 - **Fix on the way** what is egregious, in its own `fix` commit: a warm focused command over 120 s, a same-workload regression over 2× baseline, a baseline-red test that blocks the item. Record anything else and leave it.
 - **Honest labels.** Implemented, behavior verified at N, capacity certified at N, and open limit are four different things. A headless surrogate is not an expert human. Configuration support is not capacity. An action admission rate is not hit accuracy.
+- **A comparison is valid only if the candidate ran.** Every candidate-versus-baseline report must show the candidate's own reason codes firing in the seat reason histograms and record the commit it ran on. A run whose histograms show only `delegatedBaselineRules` for candidate seats is void. (A runner wiring bug once made "improved" seats decide with baseline; this rule is why it was caught.)
+- **Evidence is stamped.** Every quality, league, duel or bench result names the branch tip it ran on, scenario and seeds, candidate ids and versions, concurrency, and whether the host was shared; concurrent matches are labeled timing-sensitive.
+- **Merging lanes.** Lanes commit on their own branches; the coordinator integrates by `git cherry-pick` of `git cherry campaign/frontier <lane-branch>`, resolves conflicts in favor of keeping both sides, runs `./arena build --package all`, `./arena check lint` and the compiled offline suite, then updates the verify worktree before any live run. Live evidence is never gathered from a tree that is behind the merged tip.
+- **Live runs.** League, quality and bench matches use ephemeral ports and may run concurrently (host memory budget about 3.5 GiB per match, at most 3 concurrent). Acceptance cases that bind 25565 (`hunger-six`, lifecycle, faults, external-seat) serialize under `.work/live.lock` and wait for the port; never kill another lane's process.
 - **Bookkeeping is small.** This document, updated area docs, one acceptance report, compact fixtures a reader uses. No tracker, provenance register, hashes or manifests unless a reader or failure needs them.
 - **No code comments.** Put the reason in a name, type or test. A surviving comment states its own constraint and never cites this document, an item ID or a phase. Delete failing comments in files you touch.
 - **Commits.** Local commits are authorized. Each is a Conventional Commit `type(scope): subject`, scope = workstream or area, item ID in the body, `!` for a contract change, ending with the attribution trailer the session supplies. No formatters. Never push.
@@ -122,6 +140,9 @@ The executor has this document and the repo. It runs from G0 to the last item wi
 | Hunger-24 gates (fixed now; G2 numbers may tighten them, never loosen): across `481516..481521`, every match terminates with a valid outcome; at least 75% of seats loot a chest; at least 40% of eliminations are PvP; at least two distinct engagements per match; at least one confirmed bow hit in the suite; no seat idle for more than 600 ticks without a recorded legitimate waiting reason. | A tournament that idles into border death is a failed gate. |
 | Static-mechanics admission gate: under 5% self-inflicted admission failures on eligible controlled opportunities, with at least 20 issued actions and 10 attributed damage events per case. Moving-target cases report the funnel without a rate gate. | Paired with minimum work so "no attacks" cannot pass. |
 | Capacity floors (§7): 20 TPS target, per-tick service p95 < 40 ms and p99 < 50 ms, engaged-worker event-loop delay p99 < 25 ms, at least 90% of living eligible actors useful or with a verified waiting reason, no unbounded queue growth, no silent critical evidence loss. | Fixed before measuring; never moved after a failure. |
+| A client that must be quarantined (window desync that does not settle) is treated as a disconnect of that seat: eliminated at the tick boundary, the run is marked `degraded` with the reason, and the match continues; it is excluded from league and capacity statistics but kept in quality reports. | Failing a whole six-seat match for one client desync destroyed otherwise valid evidence. Reverse if degraded runs start hiding a systematic client bug (then fix the bug). |
+| Candidate promotion happens only through the league or duel ladder rule; `baseline@1` is never edited, and a promoted candidate becomes `baseline@2` by a new frozen record, with `baseline@1` kept as an opponent. | Keeps comparisons reproducible. |
+| Duel scoring is per seed pair with both seat assignments; the pool is fixed data and versioned; training never uses held-out seeds; hunger-six quality gates are the regression guard for any duel-trained candidate. | Prevents overfitting to one scripted opponent or one arena. |
 | `skills.ts` is split first (item M0): civilization-only handlers move to `civilization-skills.ts`, owned by the civilization lane. | One 1,300-line file owned by two lanes is the dominant merge risk. |
 | Rule modes are new scenario values: `frontier_survival`, `squads`, `frontier_war`, each versioned. `classic` is the existing `hunger_games`. No frozen scenario changes meaning. | Frozen baselines must stay reproducible. |
 
@@ -166,9 +187,22 @@ The executor has this document and the repo. It runs from G0 to the last item wi
 
 ---
 
+### Updated measurements (2026-10-14, after the quality sprint)
+
+| Command or run | Time or result |
+|---|---|
+| `./arena build --package all` warm | about 2 s |
+| Offline suite (compiled, 4-way concurrency) | 631 tests, about 25 s |
+| Java unit (`./arena test --suite java --case unit`) | 6–16 s |
+| Live `stack`, `legal-player` | 15 s, 131 s |
+| `curriculum-melee`, `curriculum-ranged` live | 106 s, 73 s |
+| `./arena quality` three hunger-six seeds, concurrency 1 / 2 / 3 | 810 s / 573 s / 368 s (shared host) |
+| Setup-only world preparation (hunger-six) | 35–47 s per world |
+| Baseline quality, four seeds | seats looting 0.58, PvP eliminations 0.53, self-inflicted rejections 0.63 per issued attack, longest unexplained idle 2,236 ticks |
+
 ## 4. Sequence
 
-Items are capabilities a lane delivers end to end. A lane takes several in a go. Prerequisites that cross workstreams are written on the item.
+Quality sprint items (Priority override) precede every item below that is not marked merged in Item status. Items are capabilities a lane delivers end to end. A lane takes several in a go. Prerequisites that cross workstreams are written on the item.
 
 ### Workstreams and ownership
 
@@ -254,6 +288,8 @@ Nothing waits on a person. Cases are named so `./arena test --suite <suite> --ca
 | D5 | `integration checkpoint-resume` | A 12-seat session saves, resumes in a new epoch, no duplicate materials, no revived seat, failed manifest stays incomplete |
 | D6 | `./arena league --manifest evaluation/league-v1.toml` | Reproducible report with denominators and intervals, and either a promoted candidate or the retained baseline |
 | D7 | `./arena bench --profile scale-v1` | Highest qualifying population per workload with workload, quality floor, duration and samples; failures and stops recorded; at least 3 runs per level, 120 s steady load each |
+| Quality | `./arena quality --scenario scenarios/hunger-six.toml --seeds 481516,481517,481518,481519,481520,481521 --candidate improved --concurrency 2 --accept-minecraft-eula` | All five Quality gates pass on the six seeds; candidate reason codes fired; compared against `baseline@1` on the same tip |
+| Duel (D-*) | `./arena duel --candidate improved --opponent pool --seeds <manifest> --rounds <n>` | D-train threshold met against `baseline@1` and the pool, duel gates met, and no hunger-six regression |
 | Fairness | `integration fairness` | Counterfactual perturbations leave decisions unchanged under one and two workers, caches and stale messages; injected leak fails the test |
 | Faults | `integration faults`, `worker-fault` | Every §8 obligation passes; artifacts truthful |
 | D8 | `fresh-checkout` procedure (Z1) | README walkthrough from an empty cache reaches a match; every advertised command exists; macOS arm64 tested, Linux reported untested unless a host exists |
