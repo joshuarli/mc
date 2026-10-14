@@ -831,27 +831,11 @@ export class SkillOwner {
       recordPathDiagnostic(this.#bot, { kind: 'navigation', active: true });
       try {
         this.#bot.pathfinder.setGoal(goal, false);
-        await Promise.resolve();
+        await Promise.race([reached, pathFailure]);
         throwIfInterrupted(signal);
-        let keepFacing = true;
-        const facing = arrival.kind === 'meleeReach' && !this.#inMeleeReach(arrival.target)
-          ? this.#faceUntil(active, arrival.target.id, signal, () => keepFacing)
-          : null;
-        const facingFailure = facing?.then(
-          () => new Promise<void>(() => undefined),
-          (error: unknown) => Promise.reject(error),
-        );
-        if (facingFailure !== undefined) void facingFailure.catch(() => undefined);
-        try {
-          await Promise.race(facingFailure === undefined ? [reached, pathFailure] : [reached, pathFailure, facingFailure]);
-          throwIfInterrupted(signal);
-          if (arrival.kind === 'meleeReach' ? this.#inMeleeReach(arrival.target) : hasArrived(this.#bot.entity.position, position, arrival)) return;
-          if (leg === MAX_NAVIGATION_LEGS - 1) {
-            throw new SkillFault('noProgress', `navigation exceeded ${MAX_NAVIGATION_LEGS} bounded path segments`);
-          }
-        } finally {
-          keepFacing = false;
-          if (facing !== null) await facing.catch(() => undefined);
+        if (arrival.kind === 'meleeReach' ? this.#inMeleeReach(arrival.target) : hasArrived(this.#bot.entity.position, position, arrival)) return;
+        if (leg === MAX_NAVIGATION_LEGS - 1) {
+          throw new SkillFault('noProgress', `navigation exceeded ${MAX_NAVIGATION_LEGS} bounded path segments`);
         }
       } finally {
         signal.removeEventListener('abort', relayAbort);
@@ -992,25 +976,6 @@ export class SkillOwner {
       return true;
     }
     throw new SkillFault('noProgress', `aim at opponent ${targetId} did not settle`, 'aimNotReady');
-  }
-
-  async #faceUntil(
-    active: ActiveSkill,
-    targetId: number,
-    signal: AbortSignal,
-    keepFacing: () => boolean,
-  ): Promise<void> {
-    const samples: Point3[] = [];
-    while (keepFacing()) {
-      throwIfInterrupted(signal);
-      const entity = this.#bot.entities[String(targetId)];
-      if (entity === undefined || !isTargetablePlayer(this.#bot, entity)) return;
-      const tickAt = this.#physicsTicks;
-      await this.#lookAt(active, 'face opponent', this.#aimPoint(samples, entity));
-      if (!keepFacing()) return;
-      throwIfInterrupted(signal);
-      if (this.#physicsTicks === tickAt) await waitForPhysicsTicks(this.#bot, 1, signal);
-    }
   }
 
   #aimPoint(samples: Point3[], entity: MineflayerEntity): MineflayerEntity['position'] {
