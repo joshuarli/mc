@@ -88,5 +88,12 @@ export interface CompletedOwnedRun {
   readonly stats: readonly StoppedPlayerStats[];
   readonly seatPolicies?: readonly Readonly<{ seat: number; candidate: string; semanticId: string }>[];
   readonly checkpoint?: import('../checkpoint/manifest.js').CheckpointManifest;
-  readonly degraded?: readonly import('../workers/cohort.js').WorkerLoss[];
+  readonly degraded?: readonly RunDegradation[];
+}
+
+export interface RunDegradation {
+  readonly worker: number | null;
+  readonly epoch: number | null;
+  readonly seats: readonly number[];
+  readonly reason: string;
 }

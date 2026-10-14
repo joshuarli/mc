@@ -728,6 +728,12 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
     });
     await lease.release();
     releaseLease = true;
+    const degraded = [
+      ...(cohort?.losses ?? []),
+      ...coordinator.policyDegradations().map((entry) => Object.freeze({
+        worker: null, epoch: null, seats: Object.freeze([entry.seat]), reason: entry.reason,
+      })),
+    ];
     return Object.freeze({
       runId: options.preparedRun.runId,
       ready: session.ready,
@@ -737,7 +743,7 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
       competitors: roster.competitorIdentities,
       spectators: roster.spectators,
       stats,
-      ...(cohort !== undefined && cohort.losses.length > 0 ? { degraded: cohort.losses } : {}),
+      ...(degraded.length > 0 ? { degraded: Object.freeze(degraded) } : {}),
       ...(seatCandidates.size === 0 ? {} : {
         seatPolicies: Object.freeze([...seatCandidates.entries()].sort(([a], [b]) => a - b)
           .map(([seat, candidate]) => Object.freeze({ seat, candidate: candidate.id, semanticId: candidate.semanticId }))),
@@ -907,6 +913,10 @@ class ControlCoordinator {
 
   get outcomeReceived(): boolean {
     return this.#outcomeReceived;
+  }
+
+  policyDegradations(): readonly import('./client-quarantine.js').ClientQuarantine[] {
+    return this.#policyLoop?.degraded ?? [];
   }
 
   startPump(): void {

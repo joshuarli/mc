@@ -15,8 +15,9 @@ import type { RuntimeCompetitorClient } from './clients.js';
 import type { ActionFunnelCollector } from './funnel.js';
 import { openingPolicyState, policyMemory, type CompiledCandidate, type PolicyMemoryInput } from '@arena/core';
 import { makeActionFunnelTraceRecord } from '../funnel-record.js';
+import { isClientQuarantine, type ClientQuarantine } from './client-quarantine.js';
 
-type PolicyCompetitor = Pick<RuntimeCompetitorClient, 'seat' | 'gameplay' | 'bot'>;
+type PolicyCompetitor = Pick<RuntimeCompetitorClient, 'seat' | 'gameplay' | 'bot'> & Partial<Pick<RuntimeCompetitorClient, 'close'>>;
 type GameplayDecision = Decision | CivilizationDecision;
 type PolicyTrace = Pick<RuntimeTraceBuilder, 'recordPolicyDecision' | 'recordPolicyEffect' | 'checkpoint'>
   & Partial<Pick<RuntimeTraceBuilder, 'recordActionFunnel' | 'recordRunNote'>>;
@@ -76,6 +77,8 @@ export class LivePolicyLoop {
   readonly #actions = new Map<number, OwnedAction>();
   readonly #watchedBots = new Map<number, Readonly<{ bot: PolicyCompetitor['bot']; gate: PolicyCompetitorGate }>>();
   readonly #disabledSeats = new Set<number>();
+  readonly #quarantines: ClientQuarantine[] = [];
+  readonly #quarantineClosed = new Set<number>();
   #sequence = 0n;
   #observationCount = 0;
   #lastTick = -1;
@@ -115,6 +118,10 @@ export class LivePolicyLoop {
     }
   }
 
+  get degraded(): readonly ClientQuarantine[] {
+    return Object.freeze([...this.#quarantines]);
+  }
+
   exportState(): ReadonlyMap<number, SeatPolicyState> {
     const states = new Map<number, SeatPolicyState>();
     for (const [seat, memory] of this.#memories) {
@@ -138,7 +145,10 @@ export class LivePolicyLoop {
     for (const competitor of this.#competitors()) {
       if (!this.#canIssuePolicy(competitor)) continue;
       try { this.#decide(competitor, tick, tickReceivedAtNs); }
-      catch (error) { this.#reportFailure(error); }
+      catch (error) {
+        if (isClientQuarantine(error)) this.#retireQuarantinedClient(competitor, error);
+        else this.#reportFailure(error);
+      }
     }
   }
 
@@ -148,8 +158,16 @@ export class LivePolicyLoop {
     this.#stopped = true;
     try {
       const cancel = [...this.#actions.values()].map((action) => this.#cancel(action, 'shutdown'));
-      const results = await Promise.allSettled([...cancel, ...this.#tasks]);
-      const failed = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+      const joined = new Set<Promise<void>>([...cancel, ...this.#tasks]);
+      let results = await Promise.allSettled([...joined]);
+      let failed = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+      if (failed === undefined) {
+        const extra = [...this.#tasks].filter((task) => !joined.has(task));
+        if (extra.length > 0) {
+          results = await Promise.allSettled(extra);
+          failed = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+        }
+      }
       if (failed !== undefined) throw mapRuntimeFailure(failed.reason);
       await this.#checkpointTail;
       if (this.#failure !== undefined) throw mapRuntimeFailure(this.#failure);
@@ -386,6 +404,20 @@ export class LivePolicyLoop {
       this.#onActivity?.({ kind: 'action', seat: action.competitor.seat, actionSequence: action.sequence.toString(),
         intent: action.decision.intent, startedAtNs: action.startedAtNs, settledAtNs: settledAtNs!, outcome, cleanupIncluded: true });
     } catch (error) {
+      if (isClientQuarantine(error)) {
+        this.#retireQuarantinedClient(action.competitor, error);
+        if (decisionRecorded && !effectRecorded && this.#recordPolicy) {
+          await this.#trace.recordPolicyEffect(action.competitor.gameplay.mode === 'civilization'
+            ? makeCivilizationPolicyEffectRecord(action.sequence, { kind: 'cancelled', reason: 'agentEliminated' }, [])
+            : makePolicyEffectRecord(action.sequence, { kind: 'cancelled', reason: 'agentEliminated' }, []));
+          effectRecorded = true;
+        }
+        deliveringActivity = true;
+        this.#onActivity?.({ kind: 'action', seat: action.competitor.seat, actionSequence: action.sequence.toString(),
+          intent: action.decision.intent, startedAtNs: action.startedAtNs, settledAtNs: process.hrtime.bigint(),
+          outcome: { kind: 'cancelled', reason: 'agentEliminated' }, cleanupIncluded: true });
+        return;
+      }
       this.#disabledSeats.add(action.competitor.seat);
       if (action.state === 'reserved' && decisionRecorded && !effectRecorded && this.#recordPolicy) {
         await this.#trace.recordPolicyEffect(action.competitor.gameplay.mode === 'civilization'
@@ -413,9 +445,23 @@ export class LivePolicyLoop {
     const wasRunning = action.state === 'running';
     action.cancellation.resolve(reason);
     action.cancelTask = boundedCleanup((async () => {
-      if (wasRunning) await action.competitor.gameplay.client.cancel(reason);
-      await action.task;
-      await action.barrier;
+      let quarantine: unknown;
+      if (wasRunning) {
+        try {
+          await action.competitor.gameplay.client.cancel(reason);
+        } catch (error) {
+          if (!isClientQuarantine(error)) throw error;
+          quarantine = error;
+        }
+      }
+      try {
+        await action.task;
+        await action.barrier;
+      } catch (error) {
+        if (!isClientQuarantine(error)) throw error;
+        quarantine ??= error;
+      }
+      if (isClientQuarantine(quarantine)) this.#retireQuarantinedClient(action.competitor, quarantine);
     })());
     this.#ownTask(action.cancelTask);
     return action.cancelTask;
@@ -452,6 +498,26 @@ export class LivePolicyLoop {
     this.#disabledSeats.add(seat);
     const action = this.#actions.get(seat);
     if (action !== undefined) this.#ownTask(this.#cancel(action, 'agentEliminated'));
+  }
+
+  #retireQuarantinedClient(competitor: PolicyCompetitor, error: Error): void {
+    const seat = competitor.seat;
+    if (!this.#quarantines.some((entry) => entry.seat === seat)) {
+      this.#quarantines.push(Object.freeze({ seat, tick: this.#lastTick, reason: error.message }));
+    }
+    this.#disabledSeats.add(seat);
+    if (this.#quarantineClosed.has(seat)) return;
+    this.#quarantineClosed.add(seat);
+    this.#ownTask(this.#disconnectQuarantinedClient(competitor));
+  }
+
+  async #disconnectQuarantinedClient(competitor: PolicyCompetitor): Promise<void> {
+    try {
+      if (competitor.close !== undefined) await competitor.close();
+      else await competitor.gameplay.client.close();
+    } catch (error) {
+      if (!isClientQuarantine(error)) throw error;
+    }
   }
 }
 

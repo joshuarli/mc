@@ -189,6 +189,34 @@ test('live policy keeps a stable active intent and defers lower priority observa
   assert.equal(cancellations, 1);
 });
 
+test('live policy eliminates one quarantined seat, marks the run degraded, and lets another seat finish', async () => {
+  const quarantine = new Error('Mineflayer operation "synchronize window after withdrawing bread" did not settle; this client is quarantined');
+  let quarantinedCloses = 0;
+  let otherCloses = 0;
+  const quarantined = competitor(0, async () => { throw quarantine; }, false, 0);
+  quarantined.client.close = async () => { quarantinedCloses += 1; };
+  const other = competitor(1, async () => ({ kind: 'succeeded' }));
+  other.client.close = async () => { otherCloses += 1; };
+  const state = fixture([quarantined, other]);
+  state.loop.onTick(0);
+  await settle();
+  assert.deepEqual(state.failures, []);
+  assert.deepEqual(state.loop.degraded, [{ seat: 0, tick: 0, reason: quarantine.message }]);
+  assert.equal(quarantinedCloses, 1);
+  assert.equal(otherCloses, 0);
+  const eliminated = state.effects.find((effect) => effect.decision_sequence === state.decisions.find((record) => record.seat === 0)?.sequence);
+  assert.deepEqual(eliminated?.skill, { kind: 'cancelled', reason: 'agentEliminated' });
+  assert.equal(state.effects.some((effect) => effect.skill.kind === 'succeeded'), true);
+  state.loop.onTick(1);
+  await settle();
+  assert.equal(state.decisions.filter((record) => record.seat === 0).length, 1);
+  assert.ok(state.decisions.filter((record) => record.seat === 1).length >= 2);
+  assert.deepEqual(state.failures, []);
+  await state.loop.stopAndJoin();
+  assert.deepEqual(state.failures, []);
+  assert.equal(otherCloses, 0);
+});
+
 test('live policy quarantines a seat when replacement cleanup fails', async () => {
   const skill = pending<SkillOutcome>();
   let starts = 0;
