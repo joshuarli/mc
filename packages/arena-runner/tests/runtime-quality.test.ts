@@ -223,6 +223,71 @@ test('quality seat table counts loot, distance, idle reasons, attacks, damage an
   assert.match(renderQualityTable([{ label: 'm', quality }]), /melee@110<-0/);
 });
 
+function effect(sequence: string, skill: object, path: object[] = []): TraceRecord {
+  return { schema: 'policy-effect-v1', decision_sequence: sequence, skill, path_updates: path } as unknown as TraceRecord;
+}
+
+const navigate = { kind: 'navigate', target: { x: 50, y: 65, z: 0 } };
+
+test('quality classifies stationary failed navigation as trapped and excludes it from the unexplained span', () => {
+  const records = [
+    replay(0, 1, 0, 0, navigate, { kind: 'start', action_sequence: '1' }),
+    replay(0, 2, 100, 0, navigate, { kind: 'continue', action_sequence: '1' }),
+    replay(0, 3, 200, 5, navigate, { kind: 'start', action_sequence: '3' }),
+    replay(0, 4, 900, 5, navigate, { kind: 'continue', action_sequence: '3' }),
+    effect('1', { kind: 'failed', cause: 'noProgress' }),
+    effect('3', { kind: 'failed', cause: 'timedOut' }, [{ status: 'timeout', path: [] }]),
+  ];
+  const quality = matchQuality(evidenceOf(records));
+  const seat = quality.seats.find((entry) => entry.seat === 0)!;
+  assert.equal(seat.idle.ticks, 800);
+  assert.equal(seat.idle.trapped_ticks, 800);
+  assert.equal(seat.idle.max_trapped_span_ticks, 700);
+  assert.equal(seat.idle.unexplained_ticks, 0);
+  assert.equal(seat.idle.max_unexplained_span_ticks, 0);
+  assert.deepEqual(seat.idle.by_reason, { 'trapped:navigate': 800 });
+  const gate = qualityGates([{ label: 'm', terminated: true, quality }]).find((entry) => entry.id === 'no_unexplained_idle')!;
+  assert.equal(gate.passed, true);
+  assert.equal(gate.threshold, 600);
+  const text = renderQualityTable([{ label: 'm', quality }]);
+  assert.match(text, /unexpl\s+trapped/);
+  assert.match(text, /800\s+0\s+800/);
+});
+
+test('quality leaves stationary cycles without a navigation failure unexplained', () => {
+  const records = [
+    replay(0, 1, 0, 0, navigate, { kind: 'start', action_sequence: '1' }),
+    replay(0, 2, 30, 0, navigate, { kind: 'continue', action_sequence: '1' }),
+    replay(0, 3, 70, 0, navigate, { kind: 'continue', action_sequence: '1' }),
+    effect('1', { kind: 'succeeded' }, [{ status: 'partial', path: [] }]),
+  ];
+  const quality = matchQuality(evidenceOf(records));
+  const seat = quality.seats.find((entry) => entry.seat === 0)!;
+  assert.equal(seat.idle.ticks, 70);
+  assert.equal(seat.idle.unexplained_ticks, 70);
+  assert.equal(seat.idle.max_unexplained_span_ticks, 70);
+  assert.equal(seat.idle.trapped_ticks, 0);
+  assert.equal(seat.idle.max_trapped_span_ticks, 0);
+  assert.deepEqual(seat.idle.by_reason, { 'no_progress:navigate': 70 });
+});
+
+test('quality keeps a wait reason ahead of a trapped navigation', () => {
+  const records = [
+    replay(0, 1, 0, 0, { kind: 'hold', reason: 'awaitingLoot' }, { kind: 'hold' }),
+    replay(0, 2, 40, 0, navigate, { kind: 'start', action_sequence: '2' }),
+    replay(0, 3, 90, 0, navigate, { kind: 'continue', action_sequence: '2' }),
+    effect('1', { kind: 'failed', cause: 'noProgress' }, [{ status: 'noPath', path: [] }]),
+    effect('2', { kind: 'failed', cause: 'noProgress' }, [{ status: 'noPath', path: [] }]),
+  ];
+  const quality = matchQuality(evidenceOf(records));
+  const seat = quality.seats.find((entry) => entry.seat === 0)!;
+  assert.deepEqual(seat.idle.by_reason, { 'wait:awaitingLoot': 40, 'trapped:navigate': 50 });
+  assert.equal(seat.idle.trapped_ticks, 50);
+  assert.equal(seat.idle.max_trapped_span_ticks, 50);
+  assert.equal(seat.idle.unexplained_ticks, 0);
+  assert.equal(seat.idle.max_unexplained_span_ticks, 0);
+});
+
 function idleCompetitor(seat: number) {
   const bot = Object.assign(new EventEmitter(), { health: 20, game: { gameMode: 'survival' } }) as unknown as Bot;
   const client: MineflayerArenaClient = {

@@ -43,6 +43,8 @@ export interface SeatQuality {
     ticks: number;
     unexplained_ticks: number;
     max_unexplained_span_ticks: number;
+    trapped_ticks: number;
+    max_trapped_span_ticks: number;
     by_reason: Readonly<Record<string, number>>;
   }>;
   readonly attacks: Readonly<{
@@ -81,6 +83,7 @@ interface SeatDecision {
   readonly waitReason: string | null;
   readonly disposition: string;
   readonly actionSequence: string | null;
+  readonly moveAction: string | null;
   readonly containerPosition: string | null;
 }
 
@@ -101,6 +104,7 @@ interface Scan {
   readonly damage: readonly DamageEntry[];
   readonly eliminations: readonly { tick: number; seat: number; cause: string }[];
   readonly endTick: number | null;
+  readonly failedNavigation: ReadonlySet<string>;
 }
 
 export interface ExplainEntry {
@@ -123,6 +127,7 @@ function scan(evidence: Evidence): Scan {
   const funnelBySeat = new Map<number, FunnelOutcome[]>();
   const damage: DamageEntry[] = [];
   const eliminations: { tick: number; seat: number; cause: string }[] = [];
+  const failedNavigation = new Set<string>();
   let endTick: number | null = null;
   let maxTick = 0;
 
@@ -137,9 +142,14 @@ function scan(evidence: Evidence): Scan {
       notesBySeat.set(record.seat, list);
       continue;
     }
-    if (record.schema === 'policy-effect-v1' && typeof record.decision_sequence === 'string') {
-      const kind = (record.skill as { kind?: string } | undefined)?.kind;
-      if (typeof kind === 'string') effects.set(record.decision_sequence, kind);
+    if ((record.schema === 'policy-effect-v1' || record.schema === 'civilization-policy-effect-v1')
+        && typeof record.decision_sequence === 'string') {
+      if (record.schema === 'policy-effect-v1') {
+        const kind = (record.skill as { kind?: string } | undefined)?.kind;
+        if (typeof kind === 'string') effects.set(record.decision_sequence, kind);
+      }
+      if (navigationFailedEffect(record)) failedNavigation.add(record.decision_sequence);
+      else failedNavigation.delete(record.decision_sequence);
       continue;
     }
     if (record.schema === 'action-funnel-v1') {
@@ -176,11 +186,11 @@ function scan(evidence: Evidence): Scan {
     }
   }
   if (endTick === null && maxTick > 0) endTick = maxTick;
-  return { decisionsBySeat, effects, candidates, funnelBySeat, notesBySeat, damage, eliminations, endTick };
+  return { decisionsBySeat, effects, candidates, funnelBySeat, notesBySeat, damage, eliminations, endTick, failedNavigation };
 }
 
 export function matchQuality(evidence: Evidence): MatchQuality {
-  const { decisionsBySeat, effects, candidates, funnelBySeat, notesBySeat, damage, eliminations, endTick } = scan(evidence);
+  const { decisionsBySeat, effects, candidates, funnelBySeat, notesBySeat, damage, eliminations, endTick, failedNavigation } = scan(evidence);
   const seatIds = new Set<number>([...decisionsBySeat.keys(), ...funnelBySeat.keys(), ...candidates.keys(),
     ...eliminations.map((entry) => entry.seat)]);
   const matchReasons: Record<string, number> = {};
@@ -198,7 +208,7 @@ export function matchQuality(evidence: Evidence): MatchQuality {
       decisions: decisions.length,
       loot: lootOf(decisions, effects),
       distance_blocks: round1(distanceOf(decisions)),
-      idle: idleOf(decisions),
+      idle: idleOf(decisions, failedNavigation),
       attacks: attacksOf(funnelBySeat.get(seat) ?? []),
       damage: { dealt: round1(sum(dealt.map((entry) => entry.amount))), taken: round1(takenTotal),
         taken_from_competitors: round1(takenFromCompetitors) },
@@ -255,6 +265,8 @@ function readDecision(record: TraceRecord, tick: number | null): SeatDecision | 
   const containerPosition = intentKind === 'containerOpen' && decision.intent?.position !== undefined
     ? `${decision.intent.position.x},${decision.intent.position.y},${decision.intent.position.z}` : null;
   const observation = (record.input as { observation?: { border?: { kind?: string } } }).observation;
+  const linkedAction = disposition.kind === 'start' || disposition.kind === 'replace' || disposition.kind === 'continue'
+    ? disposition.action_sequence ?? null : null;
   return {
     tick,
     sequence: String(record.sequence),
@@ -264,7 +276,8 @@ function readDecision(record: TraceRecord, tick: number | null): SeatDecision | 
     intent: intentKind,
     waitReason: intentKind === 'hold' ? decision.intent?.reason ?? 'unspecified' : null,
     disposition: disposition.kind === 'defer' ? `defer:${disposition.reason}` : disposition.kind,
-    actionSequence: disposition.kind === 'start' || disposition.kind === 'replace' ? disposition.action_sequence ?? null : null,
+    actionSequence: disposition.kind === 'start' || disposition.kind === 'replace' ? linkedAction : null,
+    moveAction: linkedAction,
     containerPosition,
   };
 }
@@ -302,12 +315,15 @@ function displacement(from: SeatDecision, to: SeatDecision): number | null {
   return Math.hypot(to.position.x - from.position.x, to.position.z - from.position.z);
 }
 
-function idleOf(decisions: readonly SeatDecision[]): SeatQuality['idle'] {
+function idleOf(decisions: readonly SeatDecision[], failedNavigation: ReadonlySet<string>): SeatQuality['idle'] {
   const byReason: Record<string, number> = {};
   let ticks = 0;
   let unexplained = 0;
   let span = 0;
   let maxSpan = 0;
+  let trapped = 0;
+  let trappedSpan = 0;
+  let maxTrapped = 0;
   for (let index = 1; index < decisions.length; index += 1) {
     const previous = decisions[index - 1]!;
     const current = decisions[index]!;
@@ -315,21 +331,61 @@ function idleOf(decisions: readonly SeatDecision[]): SeatQuality['idle'] {
     const moved = displacement(previous, current);
     if (gap <= 0 || moved === null || moved >= STATIONARY_BLOCKS || IN_PLACE_INTENTS.has(previous.intent)) {
       span = 0;
+      trappedSpan = 0;
       continue;
     }
     ticks += gap;
-    let reason: string | null = null;
-    if (previous.waitReason !== null) reason = `wait:${previous.waitReason}`;
-    else if (previous.disposition === 'hold' || previous.disposition.startsWith('defer:')) reason = previous.disposition;
-    if (reason === null) {
-      reason = `no_progress:${previous.intent}`;
+    const classified = idleReason(previous, failedNavigation);
+    if (classified.class === 'unexplained') {
       unexplained += gap;
       span += gap;
       maxSpan = Math.max(maxSpan, span);
-    } else span = 0;
-    byReason[reason] = (byReason[reason] ?? 0) + gap;
+      trappedSpan = 0;
+    } else if (classified.class === 'trapped') {
+      trapped += gap;
+      trappedSpan += gap;
+      maxTrapped = Math.max(maxTrapped, trappedSpan);
+      span = 0;
+    } else {
+      span = 0;
+      trappedSpan = 0;
+    }
+    byReason[classified.reason] = (byReason[classified.reason] ?? 0) + gap;
   }
-  return { ticks, unexplained_ticks: unexplained, max_unexplained_span_ticks: maxSpan, by_reason: byReason };
+  return {
+    ticks, unexplained_ticks: unexplained, max_unexplained_span_ticks: maxSpan,
+    trapped_ticks: trapped, max_trapped_span_ticks: maxTrapped, by_reason: byReason,
+  };
+}
+
+const MOVE_INTENTS = new Set(['navigate', 'approach']);
+
+function navigationFailedEffect(record: TraceRecord): boolean {
+  const skill = record.skill as { kind?: string; cause?: string } | undefined;
+  if (skill?.kind === 'failed' && skill.cause === 'noProgress') return true;
+  const updates = record.path_updates;
+  if (!Array.isArray(updates)) return false;
+  return updates.some((update) => {
+    const status = (update as { status?: unknown }).status;
+    return status === 'noPath' || status === 'timeout';
+  });
+}
+
+function navigationFailed(decision: SeatDecision, failedNavigation: ReadonlySet<string>): boolean {
+  if (!MOVE_INTENTS.has(decision.intent)) return false;
+  return failedNavigation.has(decision.sequence)
+    || (decision.moveAction !== null && failedNavigation.has(decision.moveAction));
+}
+
+function idleReason(
+  previous: SeatDecision, failedNavigation: ReadonlySet<string>,
+): { reason: string; class: 'explained' | 'trapped' | 'unexplained' } {
+  if (previous.waitReason !== null) return { reason: `wait:${previous.waitReason}`, class: 'explained' };
+  if (previous.disposition === 'hold' || previous.disposition.startsWith('defer:')) {
+    return { reason: previous.disposition, class: 'explained' };
+  }
+  if (navigationFailed(previous, failedNavigation)) return { reason: `trapped:${previous.intent}`, class: 'trapped' };
+  return { reason: `no_progress:${previous.intent}`, class: 'unexplained' };
 }
 
 type FunnelOutcome = NonNullable<ReturnType<typeof readActionFunnelTraceRecord>['funnel']>;
@@ -420,7 +476,7 @@ export function qualityGates(matches: readonly QualityMatchInput[]): readonly Qu
 }
 
 export function renderQualityTable(matches: readonly Readonly<{ label: string; quality: MatchQuality | null; note?: string }>[]): string {
-  const header = ['seat', 'policy', 'loot', 'chests', 'dist', 'idle', 'unexpl', 'atk iss/rej', 'self', 'dmg out/in', 'alive', 'death', 'pvp%'];
+  const header = ['seat', 'policy', 'loot', 'chests', 'dist', 'idle', 'unexpl', 'trapped', 'atk iss/rej', 'self', 'dmg out/in', 'alive', 'death', 'pvp%'];
   const lines: string[] = [];
   for (const match of matches) {
     lines.push(`${match.label}${match.note === undefined ? '' : ` (${match.note})`}`);
@@ -436,6 +492,7 @@ export function renderQualityTable(matches: readonly Readonly<{ label: string; q
       String(Math.round(seat.distance_blocks)),
       String(seat.idle.ticks),
       String(seat.idle.unexplained_ticks),
+      String(seat.idle.trapped_ticks),
       `${seat.attacks.issued}/${seat.attacks.rejected}`,
       String(seat.attacks.self_inflicted_rejected),
       `${seat.damage.dealt}/${seat.damage.taken}`,
@@ -514,7 +571,7 @@ export function seatTimeline(evidence: Evidence, seat: number): object {
   const quality = matchQuality(evidence).seats.find((entry) => entry.seat === seat);
   return {
     ranges,
-    idle_spans: idleSpans(decisions),
+    idle_spans: idleSpans(decisions, scanned.failedNavigation),
     engagements: [...engagements.values()].sort((left, right) => left.first_tick - right.first_tick),
     environment_damage: scanned.damage.filter((entry) => entry.victim === seat && entry.attacker === null)
       .map((entry) => ({ tick: entry.tick, cause: entry.cause, amount: entry.amount })).slice(0, 200),
@@ -523,20 +580,19 @@ export function seatTimeline(evidence: Evidence, seat: number): object {
   };
 }
 
-function idleSpans(decisions: readonly SeatDecision[]): readonly object[] {
+function idleSpans(decisions: readonly SeatDecision[], failedNavigation: ReadonlySet<string>): readonly object[] {
   const spans: { from_tick: number; to_tick: number; reason: string; explained: boolean }[] = [];
   for (let index = 1; index < decisions.length; index += 1) {
     const previous = decisions[index - 1]!;
     const current = decisions[index]!;
     const moved = displacement(previous, current);
     if (current.tick <= previous.tick || moved === null || moved >= STATIONARY_BLOCKS || IN_PLACE_INTENTS.has(previous.intent)) continue;
-    let reason = `no_progress:${previous.intent}`;
-    let explained = false;
-    if (previous.waitReason !== null) { reason = `wait:${previous.waitReason}`; explained = true; }
-    else if (previous.disposition === 'hold' || previous.disposition.startsWith('defer:')) { reason = previous.disposition; explained = true; }
+    const classified = idleReason(previous, failedNavigation);
     const last = spans.at(-1);
-    if (last !== undefined && last.reason === reason && last.to_tick === previous.tick) last.to_tick = current.tick;
-    else spans.push({ from_tick: previous.tick, to_tick: current.tick, reason, explained });
+    if (last !== undefined && last.reason === classified.reason && last.to_tick === previous.tick) last.to_tick = current.tick;
+    else spans.push({
+      from_tick: previous.tick, to_tick: current.tick, reason: classified.reason, explained: classified.class !== 'unexplained',
+    });
   }
   return spans.filter((span) => span.to_tick - span.from_tick >= 40).slice(0, 100);
 }
