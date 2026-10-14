@@ -4,6 +4,8 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { compileScenario } from '@arena/spec';
 import { withExternalSeat } from '../src/effective-scenario.js';
+import { decodeControlEnvelope, encodeControlEnvelope } from '../src/control/index.js';
+import type { ControlMessage } from '../src/control/types.js';
 import { RunnerError } from '../src/errors.js';
 import { createPreparePayload, createRuntimeRoster } from '../src/runtime/roster.js';
 
@@ -139,4 +141,58 @@ test('schema 2 scenarios keep the legacy bot roster unless an external seat is s
   const substituted = withExternalSeat(scenario, { seat: 0, username: 'Josh' });
   const prepare = createPreparePayload(substituted, createRuntimeRoster(substituted).competitors);
   assert.equal('roster_version' in prepare ? prepare.roster_version : undefined, 2);
+});
+
+function hunger12Source(): { scenario: string; map: string } {
+  return {
+    scenario: readFileSync(join(repositoryRoot, 'scenarios/hunger-12.toml'), 'utf8'),
+    map: readFileSync(join(repositoryRoot, 'maps/hunger-12.toml'), 'utf8'),
+  };
+}
+
+test('classic schema 3 prepare carries no rules object', () => {
+  const { scenario: source, map } = hunger12Source();
+  const scenario = compileScenario(source, map);
+  const prepare = createPreparePayload(scenario, createRuntimeRoster(scenario).competitors);
+  assert.equal('rules' in prepare, false);
+  assert.equal(prepare.roster.length, 12);
+});
+
+test('squads rules are prepared with roster version 2 and decode through the control codec', () => {
+  const { scenario: source, map } = hunger12Source();
+  const scenario = compileScenario(`${source}
+[rules]
+kind = "squads"
+version = 1
+squads = [
+  { id = "alpha", seats = [0, 1, 2, 3, 4, 5] },
+  { id = "bravo", seats = [6, 7, 8, 9, 10, 11] },
+]
+`, map);
+  const prepare = createPreparePayload(scenario, createRuntimeRoster(scenario).competitors);
+  assert.deepEqual('rules' in prepare ? prepare.rules : undefined, {
+    kind: 'squads', version: 1,
+    squads: [{ id: 'alpha', seats: [0, 1, 2, 3, 4, 5] }, { id: 'bravo', seats: [6, 7, 8, 9, 10, 11] }],
+  });
+  const decoded = decodeControlEnvelope(encodeControlEnvelope({
+    protocol: 1, run_id: 'rules-run', sequence: 1n, type: 'prepare', payload: prepare,
+  } as ControlMessage));
+  assert.equal(decoded.type, 'prepare');
+});
+
+test('frontier survival rules map the spec fields onto the wire names', () => {
+  const { scenario: source, map } = hunger12Source();
+  const text = `${source}
+[rules]
+kind = "frontier_survival"
+version = 1
+edit_radius_blocks = 96
+max_block_edits_per_seat = 2000
+`.replace(/block_breaking = false/, 'block_breaking = true');
+  const withPlacing = text.replace(/block_placing = false/, 'block_placing = true');
+  const scenario = compileScenario(withPlacing, map);
+  const prepare = createPreparePayload(scenario, createRuntimeRoster(scenario).competitors);
+  assert.deepEqual('rules' in prepare ? prepare.rules : undefined, {
+    kind: 'frontier_survival', version: 1, edit_radius_blocks: 96, max_block_edits_per_seat: 2000,
+  });
 });

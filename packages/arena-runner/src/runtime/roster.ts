@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
-import type { CivilizationFactionMemberIr, CivilizationScenarioIr, ScenarioIr } from '@arena/spec';
-import type { BotCompetitor, ExternalCompetitor, PreparePayload, RosterCompetitor } from '../control/index.js';
+import type { CivilizationFactionMemberIr, CivilizationScenarioIr, RuleModeIr, ScenarioIr } from '@arena/spec';
+import type { BotCompetitor, ExternalCompetitor, PreparePayload, PrepareRules, RosterCompetitor } from '../control/index.js';
 import { RunnerError } from '../errors.js';
 import type { PlayerIdentity } from './observations.js';
 
@@ -101,9 +101,34 @@ export function createPreparePayload(scenario: ScenarioIr, roster: readonly Rost
     }),
   });
   if (scenario.schemaVersion === 3 || roster.some((competitor) => competitor.kind === 'external')) {
-    return Object.freeze({ ...common, mode: 'hunger_games', roster_version: 2, settings, roster });
+    const rules = scenario.schemaVersion === 3 ? preparedRules(scenario.rules) : undefined;
+    return Object.freeze({
+      ...common,
+      mode: 'hunger_games',
+      roster_version: 2,
+      ...(rules === undefined ? {} : { rules }),
+      settings,
+      roster,
+    });
   }
   return Object.freeze({ ...common, mode: 'hunger_games', settings, roster: botOnlyRoster(roster) });
+}
+
+function preparedRules(rules: RuleModeIr): PrepareRules | undefined {
+  switch (rules.kind) {
+    case 'classic': return undefined;
+    case 'frontier_survival': return Object.freeze({
+      kind: 'frontier_survival',
+      version: rules.version,
+      edit_radius_blocks: rules.editRadiusBlocks,
+      max_block_edits_per_seat: rules.maxBlockEditsPerSeat,
+    });
+    case 'squads': return Object.freeze({
+      kind: 'squads',
+      version: rules.version,
+      squads: Object.freeze(rules.squads.map((squad) => Object.freeze({ id: squad.id, seats: squad.seats }))),
+    });
+  }
 }
 
 function botOnlyRoster(roster: readonly RosterCompetitor[]): readonly BotCompetitor[] {
