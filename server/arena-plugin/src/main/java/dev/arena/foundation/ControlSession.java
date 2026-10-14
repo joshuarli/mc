@@ -19,6 +19,7 @@ final class ControlSession implements AutoCloseable {
     private static final int INBOUND_COMMAND_CAPACITY = 128;
     private static final int OUTBOUND_MESSAGE_CAPACITY = 256;
     private static final int CONNECT_TIMEOUT_MILLIS = 10_000;
+    private static final int OPTIONAL_OUTBOUND_THRESHOLD = OUTBOUND_MESSAGE_CAPACITY / 2;
 
     private record Outbound(ControlProtocol.Type type, ControlProtocol.Payload payload,
             Optional<BigInteger> correlation, boolean readiness) {}
@@ -93,6 +94,17 @@ final class ControlSession implements AutoCloseable {
     void reject(BigInteger requestSequence, ControlProtocol.ErrorCode code, String message) {
         enqueue(new Outbound(ControlProtocol.Type.ERROR, new ControlProtocol.ErrorPayload(code, message),
                 Optional.of(requestSequence), false));
+    }
+
+    boolean offerOptional(ControlProtocol.Type type, ControlProtocol.Payload payload) {
+        if (closed.get() || failure.get() != null || outbound.size() >= OPTIONAL_OUTBOUND_THRESHOLD) {
+            return false;
+        }
+        return outbound.offer(new Outbound(type, payload, Optional.empty(), false));
+    }
+
+    int outboundDepth() {
+        return outbound.size();
     }
 
     private void enqueue(Outbound message) {

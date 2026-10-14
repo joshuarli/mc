@@ -129,6 +129,8 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
     private boolean skipMatchAdvanceThisTick;
     private boolean outcomeEmitted;
     private long lastHeartbeatNanos;
+    private final TickDurationRing tickDurations = new TickDurationRing();
+    private int droppedOptionalMetrics;
     private boolean generatorRequested;
     private boolean worldInitialized;
     private boolean civilizationEvaluatorEnabled;
@@ -250,6 +252,7 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
 
     @EventHandler(priority = EventPriority.MONITOR)
     public void onServerTickEnd(ServerTickEndEvent event) {
+        tickDurations.record(event.getTickDuration());
         if (startupMode != StartupMode.PLAN || controlSession == null) {
             return;
         }
@@ -277,6 +280,14 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
                 if (controlSession.isReady() && now - lastHeartbeatNanos >= 1_000_000_000L) {
                     controlSession.sendEvent(ControlProtocol.Type.HEARTBEAT, new ControlProtocol.EmptyPayload());
                     lastHeartbeatNanos = now;
+                    if (preparedMatch != null) {
+                        Optional<ControlProtocol.MetricsPayload> metrics = tickDurations.snapshot(
+                                controlSession.outboundDepth(), droppedOptionalMetrics);
+                        if (metrics.isPresent() && !controlSession.offerOptional(
+                                ControlProtocol.Type.METRICS, metrics.get())) {
+                            droppedOptionalMetrics++;
+                        }
+                    }
                 }
             }
         } catch (RuntimeException failure) {

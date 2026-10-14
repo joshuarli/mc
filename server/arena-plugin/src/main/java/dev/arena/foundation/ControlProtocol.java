@@ -89,10 +89,12 @@ final class ControlProtocol {
         CIVILIZATION_V1("civilization_v1"),
         HUNGER_GAMES_ROSTER_V2("hunger_games_roster_v2"),
         CHECKPOINT_V1("checkpoint_v1"),
-        DAMAGE_EVENTS_V1("damage_events_v1");
+        DAMAGE_EVENTS_V1("damage_events_v1"),
+        TICK_METRICS_V1("tick_metrics_v1");
 
         static final List<Capability> SUPPORTED = List.of(
-                HUNGER_GAMES_V1, CIVILIZATION_V1, HUNGER_GAMES_ROSTER_V2, CHECKPOINT_V1, DAMAGE_EVENTS_V1);
+                HUNGER_GAMES_V1, CIVILIZATION_V1, HUNGER_GAMES_ROSTER_V2, CHECKPOINT_V1, DAMAGE_EVENTS_V1,
+                TICK_METRICS_V1);
 
         private final String wireName;
 
@@ -1047,11 +1049,24 @@ final class ControlProtocol {
         }
     }
 
-    record MetricsPayload(long serverTickDurationMicros, int criticalQueueDepth, int droppedOptionalMetrics)
-            implements Payload {
+    static final int MAX_TICK_DURATION_SAMPLES = 20;
+
+    record MetricsPayload(long serverTickDurationMicros, int criticalQueueDepth, int droppedOptionalMetrics,
+            Optional<List<Long>> tickDurationsMicros) implements Payload {
         MetricsPayload {
             require(serverTickDurationMicros >= 0 && criticalQueueDepth >= 0 && droppedOptionalMetrics >= 0,
                     "invalid control metrics");
+            tickDurationsMicros = Objects.requireNonNull(tickDurationsMicros, "tick durations")
+                    .map(List::copyOf);
+            require(tickDurationsMicros.isEmpty() || (tickDurationsMicros.get().size() >= 1
+                            && tickDurationsMicros.get().size() <= MAX_TICK_DURATION_SAMPLES
+                            && tickDurationsMicros.get().stream()
+                                    .allMatch(sample -> sample != null && sample >= 0 && sample <= MAX_SAFE_INTEGER_LONG)),
+                    "invalid tick duration samples");
+        }
+
+        MetricsPayload(long serverTickDurationMicros, int criticalQueueDepth, int droppedOptionalMetrics) {
+            this(serverTickDurationMicros, criticalQueueDepth, droppedOptionalMetrics, Optional.empty());
         }
     }
 
@@ -1591,13 +1606,26 @@ final class ControlProtocol {
 
     private static Payload readMetrics(Object value) throws IOException {
         Map<String, Object> payload = object(value, "payload",
-                Set.of("server_tick_duration_micros", "critical_queue_depth", "dropped_optional_metrics"),
+                Set.of("server_tick_duration_micros", "critical_queue_depth", "dropped_optional_metrics",
+                        "tick_durations_micros"),
                 Set.of("server_tick_duration_micros", "critical_queue_depth", "dropped_optional_metrics"));
+        Optional<List<Long>> samples = Optional.empty();
+        if (payload.containsKey("tick_durations_micros")) {
+            List<Object> values = array(payload.get("tick_durations_micros"), "payload.tick_durations_micros", 1,
+                    MAX_TICK_DURATION_SAMPLES);
+            List<Long> parsed = new ArrayList<>(values.size());
+            for (int index = 0; index < values.size(); index++) {
+                parsed.add(readIntegerLong(values.get(index), "payload.tick_durations_micros[" + index + "]", 0,
+                        MAX_SAFE_INTEGER.longValue()));
+            }
+            samples = Optional.of(parsed);
+        }
         return new MetricsPayload(
                 readIntegerLong(payload.get("server_tick_duration_micros"), "payload.server_tick_duration_micros", 0,
                         MAX_SAFE_INTEGER.longValue()),
                 readInteger(payload.get("critical_queue_depth"), "payload.critical_queue_depth", 0, Integer.MAX_VALUE),
-                readInteger(payload.get("dropped_optional_metrics"), "payload.dropped_optional_metrics", 0, Integer.MAX_VALUE));
+                readInteger(payload.get("dropped_optional_metrics"), "payload.dropped_optional_metrics", 0, Integer.MAX_VALUE),
+                samples);
     }
 
     private static Payload readError(Object value) throws IOException {
@@ -1786,9 +1814,11 @@ final class ControlProtocol {
                     "at", abort.at().map(ControlProtocol::tickValue).orElse(null));
         }
         if (payload instanceof MetricsPayload metrics) {
-            return object("server_tick_duration_micros", metrics.serverTickDurationMicros(),
+            Map<String, Object> value = object("server_tick_duration_micros", metrics.serverTickDurationMicros(),
                     "critical_queue_depth", metrics.criticalQueueDepth(),
                     "dropped_optional_metrics", metrics.droppedOptionalMetrics());
+            metrics.tickDurationsMicros().ifPresent(samples -> value.put("tick_durations_micros", samples));
+            return value;
         }
         if (payload instanceof ErrorPayload error) {
             return object("code", error.code().wireName(), "message", error.message());
