@@ -1,6 +1,6 @@
 # Arena Frontier: from a six-bot experiment to competitive worlds
 
-**Status:** resumed 2026-10-14. Active priorities: bot quality and UHC-style duel training (Priority override). Integration branch `campaign/frontier`. Q-trapped, D-ladder, D-rules, and Q-engage are merged offline. Live `curriculum-melee` and a `uhc_duel` smoke are still owed. Q-resilience is next, then D-pool and D-skills. `--opponent pool` stays rejected until D-pool. Written against `master` at `f479b16` (2026-10-14). It supersedes the earlier agent campaign plans, which G0 deleted.
+**Status:** resumed 2026-10-14. Active priorities: bot quality and UHC-style duel training (Priority override). Integration branch `campaign/frontier`. Q-trapped, D-ladder, D-rules, and Q-engage are merged. `curriculum-melee` passed live. A `uhc_duel` smoke and the six-seed quality table are still owed. Q-resilience is next, then D-pool and D-skills. `--opponent pool` stays rejected until D-pool. Written against `master` at `f479b16` (2026-10-14). It supersedes the earlier agent campaign plans, which G0 deleted.
 
 ## Priority override (2026-10-14, owner)
 
@@ -41,7 +41,7 @@ Merged means on `campaign/frontier` and verified at least offline. Partial and p
 | State | Items |
 |---|---|
 | Merged and live-verified | G0, G1, G2 (baseline recorded), S1, S2, M0, M1 (melee curriculum), M2 (ranged curriculum), K1 plugin and runner (`checkpoint-resume` live), Q0, Q-loop |
-| Merged, offline only or partly live | R1b (rules sent by the runner; no live run uses a rule mode), S3/S3a, S4–S7, S8/S8b, S9, S10, S11, S13, M3, M3a, L1a, R2, R3, L1, B1, Q1 (v5 set), `steadyMeleeEngagement`, Q-trapped, D-ladder (`./arena duel`; `--opponent pool` rejected), D-rules (`uhc_duel` v1; natural terrain, not superflat; live smoke not run), Q-engage (led strike; live `curriculum-melee` not re-run) |
+| Merged, offline only or partly live | R1b (rules sent by the runner; no live run uses a rule mode), S3/S3a, S4–S7, S8/S8b, S9, S10, S11, S13, M3, M3a, L1a, R2, R3, L1, B1, Q1 (v5 set), `steadyMeleeEngagement`, Q-trapped, D-ladder (`./arena duel`; `--opponent pool` rejected), D-rules (`uhc_duel` v1; natural terrain, not superflat; live smoke not run), Q-engage (led strike; `curriculum-melee` passed, six-seed quality not re-run) |
 | Partial / parked | C0 (craft defect), M4 (`curriculum-survival` unrun, calibration unmeasured), R1/R1c (`external-seat` row 1), S12 (seed matrix incomplete), Q1 (live comparison mixed) |
 | Not started | Q-resilience, D-pool, D-skills, D-train, Q2, C1–C5, H-SRV/MECH/RUN/CIV, O1, L2, Z1 |
 
@@ -504,7 +504,8 @@ Do not spend a research phase rediscovering launchers, server replacements, bot 
 - 2026-10-14 Q-trapped merged offline at `7707b16`. Compiled package tests 624/624, lint clean. Report shape adds `idle.trapped_ticks` and `idle.max_trapped_span_ticks` and a `trapped` column. Not live-checked.
 - 2026-10-14 D-ladder merged offline at `96c7f5a`. `./arena duel` plans both seat assignments, scores with the league seed-cluster `tInterval`, and records run ids. `--opponent pool` is `duel_opponent_pool_unavailable` until D-pool. Engagement omits swings, time in reach, heals, bow shots, bow hits, and first strike. Compiled package tests 627/627, lint clean. Not live-checked.
 - 2026-10-14 D-rules merged offline at `c3a871c`. Schema-3 `[rules].kind = "uhc_duel"` version 1, semantic-id discriminant 3. Shipped scenario id `e3f9ef8eed6d0e4036af909e98ab81e6797df74460b5109c8c937e9713279b24`. Every prepare sets `NATURAL_REGENERATION` (false only for this kind). Kit is granted once in `bindSeat`. Arena is natural 1024 terrain because schema 3 has no superflat. Compiled package tests 640/640, lint clean, Java unit green, `./arena validate` green. Live smoke not run.
-- 2026-10-14 Q-engage merged offline at `54ff3bf` and `cf664c8`. The strike leads one tick and swings after one non-forced look once the crosshair is on the body. `isCrosshairOnBody` is unchanged. Compiled package tests 644/644, bots 126/126, lint clean. Live `curriculum-melee` and the six-seed quality table are not re-run.
+- 2026-10-14 Q-engage merged offline at `54ff3bf` and `cf664c8`. The strike leads one tick and swings after one non-forced look once the crosshair is on the body. `isCrosshairOnBody` is unchanged. Compiled package tests 644/644, bots 126/126, lint clean.
+- 2026-10-14 Q-engage live: the first `curriculum-melee` on that tip failed the 5% admission gate at 3/31, all `targetNoLongerVisible` after a fixed 54-tick pursuit. `e9e04a0` keeps turning through a cone miss while the cooldown refills. `b59a721` gives looking during pursuit back to the pathfinder. The rerun passed: static 22 attacks and 0 rejections, fractional-boundary 11 and 0, 37 server hits, 33 attacks, 0 rejections. The six-seed quality table is not re-run.
 
 ## 13. For the owner afterwards
 
