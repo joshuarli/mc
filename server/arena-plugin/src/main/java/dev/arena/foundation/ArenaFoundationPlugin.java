@@ -478,6 +478,7 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
         for (Player player : Bukkit.getOnlinePlayers()) {
             if (!bindBotIfExpected(player)) {
                 player.setGameMode(GameMode.SPECTATOR);
+                moveSpectatorToSpawnCenter(player);
             }
         }
     }
@@ -513,6 +514,45 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
             return;
         }
         player.setGameMode(GameMode.SPECTATOR);
+        moveSpectatorToSpawnCenter(player);
+    }
+
+    private void moveSpectatorToSpawnCenter(Player player) {
+        World world = Bukkit.getWorld(ARENA_WORLD);
+        if (world == null) {
+            throw new IllegalStateException("the staged arena world is unavailable for spectator placement");
+        }
+        MapPlan.Position center = spawnCenter(spectatorSpawns());
+        if (!player.teleport(new Location(world, center.x() + 0.5, center.y(), center.z() + 0.5))) {
+            throw new IllegalStateException("could not place a spectator at the arena spawn center");
+        }
+    }
+
+    static MapPlan.Position spawnCenter(List<MapPlan.SpawnPoint> spawns) {
+        if (spawns.isEmpty()) {
+            throw new IllegalArgumentException("spectator placement requires at least one configured spawn");
+        }
+        long x = 0;
+        long y = 0;
+        long z = 0;
+        for (MapPlan.SpawnPoint spawn : spawns) {
+            x += spawn.position().x();
+            y += spawn.position().y();
+            z += spawn.position().z();
+        }
+        return new MapPlan.Position(
+                (int) Math.round((double) x / spawns.size()),
+                (int) Math.round((double) y / spawns.size()),
+                (int) Math.round((double) z / spawns.size()));
+    }
+
+    private List<MapPlan.SpawnPoint> spectatorSpawns() {
+        if (preparedMatch == null) {
+            return generationPlan.spawns();
+        }
+        return preparedMatch.roster().stream()
+                .map(bot -> generationPlan.spawns().get(bot.seat()))
+                .toList();
     }
 
     private boolean bindBotIfExpected(Player player) {

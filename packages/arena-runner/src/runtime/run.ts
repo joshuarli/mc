@@ -60,6 +60,7 @@ import type { OwnedServerProcess, ServerProcessExit } from './process.js';
 import { startOwnedResourceMonitor, type OwnedResourceMonitor, type ResourceMonitorSampleEvent } from './resource-monitor.js';
 import type { OperationalFailurePrimaryV1 } from './failure-artifact.js';
 import { TextDecoder } from 'node:util';
+import { waitForExternalPlayer } from './external-player-gate.js';
 
 function requiredControlCapability(mode: PreparedRun['scenario']['mode']): ControlCapability {
   switch (mode) {
@@ -89,6 +90,7 @@ export interface RunPreparedRunOptions {
   readonly evaluate?: ActiveRunEvaluator;
   readonly competitorDriver?: 'baselinePolicy' | 'evaluator';
   readonly spectatorMode?: RuntimeSpectatorMode;
+  readonly waitForExternalPlayer?: true;
   readonly onPolicyActivity?: (event: PolicyActivityEvent) => void;
   readonly onResourceSample?: (event: ResourceMonitorSampleEvent) => void;
   readonly onRosterReady?: (details: Readonly<{
@@ -293,6 +295,21 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
       minecraftVersion: session.ready.payload.server.minecraft_version,
       protocolVersion: session.ready.payload.server.protocol_version,
     });
+    if (options.waitForExternalPlayer === true) {
+      const runtimeUsernames = new Set([
+        ...roster.competitors.map((competitor) => competitor.username),
+        ...roster.spectators.map((spectator) => spectator.username),
+      ]);
+      await raceWithRunState(
+        waitForExternalPlayer([...clients, ...spectators].map((client) => client.bot), runtimeUsernames, runSignal),
+        abortPromise,
+        leaseLost,
+        processFailure,
+        coordinator.failure,
+      );
+      const joinFailure = collectClientFailures(clients, spectators);
+      if (joinFailure !== undefined) throw joinFailure;
+    }
 
     const start = async (): Promise<void> => {
       if (startAttempted) throw new RunnerError('runtime_failure', 'match start', { kind: 'start_already_called' });

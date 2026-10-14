@@ -168,7 +168,7 @@ test('run accepts explicit EULA option and rejects unknown options', async () =>
   try {
     const accepted = await runCli([
       'run', '--scenario', 'scenarios/hunger-six.toml', '--accept-minecraft-eula',
-      '--reserve-external-spectator-slot',
+      '--reserve-external-spectator-slot', '--wait-for-external-player',
     ]);
     assert.equal(accepted.kind, 'failure');
     if (accepted.kind !== 'failure') return;
@@ -190,6 +190,16 @@ test('run accepts explicit EULA option and rejects unknown options', async () =>
     assert.equal(repeatedReservation.exitCode, 2);
     assert.equal(JSON.parse(repeatedReservation.stderr).error.source.kind,
       'run_reserve_external_spectator_slot_repeated');
+
+    const repeatedPlayerGate = await runCli([
+      'run', '--scenario', 'scenarios/hunger-six.toml', '--accept-minecraft-eula',
+      '--wait-for-external-player', '--wait-for-external-player',
+    ]);
+    assert.equal(repeatedPlayerGate.kind, 'failure');
+    if (repeatedPlayerGate.kind !== 'failure') return;
+    assert.equal(repeatedPlayerGate.exitCode, 2);
+    assert.equal(JSON.parse(repeatedPlayerGate.stderr).error.source.kind,
+      'run_wait_for_external_player_repeated');
   } finally {
     if (previousHelper === undefined) delete process.env.ARENA_FS_HELPER;
     else process.env.ARENA_FS_HELPER = previousHelper;

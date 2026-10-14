@@ -15,12 +15,12 @@ endif
 
 .PHONY: help server
 help:
-	@printf '%s\n' 'make server: start the local bot match, reserve an external spectator slot, and print Minecraft connection details'
+	@printf '%s\n' 'make server: wait for an external spectator to join, then start the local bot match'
 
 
 ifeq ($(ACCEPT_MINECRAFT_EULA),1)
 server:
-	@cd "$(ARENA_ROOT)" && exec ./arena run --scenario scenarios/hunger-six.toml --accept-minecraft-eula --reserve-external-spectator-slot
+	@cd "$(ARENA_ROOT)" && exec ./arena run --scenario scenarios/hunger-six.toml --accept-minecraft-eula --reserve-external-spectator-slot --wait-for-external-player
 else
 server:
 	@printf '%s\n' 'Set ACCEPT_MINECRAFT_EULA=1 to accept the Minecraft EULA and start the server.' >&2
