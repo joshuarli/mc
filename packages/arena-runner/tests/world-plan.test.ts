@@ -108,3 +108,26 @@ test('world-plan-v2 rejects natural footprints outside the fixed world dimension
   assert.throws(() => encodeWorldPlanV2('fixture-run', 4n, map),
     (error: unknown) => error instanceof WorldPlanError && error.kind === 'invalid_natural_dimensions');
 });
+
+test('world-plan schema mirrors the natural encoder seed and footprint contract', async () => {
+  const schema = JSON.parse(await readFile(join(repositoryRoot, 'schemas/world-plan.schema.json'), 'utf8')) as {
+    $defs: {
+      natural: { properties: { world_seed: { pattern: string }; terrain: { const: string }; blocks: { maxItems: number } } };
+      natural_dimensions: { properties: { width: { const: number }; depth: { const: number } } };
+    };
+  };
+  const map = compileMap(worldPlanV2FixtureMap);
+  if (map.terrain !== 'vanilla') assert.fail('natural map required');
+  const encoded = JSON.parse(encodeWorldPlanV2('fixture-run', (1n << 64n) - 1n, map).toString('utf8')) as {
+    world_seed: string;
+  };
+  const seedPattern = new RegExp(schema.$defs.natural.properties.world_seed.pattern);
+
+  assert.equal(schema.$defs.natural.properties.terrain.const, map.terrain);
+  assert.equal(schema.$defs.natural.properties.blocks.maxItems, 0);
+  assert.equal(schema.$defs.natural_dimensions.properties.width.const, map.dimensions.width);
+  assert.equal(schema.$defs.natural_dimensions.properties.depth.const, map.dimensions.depth);
+  assert.match(encoded.world_seed, seedPattern);
+  assert.doesNotMatch((1n << 64n).toString(10), seedPattern);
+  assert.doesNotMatch('01', seedPattern);
+});
