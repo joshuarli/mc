@@ -13,7 +13,7 @@ import type {
 import { blockPosition, civilizationOutpostCells, entityId } from "@arena/core";
 import type { CivilizationScenarioIr } from "@arena/spec";
 import type { MineflayerCivilizationClient } from "@arena/bots";
-import type { PathDiagnosticRecord } from "@arena/bots";
+import { PathDiagnosticRing, type PathDiagnosticRecord } from "@arena/bots";
 import { isVisibleEntity } from "../../packages/arena-bots/src/perception.js";
 import { hasLocalVoxelRayToTarget, isInsidePerceptionCone } from "../../packages/arena-bots/src/visibility.js";
 import { readOwnedFile, MAX_OWNED_READ_BYTES } from "../../packages/arena-runner/src/owned-files/index.js";
@@ -139,6 +139,8 @@ export function civilizationClientForSeat(active: AcceptanceRunContext, seat: nu
   return gameplay.client;
 }
 
+const CANOPY_FREE_LOG_HEIGHT = 2;
+
 export function civilizationActionLayout(scenario: CivilizationScenarioIr): CivilizationActionLayout {
   const allSources = scenario.map.blocks
     .filter(({ block }) => block === "minecraft:oak_log")
@@ -152,9 +154,9 @@ export function civilizationActionLayout(scenario: CivilizationScenarioIr): Civi
     const home = spawns.get(firstMember.seat);
     assert.ok(home, `${faction.id} source seat must have a compiled spawn`);
     const naturalOakLogSources = allSources
-      .filter((position) => squaredDistance(position, home) < 64 * 64)
+      .filter((position) => squaredDistance(position, home) < 64 * 64 && position.y <= home.y + CANOPY_FREE_LOG_HEIGHT)
       .sort((first, second) => squaredDistance(first, home) - squaredDistance(second, home));
-    assert.ok(naturalOakLogSources.length >= 5, `${faction.id} base must have five reachable natural oak logs`);
+    assert.ok(naturalOakLogSources.length >= 6, `${faction.id} base must have six natural oak logs below its leaf canopy`);
     const chest = [...scenario.map.lootContainers]
       .sort((first, second) => squaredDistance(first.position, home) - squaredDistance(second.position, home))[0];
     assert.ok(chest, `${faction.id} base must have a declared chest`);
@@ -275,17 +277,50 @@ export async function prepareCivilizationFactionMaterials(
   assert.equal(materialCount(observation, "oak_log"), 0, `seat ${gathererSeat} must begin without natural logs`);
 
   for (const [index, position] of layout.naturalOakLogSources.slice(0, 5).entries()) {
-    const navigationIntent = { kind: "navigate" as const, target: position };
+    const walker = active.competitors.find((candidate) => candidate.seat === gathererSeat)?.bot;
+    assert.ok(walker, `civilization runtime must contain seat ${gathererSeat}`);
+    const side = walker.entity.position.x < position.x ? -1 : 1;
+    const groundY = Math.floor(walker.entity.position.y);
+    if (Math.abs(walker.entity.position.x - position.x) < 6) {
+      const backoffIntent = {
+        kind: "navigate" as const,
+        target: blockPosition(position.x + side * 9, groundY, position.z),
+      };
+      assertSucceeded(await recordCivilizationAction(actions, gathererSeat,
+        { kind: "gatherMaterial", item: "oak_log", target: position }, backoffIntent,
+        () => runArenaSkill(gatherer, backoffIntent, signal)),
+      `seat ${gathererSeat} must back away from natural oak log ${positionText(position)}`);
+    }
+    const navigationIntent = {
+      kind: "navigate" as const,
+      target: blockPosition(position.x + side * 3, groundY, position.z),
+    };
     const navigated = await recordCivilizationAction(actions, gathererSeat,
       { kind: "gatherMaterial", item: "oak_log", target: position }, navigationIntent,
       () => runArenaSkill(gatherer, navigationIntent, signal));
     assertSucceeded(navigated,
       `seat ${gathererSeat} must navigate to natural oak log ${positionText(position)}`);
-    observation = await waitForCivilizationObservation(active, gatherer, signal,
-      `seat ${gathererSeat} to observe natural oak log ${positionText(position)}`, (current) =>
-      current.observedResources.kind === "current"
-      && current.observedResources.value.some((resource) => resource.kind === "logBlock"
-        && samePosition(resource.position, position)));
+    try {
+      observation = await waitForCivilizationObservation(active, gatherer, signal,
+        `seat ${gathererSeat} to observe natural oak log ${positionText(position)}`, (current) =>
+        current.observedResources.kind === "current"
+        && current.observedResources.value.some((resource) => resource.kind === "logBlock"
+          && samePosition(resource.position, position)));
+    } catch (error) {
+      const entity = walker.entity;
+      const block = walker.blockAt(entity.position.clone().set(position.x, position.y, position.z));
+      throw new Error(`${error instanceof Error ? error.message : String(error)}; ${JSON.stringify({
+        player: [entity.position.x, entity.position.y, entity.position.z],
+        yaw: entity.yaw,
+        pitch: entity.pitch,
+        height: entity.height,
+        block: block?.name ?? null,
+        observedLogs: observation.observedResources.kind === "current"
+          ? observation.observedResources.value.filter((resource) => resource.kind === "logBlock")
+            .map((resource) => resource.position)
+          : null,
+      })}`, { cause: error });
+    }
     assert.equal(observation.observedResources.kind, "current");
     if (observation.observedResources.kind !== "current") throw new Error("natural log perception became unavailable");
     const stillPresent = observation.observedResources.value.some((resource) => resource.kind === "logBlock"
@@ -301,14 +336,26 @@ export async function prepareCivilizationFactionMaterials(
     const collectIntent = { kind: "dropCollect" as const, entityId: entityId(drop.entityId) };
     const bot = active.competitors.find((candidate) => candidate.seat === gathererSeat)?.bot;
     assert.ok(bot, `civilization runtime must contain seat ${gathererSeat}`);
-    const collected = await recordCivilizationAction(actions, gathererSeat,
-      { kind: "gatherMaterial", item: "oak_log", target: position }, collectIntent,
-      () => runArenaSkill(gatherer, collectIntent, signal));
+    const ring = new PathDiagnosticRing(bot, {
+      clientLabel: `civilization-seat-${gathererSeat}`,
+      clock: () => ({ clientMs: performance.now(), authorityTick: null }),
+    });
+    let collected: SkillOutcome;
+    let pathRecords: readonly PathDiagnosticRecord[];
+    try {
+      collected = await recordCivilizationAction(actions, gathererSeat,
+        { kind: "gatherMaterial", item: "oak_log", target: position }, collectIntent,
+        () => runArenaSkill(gatherer, collectIntent, signal));
+    } finally {
+      pathRecords = ring.snapshot();
+      ring.close();
+    }
     if (collected.kind !== "succeeded") {
       const entity = bot.entities[String(drop.entityId)];
       const item = entity?.getDroppedItem() ?? null;
       throw new Error(`seat ${gathererSeat} failed to collect the observed oak log drop; ${JSON.stringify({
         outcome: collected,
+        path: summarizePathRecords(pathRecords),
         entityId: drop.entityId,
         entityPresent: entity !== undefined,
         entityType: entity?.type ?? null,
@@ -706,4 +753,27 @@ function isCensusProperty(argument: string): boolean {
 
 function positionKey(position: Readonly<{ x: number; y: number; z: number }>): string {
   return `${position.x},${position.y},${position.z}`;
+}
+
+function summarizePathRecords(records: readonly PathDiagnosticRecord[]): string {
+  const round = (value: number): number => Math.round(value * 100) / 100;
+  const lines = records.flatMap((record): string[] => {
+    switch (record.kind) {
+      case "physicsTick": return [];
+      case "goalUpdated": return [`goal${JSON.stringify(record.goal)}`];
+      case "goalReached": return ["reached"];
+      case "pathUpdate": return [`path:${record.path.status}:n${record.path.nodeCount}:v${record.path.visitedNodes}:${record.path.nodes.at(-1)
+        ? `${round(record.path.nodes.at(-1)!.x)},${record.path.nodes.at(-1)!.z}` : "-"}`];
+      case "pathReset": return [`reset:${record.reason}`];
+      case "pathStop": return ["stop"];
+      case "pathSearch": return [`search:${record.transition}`];
+      case "blockUpdate": return [`block:${record.current.name}`];
+      default: return [];
+    }
+  });
+  const last = [...records].reverse().find((record) => record.kind === "physicsTick");
+  const tail = last?.kind === "physicsTick"
+    ? ` at(${round(last.position.x)},${round(last.position.y)},${round(last.position.z)}) ground=${last.onGround} hCol=${last.collidedHorizontally} ctl=${Object.entries(last.control).filter(([, on]) => on).map(([name]) => name).join("+")}`
+    : "";
+  return `${lines.slice(-14).join(" ")}${tail}`;
 }
