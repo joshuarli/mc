@@ -1,6 +1,6 @@
 # Arena Frontier: from a six-bot experiment to competitive worlds
 
-**Status:** stopped 2026-10-14 at the owner's request. Integration branch `campaign/frontier`, at the commit that contains this status. The live order is Steering order below. The one-leg drop (`7e93161`) is merged offline and was not live-checked. The owner stopped that duel before a match result. That run has no score. Next work, when resumed, is S0, then S1. S3 may run beside them only as a pure `arena-core` module that does not edit `skills.ts`. Seed 260114 stays a navigation and perception red. Its 0.75 score is a match outcome and is excluded from combat-skill qualification. Do not grind that seed with more look or path patches. Written against `master` at `f479b16` (2026-10-14). This document supersedes the earlier agent campaign plans, which G0 deleted.
+**Status:** resumed 2026-10-14. Integration branch `campaign/frontier`, at the commit that contains this status. The live order is Steering order below. The wave is steering S0 (runner reports), steering S1 (planned UHC lab schema), and steering S3 (pure `frontier-v1`, no `skills.ts`). The one-leg drop (`7e93161`) is merged offline and was not live-checked. The owner stopped that duel before a match result. That run has no score. Next work, when resumed, is S0, then S1. S3 may run beside them only as a pure `arena-core` module that does not edit `skills.ts`. Seed 260114 stays a navigation and perception red. Its 0.75 score is a match outcome and is excluded from combat-skill qualification. Do not grind that seed with more look or path patches. Written against `master` at `f479b16` (2026-10-14). This document supersedes the earlier agent campaign plans, which G0 deleted.
 
 ## Steering order (2026-10-14, owner)
 
@@ -115,7 +115,7 @@ Merged means on `campaign/frontier` and verified at least offline. Partial and p
 | Partial / parked | C0 (craft defect), M4 (`curriculum-survival` unrun, calibration unmeasured), R1/R1c (`external-seat` row 1), S12 (seed matrix incomplete), Q1 (live comparison mixed) |
 | Not started | S0 through S9 (Steering order). Still open inside that order: a shield raise and strafe that the pool actually performs, fall avoidance that does not drop into the pit, D-train, Q2, C1–C5, H-SRV/MECH/RUN/CIV, O1, L2, Z1 |
 
-## Handoff (stopped 2026-10-14)
+## Handoff (resumed 2026-10-14)
 
 **Resume.** Prompt: `Execute docs/minecraft-arena-frontier-campaign.md from Steering order on branch campaign/frontier. Start at S0, then S1. S3 may run beside them only as a pure arena-core module that does not edit skills.ts. Finish every deliverable. Never push. Do not grind seed 260114. Do not extend the rejected search and drop commits.` First commands: `git switch campaign/frontier && ./arena build --package all`. No lane worktrees exist; recreate under `.work/wt/frontier-<lane>` with `git worktree add .work/wt/frontier-<lane> -b campaign/frontier-<lane> campaign/frontier`, then `pnpm install --frozen-lockfile --offline --store-dir <repo>/.work/arena/pnpm-store` and `git checkout pnpm-lock.yaml` (pnpm adds `@pnpm/exe`; never commit it). Lanes that run live need `.work/arena/{toolchains,downloads,gradle}` cloned with `cp -cR`.
 
@@ -135,7 +135,7 @@ Merged means on `campaign/frontier` and verified at least offline. Partial and p
 - `external-seat` row 1 (surrogate loots/damages/wins) fails with a bare AssertionError; the other 7 rows pass. `curriculum-survival` never ran; calibration constants not measured.
 - S12 seed matrix incomplete: hunger-six resolves at 481516..481521; `hunger-12` at 481516/481518 failed before the ranked-translation commit (not rerun); hunger-24, development 500001..500012 and held-out 600001..600024 never probed.
 
-**Open lanes.** None; all lane branches merged by cherry-pick and deleted. **Retained worktrees.** None.
+**Open lanes.** Steering S0 `campaign/frontier-s0`, steering S1 `campaign/frontier-s1`, steering S3 `campaign/frontier-s3`. Worktrees `.work/wt/frontier-s0`, `.work/wt/frontier-s1`, `.work/wt/frontier-s3`. S1 does not run a live match. The integrator runs that proof after the schema merges. **Retained worktrees.** The eleven unregistered `.work/wt/civ-*`, `natural-*`, and `opening-style-evidence` directories stay untouched.
 
 **Not started (in order).**
 1. S0 evaluation honesty. No behavior tuning. Split the six-seed 5% denominator before treating 0.268 as an aim failure. Mark the finished 260114 duels `no combat demonstrated`.
@@ -602,6 +602,7 @@ Do not spend a research phase rediscovering launchers, server replacements, bot 
 - 2026-10-14 D-sight rim live rerun, same command and seed 260114. Score mean 0.75 again: improved won on a border death at tick 6091, and the swap drew at tick 7200. PvP hits 0, attacks issued 0. The first match still had 3,046 decisions and an empty opponent list. Closest samples were 5.1 blocks apart horizontally and 20 vertically, at about (520, 63, 508) and (525, 43, 509). The default pathfinder drop is 4 blocks, so the upper seat cannot path down to the trapped seat.
 - 2026-10-14 D-sight drop merged offline at `7e93161`. When a player the current look classifies as blocked is below and the next column is a drop, one travel leg raises `maxDropDown` enough to reach that floor, at most 24, and restores the previous value in `finally`. Parkour, digging, and towers stay off. A failed drop is not repeated. A fully visible player still ends travel. The travel-look test and the arrival test passed. Not live-checked. The owner stopped the seed-260114 rerun before a match result. Live lock released. Steering order rejects this method. Do not extend it.
 - 2026-10-14 steering order incorporated from `arena_frontier_steering_v2.md`, and that file deleted. Execution stays stopped until the owner says resume. Next work is S0, then S1. S3 may run beside them only as pure `arena-core` that does not edit `skills.ts`.
+- 2026-10-14 resumed: wave is steering S0 (`campaign/frontier-s0`, duel contact report, no policy edits), steering S1 (`campaign/frontier-s1`, scenario schema for a planned UHC lab, no live match), and steering S3 (`campaign/frontier-s3`, pure `frontier-v1`, no `skills.ts`). Live damage on the new arena waits until S1 is merged.
 
 ## 13. For the owner afterwards
 
