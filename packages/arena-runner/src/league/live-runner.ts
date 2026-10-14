@@ -69,6 +69,7 @@ export class LiveMatchRunner implements MatchRunner {
       pluginJarPath: options.pluginJarPath,
       acceptMinecraftEula: true,
       ephemeralGamePort: true,
+      serverLogsToStderr: true,
       seatCandidates,
       signal,
     });

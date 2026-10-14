@@ -126,6 +126,7 @@ export interface RunPreparedRunOptions {
   readonly spectatorMode?: RuntimeSpectatorMode;
   readonly waitForExternalPlayer?: true;
   readonly ephemeralGamePort?: true;
+  readonly serverLogsToStderr?: true;
   readonly externalJoinTimeoutMs?: number;
   readonly workers?: number;
   readonly checkpointing?: true;
@@ -1199,6 +1200,7 @@ async function startPaper(
       cwd: serverWorkingDirectory(options.ownedRoot, serverPath),
       env,
       gamePort: inputs.gamePort ?? DEFAULT_GAME_PORT,
+      ...(options.serverLogsToStderr === true ? { output: { stdout: process.stderr, stderr: process.stderr } } : {}),
       signal,
     });
   } catch (error) {
