@@ -28,6 +28,7 @@ import { prepareRun, resolveScenarioResource } from './prepare.js';
 import { replayPolicyJson } from './policy-replay.js';
 import { isValidRunId } from './run-id.js';
 import { inspectStoppedRun, readStoppedRunEvidence } from './runtime/inspect.js';
+import { decisionDiffJson } from './decision-diff.js';
 import { explainSeatJson } from './funnel-report.js';
 import { matchQuality, renderQualityTable, renderSeatTimeline, seatTimeline } from './seat-quality.js';
 import { collectOwnedRuns, type RunGarbageCollectionMode } from './runtime/gc.js';
@@ -88,6 +89,7 @@ async function dispatchCliBytes(args: readonly Buffer[]): Promise<CliResult> {
     return success(comparisonJson(left, right));
   }
   if (command === 'explain') return await explainCommand(rest);
+  if (command === 'decision-diff') return await decisionDiffCommand(rest);
   if (command === 'league') return await leagueCommand(rest);
   if (command === 'quality') return await qualityCommand(rest);
   if (command === 'bench') return await benchCommand(rest);
@@ -470,6 +472,33 @@ async function explainCommand(args: readonly Buffer[]): Promise<CliResult> {
   const evidence = await readStoppedRunEvidence({ helperPath, ownedRoot: Buffer.from(process.cwd(), 'utf8'), runId });
   writeProgress([renderSeatTimeline(Number(seatText), seatTimeline(evidence, Number(seatText)))]);
   return success(explainSeatJson(evidence, Number(seatText)));
+}
+
+async function decisionDiffCommand(args: readonly Buffer[]): Promise<CliResult> {
+  let runId: string | undefined;
+  let baseline = 'baseline';
+  let challenger: string | undefined;
+  let seat: number | undefined;
+  for (let index = 0; index < args.length; index += 2) {
+    const option = argumentText(args[index]!, index + 1);
+    if (index + 1 >= args.length) throw invalidInput('decision_diff_option_requires_value');
+    const value = argumentText(args[index + 1]!, index + 2);
+    if (option === '--run-id' && runId === undefined) runId = value;
+    else if (option === '--baseline') baseline = value;
+    else if (option === '--candidate' && challenger === undefined) challenger = value;
+    else if (option === '--seat' && seat === undefined && /^(0|[1-9][0-9]{0,2})$/.test(value) && Number(value) <= 255) seat = Number(value);
+    else throw invalidInput('unexpected_argument');
+  }
+  if (runId === undefined || challenger === undefined) throw invalidInput('decision_diff_requires_run_id_and_candidate');
+  if (!isValidRunId(runId)) throw new RunnerError('invalid_input', 'run id', { kind: 'invalid_run_id' });
+  const ids = CANDIDATE_IDS as readonly string[];
+  if (!ids.includes(baseline) || !ids.includes(challenger)) throw invalidInput('decision_diff_unknown_candidate');
+  const helperPath = configuredAbsolutePath('ARENA_FS_HELPER', 'filesystem helper');
+  const evidence = await readStoppedRunEvidence({ helperPath, ownedRoot: Buffer.from(process.cwd(), 'utf8'), runId });
+  return success(decisionDiffJson(evidence, {
+    baseline: baseline as CandidateSpec['id'], challenger: challenger as CandidateSpec['id'],
+    ...(seat === undefined ? {} : { seat }),
+  }));
 }
 
 async function garbageCollectCommand(args: readonly Buffer[]): Promise<CliResult> {
@@ -993,6 +1022,7 @@ function helpJson(): object {
       'inspect --run-id <id>': 'Reconstruct a stopped run result and read its player statistics.',
       'report <segment>...': 'Reconstruct the terminal result from prepared-roster and authoritative event records.',
       'compare <left-segment> <right-segment>': 'Compare two single-segment record streams exactly.',
+      'decision-diff --run-id <id> --candidate <id> [--baseline <id>] [--seat <n>]': 'Replay a run\'s recorded observations and memory through two candidates and list the decisions that differ, with reason codes.',
       'explain --run-id <id> --seat <n>': 'Tie one seat\'s recorded decisions to permitted evidence, skill outcomes, funnel stages, and authoritative effects.',
       'bench --profile scale-v1 --accept-minecraft-eula [--workloads <list>] [--layouts <1,2,4>] [--regimes <list>] [--max-level <n>]': 'Measure the highest qualifying population per workload against fixed quality floors.',
       'save --run-id <id> [--checkpoint-id <id>]': 'Checkpoint a running generalized-roster Hunger match, stop it, and publish the checkpoint.',

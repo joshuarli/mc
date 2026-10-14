@@ -21,6 +21,8 @@ import {
 } from '../src/league/manifest.js';
 import { planQualityMatches, runQuality } from '../src/league/quality.js';
 import { reserveEphemeralGamePort } from '../src/runtime/game-port.js';
+import { decisionDiffJson } from '../src/decision-diff.js';
+import type { PolicyReplayRecord } from '../src/policy-replay.js';
 import { matchQuality, qualityGates, renderQualityTable, seatTimeline } from '../src/seat-quality.js';
 import type { TraceRecord } from '../src/trace.js';
 
@@ -285,4 +287,33 @@ test('quality seat timeline collapses equal decisions into tick ranges with reas
     [60, 100, 2, 'delegatedBaselineRules'],
   ]);
   assert.deepEqual(timeline.reasons, { travelToBorderCenter: 2, delegatedBaselineRules: 2 });
+});
+
+test('quality decision diff replays recorded observations through two candidates', async () => {
+  const records: PolicyReplayRecord[] = [];
+  const competitors = [idleCompetitor(0)];
+  const loop = new LivePolicyLoop({
+    trace: {
+      recordPolicyDecision: async (record) => { records.push(record); },
+      recordPolicyEffect: async () => {},
+      checkpoint: async () => {},
+    },
+    params: PolicyParams.baseline(), seed: 1n, strategyIntervalTicks: 1n, recordPolicy: true,
+    competitors: () => competitors, fail: (error) => { throw error; },
+  });
+  for (let value = 0; value < 4; value += 1) {
+    loop.onTick(value);
+    for (let index = 0; index < 30; index += 1) await Promise.resolve();
+  }
+  await loop.stopAndJoin();
+  assert.equal(records.length, 4);
+  const evidence = evidenceOf(records as unknown as TraceRecord[]);
+  const same = decisionDiffJson(evidence, { baseline: 'baseline', challenger: 'baseline' }) as { compared: number; differing: number };
+  assert.deepEqual([same.compared, same.differing], [4, 0]);
+  const other = decisionDiffJson(evidence, { baseline: 'baseline', challenger: 'improved', seat: 0 }) as {
+    compared: number; differing: number; entries: unknown[]; entries_truncated: boolean;
+  };
+  assert.equal(other.compared, 4);
+  assert.equal(other.entries.length, other.differing);
+  assert.equal(other.entries_truncated, false);
 });

@@ -314,6 +314,7 @@ usage:
   ./arena <report|inspect|compare|prepare|validate|doctor|run|replay-policy|gc> <arguments...>
   ./arena play --scenario <path> --username <name> [--seat <n>] --accept-minecraft-eula [--join-timeout-seconds <n>] [--workers <n>]
   ./arena explain --run-id <id> --seat <n>
+  ./arena decision-diff --run-id <id> --candidate <id> [--baseline <id>] [--seat <n>]
   ./arena league --manifest <path> --accept-minecraft-eula [--concurrency <1-4>]
   ./arena quality --scenario <path> --seeds <a,b,c> --accept-minecraft-eula [--candidate <id>] [--concurrency <1-4>]
   ./arena bench --profile scale-v1 --accept-minecraft-eula [--workloads <list>] [--layouts <1,2,4>] [--regimes <list>] [--max-level <n>]
@@ -552,7 +553,7 @@ case "$command" in
     build) build_command "$@" ;;
     check) check_command "$@" ;;
     test) test_command "$@" ;;
-    report|inspect|compare|prepare|validate|doctor|run|play|watch|explain|league|quality|bench|save|resume|replay-policy|gc)
+    report|inspect|compare|prepare|validate|doctor|run|play|watch|explain|decision-diff|league|quality|bench|save|resume|replay-policy|gc)
         launch_runner "$command" "$@"
         ;;
     help|-h|--help)

@@ -1,7 +1,7 @@
 import type { ResourceReference } from '@arena/spec';
 import { RunnerError } from '../errors.js';
 import { actionFunnelReport } from '../funnel-report.js';
-import { matchQuality } from '../seat-quality.js';
+import { matchQuality, type MatchQuality } from '../seat-quality.js';
 import { createOwnedDirectory, OwnedFilesError, readOwnedFile, stageOwnedFile } from '../owned-files/index.js';
 import { prepareRun, resolveScenarioResource } from '../prepare.js';
 import { readStoppedRunEvidence } from '../runtime/inspect.js';
@@ -58,7 +58,9 @@ export class LiveMatchRunner implements MatchRunner {
     const seatCandidates = new Map<number, { id: typeof plan.candidate.id; params: Readonly<Record<string, number>> }>();
     for (const seat of plan.candidateSeats) seatCandidates.set(seat, { id: plan.candidate.id, params: plan.candidate.params });
     for (const seat of plan.opponentSeats) seatCandidates.set(seat, { id: plan.opponent.id, params: plan.opponent.params });
-    const completed = await runPreparedRun({
+    let completed: Awaited<ReturnType<typeof runPreparedRun>>;
+    try {
+      completed = await runPreparedRun({
       preparedRun,
       helperPath: options.helperPath,
       ownedRoot: options.ownedRoot,
@@ -70,8 +72,18 @@ export class LiveMatchRunner implements MatchRunner {
       seatCandidates,
       signal,
     });
+    } catch (error) {
+      if (signal.aborted || !(error instanceof RunnerError) || error.category === 'cancelled') throw error;
+      return Object.freeze({
+        status: 'failed' as const, reason: error.source.kind, runId,
+        quality: await this.#partialQuality(runId),
+      });
+    }
     if (completed.outcome.kind === 'abort') {
-      return Object.freeze({ status: 'failed' as const, reason: `abort_${completed.outcome.reason}`, runId });
+      return Object.freeze({
+        status: 'failed' as const, reason: `abort_${completed.outcome.reason}`, runId,
+        quality: await this.#partialQuality(completed.runId),
+      });
     }
     const evidence = await readStoppedRunEvidence({
       helperPath: options.helperPath, ownedRoot: options.ownedRoot, runId: completed.runId,
@@ -102,6 +114,18 @@ export class LiveMatchRunner implements MatchRunner {
       quality: matchQuality(evidence),
       runId: completed.runId,
     });
+  }
+
+  async #partialQuality(runId: string): Promise<MatchQuality | null> {
+    try {
+      const evidence = await readStoppedRunEvidence({
+        helperPath: this.#options.helperPath, ownedRoot: this.#options.ownedRoot, runId,
+      });
+      return matchQuality(evidence);
+    } catch (error) {
+      if (error instanceof RunnerError) return null;
+      throw error;
+    }
   }
 
   async #seedScenario(seed: number, signal: AbortSignal): Promise<Buffer> {

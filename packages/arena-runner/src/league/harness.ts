@@ -40,7 +40,7 @@ export type MatchObservation =
     quality?: MatchQuality | null;
     runId: string;
   }>
-  | Readonly<{ status: 'failed'; reason: string; runId: string }>;
+  | Readonly<{ status: 'failed'; reason: string; runId: string; quality?: MatchQuality | null }>;
 
 export interface MatchRunner {
   run(plan: MatchPlan, signal: AbortSignal): Promise<MatchObservation>;
@@ -354,7 +354,9 @@ export function matchRows(plans: readonly MatchPlan[], byId: ReadonlyMap<string,
       concurrency: entry?.concurrency ?? null,
     };
     if (observation === undefined) return { ...base, status: 'not_run' };
-    if (observation.status === 'failed') return { ...base, status: 'failed', reason: observation.reason, run_id: observation.runId };
+    if (observation.status === 'failed') {
+      return { ...base, status: 'failed', reason: observation.reason, run_id: observation.runId, quality: observation.quality ?? null };
+    }
     return {
       ...base,
       status: 'completed',
@@ -408,9 +410,10 @@ export function renderLeagueQuality(plans: readonly MatchPlan[], byId: ReadonlyM
   const report = leagueQuality(plans, byId);
   const tables = plans.flatMap((plan) => {
     const observation = byId.get(plan.matchId)?.observation;
-    if (observation?.status !== 'completed' || observation.quality === undefined || observation.quality === null) return [];
+    if (observation === undefined || observation.quality === undefined || observation.quality === null) return [];
+    const failure = observation.status === 'failed' ? `, FAILED ${observation.reason}, partial evidence` : '';
     return [{ label: `${plan.matchId} seed ${plan.worldSeed}`, quality: observation.quality,
-      note: `concurrency ${byId.get(plan.matchId)?.concurrency ?? 1}` }];
+      note: `concurrency ${byId.get(plan.matchId)?.concurrency ?? 1}${failure}` }];
   });
   return [
     renderQualityTable(tables),
