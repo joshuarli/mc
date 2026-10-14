@@ -134,7 +134,7 @@ final class NaturalWorldSetup {
     static final int TRANSLATION_STEP_BLOCKS = 48;
     static final int TRANSLATION_MAX_RINGS = 7;
     static final int TRANSLATION_MAX_SCREENED = 80;
-    static final int TRANSLATION_MAX_SEARCHED = 6;
+    static final int TRANSLATION_MAX_SEARCHED = 5;
 
     static List<int[]> translationCandidates(NaturalMapPlan plan) {
         int minX = Integer.MAX_VALUE;
@@ -203,18 +203,19 @@ final class NaturalWorldSetup {
         }
     }
 
-    private static boolean screens(Formation formation, SurfaceAccess world) {
+    private static int landColumns(Formation formation, SurfaceAccess world) {
+        int land = 0;
         for (NaturalMapPlan.SurfaceSpawnPoint spawn : formation.spawns()) {
-            if (!landColumn(world, spawn.column())) {
-                return false;
+            if (landColumn(world, spawn.column())) {
+                land++;
             }
         }
         for (NaturalMapPlan.SurfaceLootContainer cache : formation.caches()) {
-            if (!landColumn(world, cache.column())) {
-                return false;
+            if (landColumn(world, cache.column())) {
+                land++;
             }
         }
-        return true;
+        return land;
     }
 
     static ResolvedWorld resolveWorld(
@@ -226,20 +227,29 @@ final class NaturalWorldSetup {
             boolean placeCaches) {
         int halo = Math.max(0, viewDistanceChunks) * 16;
         List<String> attempts = new ArrayList<>();
+        List<int[]> translations = translationCandidates(plan);
+        List<Formation> ordered = new ArrayList<>();
+        ordered.add(translated(plan, 0, 0));
+        List<int[]> ranked = new ArrayList<>();
         int screened = 0;
-        int searched = 0;
-        for (int[] translation : translationCandidates(plan)) {
-            boolean identity = translation[0] == 0 && translation[1] == 0;
-            Formation formation = identity ? translated(plan, 0, 0) : translated(plan, translation[0], translation[1]);
-            if (!identity) {
-                if (screened >= TRANSLATION_MAX_SCREENED || searched >= TRANSLATION_MAX_SEARCHED) {
-                    break;
-                }
-                screened++;
-                if (!screens(formation, world)) {
-                    continue;
-                }
+        for (int index = 1; index < translations.size() && screened < TRANSLATION_MAX_SCREENED; index++) {
+            int[] translation = translations.get(index);
+            Formation formation = translated(plan, translation[0], translation[1]);
+            ranked.add(new int[] {landColumns(formation, world), index});
+            screened++;
+        }
+        ranked.sort(java.util.Comparator
+                .comparingInt((int[] value) -> -value[0])
+                .thenComparingInt(value -> value[1]));
+        for (int[] entry : ranked) {
+            if (ordered.size() > TRANSLATION_MAX_SEARCHED) {
+                break;
             }
+            int[] translation = translations.get(entry[1]);
+            ordered.add(translated(plan, translation[0], translation[1]));
+        }
+        int searched = 0;
+        for (Formation formation : ordered) {
             searched++;
             try {
                 List<MapPlan.LootContainer> loot = searchCaches(plan, formation, world, materials,
@@ -264,7 +274,8 @@ final class NaturalWorldSetup {
                 return new ResolvedWorld(spawns, loot, recipe, worldIdentity(plan, recipe, spawns, loot),
                         formation.center());
             } catch (IllegalStateException failed) {
-                attempts.add("translation (" + translation[0] + "," + translation[1] + "): " + failed.getMessage());
+                attempts.add("translation (" + formation.translationX() + "," + formation.translationZ() + "): "
+                        + failed.getMessage());
             }
         }
         String first = attempts.isEmpty() ? "no translation passed the land screen" : attempts.getFirst();
