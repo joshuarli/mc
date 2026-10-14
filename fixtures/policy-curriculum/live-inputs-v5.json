@@ -1,0 +1,1129 @@
+{
+ "travelToBorderCenter": {
+  "input": {
+   "feedback": [],
+   "memory": {
+    "failedTargets": [],
+    "lastGoal": null,
+    "lastOpponent": null
+   },
+   "observation": {
+    "agent": {
+     "kind": "current",
+     "value": {
+      "combat": {
+       "eyeHeight": 1659,
+       "height": 1843,
+       "pitch": 0,
+       "position": {
+        "x": 496128,
+        "y": 68608,
+        "z": 612864
+       },
+       "velocity": {
+        "x": 0,
+        "y": -80,
+        "z": 0
+       },
+       "width": 614,
+       "yaw": 3217
+      },
+      "directions": [
+       {
+        "hazard": false,
+        "kind": "supported",
+        "support": {
+         "x": 492,
+         "y": 66,
+         "z": 598
+        }
+       },
+       {
+        "hazard": false,
+        "kind": "supported",
+        "support": {
+         "x": 492,
+         "y": 66,
+         "z": 602
+        }
+       },
+       {
+        "hazard": false,
+        "kind": "supported",
+        "support": {
+         "x": 484,
+         "y": 67,
+         "z": 606
+        }
+       },
+       {
+        "hazard": false,
+        "kind": "supported",
+        "support": {
+         "x": 480,
+         "y": 67,
+         "z": 606
+        }
+       },
+       {
+        "hazard": false,
+        "kind": "supported",
+        "support": {
+         "x": 476,
+         "y": 67,
+         "z": 598
+        }
+       },
+       {
+        "hazard": false,
+        "kind": "supported",
+        "support": {
+         "x": 476,
+         "y": 68,
+         "z": 594
+        }
+       },
+       {
+        "kind": "blocked"
+       },
+       {
+        "hazard": false,
+        "kind": "supported",
+        "support": {
+         "x": 488,
+         "y": 68,
+         "z": 590
+        }
+       }
+      ],
+      "equipped": {
+       "boots": null,
+       "chestplate": null,
+       "helmet": null,
+       "leggings": null,
+       "weapon": null
+      },
+      "foodStacks": [],
+      "healthHalfHearts": 20,
+      "hungerPoints": 20,
+      "position": {
+       "x": 484,
+       "y": 67,
+       "z": 598
+      },
+      "terrainChanges": [
+       {
+        "x": 501,
+        "y": 54,
+        "z": 619
+       },
+       {
+        "x": 469,
+        "y": 61,
+        "z": 575
+       },
+       {
+        "x": 501,
+        "y": 53,
+        "z": 619
+       },
+       {
+        "x": 469,
+        "y": 60,
+        "z": 575
+       },
+       {
+        "x": 501,
+        "y": 52,
+        "z": 619
+       },
+       {
+        "x": 469,
+        "y": 59,
+        "z": 575
+       },
+       {
+        "x": 502,
+        "y": 52,
+        "z": 619
+       },
+       {
+        "x": 469,
+        "y": 58,
+        "z": 575
+       },
+       {
+        "x": 502,
+        "y": 51,
+        "z": 619
+       },
+       {
+        "x": 469,
+        "y": 57,
+        "z": 575
+       },
+       {
+        "x": 469,
+        "y": 56,
+        "z": 575
+       },
+       {
+        "x": 469,
+        "y": 55,
+        "z": 575
+       },
+       {
+        "x": 469,
+        "y": 54,
+        "z": 575
+       },
+       {
+        "x": 469,
+        "y": 53,
+        "z": 575
+       },
+       {
+        "x": 469,
+        "y": 52,
+        "z": 575
+       },
+       {
+        "x": 469,
+        "y": 51,
+        "z": 575
+       },
+       {
+        "x": 469,
+        "y": 50,
+        "z": 575
+       },
+       {
+        "x": 469,
+        "y": 49,
+        "z": 575
+       },
+       {
+        "x": 469,
+        "y": 48,
+        "z": 575
+       },
+       {
+        "x": 470,
+        "y": 48,
+        "z": 575
+       },
+       {
+        "x": 470,
+        "y": 47,
+        "z": 575
+       },
+       {
+        "x": 471,
+        "y": 47,
+        "z": 575
+       }
+      ],
+      "upgrades": []
+     }
+    },
+    "border": {
+     "kind": "current",
+     "value": {
+      "centerX": 427,
+      "centerZ": 610,
+      "radiusBlocks": 63
+     }
+    },
+    "loot": {
+     "kind": "current",
+     "value": []
+    },
+    "opponents": {
+     "kind": "current",
+     "value": []
+    },
+    "sequence": 1,
+    "tick": 0
+   },
+   "opening": {
+    "cycle": [
+     "explorer",
+     "scavenger",
+     "hunter"
+    ],
+    "seed": "481519",
+    "state": {
+     "cacheTakenAt": null
+    },
+    "style": "explorer"
+   },
+   "params": {
+    "borderMarginBlocks": 2,
+    "eatAtHungerOrBelow": 8,
+    "fightRangeBlocks": 4,
+    "lootHysteresisBlocks": 2,
+    "opponentMemoryTicks": 100,
+    "retreatAtHealthHalfHeartsOrBelow": 8,
+    "searchRadiusBlocks": 8,
+    "version": 1
+   },
+   "rng_state": "5207010083442947550",
+   "schema": "policy-input-v4"
+  },
+  "recordedGoal": "explore"
+ },
+ "confinedProbeFarTarget": {
+  "input": {
+   "feedback": [
+    {
+     "cause": "noProgress",
+     "kind": "failed",
+     "target": {
+      "kind": "loot",
+      "opportunity": {
+       "kind": "unopenedContainer",
+       "position": {
+        "x": 445,
+        "y": 70,
+        "z": 604
+       }
+      },
+      "target": {
+       "kind": "container",
+       "position": {
+        "x": 445,
+        "y": 70,
+        "z": 604
+       }
+      }
+     }
+    }
+   ],
+   "memory": {
+    "failedTargets": [],
+    "knowledge": {
+     "trail": [
+      {
+       "x": 484,
+       "y": 67,
+       "z": 598
+      },
+      {
+       "x": 485,
+       "y": 67,
+       "z": 605
+      },
+      {
+       "x": 481,
+       "y": 67,
+       "z": 609
+      },
+      {
+       "x": 477,
+       "y": 65,
+       "z": 607
+      },
+      {
+       "x": 479,
+       "y": 67,
+       "z": 603
+      }
+     ],
+     "visitedRegions": [
+      {
+       "x": 30,
+       "z": 37
+      },
+      {
+       "x": 29,
+       "z": 37
+      },
+      {
+       "x": 30,
+       "z": 38
+      },
+      {
+       "x": 29,
+       "z": 38
+      }
+     ]
+    },
+    "lastGoal": {
+     "kind": "loot",
+     "target": {
+      "kind": "container",
+      "position": {
+       "x": 445,
+       "y": 70,
+       "z": 604
+      }
+     }
+    },
+    "lastOpponent": null
+   },
+   "observation": {
+    "agent": {
+     "kind": "current",
+     "value": {
+      "combat": {
+       "eyeHeight": 1659,
+       "height": 1843,
+       "pitch": 0,
+       "position": {
+        "x": 493056,
+        "y": 68608,
+        "z": 619008
+       },
+       "velocity": {
+        "x": 0,
+        "y": -80,
+        "z": 0
+       },
+       "width": 614,
+       "yaw": 1608
+      },
+      "directions": [
+       {
+        "hazard": false,
+        "kind": "supported",
+        "support": {
+         "x": 489,
+         "y": 67,
+         "z": 604
+        }
+       },
+       {
+        "hazard": false,
+        "kind": "supported",
+        "support": {
+         "x": 489,
+         "y": 67,
+         "z": 608
+        }
+       },
+       {
+        "hazard": false,
+        "kind": "supported",
+        "support": {
+         "x": 481,
+         "y": 67,
+         "z": 612
+        }
+       },
+       {
+        "hazard": false,
+        "kind": "supported",
+        "support": {
+         "x": 477,
+         "y": 66,
+         "z": 612
+        }
+       },
+       {
+        "kind": "blocked"
+       },
+       {
+        "kind": "blocked"
+       },
+       {
+        "hazard": false,
+        "kind": "supported",
+        "support": {
+         "x": 481,
+         "y": 68,
+         "z": 596
+        }
+       },
+       {
+        "hazard": false,
+        "kind": "supported",
+        "support": {
+         "x": 485,
+         "y": 66,
+         "z": 596
+        }
+       }
+      ],
+      "equipped": {
+       "boots": null,
+       "chestplate": null,
+       "helmet": null,
+       "leggings": null,
+       "weapon": null
+      },
+      "foodStacks": [],
+      "healthHalfHearts": 20,
+      "hungerPoints": 20,
+      "position": {
+       "x": 481,
+       "y": 67,
+       "z": 604
+      },
+      "upgrades": []
+     }
+    },
+    "border": {
+     "kind": "current",
+     "value": {
+      "centerX": 427,
+      "centerZ": 610,
+      "radiusBlocks": 63
+     }
+    },
+    "loot": {
+     "kind": "current",
+     "value": [
+      {
+       "kind": "unopenedContainer",
+       "position": {
+        "x": 445,
+        "y": 70,
+        "z": 604
+       }
+      }
+     ]
+    },
+    "opponents": {
+     "kind": "current",
+     "value": []
+    },
+    "sequence": 78,
+    "tick": 308
+   },
+   "opening": {
+    "cycle": [
+     "explorer",
+     "scavenger",
+     "hunter"
+    ],
+    "seed": "481519",
+    "state": {
+     "cacheTakenAt": null
+    },
+    "style": "explorer"
+   },
+   "params": {
+    "borderMarginBlocks": 2,
+    "eatAtHungerOrBelow": 8,
+    "fightRangeBlocks": 4,
+    "lootHysteresisBlocks": 2,
+    "opponentMemoryTicks": 100,
+    "retreatAtHealthHalfHeartsOrBelow": 8,
+    "searchRadiusBlocks": 8,
+    "version": 1
+   },
+   "rng_state": "3001023012169768881",
+   "schema": "policy-input-v4"
+  },
+  "recordedGoal": "explore"
+ },
+ "huntVisibleOpponentArmed": {
+  "input": {
+   "feedback": [
+    {
+     "kind": "succeeded",
+     "target": {
+      "kind": "explore",
+      "origin": {
+       "x": 456,
+       "y": 66,
+       "z": 600
+      },
+      "target": {
+       "x": 456,
+       "y": 65,
+       "z": 608
+      }
+     }
+    }
+   ],
+   "memory": {
+    "failedTargets": [],
+    "knowledge": {
+     "trail": [
+      {
+       "x": 458,
+       "y": 68,
+       "z": 624
+      },
+      {
+       "x": 452,
+       "y": 67,
+       "z": 623
+      },
+      {
+       "x": 447,
+       "y": 66,
+       "z": 621
+      },
+      {
+       "x": 450,
+       "y": 66,
+       "z": 616
+      },
+      {
+       "x": 449,
+       "y": 68,
+       "z": 610
+      },
+      {
+       "x": 446,
+       "y": 70,
+       "z": 607
+      },
+      {
+       "x": 451,
+       "y": 68,
+       "z": 606
+      },
+      {
+       "x": 454,
+       "y": 66,
+       "z": 603
+      }
+     ],
+     "visitedRegions": [
+      {
+       "x": 30,
+       "z": 37
+      },
+      {
+       "x": 29,
+       "z": 37
+      },
+      {
+       "x": 30,
+       "z": 38
+      },
+      {
+       "x": 29,
+       "z": 38
+      },
+      {
+       "x": 30,
+       "z": 39
+      },
+      {
+       "x": 29,
+       "z": 39
+      },
+      {
+       "x": 28,
+       "z": 39
+      },
+      {
+       "x": 28,
+       "z": 38
+      },
+      {
+       "x": 27,
+       "z": 38
+      },
+      {
+       "x": 27,
+       "z": 37
+      },
+      {
+       "x": 28,
+       "z": 37
+      }
+     ]
+    },
+    "lastGoal": {
+     "kind": "explore"
+    },
+    "lastOpponent": {
+     "id": 56,
+     "observedAt": 844,
+     "position": {
+      "x": 449,
+      "y": 68,
+      "z": 610
+     }
+    }
+   },
+   "observation": {
+    "agent": {
+     "kind": "current",
+     "value": {
+      "combat": {
+       "eyeHeight": 1659,
+       "height": 1843,
+       "pitch": 0,
+       "position": {
+        "x": 466434,
+        "y": 66560,
+        "z": 622080
+       },
+       "velocity": {
+        "x": 0,
+        "y": -80,
+        "z": 0
+       },
+       "width": 614,
+       "yaw": 3212
+      },
+      "directions": [
+       {
+        "kind": "blocked"
+       },
+       {
+        "hazard": false,
+        "kind": "supported",
+        "support": {
+         "x": 463,
+         "y": 66,
+         "z": 611
+        }
+       },
+       {
+        "kind": "blocked"
+       },
+       {
+        "kind": "blocked"
+       },
+       {
+        "kind": "blocked"
+       },
+       {
+        "kind": "blocked"
+       },
+       {
+        "kind": "blocked"
+       },
+       {
+        "kind": "blocked"
+       }
+      ],
+      "equipped": {
+       "boots": null,
+       "chestplate": null,
+       "helmet": null,
+       "leggings": null,
+       "weapon": 2
+      },
+      "foodStacks": [
+       {
+        "count": 1,
+        "inventorySlot": 44,
+        "restores": 5
+       }
+      ],
+      "healthHalfHearts": 20,
+      "hungerPoints": 20,
+      "position": {
+       "x": 455,
+       "y": 65,
+       "z": 607
+      },
+      "upgrades": [
+       {
+        "equipmentSlot": "weapon",
+        "inventorySlot": 43,
+        "rating": 2
+       }
+      ]
+     }
+    },
+    "border": {
+     "kind": "current",
+     "value": {
+      "centerX": 427,
+      "centerZ": 610,
+      "radiusBlocks": 63
+     }
+    },
+    "loot": {
+     "kind": "current",
+     "value": []
+    },
+    "opponents": {
+     "kind": "current",
+     "value": [
+      {
+       "attackingAgent": false,
+       "combat": {
+        "height": 1843,
+        "pitch": 0,
+        "position": {
+         "x": 461332,
+         "y": 68789,
+         "z": 630743
+        },
+        "velocity": {
+         "x": 4,
+         "y": 430,
+         "z": -205
+        },
+        "width": 614,
+        "yaw": 50
+       },
+       "id": 61,
+       "position": {
+        "x": 450,
+        "y": 67,
+        "z": 615
+       }
+      }
+     ]
+    },
+    "sequence": 213,
+    "tick": 848
+   },
+   "opening": {
+    "cycle": [
+     "explorer",
+     "scavenger",
+     "hunter"
+    ],
+    "seed": "481519",
+    "state": {
+     "cacheTakenAt": null
+    },
+    "style": "explorer"
+   },
+   "params": {
+    "borderMarginBlocks": 2,
+    "eatAtHungerOrBelow": 8,
+    "fightRangeBlocks": 4,
+    "lootHysteresisBlocks": 2,
+    "opponentMemoryTicks": 100,
+    "retreatAtHealthHalfHeartsOrBelow": 8,
+    "searchRadiusBlocks": 8,
+    "version": 1
+   },
+   "rng_state": "8476405256808110720",
+   "schema": "policy-input-v4"
+  },
+  "recordedGoal": "explore"
+ },
+ "orbitBorderCenter": {
+  "input": {
+   "feedback": [],
+   "memory": {
+    "failedTargets": [],
+    "knowledge": {
+     "trail": [
+      {
+       "x": 390,
+       "y": 71,
+       "z": 606
+      },
+      {
+       "x": 393,
+       "y": 71,
+       "z": 601
+      },
+      {
+       "x": 398,
+       "y": 70,
+       "z": 603
+      },
+      {
+       "x": 405,
+       "y": 70,
+       "z": 605
+      },
+      {
+       "x": 410,
+       "y": 69,
+       "z": 607
+      },
+      {
+       "x": 416,
+       "y": 70,
+       "z": 608
+      },
+      {
+       "x": 423,
+       "y": 70,
+       "z": 610
+      },
+      {
+       "x": 430,
+       "y": 70,
+       "z": 609
+      }
+     ],
+     "visitedRegions": [
+      {
+       "x": 30,
+       "z": 37
+      },
+      {
+       "x": 29,
+       "z": 37
+      },
+      {
+       "x": 30,
+       "z": 38
+      },
+      {
+       "x": 29,
+       "z": 38
+      },
+      {
+       "x": 30,
+       "z": 39
+      },
+      {
+       "x": 29,
+       "z": 39
+      },
+      {
+       "x": 28,
+       "z": 39
+      },
+      {
+       "x": 28,
+       "z": 38
+      },
+      {
+       "x": 27,
+       "z": 38
+      },
+      {
+       "x": 27,
+       "z": 37
+      },
+      {
+       "x": 28,
+       "z": 37
+      },
+      {
+       "x": 28,
+       "z": 36
+      },
+      {
+       "x": 27,
+       "z": 36
+      },
+      {
+       "x": 27,
+       "z": 35
+      },
+      {
+       "x": 26,
+       "z": 36
+      },
+      {
+       "x": 26,
+       "z": 35
+      },
+      {
+       "x": 25,
+       "z": 36
+      },
+      {
+       "x": 25,
+       "z": 35
+      },
+      {
+       "x": 24,
+       "z": 36
+      },
+      {
+       "x": 26,
+       "z": 37
+      },
+      {
+       "x": 25,
+       "z": 37
+      },
+      {
+       "x": 26,
+       "z": 38
+      },
+      {
+       "x": 25,
+       "z": 38
+      },
+      {
+       "x": 24,
+       "z": 38
+      },
+      {
+       "x": 24,
+       "z": 37
+      }
+     ]
+    },
+    "lastGoal": {
+     "kind": "explore"
+    },
+    "lastOpponent": {
+     "id": 59,
+     "observedAt": 3152,
+     "position": {
+      "x": 394,
+      "y": 71,
+      "z": 607
+     }
+    }
+   },
+   "observation": {
+    "agent": {
+     "kind": "current",
+     "value": {
+      "combat": {
+       "eyeHeight": 1659,
+       "height": 1843,
+       "pitch": 0,
+       "position": {
+        "x": 442122,
+        "y": 71680,
+        "z": 624347
+       },
+       "velocity": {
+        "x": 129,
+        "y": -80,
+        "z": 74
+       },
+       "width": 614,
+       "yaw": -2445
+      },
+      "directions": [
+       {
+        "hazard": false,
+        "kind": "supported",
+        "support": {
+         "x": 439,
+         "y": 70,
+         "z": 609
+        }
+       },
+       {
+        "hazard": false,
+        "kind": "supported",
+        "support": {
+         "x": 439,
+         "y": 70,
+         "z": 613
+        }
+       },
+       {
+        "hazard": false,
+        "kind": "supported",
+        "support": {
+         "x": 431,
+         "y": 71,
+         "z": 617
+        }
+       },
+       {
+        "hazard": false,
+        "kind": "supported",
+        "support": {
+         "x": 427,
+         "y": 71,
+         "z": 617
+        }
+       },
+       {
+        "hazard": false,
+        "kind": "supported",
+        "support": {
+         "x": 423,
+         "y": 70,
+         "z": 609
+        }
+       },
+       {
+        "hazard": false,
+        "kind": "supported",
+        "support": {
+         "x": 423,
+         "y": 70,
+         "z": 605
+        }
+       },
+       {
+        "hazard": false,
+        "kind": "supported",
+        "support": {
+         "x": 431,
+         "y": 70,
+         "z": 601
+        }
+       },
+       {
+        "hazard": false,
+        "kind": "supported",
+        "support": {
+         "x": 435,
+         "y": 70,
+         "z": 601
+        }
+       }
+      ],
+      "equipped": {
+       "boots": null,
+       "chestplate": null,
+       "helmet": null,
+       "leggings": null,
+       "weapon": 2
+      },
+      "foodStacks": [],
+      "healthHalfHearts": 10,
+      "hungerPoints": 13,
+      "position": {
+       "x": 431,
+       "y": 70,
+       "z": 609
+      },
+      "upgrades": [
+       {
+        "equipmentSlot": "weapon",
+        "inventorySlot": 43,
+        "rating": 2
+       }
+      ]
+     }
+    },
+    "border": {
+     "kind": "current",
+     "value": {
+      "centerX": 427,
+      "centerZ": 610,
+      "radiusBlocks": 38
+     }
+    },
+    "loot": {
+     "kind": "current",
+     "value": []
+    },
+    "opponents": {
+     "kind": "current",
+     "value": []
+    },
+    "sequence": 832,
+    "tick": 3324
+   },
+   "opening": {
+    "cycle": [
+     "explorer",
+     "scavenger",
+     "hunter"
+    ],
+    "seed": "481519",
+    "state": {
+     "cacheTakenAt": null
+    },
+    "style": "explorer"
+   },
+   "params": {
+    "borderMarginBlocks": 2,
+    "eatAtHungerOrBelow": 8,
+    "fightRangeBlocks": 4,
+    "lootHysteresisBlocks": 2,
+    "opponentMemoryTicks": 100,
+    "retreatAtHealthHalfHeartsOrBelow": 8,
+    "searchRadiusBlocks": 8,
+    "version": 1
+   },
+   "rng_state": "5555907256920555007",
+   "schema": "policy-input-v4"
+  },
+  "recordedGoal": "explore"
+ }
+}

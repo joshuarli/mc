@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { deepStrictEqual, equal, notDeepStrictEqual, ok } from 'node:assert/strict';
 import { test } from 'node:test';
 
@@ -16,6 +18,7 @@ import {
   observationSequence,
   openingPolicyState,
   policyMemory,
+  rehydratePolicyReplayInput,
   RandomStream,
   seatId,
   tick,
@@ -187,4 +190,20 @@ test('a seat that has not left a 16-block pocket for hundreds of ticks probes fa
   ok(Math.max(Math.abs(target.x - 483), Math.abs(target.z - 596)) >= 24);
   const early = improved.explain(situation({ at: [483, 62, 596], tick: 100 }), pocket, stream());
   equal(early.explanation.reason, 'travelToBorderCenter');
+});
+
+test('improved overrides the baseline on inputs recorded from a live match', () => {
+  const recorded = JSON.parse(readFileSync(
+    resolve(process.cwd(), 'fixtures/policy-curriculum/live-inputs-v5.json'),
+    'utf8',
+  )) as Record<string, { input: unknown }>;
+  for (const [reason, { input }] of Object.entries(recorded)) {
+    const restored = rehydratePolicyReplayInput(input);
+    if (restored.schema !== 'policy-input-v4' || restored.opening === null) throw new Error('unexpected fixture shape');
+    const explained = improved.explainOpening(
+      restored.observation, restored.memory, restored.random, restored.feedback,
+      { style: restored.opening.style, state: restored.opening.state },
+    );
+    equal(explained.explanation.reason, reason);
+  }
 });
