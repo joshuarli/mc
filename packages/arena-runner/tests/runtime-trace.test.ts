@@ -57,7 +57,7 @@ const CAPABILITIES = ['hunger_games_v1'] as const;
 const repositoryRoot = basename(process.cwd()) === 'arena-runner' ? resolve(process.cwd(), '../..') : process.cwd();
 const helperPath = process.env.ARENA_FS_HELPER ?? resolve(repositoryRoot, '.work/arena-fs/arena-fs');
 
-test('runtime trace retains authenticated lifecycle events and stages schema-2 evidence', async (t) => {
+test('runtime trace retains authenticated lifecycle events and stages schema-3 evidence', async (t) => {
   const { session, client, token } = await authenticatedSession(t);
   const { trace, ownedRoot } = await createTrace(t);
   await trace.recordReady(session.ready);
@@ -99,6 +99,7 @@ test('runtime trace retains authenticated lifecycle events and stages schema-2 e
     maxBytes: finalized.segments[0]!.byteLength,
   });
   const segment = parseSegment(bytes);
+  assert.equal(segment.schema, 3);
   assert.equal(segment.runId, RUN_ID);
   assert.equal(segment.firstSequence, 1n);
   assert.equal(segment.lastSequence, 4n);

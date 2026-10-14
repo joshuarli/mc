@@ -1,4 +1,5 @@
 import { compilePolicy, MAX_SOURCE_BYTES, SpecError } from '@arena/spec';
+import type { OpeningStyleCycle } from '@arena/spec';
 import type { AbortReason, ControlCapability, ControlMessage, OutcomePayload } from '../control/index.js';
 import { CONTROL_CAPABILITIES } from '../control/index.js';
 import { reconstructEventResult } from '../event-report.js';
@@ -252,6 +253,9 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
       policy: competitorDriver === 'baselinePolicy' ? policy : undefined,
       policySeed: scenario.seed,
       strategyIntervalTicks: scenario.bots.strategyIntervalTicks,
+      ...(scenario.mode === 'hunger_games' && scenario.schemaVersion === 2
+        ? { openingStyleCycle: scenario.openingStyleCycle }
+        : {}),
       competitors: () => clients,
       ...(options.onPolicyActivity === undefined ? {} : { onPolicyActivity: options.onPolicyActivity }),
       recordPolicy: scenario.record.policyReplay,
@@ -472,6 +476,7 @@ class ControlCoordinator {
     leaseLost: Promise<never>;
     policy: ReturnType<typeof compilePolicy> | undefined;
     policySeed: bigint;
+    openingStyleCycle?: OpeningStyleCycle;
     strategyIntervalTicks: bigint;
     competitors(): readonly RuntimeCompetitorClient[];
     recordPolicy: boolean;
@@ -495,6 +500,7 @@ class ControlCoordinator {
         trace: options.trace,
         params: options.policy.params,
         seed: options.policySeed,
+        ...(options.openingStyleCycle === undefined ? {} : { openingStyleCycle: options.openingStyleCycle }),
         strategyIntervalTicks: options.strategyIntervalTicks,
         recordPolicy: options.recordPolicy,
         competitors: options.competitors,

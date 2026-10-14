@@ -1,12 +1,12 @@
-import { DeterministicRandom, RandomStream, emptyPolicyMemory, seatId, type PolicyMemory, type Decision, type SkillCancellation, type SkillOutcome, createPolicyFeedback, policyFeedbackBatch, type PolicyFeedbackBatch, type AgentObservation, decideCivilization, type CivilizationDecision, type PolicyFeedbackSource, CIVILIZATION_TEAM_MESSAGE_MAX_BYTES, CIVILIZATION_TEAM_MESSAGE_MIN_INTERVAL_TICKS, type CivilizationObservation, type CivilizationPolicyMemory, type CivilizationPolicyFeedbackBatch, type CivilizationGoal, type CivilizationActionIntent, emptyCivilizationPolicyMemory, civilizationPolicyFeedbackBatch, tick } from '@arena/core';
-import type { compilePolicy } from '@arena/spec';
+import { DeterministicRandom, RandomStream, emptyPolicyMemory, openingStyleForSeat, seatId, type PolicyMemory, type Decision, type OpeningPolicyState, type SkillCancellation, type SkillOutcome, createPolicyFeedback, policyFeedbackBatch, type PolicyFeedbackBatch, type AgentObservation, decideCivilization, type CivilizationDecision, type PolicyFeedbackSource, CIVILIZATION_TEAM_MESSAGE_MAX_BYTES, CIVILIZATION_TEAM_MESSAGE_MIN_INTERVAL_TICKS, type CivilizationObservation, type CivilizationPolicyMemory, type CivilizationPolicyFeedbackBatch, type CivilizationGoal, type CivilizationActionIntent, emptyCivilizationPolicyMemory, civilizationPolicyFeedbackBatch, tick } from '@arena/core';
+import type { OpeningStyleCycle, compilePolicy } from '@arena/spec';
 import type { PartiallyComputedPath } from 'mineflayer-pathfinder';
 import { RunnerError } from '../errors.js';
-import { makeCivilizationPolicyEffectRecord, makeCivilizationPolicyReplayRecord, normalizeCivilizationPolicyReplayInput, makePolicyEffectRecord, makePolicyReplayRecord, type PolicyPathUpdate, type PolicyDisposition } from '../policy-replay.js';
+import { makeCivilizationPolicyEffectRecord, makeCivilizationPolicyReplayRecord, normalizeCivilizationPolicyReplayInput, makeOpeningPolicyReplayRecord, makePolicyEffectRecord, makePolicyReplayRecord, type PolicyPathUpdate, type PolicyDisposition } from '../policy-replay.js';
 import { canonicalJson } from '../canonical.js';
 import type { RuntimeTraceBuilder } from './trace.js';
 import { mapRuntimeFailure } from './failures.js';
-import { decideRuntimePolicy, isStrategyDecisionTick } from './policy-decision.js';
+import { decideRuntimeOpeningPolicy, decideRuntimePolicy, isStrategyDecisionTick } from './policy-decision.js';
 import { PolicyCompetitorGate } from './policy-gate.js';
 import type { RuntimeCompetitorClient } from './clients.js';
 
@@ -45,12 +45,14 @@ export class LivePolicyLoop {
   readonly #trace: PolicyTrace;
   readonly #params: ReturnType<typeof compilePolicy>['params'];
   readonly #seed: bigint;
+  readonly #openingStyleCycle: OpeningStyleCycle | undefined;
   readonly #strategyIntervalTicks: bigint;
   readonly #recordPolicy: boolean;
   readonly #competitors: () => readonly PolicyCompetitor[];
   readonly #fail: (error: unknown) => void;
   readonly #onActivity: ((event: PolicyActivityEvent) => void) | undefined;
   readonly #memories = new Map<number, PolicyMemory>();
+  readonly #openingStates = new Map<number, OpeningPolicyState>();
   readonly #feedback = new Map<number, PolicyFeedbackBatch>();
   readonly #civilizationMemories = new Map<number, CivilizationPolicyMemory>();
   readonly #civilizationFeedback = new Map<number, CivilizationPolicyFeedbackBatch>();
@@ -71,6 +73,7 @@ export class LivePolicyLoop {
     trace: PolicyTrace;
     params: ReturnType<typeof compilePolicy>['params'];
     seed: bigint;
+    openingStyleCycle?: OpeningStyleCycle;
     strategyIntervalTicks: bigint;
     recordPolicy: boolean;
     competitors(): readonly PolicyCompetitor[];
@@ -80,6 +83,7 @@ export class LivePolicyLoop {
     this.#trace = options.trace;
     this.#params = options.params;
     this.#seed = options.seed;
+    this.#openingStyleCycle = options.openingStyleCycle;
     this.#strategyIntervalTicks = options.strategyIntervalTicks;
     this.#recordPolicy = options.recordPolicy;
     this.#competitors = options.competitors;
@@ -128,7 +132,15 @@ export class LivePolicyLoop {
         const feedback = this.#feedback.get(seat) ?? [];
         this.#feedback.delete(seat);
         const inputObservation = gameplay.client.observe(tick);
-        const result = decideRuntimePolicy(inputObservation, memory, this.#params, random, feedback);
+        if (this.#openingStyleCycle === undefined) {
+          const result = decideRuntimePolicy(inputObservation, memory, this.#params, random, feedback);
+          return { mode: 'hunger_games' as const, observation: inputObservation, ...result };
+        }
+        const style = openingStyleForSeat(this.#seed, seat, this.#openingStyleCycle);
+        const openingState = this.#openingStates.get(seat) ?? Object.freeze({ cacheTakenAt: null });
+        const result = decideRuntimeOpeningPolicy(inputObservation, memory, this.#params, random, feedback,
+          { seed: this.#seed, seat, style, cycle: this.#openingStyleCycle, state: openingState });
+        this.#openingStates.set(seat, result.openingState);
         return { mode: 'hunger_games' as const, observation: inputObservation, ...result };
       })()
       : (() => {
@@ -151,9 +163,25 @@ export class LivePolicyLoop {
     const disposition = Object.freeze(this.#disposition(previous, decision, tick, sequence));
     let recorded = Promise.resolve();
     if (this.#recordPolicy) {
-      const frame = this.#trace.recordPolicyDecision(step.mode === 'hunger_games'
-        ? makePolicyReplayRecord({ sequence, seat, input: step.input, decision: step.decision, rngStateAfter: step.rngStateAfter, disposition })
-        : makeCivilizationPolicyReplayRecord({ sequence, seat, input: step.input, decision: step.decision, rngStateAfter: step.rngStateAfter, disposition }));
+      let record: ReturnType<typeof makePolicyReplayRecord> | ReturnType<typeof makeOpeningPolicyReplayRecord>
+        | ReturnType<typeof makeCivilizationPolicyReplayRecord>;
+      if (step.mode === 'hunger_games') {
+        if (step.input.schema === 'policy-input-v3') {
+          const openingStateAfter = this.#openingStates.get(seat);
+          if (openingStateAfter === undefined) {
+            throw new RunnerError('runtime_failure', 'opening policy state', { kind: 'missing_state' });
+          }
+          record = makeOpeningPolicyReplayRecord({ sequence, seat, input: step.input, decision: step.decision,
+            openingStateAfter, rngStateAfter: step.rngStateAfter, disposition });
+        } else {
+          record = makePolicyReplayRecord({ sequence, seat, input: step.input, decision: step.decision,
+            rngStateAfter: step.rngStateAfter, disposition });
+        }
+      } else {
+        record = makeCivilizationPolicyReplayRecord({ sequence, seat, input: step.input, decision: step.decision,
+          rngStateAfter: step.rngStateAfter, disposition });
+      }
+      const frame = this.#trace.recordPolicyDecision(record);
       this.#observationCount += 1;
       // The decision watermark does not assert that its owned effect has completed.
       if (this.#observationCount % 200 === 0) this.#checkpointTail = this.#trace.checkpoint(this.#observationCount);

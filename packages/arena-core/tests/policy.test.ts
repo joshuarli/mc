@@ -8,6 +8,7 @@ import {
   currentKnowledge,
   createPolicyFeedback,
   decide,
+  decideOpening,
   decidePolicyReplayV1,
   emptyEquipment,
   emptyPolicyMemory,
@@ -16,9 +17,13 @@ import {
   inventorySlot,
   InvalidPolicyParamsError,
   lootTarget,
+  manhattanDistance,
   PolicyParams,
   policyMemory,
   policyFeedbackBatch,
+  openingPolicyState,
+  openingStyleForSeat,
+  openingStyleCycle,
   RandomStream,
   DeterministicRandom,
   observationSequence,
@@ -70,6 +75,77 @@ const makeObservation = (options: {
 });
 
 const params = () => PolicyParams.baseline();
+
+test('opening styles rotate every fixed seat through the configured three-style cycle', () => {
+  const cycle = openingStyleCycle(['explorer', 'scavenger', 'hunter']);
+  for (let seat = 0; seat < 6; seat += 1) {
+    const styles = [0n, 1n, 2n].map((seed) => openingStyleForSeat(seed, seat, cycle)).sort();
+    deepStrictEqual(styles, ['explorer', 'hunter', 'scavenger']);
+  }
+  deepStrictEqual(openingStyleForSeat(2n, 1, cycle), 'explorer');
+  throws(() => openingStyleCycle(['explorer', 'explorer', 'hunter'] as unknown as readonly ['explorer', 'scavenger', 'hunter']));
+});
+
+test('explorer passes observed loot opportunities and chooses exploration', () => {
+  const observation = makeObservation({ loot: currentKnowledge([
+    unopenedContainer(blockPosition(1, 64, 0)),
+    visibleDrop(entityId(41), blockPosition(2, 64, 0), { kind: 'weapon', rating: 1 }),
+  ]) });
+  const decision = decideOpening(observation, emptyPolicyMemory(), params(), policyRandom(), [], {
+    style: 'explorer', state: openingPolicyState({ cacheTakenAt: null }),
+  });
+
+  deepStrictEqual(decision.goal, { kind: 'explore' });
+  ok(decision.intent.kind === 'navigate');
+});
+
+test('scavenger opens one useful cache and navigates out of its local area', () => {
+  const cache = unopenedContainer(blockPosition(1, 64, 0));
+  const otherCache = unopenedContainer(blockPosition(2, 64, 0));
+  const initiatingObservation = makeObservation({ loot: currentKnowledge([cache]) });
+  const first = decideOpening(initiatingObservation, emptyPolicyMemory(), params(), policyRandom(), [], {
+    style: 'scavenger', state: openingPolicyState({ cacheTakenAt: null }),
+  });
+  deepStrictEqual(first.goal, { kind: 'loot', target: { kind: 'container', position: cache.position } });
+  deepStrictEqual(first.intent, { kind: 'containerOpen', position: cache.position });
+  const feedback = createPolicyFeedback({ initiatingObservation, goal: first.goal, intent: first.intent,
+    outcome: { kind: 'succeeded' } });
+  ok(feedback !== null);
+  const next = decideOpening(makeObservation({ at: 11, loot: currentKnowledge([cache, otherCache]) }), first.memory,
+    params(), policyRandom(), policyFeedbackBatch([feedback]), {
+      style: 'scavenger', state: first.openingState,
+    });
+
+  deepStrictEqual(next.openingState.cacheTakenAt, cache.position);
+  deepStrictEqual(next.goal, { kind: 'explore' });
+  ok(next.intent.kind === 'navigate');
+  ok(manhattanDistance(next.intent.target, cache.position) >= 8n);
+
+  const laterObservation = makeObservation({
+    at: 12,
+    agent: currentKnowledge(makeAgent({ position: next.intent.target })),
+    loot: currentKnowledge([cache, otherCache]),
+  });
+  const later = decideOpening(laterObservation, next.memory, params(), policyRandom(), [], {
+    style: 'scavenger', state: next.openingState,
+  });
+  ok(later.intent.kind === 'navigate');
+  ok(manhattanDistance(later.intent.target, cache.position) >= 8n);
+});
+
+test('hunter approaches a visible isolated opponent before observed caches', () => {
+  const target = entityId(42);
+  const observation = makeObservation({
+    opponents: currentKnowledge([visibleOpponent(target, blockPosition(10, 64, 0), false)]),
+    loot: currentKnowledge([unopenedContainer(blockPosition(1, 64, 0))]),
+  });
+  const decision = decideOpening(observation, emptyPolicyMemory(), params(), policyRandom(), [], {
+    style: 'hunter', state: openingPolicyState({ cacheTakenAt: null }),
+  });
+
+  deepStrictEqual(decision.goal, { kind: 'engageVisibleOpponent', target });
+  deepStrictEqual(decision.intent, { kind: 'approach', target });
+});
 
 test('baseline exits the border before eating', () => {
   const observation = makeObservation({

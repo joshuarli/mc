@@ -65,8 +65,13 @@ export {
   PolicyParams,
   createPolicyFeedback,
   decide,
+  decideOpening,
   decidePolicyReplayV1,
   emptyPolicyMemory,
+  openingPolicyContext,
+  openingPolicyState,
+  openingStyleCycle,
+  openingStyleForSeat,
   policyFeedbackBatch,
   policyMemory,
   policyMemoryV1,
@@ -78,6 +83,11 @@ export type {
   Goal,
   Intent,
   InvalidPolicyParamsCode,
+  OpeningDecision,
+  OpeningPolicyContext,
+  OpeningPolicyState,
+  OpeningStyle,
+  OpeningStyleCycle,
   PolicyMemory,
   PolicyMemoryInput,
   PolicyMemoryInputV1,
@@ -95,17 +105,21 @@ export { DeterministicRandom, RandomStream } from './random.js';
 
 export {
   PolicyReplayInputError,
+  normalizeOpeningPolicyReplayInput,
   normalizePolicyReplayInput,
   rehydratePolicyReplayInput,
 } from './replay.js';
 export type {
+  OpeningPolicyReplayInputSource,
   PolicyReplayInputErrorCode,
   PolicyReplayInputSource,
   PolicyReplayInputV1,
   PolicyReplayInputV2,
+  PolicyReplayInputV3,
   RehydratedPolicyReplayInput,
   RehydratedPolicyReplayInputV1,
   RehydratedPolicyReplayInputV2,
+  RehydratedPolicyReplayInputV3,
 } from './replay.js';
 
 export { skillProgress } from './outcome.js';

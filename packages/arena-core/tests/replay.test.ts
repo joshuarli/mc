@@ -13,12 +13,16 @@ import {
   emptyPolicyMemory,
   PolicyParams,
   PolicyReplayInputError,
+  normalizeOpeningPolicyReplayInput,
   normalizePolicyReplayInput,
+  openingPolicyState,
+  openingStyleForSeat,
   observationSequence,
   rehydratePolicyReplayInput,
   tick,
   unknownKnowledge,
   worldBorder,
+  type OpeningStyleCycle,
 } from '../src/index.js';
 
 const MAX_U64 = 0xffff_ffff_ffff_ffffn;
@@ -53,6 +57,26 @@ function serializedInput(): Record<string, unknown> {
   return JSON.parse(JSON.stringify(input)) as Record<string, unknown>;
 }
 
+function serializedOpeningInput(): Record<string, unknown> {
+  const observation = makeObservation();
+  const seed = 5n;
+  const cycle: OpeningStyleCycle = ['explorer', 'scavenger', 'hunter'];
+  const input = normalizeOpeningPolicyReplayInput({
+    observation,
+    memory: emptyPolicyMemory(),
+    feedback: [],
+    params: PolicyParams.baseline(),
+    random: DeterministicRandom.fromState(MAX_U64),
+    opening: {
+      seed,
+      style: openingStyleForSeat(seed, 1, cycle),
+      cycle,
+      state: openingPolicyState({ cacheTakenAt: null }),
+    },
+  });
+  return JSON.parse(JSON.stringify(input)) as Record<string, unknown>;
+}
+
 test('policy replay input rehydrates validated state and preserves the full u64 RNG state', () => {
   const observation = makeObservation();
   const memory = emptyPolicyMemory();
@@ -70,6 +94,35 @@ test('policy replay input rehydrates validated state and preserves the full u64 
 
   deepStrictEqual(actual, expected);
   equal(restored.random.snapshotState(), random.snapshotState());
+  deepStrictEqual(JSON.parse(JSON.stringify(normalizePolicyReplayInput({
+    observation: restored.observation,
+    memory: restored.memory,
+    feedback: restored.feedback,
+    params: restored.params,
+    random: DeterministicRandom.fromState(MAX_U64),
+  }))), wire);
+});
+
+test('policy-input-v3 preserves opening assignment and rejects unknown styles and versions', () => {
+  const wire = serializedOpeningInput();
+  equal(wire.schema, 'policy-input-v3');
+  const restored = rehydratePolicyReplayInput(wire);
+  if (restored.schema !== 'policy-input-v3') throw new Error('opening input must rehydrate as policy-input-v3');
+  equal(restored.opening.seed, 5n);
+  equal(restored.opening.style, 'explorer');
+  deepStrictEqual(restored.opening.cycle, ['explorer', 'scavenger', 'hunter']);
+  deepStrictEqual(restored.opening.state, { cacheTakenAt: null });
+
+  const unknownStyle = serializedOpeningInput();
+  const opening = unknownStyle.opening as Record<string, unknown>;
+  opening.style = 'stalker';
+  throws(() => rehydratePolicyReplayInput(unknownStyle), (error) => error instanceof PolicyReplayInputError
+    && error.code === 'invalid-opening' && error.field === 'opening.style');
+
+  const unknownVersion = serializedOpeningInput();
+  unknownVersion.schema = 'policy-input-v4';
+  throws(() => rehydratePolicyReplayInput(unknownVersion), (error) => error instanceof PolicyReplayInputError
+    && error.code === 'unsupported-schema');
 });
 
 test('policy-input-v1 preserves historical memory and decision semantics', () => {

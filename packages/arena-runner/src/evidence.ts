@@ -104,7 +104,7 @@ export function reconstructRunEvidence(evidence: Evidence): ReconstructedRunEvid
 
   for (const [index, record] of evidence.records.entries()) {
     const recordNumber = index + 1;
-    if (record.schema === 'policy-replay-v1' || record.schema === 'policy-replay-v2' || record.schema === 'policy-effect-v1' || record.schema === 'civilization-policy-replay-v1'
+    if (record.schema === 'policy-replay-v1' || record.schema === 'policy-replay-v2' || record.schema === 'policy-replay-v3' || record.schema === 'policy-effect-v1' || record.schema === 'civilization-policy-replay-v1'
         || record.schema === 'civilization-policy-effect-v1') continue;
     const direction = record.direction;
     if (direction !== 'runner' && direction !== 'plugin') {

@@ -218,7 +218,8 @@ export class RuntimeTraceBuilder {
       if (this.#hasOutcome) {
         throw new RunnerError('runtime_failure', 'run trace', { kind: 'policy_decision_after_outcome' });
       }
-      if (record.schema !== 'policy-replay-v1' && record.schema !== 'policy-replay-v2' && record.schema !== 'civilization-policy-replay-v1') {
+      if (record.schema !== 'policy-replay-v1' && record.schema !== 'policy-replay-v2'
+          && record.schema !== 'policy-replay-v3' && record.schema !== 'civilization-policy-replay-v1') {
         throw new RunnerError('runtime_failure', 'run trace', { kind: 'invalid_policy_decision' });
       }
       if ((record.schema === 'civilization-policy-replay-v1') !== (this.#mode === 'civilization')) {

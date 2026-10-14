@@ -9,19 +9,27 @@ import {
   currentKnowledge,
   decide,
   decidePolicyReplayV1,
+  decideOpening,
   type PolicyReplayInputV1,
   DeterministicRandom,
   emptyEquipment,
   emptyPolicyMemory,
+  entityId,
   normalizePolicyReplayInput,
+  normalizeOpeningPolicyReplayInput,
+  openingPolicyState,
+  openingStyleForSeat,
+  type OpeningStyleCycle,
   observationSequence,
   PolicyParams,
   rehydratePolicyReplayInput,
   tick,
   unknownKnowledge,
+  unopenedContainer,
+  visibleOpponent,
   worldBorder,
 } from '@arena/core';
-import { makePolicyEffectRecord, makePolicyReplayRecord, replayPolicyJson } from '../src/policy-replay.js';
+import { makeOpeningPolicyReplayRecord, makePolicyEffectRecord, makePolicyReplayRecord, replayPolicyJson } from '../src/policy-replay.js';
 import { canonicalJson, sha256Json } from '../src/canonical.js';
 import { runCli } from '../src/index.js';
 import { TraceError, type TraceRecord } from '../src/trace.js';
@@ -73,6 +81,36 @@ function policyRecord(sequence = 1n, randomState = MAX_U64) {
   if (restored.schema !== 'policy-input-v1') throw new Error('expected legacy input');
   const decision = decidePolicyReplayV1(restored.observation, restored.memory, restored.params, restored.random);
   return { schema: 'policy-replay-v1' as const, sequence: sequence.toString(), seat: 255, input, decision, rng_state_after: restored.random.snapshotState().toString() };
+}
+
+function openingPolicyRecord(sequence = 1n) {
+  const seed = 0n;
+  const seat = 0;
+  const cycle: OpeningStyleCycle = ['explorer', 'scavenger', 'hunter'];
+  const observation = agentObservation({
+    tick: tick(10),
+    sequence: observationSequence(1),
+    agent: currentKnowledge(agentState({
+      position: blockPosition(0, 64, 0),
+      healthHalfHearts: 40,
+      hungerPoints: 20,
+      foodStacks: [],
+      equipped: emptyEquipment(),
+      upgrades: [],
+    })),
+    border: currentKnowledge(worldBorder(0, 0, 100)),
+    opponents: currentKnowledge([visibleOpponent(entityId(4), blockPosition(10, 64, 0), false)]),
+    loot: currentKnowledge([unopenedContainer(blockPosition(2, 64, 0))]),
+  });
+  const random = DeterministicRandom.fromState(7n);
+  const opening = { seed, style: openingStyleForSeat(seed, seat, cycle), cycle,
+    state: openingPolicyState({ cacheTakenAt: null }) };
+  const input = normalizeOpeningPolicyReplayInput({ observation, memory: emptyPolicyMemory(), feedback: [],
+    params: PolicyParams.baseline(), random, opening });
+  const actual = decideOpening(observation, emptyPolicyMemory(), PolicyParams.baseline(), random, [], opening);
+  const { openingState, ...decision } = actual;
+  return makeOpeningPolicyReplayRecord({ sequence, seat, input, decision, openingStateAfter: openingState,
+    rngStateAfter: random.snapshotState(), disposition: { kind: 'start', action_sequence: sequence.toString() } });
 }
 
 test('replays exact core decisions and verifies full-u64 policy sequences and RNG states', () => {
@@ -311,6 +349,38 @@ test('policy replay v2 producer rejects invalid action identities and dispositio
   assert.throws(() => makePolicyReplayRecord({ ...source, disposition: { kind: 'start', action_sequence: '2' } }), TypeError);
   assert.throws(() => makePolicyReplayRecord({ ...source,
     disposition: { kind: 'defer', action_sequence: '1', reason: 'unknown' as 'hysteresis' } }), TypeError);
+});
+
+test('policy replay v3 verifies style, local opportunities, and confirmed effects', () => {
+  const frame = openingPolicyRecord();
+  assert.equal(frame.schema, 'policy-replay-v3');
+  const summary = replayPolicyJson(evidence([frame, makePolicyEffectRecord(1n, { kind: 'succeeded' }, [])]));
+  assert.equal(summary.schema, 2);
+  if (summary.schema !== 2) throw new Error('opening evidence must use summary schema 2');
+  assert.deepEqual(summary.opening_evidence['0'], {
+    assigned_style: 'explorer',
+    first_decision: { goal: { kind: 'explore' }, intent: frame.decision.intent },
+    local_opportunities: {
+      chest_sightings: 1,
+      chest_positions: [{ x: 2, y: 64, z: 0 }],
+      visible_opponent_observations: 1,
+      isolated_opponent_observations: 1,
+      visible_opponents: [{ id: 4, position: { x: 10, y: 64, z: 0 }, attacking_agent: false }],
+    },
+    confirmed_outcomes: {
+      navigation: { succeeded: 1, failed: 0, cancelled: 0 },
+      loot: { succeeded: 0, failed: 0, cancelled: 0 },
+      eat: { succeeded: 0, failed: 0, cancelled: 0 },
+      equip: { succeeded: 0, failed: 0, cancelled: 0 },
+      attack: { succeeded: 0, failed: 0, cancelled: 0 },
+    },
+  });
+
+  assert.throws(() => replayPolicyJson(evidence([{ ...frame,
+    input: { ...frame.input, opening: { ...frame.input.opening, style: 'stalker' } },
+  }])));
+  assert.throws(() => replayPolicyJson(evidence([{ ...frame, schema: 'policy-replay-v4' } as unknown as object])),
+    (error: unknown) => error instanceof TraceError && error.source.kind === 'unsupported_policy_schema');
 });
 
 test('policy replay v2 accepts goal persistence without claiming another action effect', () => {

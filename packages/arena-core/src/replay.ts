@@ -6,6 +6,8 @@ import {
 } from './observation.js';
 import {
   PolicyParams,
+  openingPolicyContext,
+  openingStyleCycle,
   policyFeedbackBatch,
   policyMemory,
   policyMemoryV1,
@@ -15,6 +17,10 @@ import {
   type PolicyFeedback,
   type PolicyFeedbackBatch,
   type PolicyParamValues,
+  type OpeningPolicyContext,
+  type OpeningPolicyState,
+  type OpeningStyle,
+  type OpeningStyleCycle,
 } from './policy.js';
 import { DeterministicRandom } from './random.js';
 
@@ -37,6 +43,21 @@ export interface PolicyReplayInputV2 {
   readonly rng_state: string;
 }
 
+export interface PolicyReplayInputV3 {
+  readonly schema: 'policy-input-v3';
+  readonly observation: AgentObservationInput;
+  readonly memory: PolicyMemoryInput;
+  readonly feedback: readonly PolicyFeedback[];
+  readonly params: PolicyParamValues;
+  readonly opening: Readonly<{
+    readonly seed: string;
+    readonly style: OpeningStyle;
+    readonly cycle: OpeningStyleCycle;
+    readonly state: OpeningPolicyState;
+  }>;
+  readonly rng_state: string;
+}
+
 export interface RehydratedPolicyReplayInputV1 {
   readonly schema: 'policy-input-v1';
   readonly observation: AgentObservation;
@@ -54,7 +75,22 @@ export interface RehydratedPolicyReplayInputV2 {
   readonly random: DeterministicRandom;
 }
 
-export type RehydratedPolicyReplayInput = RehydratedPolicyReplayInputV1 | RehydratedPolicyReplayInputV2;
+export interface RehydratedPolicyReplayInputV3 {
+  readonly schema: 'policy-input-v3';
+  readonly observation: AgentObservation;
+  readonly memory: PolicyMemory;
+  readonly feedback: readonly PolicyFeedback[];
+  readonly params: PolicyParams;
+  readonly opening: Readonly<{
+    readonly seed: bigint;
+    readonly style: OpeningStyle;
+    readonly cycle: OpeningStyleCycle;
+    readonly state: OpeningPolicyState;
+  }>;
+  readonly random: DeterministicRandom;
+}
+
+export type RehydratedPolicyReplayInput = RehydratedPolicyReplayInputV1 | RehydratedPolicyReplayInputV2 | RehydratedPolicyReplayInputV3;
 
 export type PolicyReplayInputErrorCode =
   | 'invalid-shape'
@@ -65,6 +101,7 @@ export type PolicyReplayInputErrorCode =
   | 'invalid-observation'
   | 'invalid-memory'
   | 'invalid-feedback'
+  | 'invalid-opening'
   | 'invalid-params';
 
 export class PolicyReplayInputError extends TypeError {
@@ -91,6 +128,15 @@ export interface PolicyReplayInputSource {
   readonly random: DeterministicRandom;
 }
 
+export interface OpeningPolicyReplayInputSource extends PolicyReplayInputSource {
+  readonly opening: Readonly<{
+    readonly seed: bigint;
+    readonly style: OpeningStyle;
+    readonly cycle: OpeningStyleCycle;
+    readonly state: OpeningPolicyState;
+  }>;
+}
+
 /** Captures v2 decision inputs with the RNG state from before the decision. */
 export function normalizePolicyReplayInput(source: PolicyReplayInputSource): PolicyReplayInputV2 {
   assertValidatedAgentObservation(source.observation);
@@ -115,6 +161,20 @@ export function normalizePolicyReplayInput(source: PolicyReplayInputSource): Pol
   });
 }
 
+export function normalizeOpeningPolicyReplayInput(source: OpeningPolicyReplayInputSource): PolicyReplayInputV3 {
+  const base = normalizePolicyReplayInput(source);
+  const opening = parseSection('invalid-opening', 'opening', () => normalizeOpening(source.opening));
+  return Object.freeze({
+    schema: 'policy-input-v3',
+    observation: base.observation,
+    memory: base.memory,
+    feedback: base.feedback,
+    params: base.params,
+    opening,
+    rng_state: base.rng_state,
+  });
+}
+
 /** Rebuilds branded domain values from a parsed JSON-compatible replay input. */
 export function rehydratePolicyReplayInput(value: unknown): RehydratedPolicyReplayInput {
   assertJsonTree(value, 'input', new Set());
@@ -124,6 +184,8 @@ export function rehydratePolicyReplayInput(value: unknown): RehydratedPolicyRepl
     assertExactFields(input, ['schema', 'observation', 'memory', 'params', 'rng_state'], 'input');
   } else if (schema === 'policy-input-v2') {
     assertExactFields(input, ['schema', 'observation', 'memory', 'feedback', 'params', 'rng_state'], 'input');
+  } else if (schema === 'policy-input-v3') {
+    assertExactFields(input, ['schema', 'observation', 'memory', 'feedback', 'params', 'opening', 'rng_state'], 'input');
   } else {
     throw new PolicyReplayInputError('unsupported-schema', 'input.schema');
   }
@@ -145,7 +207,43 @@ export function rehydratePolicyReplayInput(value: unknown): RehydratedPolicyRepl
   const feedback = parseSection('invalid-feedback', 'feedback', () => (
     policyFeedbackBatch(input.feedback as PolicyFeedbackBatch)
   ));
-  return Object.freeze({ schema, observation, memory: memory as PolicyMemory, feedback, params, random });
+  if (schema === 'policy-input-v2') {
+    return Object.freeze({ schema, observation, memory: memory as PolicyMemory, feedback, params, random });
+  }
+  const opening = parseSection('invalid-opening', 'opening', () => parseOpening(input.opening));
+  return Object.freeze({ schema, observation, memory: memory as PolicyMemory, feedback, params, opening, random });
+}
+
+function normalizeOpening(input: OpeningPolicyReplayInputSource['opening']): PolicyReplayInputV3['opening'] {
+  if (typeof input.seed !== 'bigint' || input.seed < 0n || input.seed > U64_MAX) {
+    throw new RangeError('opening seed must be an unsigned 64-bit bigint');
+  }
+  const context = openingPolicyContext({ style: input.style, state: input.state });
+  const cycle = openingStyleCycle(input.cycle);
+  return Object.freeze({
+    seed: input.seed.toString(10),
+    style: context.style,
+    cycle,
+    state: context.state,
+  });
+}
+
+function parseOpening(value: unknown): RehydratedPolicyReplayInputV3['opening'] {
+  const opening = readRecord(value, 'opening');
+  assertExactFields(opening, ['seed', 'style', 'cycle', 'state'], 'opening');
+  const seed = parseU64Decimal(opening.seed, 'opening.seed');
+  const style = opening.style;
+  if (style !== 'explorer' && style !== 'scavenger' && style !== 'hunter') {
+    throw new PolicyReplayInputError('invalid-opening', 'opening.style');
+  }
+  try {
+    const cycle = openingStyleCycle(opening.cycle as OpeningStyleCycle);
+    const context = openingPolicyContext({ style, state: opening.state as OpeningPolicyState });
+    return Object.freeze({ seed, style, cycle, state: context.state });
+  } catch (cause) {
+    if (cause instanceof PolicyReplayInputError) throw cause;
+    throw new PolicyReplayInputError('invalid-opening', 'opening', cause);
+  }
 }
 
 function parseU64Decimal(value: unknown, field: string): bigint {
@@ -160,7 +258,7 @@ function parseU64Decimal(value: unknown, field: string): bigint {
 }
 
 function parseSection<T>(
-  code: 'invalid-observation' | 'invalid-memory' | 'invalid-feedback' | 'invalid-params',
+  code: 'invalid-observation' | 'invalid-memory' | 'invalid-feedback' | 'invalid-opening' | 'invalid-params',
   field: string,
   parse: () => T,
 ): T {

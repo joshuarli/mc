@@ -2,11 +2,13 @@ import {
   blockPosition,
   borderCenter,
   compareBlockPositions,
+  isOutsideBorder,
   isNearOrOutsideBorder,
   manhattanDistance,
   offsetBlockPosition,
   squaredDistance,
   type BlockPosition,
+  type WorldBorder,
 } from './geometry.js';
 import {
   assertValidatedAgentObservation,
@@ -16,6 +18,7 @@ import {
   knownFood,
   knownWeapon,
   lootTarget,
+  seatId,
   tick,
   type AgentObservation,
   type AgentState,
@@ -47,6 +50,9 @@ const LOOT_INTERACTION_DISTANCE_BLOCKS = 3n;
 const MAX_REMEMBERED_FAILED_TARGETS = 16;
 const MAX_POLICY_FEEDBACKS = 2;
 const FAILED_EXPLORATION_APPROACH_BLOCKS = 8n;
+const CACHE_DEPARTURE_DISTANCE_BLOCKS = 8n;
+const MAX_CACHE_DEPARTURE_RADIUS_BLOCKS = 16;
+const MAX_HUNTER_PURSUE_BLOCKS = 12;
 
 export type PolicyParameterVersion = 1;
 
@@ -336,6 +342,55 @@ export interface Decision {
   readonly memory: PolicyMemory;
 }
 
+export type OpeningStyle = 'explorer' | 'scavenger' | 'hunter';
+export type OpeningStyleCycle = readonly [OpeningStyle, OpeningStyle, OpeningStyle];
+
+export interface OpeningPolicyState {
+  readonly cacheTakenAt: BlockPosition | null;
+}
+
+export interface OpeningPolicyContext {
+  readonly style: OpeningStyle;
+  readonly state: OpeningPolicyState;
+}
+
+export interface OpeningDecision extends Decision {
+  readonly openingState: OpeningPolicyState;
+}
+
+export function openingPolicyState(input: OpeningPolicyState): OpeningPolicyState {
+  assertExactKeys(input, ['cacheTakenAt']);
+  const cacheTakenAt = input.cacheTakenAt === null
+    ? null
+    : blockPosition(input.cacheTakenAt.x, input.cacheTakenAt.y, input.cacheTakenAt.z);
+  return Object.freeze({ cacheTakenAt });
+}
+
+export function openingPolicyContext(input: OpeningPolicyContext): OpeningPolicyContext {
+  assertExactKeys(input, ['style', 'state']);
+  if (input.style !== 'explorer' && input.style !== 'scavenger' && input.style !== 'hunter') {
+    throw new TypeError(`unknown opening style: ${String(input.style)}`);
+  }
+  return Object.freeze({ style: input.style, state: openingPolicyState(input.state) });
+}
+
+export function openingStyleCycle(input: OpeningStyleCycle): OpeningStyleCycle {
+  if (!Array.isArray(input) || input.length !== 3 || new Set(input).size !== 3
+      || input.some((style) => style !== 'explorer' && style !== 'scavenger' && style !== 'hunter')) {
+    throw new TypeError('opening style cycle must contain each supported style exactly once');
+  }
+  return Object.freeze([input[0], input[1], input[2]]) as OpeningStyleCycle;
+}
+
+export function openingStyleForSeat(seed: bigint, seat: number, cycle: OpeningStyleCycle): OpeningStyle {
+  if (typeof seed !== 'bigint' || seed < 0n || seed > 0xffff_ffff_ffff_ffffn) {
+    throw new RangeError('opening seed must be an unsigned 64-bit bigint');
+  }
+  const normalizedCycle = openingStyleCycle(cycle);
+  const index = Number((seed % 3n + BigInt(seatId(seat))) % 3n);
+  return normalizedCycle[index]!;
+}
+
 interface LootChoice {
   readonly opportunity: LootOpportunity;
   readonly target: LootTarget;
@@ -353,6 +408,44 @@ export function decide(
   return decideWithSemantics(observation, memory, params, random, feedback, 'policy-input-v2');
 }
 
+export function decideOpening(
+  observation: AgentObservation,
+  memory: PolicyMemory,
+  params: PolicyParams,
+  random: DeterministicRandom,
+  feedback: PolicyFeedbackBatch,
+  context: OpeningPolicyContext,
+): OpeningDecision {
+  const opening = openingPolicyContext(context);
+  const feedbackBatch = policyFeedbackBatch(feedback);
+  const openingState = advanceOpeningState(opening.style, opening.state, feedbackBatch);
+  const decision = decideWithSemantics(
+    observation,
+    memory,
+    params,
+    random,
+    feedbackBatch,
+    'policy-input-v2',
+    opening.style,
+    openingState,
+  );
+  return Object.freeze({ ...decision, openingState });
+}
+
+function advanceOpeningState(
+  style: OpeningStyle,
+  state: OpeningPolicyState,
+  feedback: PolicyFeedbackBatch,
+): OpeningPolicyState {
+  if (style !== 'scavenger' || state.cacheTakenAt !== null) return state;
+  for (const outcome of feedback) {
+    if (outcome.kind === 'succeeded' && outcome.target.kind === 'loot' && outcome.target.target.kind === 'container') {
+      return openingPolicyState({ cacheTakenAt: outcome.target.target.position });
+    }
+  }
+  return state;
+}
+
 function decideWithSemantics(
   observation: AgentObservation,
   memory: PolicyMemory,
@@ -360,6 +453,8 @@ function decideWithSemantics(
   random: DeterministicRandom,
   feedback: PolicyFeedbackBatch,
   semantics: DecisionSemantics,
+  openingStyle?: OpeningStyle,
+  openingState?: OpeningPolicyState,
 ): Decision {
   assertValidatedAgentObservation(observation);
   let nextMemory = applyPolicyFeedback(policyMemory(memory), policyFeedbackBatch(feedback));
@@ -451,6 +546,40 @@ function decideWithSemantics(
     return finish(goal, intent, { ...currentMemory, lastGoal: goal });
   }
 
+  if (openingStyle === 'hunter' && currentOpponents?.length === 1
+      && agent.healthHalfHearts > params.values.retreatAtHealthHalfHeartsOrBelow
+      && squaredDistance(agent.position, currentOpponents[0]!.position) <= BigInt(MAX_HUNTER_PURSUE_BLOCKS) ** 2n) {
+    const target = currentOpponents[0]!;
+    if (isOutsideBorder(border, target.position)) {
+      return openingExploration(observation, currentMemory, random, semantics, openingStyle, openingState, params);
+    }
+    const goal: Goal = Object.freeze({ kind: 'engageVisibleOpponent', target: target.id });
+    const intent: Intent = squaredDistance(agent.position, target.position) <= BigInt(MELEE_REACH_BLOCKS) ** 2n
+      ? { kind: 'attack', target: target.id }
+      : { kind: 'approach', target: target.id };
+    return finish(goal, intent, { ...currentMemory, lastGoal: goal });
+  }
+
+  if (openingStyle === 'explorer') {
+    return openingExploration(observation, currentMemory, random, semantics, openingStyle, openingState, params);
+  }
+
+  if (openingStyle === 'scavenger') {
+    const cacheTakenAt = openingState?.cacheTakenAt ?? null;
+    if (cacheTakenAt !== null) {
+      return openingExploration(observation, currentMemory, random, semantics, openingStyle, openingState, params);
+    }
+    const cache = selectUsefulCache(observation, currentMemory, agent);
+    if (cache !== null) {
+      const goal: Goal = Object.freeze({ kind: 'loot', target: cache.target });
+      const intent: Intent = manhattanDistance(agent.position, cache.opportunity.position) > LOOT_INTERACTION_DISTANCE_BLOCKS
+        ? { kind: 'navigate', target: cache.opportunity.position }
+        : { kind: 'containerOpen', position: cache.opportunity.position };
+      return finish(goal, intent, { ...currentMemory, lastGoal: goal });
+    }
+    return openingExploration(observation, currentMemory, random, semantics, openingStyle, openingState, params);
+  }
+
   const loot = selectLoot(observation, currentMemory, agent, params.values);
   if (loot !== null) {
     const goal: Goal = Object.freeze({ kind: 'loot', target: loot.target });
@@ -489,6 +618,101 @@ function decideWithSemantics(
     ...currentMemory,
     lastGoal: goal,
   });
+}
+
+function openingExploration(
+  observation: AgentObservation,
+  memory: PolicyMemory,
+  random: DeterministicRandom,
+  semantics: DecisionSemantics,
+  openingStyle: OpeningStyle | undefined,
+  openingState: OpeningPolicyState | undefined,
+  params: PolicyParams,
+): Decision {
+  const agent = currentValue(observation.agent);
+  if (agent === null) return waitDecision('agentStateUnknown', memory);
+  const border = currentValue(observation.border);
+  if (border === null) return waitDecision('borderUnknown', memory);
+  const cacheTakenAt = openingStyle === 'scavenger' ? openingState?.cacheTakenAt ?? null : null;
+  if (cacheTakenAt !== null) {
+    const departure = cacheDepartureTarget(agent.position, cacheTakenAt, border, memory, random, semantics,
+      Math.max(params.values.searchRadiusBlocks, MAX_CACHE_DEPARTURE_RADIUS_BLOCKS));
+    if (departure.ok === false) return waitDecision(departure.reason, memory);
+    const goal: Goal = Object.freeze({ kind: 'explore' });
+    return finish(goal, { kind: 'navigate', target: departure.value }, { ...memory, lastGoal: goal });
+  }
+  const exploration = explorationTarget(agent.position, params.values.searchRadiusBlocks, memory, random, semantics);
+  if (exploration.ok === false) return waitDecision(exploration.reason, memory);
+  const goal: Goal = Object.freeze({ kind: 'explore' });
+  return finish(goal, { kind: 'navigate', target: exploration.value }, { ...memory, lastGoal: goal });
+}
+
+function selectUsefulCache(
+  observation: AgentObservation,
+  memory: PolicyMemory,
+  agent: AgentState,
+): LootChoice | null {
+  const opportunities = currentValue(observation.loot);
+  if (opportunities === null || !hasCacheNeed(agent)) return null;
+  const caches = opportunities.filter((opportunity) => opportunity.kind === 'unopenedContainer')
+    .map((opportunity): LootChoice | null => {
+      const target = lootTarget(opportunity);
+      if (memory.failedTargets.some((failed) => failed.kind === 'loot' && sameLootTarget(failed.target, target))) {
+        return null;
+      }
+      return { opportunity, target, utility: 1, distance: manhattanDistance(agent.position, opportunity.position) };
+    })
+    .filter((choice): choice is LootChoice => choice !== null);
+  caches.sort(compareLootChoices);
+  return caches[0] ?? null;
+}
+
+function hasCacheNeed(agent: AgentState): boolean {
+  return agent.foodStacks.length === 0
+    || (['weapon', 'helmet', 'chestplate', 'leggings', 'boots'] as const)
+      .some((slot) => agent.equipped[slot] === null);
+}
+
+function cacheDepartureTarget(
+  position: BlockPosition,
+  cachePosition: BlockPosition,
+  border: WorldBorder,
+  memory: PolicyMemory,
+  random: DeterministicRandom,
+  semantics: DecisionSemantics,
+  radius: number,
+): { readonly ok: true; readonly value: BlockPosition }
+  | { readonly ok: false; readonly reason: 'unrepresentableTarget' | 'failedTargetsExhausted' } {
+  const half = Math.max(1, Math.floor(radius / 2));
+  const offsets = [
+    [radius, 0],
+    [radius, half],
+    [0, radius],
+    [-half, radius],
+    [-radius, 0],
+    [-radius, -half],
+    [0, -radius],
+    [half, -radius],
+  ] as const;
+  const start = random.nextEightWay();
+  let representableTargets = 0;
+  for (let offset = 0; offset < offsets.length; offset += 1) {
+    const [dx, dz] = offsets[(start + offset) % offsets.length]!;
+    const candidate = offsetBlockPosition(position, dx, 0, dz);
+    if (!candidate.ok) continue;
+    if (isOutsideBorder(border, candidate.value)
+        || manhattanDistance(candidate.value, cachePosition) < CACHE_DEPARTURE_DISTANCE_BLOCKS) continue;
+    representableTargets += 1;
+    if (!memory.failedTargets.some((failed) => failed.kind === 'explore' && samePosition(failed.target, candidate.value))) {
+      return candidate;
+    }
+  }
+  if (representableTargets === 0) {
+    return { ok: false, reason: 'unrepresentableTarget' };
+  }
+  return semantics === 'policy-input-v1'
+    ? { ok: false, reason: 'unrepresentableTarget' }
+    : { ok: false, reason: 'failedTargetsExhausted' };
 }
 
 /** Replays the former decision contract without feeding skill results into policy. */

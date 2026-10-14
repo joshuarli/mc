@@ -8,6 +8,9 @@ import {
   civilizationObservation,
   civilizationPolicyContext,
   decideCivilization,
+  decideOpening,
+  openingPolicyState,
+  openingStyleForSeat,
   normalizePolicyReplayInput,
   type CivilizationDecision,
   type CivilizationGoal,
@@ -17,12 +20,15 @@ import {
   type CivilizationPolicyContext,
   type CivilizationPolicyContextInput,
   type PolicyReplayInputSource,
+  type PolicyReplayInputV3,
+  type OpeningPolicyState,
   decide,
   decidePolicyReplayV1,
   rehydratePolicyReplayInput,
   type Decision,
   type DecisionV1,
   type PolicyReplayInputV2,
+  type OpeningStyle,
   type SkillCancellation,
   type SkillFailure,
   type PolicyReplayInputV1,
@@ -65,6 +71,12 @@ export interface PolicyReplayRecordV2 extends Omit<PolicyReplayRecordV1, 'schema
   readonly disposition: PolicyDisposition;
 }
 
+export interface PolicyReplayRecordV3 extends Omit<PolicyReplayRecordV2, 'schema' | 'input'> {
+  readonly schema: 'policy-replay-v3';
+  readonly input: PolicyReplayInputV3;
+  readonly opening_state_after: OpeningPolicyState;
+}
+
 export interface CivilizationPolicyReplayInputV1 {
   readonly schema: 'civilization-policy-input-v1';
   readonly context: CivilizationPolicyContextInput;
@@ -81,7 +93,7 @@ export interface CivilizationPolicyReplayRecordV1 extends Omit<PolicyReplayRecor
   readonly decision: CivilizationDecision;
 }
 
-export type PolicyReplayRecord = PolicyReplayRecordV1 | PolicyReplayRecordV2 | CivilizationPolicyReplayRecordV1;
+export type PolicyReplayRecord = PolicyReplayRecordV1 | PolicyReplayRecordV2 | PolicyReplayRecordV3 | CivilizationPolicyReplayRecordV1;
 
 export interface PolicyPathPoint {
   /** Pathfinder may place a waypoint at a fractional block coordinate. */
@@ -184,7 +196,7 @@ export function isCivilizationMaterialAction(decision: CivilizationDecision): de
     || intent.kind === 'containerOpen';
 }
 
-export interface PolicyReplaySummary {
+export interface PolicyReplaySummaryV1 {
   readonly schema: 1;
   readonly run_id: string;
   readonly verified: true;
@@ -193,6 +205,49 @@ export interface PolicyReplaySummary {
   readonly effect_count: number;
   readonly path_update_count: number;
 }
+
+export interface OpeningStyleSeatEvidence {
+  readonly assigned_style: OpeningStyle;
+  readonly first_decision: Readonly<{ goal: Decision['goal']; intent: Decision['intent'] }> | null;
+  readonly local_opportunities: Readonly<{
+    readonly chest_sightings: number;
+    readonly chest_positions: readonly Readonly<{ x: number; y: number; z: number }>[];
+    readonly visible_opponent_observations: number;
+    readonly isolated_opponent_observations: number;
+    readonly visible_opponents: readonly Readonly<{
+      id: number;
+      position: Readonly<{ x: number; y: number; z: number }>;
+      attacking_agent: boolean;
+    }>[];
+  }>;
+  readonly confirmed_outcomes: Readonly<Record<OpeningActionKind, Readonly<{
+    succeeded: number;
+    failed: number;
+    cancelled: number;
+  }>>>;
+}
+
+export interface PolicyReplaySummaryV2 extends Omit<PolicyReplaySummaryV1, 'schema'> {
+  readonly schema: 2;
+  readonly opening_evidence: Readonly<Record<string, OpeningStyleSeatEvidence>>;
+}
+
+export type PolicyReplaySummary = PolicyReplaySummaryV1 | PolicyReplaySummaryV2;
+
+type OpeningActionKind = 'navigation' | 'loot' | 'eat' | 'equip' | 'attack';
+
+interface MutableOpeningEvidence {
+  readonly assignedStyle: OpeningStyle;
+  firstDecision: Readonly<{ goal: Decision['goal']; intent: Decision['intent'] }> | null;
+  chestSightings: number;
+  readonly chestPositions: Map<string, Readonly<{ x: number; y: number; z: number }>>;
+  visibleOpponentObservations: number;
+  isolatedOpponentObservations: number;
+  readonly visibleOpponents: Map<string, Readonly<{ id: number; position: Readonly<{ x: number; y: number; z: number }>; attacking_agent: boolean }>>;
+  readonly confirmedOutcomes: Record<OpeningActionKind, { succeeded: number; failed: number; cancelled: number }>;
+}
+
+const MAX_OPENING_EVIDENCE_OPPORTUNITIES = 64;
 
 /** Records the decision separately from whether it starts, continues, or defers an owned action. */
 export function makePolicyReplayRecord(options: Readonly<{
@@ -217,6 +272,37 @@ export function makePolicyReplayRecord(options: Readonly<{
     throw new TypeError('action identity must match its initiating decision');
   }
   return Object.freeze({ schema: 'policy-replay-v2', sequence: sequence.toString(), seat, input, decision, rng_state_after: rngStateAfter.toString(), disposition: Object.freeze(validated) });
+}
+
+export function makeOpeningPolicyReplayRecord(options: Readonly<{
+  sequence: bigint;
+  seat: number;
+  input: PolicyReplayInputV3;
+  decision: Decision;
+  openingStateAfter: OpeningPolicyState;
+  rngStateAfter: bigint;
+  disposition: PolicyDisposition;
+}>): PolicyReplayRecordV3 {
+  const { sequence, seat, input, decision, rngStateAfter, disposition } = options;
+  assertSequence(sequence, 'sequence');
+  assertSeat(seat);
+  assertU64(rngStateAfter, 'rng_state_after');
+  if (input.schema !== 'policy-input-v3'
+      || openingStyleForSeat(BigInt(input.opening.seed), seat, input.opening.cycle) !== input.opening.style) {
+    throw new TypeError('opening style assignment must match the replay seed, seat, and cycle');
+  }
+  let validated: PolicyDisposition;
+  try { validated = readDisposition(disposition, undefined); }
+  catch (error) { throw new TypeError('invalid policy action disposition', { cause: error }); }
+  if ((validated.kind === 'hold') !== (decision.intent.kind === 'hold') && validated.kind !== 'defer') {
+    throw new TypeError('policy hold disposition must describe a hold intent');
+  }
+  if ((validated.kind === 'start' || validated.kind === 'replace') && validated.action_sequence !== sequence.toString()) {
+    throw new TypeError('action identity must match its initiating decision');
+  }
+  const openingStateAfter = openingPolicyState(options.openingStateAfter);
+  return Object.freeze({ schema: 'policy-replay-v3', sequence: sequence.toString(), seat, input, decision,
+    rng_state_after: rngStateAfter.toString(), disposition: Object.freeze(validated), opening_state_after: openingStateAfter });
 }
 
 /** Builds a bounded effect record without inventing path results the client did not emit. */
@@ -248,11 +334,13 @@ export function replayPolicyJson(evidence: Evidence): PolicyReplaySummary {
   let effectCount = 0;
   let pathUpdateCount = 0;
   const effects = new Set<string>();
+  const openingEvidence = new Map<number, MutableOpeningEvidence>();
   let terminalOutcomeSeen = false;
 
   for (const [index, record] of evidence.records.entries()) {
     if (record.direction === 'plugin' && record.type === 'outcome') terminalOutcomeSeen = true;
-    if (record.schema === 'policy-replay-v1' || record.schema === 'policy-replay-v2' || record.schema === 'civilization-policy-replay-v1') {
+    if (record.schema === 'policy-replay-v1' || record.schema === 'policy-replay-v2'
+        || record.schema === 'policy-replay-v3' || record.schema === 'civilization-policy-replay-v1') {
       const decision = readPolicyDecision(record, index + 1);
       if (decision.schema === 'civilization-policy-replay-v1' && terminalOutcomeSeen) {
         throw replayFailure('policy_decision_after_outcome', index + 1);
@@ -268,7 +356,10 @@ export function replayPolicyJson(evidence: Evidence): PolicyReplaySummary {
       previousSequence = sequence;
       firstSequence ??= decision.sequence;
       lastSequence = decision.sequence;
-      replayDecision(decision, index + 1);
+      replayDecision(decision, index + 1, prepared?.seed);
+      if (decision.schema === 'policy-replay-v3') {
+        retainOpeningDecision(openingEvidence, decision, index + 1);
+      }
       if (decision.schema !== 'policy-replay-v1') {
         validateActionDecision(decision, activeActions, actionOwners, effects, index + 1);
       } else if (decision.decision.intent.kind !== 'hold') {
@@ -296,6 +387,9 @@ export function replayPolicyJson(evidence: Evidence): PolicyReplaySummary {
         throw replayFailure('policy_effect_without_action', index + 1, 'decision_sequence');
       }
       effects.add(effect.decision_sequence);
+      if (initiator.schema === 'policy-replay-v3') {
+        retainOpeningEffect(openingEvidence.get(initiator.seat), initiator.decision.intent, effect.skill.kind);
+      }
       if (activeActions.get(initiator.seat) === effect.decision_sequence) activeActions.delete(initiator.seat);
       effectCount += 1;
       pathUpdateCount += effect.path_updates.length;
@@ -310,19 +404,26 @@ export function replayPolicyJson(evidence: Evidence): PolicyReplaySummary {
     throw replayFailure('policy_skill_result_pending');
   }
   if (firstSequence === undefined || lastSequence === undefined) throw replayFailure('policy_records_missing');
-  return {
-    schema: 1,
+  const summary = {
     run_id: evidence.run_id,
-    verified: true,
+    verified: true as const,
     decision_count: decisions.size,
     policy_sequence_range: { first: firstSequence, last: lastSequence },
     effect_count: effectCount,
     path_update_count: pathUpdateCount,
   };
+  if (openingEvidence.size === 0) return { schema: 1, ...summary };
+  return {
+    schema: 2,
+    ...summary,
+    opening_evidence: Object.freeze(Object.fromEntries([...openingEvidence.entries()]
+      .sort(([first], [second]) => first - second)
+      .map(([seat, value]) => [String(seat), freezeOpeningEvidence(value)]))),
+  };
 }
 
-function readPreparedContext(evidence: Evidence): { readonly seats: ReadonlySet<number>; readonly mode: 'hunger_games' | 'civilization' } | undefined {
-  let prepared: { readonly seats: ReadonlySet<number>; readonly mode: 'hunger_games' | 'civilization' } | undefined;
+function readPreparedContext(evidence: Evidence): { readonly seats: ReadonlySet<number>; readonly mode: 'hunger_games' | 'civilization'; readonly seed: bigint } | undefined {
+  let prepared: { readonly seats: ReadonlySet<number>; readonly mode: 'hunger_games' | 'civilization'; readonly seed: bigint } | undefined;
   for (const [index, record] of evidence.records.entries()) {
     if (record.direction !== 'runner' || record.type !== 'prepare') continue;
     const envelope: Record<string, unknown> = {};
@@ -340,12 +441,114 @@ function readPreparedContext(evidence: Evidence): { readonly seats: ReadonlySet<
       throw replayFailure('invalid_policy_prepare', index + 1);
     }
     if (prepared !== undefined) throw replayFailure('duplicate_policy_prepare', index + 1);
-    prepared = { seats: new Set(message.payload.roster.map((competitor) => competitor.seat)), mode: message.payload.mode };
+    prepared = { seats: new Set(message.payload.roster.map((competitor) => competitor.seat)), mode: message.payload.mode,
+      seed: message.payload.seed };
   }
   return prepared;
 }
 
-function replayDecision(record: PolicyReplayRecord, recordNumber: number): void {
+function retainOpeningDecision(
+  evidence: Map<number, MutableOpeningEvidence>,
+  record: PolicyReplayRecordV3,
+  recordNumber: number,
+): void {
+  let seat = evidence.get(record.seat);
+  if (seat === undefined) {
+    seat = {
+      assignedStyle: record.input.opening.style,
+      firstDecision: null,
+      chestSightings: 0,
+      chestPositions: new Map(),
+      visibleOpponentObservations: 0,
+      isolatedOpponentObservations: 0,
+      visibleOpponents: new Map(),
+      confirmedOutcomes: {
+        navigation: { succeeded: 0, failed: 0, cancelled: 0 },
+        loot: { succeeded: 0, failed: 0, cancelled: 0 },
+        eat: { succeeded: 0, failed: 0, cancelled: 0 },
+        equip: { succeeded: 0, failed: 0, cancelled: 0 },
+        attack: { succeeded: 0, failed: 0, cancelled: 0 },
+      },
+    };
+    evidence.set(record.seat, seat);
+  } else if (seat.assignedStyle !== record.input.opening.style) {
+    throw replayFailure('policy_opening_style_changed', recordNumber, 'input.opening.style');
+  }
+  seat.firstDecision ??= Object.freeze({ goal: record.decision.goal, intent: record.decision.intent });
+  const observation = record.input.observation;
+  if (observation.loot.kind === 'current') {
+    for (const opportunity of observation.loot.value) {
+      if (opportunity.kind !== 'unopenedContainer') continue;
+      seat.chestSightings += 1;
+      const position = freezePosition(opportunity.position);
+      const key = `${position.x},${position.y},${position.z}`;
+      if (seat.chestPositions.size < MAX_OPENING_EVIDENCE_OPPORTUNITIES) seat.chestPositions.set(key, position);
+    }
+  }
+  if (observation.opponents.kind === 'current' && observation.opponents.value.length > 0) {
+    seat.visibleOpponentObservations += 1;
+    if (observation.opponents.value.length === 1) seat.isolatedOpponentObservations += 1;
+    for (const opponent of observation.opponents.value) {
+      const position = freezePosition(opponent.position);
+      const key = `${opponent.id}:${position.x},${position.y},${position.z}`;
+      if (seat.visibleOpponents.size < MAX_OPENING_EVIDENCE_OPPORTUNITIES) {
+        seat.visibleOpponents.set(key, Object.freeze({ id: opponent.id, position, attacking_agent: opponent.attackingAgent }));
+      }
+    }
+  }
+}
+
+function retainOpeningEffect(
+  evidence: MutableOpeningEvidence | undefined,
+  intent: Decision['intent'],
+  outcome: SkillOutcome['kind'],
+): void {
+  if (evidence === undefined || outcome === 'pending' || outcome === 'progress') return;
+  const action = openingActionKind(intent);
+  if (action === null) return;
+  evidence.confirmedOutcomes[action][outcome] += 1;
+}
+
+function openingActionKind(intent: Decision['intent']): OpeningActionKind | null {
+  switch (intent.kind) {
+    case 'navigate':
+    case 'approach': return 'navigation';
+    case 'containerOpen':
+    case 'dropCollect': return 'loot';
+    case 'eat': return 'eat';
+    case 'equip': return 'equip';
+    case 'attack': return 'attack';
+    case 'hold': return null;
+  }
+}
+
+function freezeOpeningEvidence(value: MutableOpeningEvidence): OpeningStyleSeatEvidence {
+  const freezeCounts = (counts: { succeeded: number; failed: number; cancelled: number }) => Object.freeze({ ...counts });
+  return Object.freeze({
+    assigned_style: value.assignedStyle,
+    first_decision: value.firstDecision,
+    local_opportunities: Object.freeze({
+      chest_sightings: value.chestSightings,
+      chest_positions: Object.freeze([...value.chestPositions.values()]),
+      visible_opponent_observations: value.visibleOpponentObservations,
+      isolated_opponent_observations: value.isolatedOpponentObservations,
+      visible_opponents: Object.freeze([...value.visibleOpponents.values()]),
+    }),
+    confirmed_outcomes: Object.freeze({
+      navigation: freezeCounts(value.confirmedOutcomes.navigation),
+      loot: freezeCounts(value.confirmedOutcomes.loot),
+      eat: freezeCounts(value.confirmedOutcomes.eat),
+      equip: freezeCounts(value.confirmedOutcomes.equip),
+      attack: freezeCounts(value.confirmedOutcomes.attack),
+    }),
+  });
+}
+
+function freezePosition(position: Readonly<{ x: number; y: number; z: number }>): Readonly<{ x: number; y: number; z: number }> {
+  return Object.freeze({ x: position.x, y: position.y, z: position.z });
+}
+
+function replayDecision(record: PolicyReplayRecord, recordNumber: number, preparedSeed?: bigint): void {
   if (record.schema === 'civilization-policy-replay-v1') {
     const input = strictObject(record.input);
     if (input === undefined || input.schema !== 'civilization-policy-input-v1') {
@@ -381,6 +584,45 @@ function replayDecision(record: PolicyReplayRecord, recordNumber: number): void 
     if (state !== parseU64Decimal(record.rng_state_after, recordNumber)) throw replayFailure('policy_rng_state_mismatch', recordNumber, 'rng_state_after');
     return;
   }
+  if (record.schema === 'policy-replay-v3') {
+    let restored: ReturnType<typeof rehydratePolicyReplayInput>;
+    try {
+      restored = rehydratePolicyReplayInput(record.input);
+    } catch (error) {
+      if (error instanceof TypeError && 'field' in error && typeof error.field === 'string') {
+        throw replayFailure('invalid_policy_input', recordNumber, error.field);
+      }
+      throw error;
+    }
+    if (restored.schema !== 'policy-input-v3') throw replayFailure('invalid_policy_input_schema', recordNumber, 'input.schema');
+    if (preparedSeed !== undefined && restored.opening.seed !== preparedSeed) {
+      throw replayFailure('policy_opening_seed_mismatch', recordNumber, 'input.opening.seed');
+    }
+    if (openingStyleForSeat(restored.opening.seed, record.seat, restored.opening.cycle) !== restored.opening.style) {
+      throw replayFailure('policy_opening_style_mismatch', recordNumber, 'input.opening.style');
+    }
+    let actual: ReturnType<typeof decideOpening>;
+    try {
+      actual = decideOpening(restored.observation, restored.memory, restored.params, restored.random, restored.feedback,
+        { style: restored.opening.style, state: restored.opening.state });
+    } catch {
+      throw replayFailure('invalid_policy_input', recordNumber, 'input.opening');
+    }
+    const { openingState, ...decision } = actual;
+    if (canonicalJson(decision) !== canonicalJson(record.decision)) {
+      throw replayFailure('policy_decision_mismatch', recordNumber, 'decision');
+    }
+    let expectedOpeningState: OpeningPolicyState;
+    try { expectedOpeningState = openingPolicyState(record.opening_state_after); }
+    catch { throw replayFailure('invalid_policy_input', recordNumber, 'opening_state_after'); }
+    if (canonicalJson(openingState) !== canonicalJson(expectedOpeningState)) {
+      throw replayFailure('policy_opening_state_mismatch', recordNumber, 'opening_state_after');
+    }
+    if (restored.random.snapshotState() !== parseU64Decimal(record.rng_state_after, recordNumber)) {
+      throw replayFailure('policy_rng_state_mismatch', recordNumber, 'rng_state_after');
+    }
+    return;
+  }
   let restored: ReturnType<typeof rehydratePolicyReplayInput>;
   try {
     restored = rehydratePolicyReplayInput(record.input);
@@ -408,7 +650,10 @@ function replayDecision(record: PolicyReplayRecord, recordNumber: number): void 
 
 function readPolicyDecision(record: TraceRecord, recordNumber: number): PolicyReplayRecord {
   const isV2 = record.schema === 'policy-replay-v2' || record.schema === 'civilization-policy-replay-v1';
-  assertExactFields(record, isV2 ? [...POLICY_DECISION_FIELDS, 'disposition'] : POLICY_DECISION_FIELDS, recordNumber);
+  const isV3 = record.schema === 'policy-replay-v3';
+  const expected = isV3 ? [...POLICY_DECISION_FIELDS, 'disposition', 'opening_state_after']
+    : isV2 ? [...POLICY_DECISION_FIELDS, 'disposition'] : POLICY_DECISION_FIELDS;
+  assertExactFields(record, expected, recordNumber);
   const sequence = parseSequence(record.sequence, 'sequence', recordNumber).toString(10);
   if (typeof record.seat !== 'number' || !Number.isSafeInteger(record.seat) || record.seat < 0 || record.seat > 255) {
     throw replayFailure('invalid_policy_seat', recordNumber, 'seat');
@@ -429,11 +674,16 @@ function readPolicyDecision(record: TraceRecord, recordNumber: number): PolicyRe
     return { ...base, schema: 'civilization-policy-replay-v1', input: record.input as unknown as CivilizationPolicyReplayInputV1,
       decision: record.decision as unknown as CivilizationDecision, disposition: readDisposition(record.disposition, recordNumber) };
   }
+  if (isV3) {
+    return { ...base, schema: 'policy-replay-v3', input: record.input as unknown as PolicyReplayInputV3,
+      decision: record.decision as unknown as Decision, disposition: readDisposition(record.disposition, recordNumber),
+      opening_state_after: record.opening_state_after as unknown as OpeningPolicyState };
+  }
   return isV2 ? { ...base, input: record.input as unknown as PolicyReplayInputV2, decision: record.decision as unknown as Decision, schema: 'policy-replay-v2', disposition: readDisposition(record.disposition, recordNumber) } : base;
 }
 
 function validateActionDecision(
-  record: PolicyReplayRecordV2 | CivilizationPolicyReplayRecordV1,
+  record: PolicyReplayRecordV2 | PolicyReplayRecordV3 | CivilizationPolicyReplayRecordV1,
   active: Map<number, string>,
   owners: Map<string, number>,
   effects: ReadonlySet<string>,

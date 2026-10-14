@@ -57,6 +57,23 @@ test('rejects trace-v1 without a compatibility fallback', async () => {
   });
 });
 
+test('reads historical trace-v2 and current trace-v3 while keeping v2 policy records strict', async () => {
+  const historical = await readSegment(join(repositoryRoot, 'tests/fixtures/operator-abort/trace-v2-000001.json'), 1);
+  assert.equal(historical.schema, 2);
+
+  const records = [{ schema: 'policy-replay-v3' }];
+  const current = parseSegment(canonicalJson({ schema: 3, run_id: 'current', first_sequence: '1', last_sequence: '1',
+    records, sha256: sha256Json(records), trailer: { complete: true } }));
+  assert.equal(current.schema, 3);
+
+  const invalidHistorical = canonicalJson({ schema: 2, run_id: 'legacy', first_sequence: '1', last_sequence: '1',
+    records, sha256: sha256Json(records), trailer: { complete: true } });
+  assert.throws(() => parseSegment(invalidHistorical), rejectsEvidence('unsupported_policy_schema'));
+  const unsupported = canonicalJson({ schema: 4, run_id: 'future', first_sequence: '1', last_sequence: '1',
+    records: [{ a: 1 }], sha256: sha256Json([{ a: 1 }]), trailer: { complete: true } });
+  assert.throws(() => parseSegment(unsupported), rejectsEvidence('unsupported_schema'));
+});
+
 test('hashes nested records with the TypeScript canonical key ordering', () => {
   const records = '[{"z":0,"a":{"y":2,"x":1}}]';
   const canonicalRecords = '[{"a":{"x":1,"y":2},"z":0}]';

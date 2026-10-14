@@ -6,7 +6,7 @@ import { sha256Json } from './canonical.js';
 import { parseStrictJson, StrictJsonError, type StrictJsonValue } from './control/strict-json.js';
 import { RunnerError } from './errors.js';
 
-export const TRACE_SCHEMA_VERSION = 2;
+export const TRACE_SCHEMA_VERSION = 3;
 export const MAX_TRACE_SEGMENT_BYTES = 8 * 1024 * 1024;
 export const MAX_EVIDENCE_BYTES = 256 * 1024 * 1024;
 export const MAX_TRACE_SEGMENTS = 100_000;
@@ -22,6 +22,7 @@ const TRACE_FIELDS = new Set([
 ]);
 
 export interface TraceSegment {
+  readonly schema: 2 | 3;
   readonly runId: string;
   readonly firstSequence: bigint;
   readonly lastSequence: bigint;
@@ -115,7 +116,7 @@ export function parseSegment(input: string | Uint8Array): TraceSegment {
     if (!Object.hasOwn(root, field)) throw traceFailure(missingFieldKind(field));
   }
 
-  if (typeof root.schema !== 'number' || root.schema !== TRACE_SCHEMA_VERSION) throw traceFailure('unsupported_schema');
+  if (root.schema !== 2 && root.schema !== TRACE_SCHEMA_VERSION) throw traceFailure('unsupported_schema');
   const runId = typeof root.run_id === 'string' && root.run_id.length > 0 ? root.run_id : undefined;
   if (runId === undefined) throw traceFailure('invalid_run_id');
 
@@ -125,6 +126,9 @@ export function parseSegment(input: string | Uint8Array): TraceSegment {
     throw traceFailure('invalid_records');
   }
   const records = root.records as readonly TraceRecord[];
+  if (root.schema === 2 && records.some((record) => record.schema === 'policy-replay-v3')) {
+    throw traceFailure('unsupported_policy_schema');
+  }
   if (typeof root.sha256 !== 'string') throw traceFailure('invalid_sha256');
   if (!/^[0-9a-f]{64}$/.test(root.sha256)) throw traceFailure('invalid_checksum_format');
 
@@ -139,7 +143,7 @@ export function parseSegment(input: string | Uint8Array): TraceSegment {
   if (sha256Json(records) !== root.sha256) throw traceFailure('checksum_mismatch');
 
   const byteLength = typeof input === 'string' ? Buffer.byteLength(input, 'utf8') : input.byteLength;
-  return { runId, firstSequence, lastSequence, records, sha256: root.sha256, byteLength };
+  return { schema: root.schema, runId, firstSequence, lastSequence, records, sha256: root.sha256, byteLength };
 }
 
 function parseSequence(value: StrictJsonValue | undefined, field: 'first_sequence' | 'last_sequence'): bigint {
