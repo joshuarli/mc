@@ -1,6 +1,6 @@
 # Arena Frontier: from a six-bot experiment to competitive worlds
 
-**Status:** resumed 2026-10-14. Active priorities: bot quality and UHC-style duel training (Priority override). Integration branch `campaign/frontier`. Q-trapped, D-ladder, D-rules, and Q-engage are merged. `curriculum-melee` passed live. One `uhc_duel` smoke finished with a winner. The six-seed quality table is still owed. Q-resilience is next, then D-pool and D-skills. `--opponent pool` stays rejected until D-pool. Written against `master` at `f479b16` (2026-10-14). It supersedes the earlier agent campaign plans, which G0 deleted.
+**Status:** resumed 2026-10-14. Active priorities: bot quality and UHC-style duel training (Priority override). Integration branch `campaign/frontier`. Q-trapped, D-ladder, D-rules, Q-engage, and Q-resilience are merged. `curriculum-melee` passed live. One `uhc_duel` smoke finished with a winner. The six-seed quality table is still owed. D-pool is next, then D-skills. `--opponent pool` stays rejected until D-pool. Written against `master` at `f479b16` (2026-10-14). It supersedes the earlier agent campaign plans, which G0 deleted.
 
 ## Priority override (2026-10-14, owner)
 
@@ -41,9 +41,9 @@ Merged means on `campaign/frontier` and verified at least offline. Partial and p
 | State | Items |
 |---|---|
 | Merged and live-verified | G0, G1, G2 (baseline recorded), S1, S2, M0, M1 (melee curriculum), M2 (ranged curriculum), K1 plugin and runner (`checkpoint-resume` live), Q0, Q-loop |
-| Merged, offline only or partly live | R1b (rules sent by the runner; no live run uses a rule mode), S3/S3a, S4–S7, S8/S8b, S9, S10, S11, S13, M3, M3a, L1a, R2, R3, L1, B1, Q1 (v5 set), `steadyMeleeEngagement`, Q-trapped, D-ladder (`./arena duel`; `--opponent pool` rejected), D-rules (`uhc_duel` v1; natural terrain; one live smoke won), Q-engage (led strike; `curriculum-melee` passed, six-seed quality not re-run) |
+| Merged, offline only or partly live | R1b (rules sent by the runner; no live run uses a rule mode), S3/S3a, S4–S7, S8/S8b, S9, S10, S11, S13, M3, M3a, L1a, R2, R3, L1, B1, Q1 (v5 set), `steadyMeleeEngagement`, Q-trapped, D-ladder (`./arena duel`; `--opponent pool` rejected), D-rules (`uhc_duel` v1; natural terrain; one live smoke won), Q-engage (led strike; `curriculum-melee` passed, six-seed quality not re-run), Q-resilience (one quarantined client; `--workers 1` marks the run degraded; `--workers` greater than 1 does not) |
 | Partial / parked | C0 (craft defect), M4 (`curriculum-survival` unrun, calibration unmeasured), R1/R1c (`external-seat` row 1), S12 (seed matrix incomplete), Q1 (live comparison mixed) |
-| Not started | Q-resilience, D-pool, D-skills, D-train, Q2, C1–C5, H-SRV/MECH/RUN/CIV, O1, L2, Z1 |
+| Not started | D-pool, D-skills, D-train, Q2, C1–C5, H-SRV/MECH/RUN/CIV, O1, L2, Z1 |
 
 ## Handoff (paused 2026-10-14, second pause)
 
@@ -58,7 +58,7 @@ Merged means on `campaign/frontier` and verified at least offline. Partial and p
 
 **Known red / open defects.**
 - Melee still ineffective in dynamic fights: `aimNotReady` clusters at 2.9–3.0 blocks eye-to-body (`isCrosshairOnBody` entry-distance test stricter than the reach check, single aim at 0.65 height with no lead), `targetNoLongerVisible` at the cone edge, and the skill never turns toward its intent target. Plan with numbers is in the `engage` lane report: rewrite the strike phase of `#pursueAndStrike` per physics tick with `meleeAimPoint` lead from observed velocity, bounded aim-settle retries, tolerate up to 3 `blocked` ticks only while the cooldown refills, add `EngagementSummary` to funnel records (runner must map it in `makeActionFunnelTraceRecord`), test `engage-dynamic.test.ts` (orbit r=2.4, 0.25 blocks per tick, 1 tick look latency and observation lag, knockback 0.6).
-- A single client window desync kills a whole match (`Mineflayer operation "synchronize window after withdrawing bread" did not settle; this client is quarantined`, seed 481516): quarantine should eliminate/disable that seat and keep the match valid, or retry the sync, not fail the run.
+- A client quarantine with `--workers` greater than 1 still disconnects only that seat and does not fail the worker, but the supervisor result does not receive `degraded` (`d917f87`). The default `--workers 1` path, which quality and league use, records the degradation.
 - v5 travel/probe still produces little distance in some seats (idle 3,000+ ticks); orbit/probe loops need re-measurement after the observed-support fix and S13.
 - `civilization-rules` fails at the sixteen-plank craft (mineflayer `bot.craft` clicks before server ack; fix in `craftCivilizationMaterial`); `civilization-six`/`baseline` never ran.
 - `external-seat` row 1 (surrogate loots/damages/wins) fails with a bare AssertionError; the other 7 rows pass. `curriculum-survival` never ran; calibration constants not measured.
@@ -69,7 +69,7 @@ Merged means on `campaign/frontier` and verified at least offline. Partial and p
 **Not started (in order).**
 1. Q-engage (also the foundation for duels): implement the planned strike-phase rewrite and rerun `curriculum-melee` live, then `./arena quality --scenario scenarios/hunger-six.toml --seeds 481516,481517,481518,481519 --candidate improved --concurrency 2 --accept-minecraft-eula` and compare with baseline (self-inflicted rejection share must drop below 0.05).
 1b. UHC duel track (owner priority, see Priority override): D-rules, D-pool, D-ladder, D-skills, D-train in that order; D-rules and D-ladder can start in parallel with Q-engage on disjoint files.
-2. Client-quarantine resilience (above), export `baselineExplanation` from core, wire `EngagementSummary`. Q-trapped is merged offline (`7707b16`): stationary `navigate` or `approach` whose policy effect failed with `noProgress`, `noPath`, or `timeout` is `trapped:<intent>`, listed as `trapped_ticks` and `max_trapped_span_ticks`, and kept out of the unexplained-idle gate.
+2. Export `baselineExplanation` from core, wire `EngagementSummary`. Q-resilience is merged offline (`d917f87`): one quarantined client is eliminated and, when `--workers` is 1, the run is `degraded`. Q-trapped is merged offline (`7707b16`): stationary `navigate` or `approach` whose policy effect failed with `noProgress`, `noPath`, or `timeout` is `trapped:<intent>`, listed as `trapped_ticks` and `max_trapped_span_ticks`, and kept out of the unexplained-idle gate.
 3. Rerun the improved-vs-baseline comparison on all six seeds and the S12 matrix; then the league on development seeds 500001..500012 (promotion needs mean ≥ 0.65 and lower bound > 0.5; held-out 600001..600024 is unconsumed), then Q2 tuning with the candidate search helper.
 4. Then the earlier backlog: C0 craft fix and C1–C5, hardening, bench matrix (O1), Z1.
 
@@ -493,6 +493,7 @@ Do not spend a research phase rediscovering launchers, server replacements, bot 
 - 2026-10-14 M3: introduced `policy-input-v4`; merge held until the runner migration (R2) landed.
 - 2026-10-14 S7: natural hunger-six moved to scenario schema 3 so the spawn search applies; schema 1/2 stay strict.
 - 2026-10-14 resume: Q-resilience stays behind Q-engage (shared `skills.ts`); D-ladder accepts any two-seat hunger scenario until `uhc_duel` merges; Q-trapped runs beside D-ladder because it only edits seat quality.
+- 2026-10-14 Q-resilience: a Mineflayer error whose message contains `this client is quarantined` retires that seat only. `RunDegradation.worker` and `epoch` are `number | null`; a quarantine row uses null, so result JSON `worker_losses` can contain nulls. It is not a `worker-loss-v1` trace note. `--workers` greater than 1 does not copy that row onto the supervisor result.
 
 ## 12. Campaign log (append-only, one line per phase end or parked item)
 
@@ -507,6 +508,7 @@ Do not spend a research phase rediscovering launchers, server replacements, bot 
 - 2026-10-14 Q-engage merged offline at `54ff3bf` and `cf664c8`. The strike leads one tick and swings after one non-forced look once the crosshair is on the body. `isCrosshairOnBody` is unchanged. Compiled package tests 644/644, bots 126/126, lint clean.
 - 2026-10-14 Q-engage live: the first `curriculum-melee` on that tip failed the 5% admission gate at 3/31, all `targetNoLongerVisible` after a fixed 54-tick pursuit. `e9e04a0` keeps turning through a cone miss while the cooldown refills. `b59a721` gives looking during pursuit back to the pathfinder. The rerun passed: static 22 attacks and 0 rejections, fractional-boundary 11 and 0, 37 server hits, 33 attacks, 0 rejections. The six-seed quality table is not re-run.
 - 2026-10-14 D-rules live smoke: `./arena run --scenario scenarios/uhc-duel.toml` run `5bd6836b-22d1-4978-b63a-d0a5185cfae1` finished with winner seat 0 at match tick 6091, one elimination, zero disconnects. The prepare payload is `uhc_duel` and the scenario id matches `e3f9ef8eed6d0e4036af909e98ab81e6797df74460b5109c8c937e9713279b24`. Statistics recorded `playerKills` 0, so the elimination was not credited as a player kill.
+- 2026-10-14 Q-resilience merged offline at `d917f87`. An injected quarantine eliminates that seat, records `degraded` on the in-process loop, and lets the other seat finish. Policy-loop tests 20/20. Any other action error still fails the run. Not live-checked. `--workers` greater than 1 does not mark the supervisor result degraded.
 
 ## 13. For the owner afterwards
 
