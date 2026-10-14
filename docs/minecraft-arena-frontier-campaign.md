@@ -1,6 +1,6 @@
 # Arena Frontier: from a six-bot experiment to competitive worlds
 
-**Status:** ready to execute unattended. Written against `master` at `f479b16` (2026-10-14). It supersedes `docs/minecraft-arena-agent-campaign.md` and the root `minecraft-arena-agent-campaign.md`; item G0 deletes both.
+**Status:** winding down. Written against `master` at `f479b16` (2026-10-14). It supersedes `docs/minecraft-arena-agent-campaign.md` and the root `minecraft-arena-agent-campaign.md`; item G0 deletes both.
 
 **Goal.** The owner opens an ordinary Minecraft client and plays against capable, fair opponents in a large Hunger Games match, or joins a faction whose economy, construction, reconnaissance and military decisions continue without them. Headless, scripted, no LLM, no paid inference, no GPU, no public listener.
 
