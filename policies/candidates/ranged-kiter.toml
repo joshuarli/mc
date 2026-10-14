@@ -1,0 +1,14 @@
+schema = 1
+candidate = "ranged-kiter"
+version = 1
+
+[parameters]
+eat_at_hunger_or_below = 8
+retreat_at_health_half_hearts_or_below = 9
+border_margin_blocks = 3
+fight_range_blocks = 4
+opponent_memory_ticks = 100
+loot_hysteresis_blocks = 4
+search_radius_blocks = 10
+loot_first_range_blocks = 3
+kite_range_blocks = 3

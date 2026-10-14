@@ -1,5 +1,7 @@
 export { SpecError, SpecErrorKind } from "./errors.js";
 export type { SourceLocation } from "./errors.js";
+export { compileCandidateProfile } from "./candidate.js";
+export type { CandidateProfileIr } from "./candidate.js";
 export { compilePolicy } from "./policy.js";
 export type { PolicyIr } from "./policy.js";
 export { compileMap } from "./map.js";
