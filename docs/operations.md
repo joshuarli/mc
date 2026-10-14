@@ -42,6 +42,8 @@ Progress goes to stderr: run ID, Minecraft version, address, mode, role and seat
 
 `./arena report <segment>...` adds `seat_quality` to its JSON and the per-seat table to stderr.
 
+`./arena decision-diff --run-id <id> --candidate <id> [--baseline <id>] [--seat <n>]` replays the run's recorded observations and memory through two registered candidates (baseline defaults to `baseline`) and lists every decision where they differ, with both goals, intents and reason codes. It reads evidence only and starts no server.
+
 ## Per-seat quality table
 
 Every league match, `quality` run, and `report` derives one row per seat from recorded evidence only: loot actions started and chests opened (a succeeded `containerOpen`), distance travelled (horizontal, summed between consecutive decision observations), idle ticks (consecutive decisions with under one block of movement and no in-place action) split by waiting reason or `no_progress:<intent>`, attacks issued against rejected before issue with the funnel miss reason and a self-inflicted count, damage dealt and taken from `damage` events with the share taken from competitors, time alive, death tick and cause (the last damage cause before the elimination, with the attacker seat when PvP), and decision reason-code counts. The match adds PvP engagements (distinct attacker-victim pairs), PvP hits, and elimination causes.
