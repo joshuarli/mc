@@ -392,7 +392,7 @@ Headless evaluator accounts are ordinary players. Administrative mutations are a
 | Spectator wait | `packages/arena-runner/src/runtime/external-player-gate.ts`, `Makefile` target `server` |
 | Decision loop and dispositions | `packages/arena-runner/src/runtime/live-policy-loop.ts` (`#disposition`) (start, continue, defer, replace; `cleanupPending`, `lowerPriority`, `goalPersistence`, `hysteresis`) |
 | Melee admission | `packages/arena-core/src/combat.ts` (`MELEE_REACH_BLOCKS = 3`, eye to bounding box); `packages/arena-bots/src/skills.ts` `#pursueAndStrike`; `docs/policies.md` fight range 4 versus reach 3 |
-| Seat bounds | `packages/arena-core/src/observation.ts:38` (0–255); six-seat caps listed in S1 |
+| Seat bounds | `packages/arena-core/src/observation.ts:46` (0–255); six-seat caps listed in S1 |
 | Fairness boundary | `docs/fairness.md`, `packages/arena-bots/src/{observer,visibility,perception}.ts` |
 | Search budget | 3 ms of search per bot in a 10 ms window, queue time counted against its deadline (`docs/fairness.md`) |
 | Existing evidence | `tests/fixtures/hunger-six-baseline/`, `tests/fixtures/legal-player-*`, `tests/acceptance/fixtures/hunger-six-seed-4815{16..21}.toml` |
