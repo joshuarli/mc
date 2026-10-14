@@ -73,6 +73,7 @@ function compileDuelScenario(spectatorCapacity: number) {
 
 function compileHungerSixScenario(spectatorCapacity: number) {
   const scenarioSource = readFileSync(join(repositoryRoot, 'scenarios/hunger-six.toml'), 'utf8')
+    .replace('schema = 3', 'schema = 2')
     .replace('spectator_capacity = 4', `spectator_capacity = ${spectatorCapacity}`);
   const mapSource = readFileSync(join(repositoryRoot, 'maps/hunger-six.toml'), 'utf8');
   return compileScenario(scenarioSource, mapSource);

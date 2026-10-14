@@ -54,7 +54,10 @@ test('external seats require hunger games on natural terrain', () => {
 });
 
 test('world plan schema follows the effective roster', () => {
-  const six = compile('hunger-six', 'hunger-six');
+  const six = compileScenario(
+    readFileSync(join(repositoryRoot, 'scenarios/hunger-six.toml'), 'utf8').replace('schema = 3', 'schema = 2'),
+    readFileSync(join(repositoryRoot, 'maps/hunger-six.toml'), 'utf8'),
+  );
   const plain = JSON.parse(encodeScenarioWorldPlan('plan-run', six).toString('utf8'));
   assert.equal(plain.schema, 2);
   const substituted = JSON.parse(encodeScenarioWorldPlan('plan-run',

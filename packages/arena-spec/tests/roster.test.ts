@@ -122,7 +122,7 @@ test("scenario_v1_and_v2_reject_the_generalized_roster", () => {
   assert.equal(v2Seven.path, "scenario.roster.competitors");
 
   const v1External = specError(() => compileScenario(
-    readRepoFile("scenarios/hunger-six.toml").replace("schema = 2", "schema = 1").replace("spectator_capacity = 4\n", external),
+    readRepoFile("scenarios/hunger-six.toml").replace("schema = 3", "schema = 1").replace("spectator_capacity = 4\n", external),
     MAP_V2_SIX,
   ));
   assert.equal(v1External.kind, SpecErrorKind.UnknownField);
