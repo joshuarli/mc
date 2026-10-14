@@ -30,8 +30,11 @@ are positive u64 decimal strings. Each direction maintains its own strictly
 increasing sequence. Gaps are permitted; repeats and lower values fail. A
 response correlation equals the initiating message's sequence.
 
-The plugin's first message is authenticated `hello`, with the `hunger_games_v1`
-capability. The runner acknowledges that sequence, then the plugin sends
+The plugin's first message is authenticated `hello`, advertising its supported
+capabilities. `CONTROL_CAPABILITIES` exposes the runner's closed supported wire
+set, currently `hunger_games_v1` and `civilization_v1`; the capability type and
+codec validation derive from that immutable tuple. A plugin may advertise both
+regardless of the selected match mode. The runner acknowledges that sequence, then the plugin sends
 `ready` with the acknowledgment sequence as its correlation and the Paper,
 Minecraft, protocol, plugin, and capability identities. The runner accepts no
 commands until this handshake completes. The plugin sends a heartbeat every
@@ -39,7 +42,10 @@ second. `ControlReceiver` performs run, sequence, authentication, capability,
 and handshake checks before returning an accepted message to the caller.
 The runtime also requires the announced plugin name and version to match the
 shipped `server/arena-plugin/src/main/resources/plugin.yml` descriptor before
-it prepares the match.
+it prepares the match. The authenticated capability set must include the selected
+mode's capability before either bootstrap readiness or match preparation succeeds;
+this required capability is distinct from the codec's supported wire set. Unknown
+capabilities and a ready capability set differing from hello remain rejected.
 
 The plugin's inbound command queue holds at most 128 `prepare`, `start`, and
 `abort` messages until the server thread drains them. A 129th undrained command

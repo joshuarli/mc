@@ -1,5 +1,6 @@
 import { compilePolicy, MAX_SOURCE_BYTES, SpecError } from '@arena/spec';
 import type { AbortReason, ControlCapability, ControlMessage, OutcomePayload } from '../control/index.js';
+import { CONTROL_CAPABILITIES } from '../control/index.js';
 import { reconstructEventResult } from '../event-report.js';
 import { RunnerError } from '../errors.js';
 import {
@@ -44,6 +45,7 @@ import type { RuntimeServerInputs } from './server.js';
 import { readStoppedPlayerStats } from './observations.js';
 import {
   assertRuntimePluginIdentity,
+  assertRuntimePluginCapability,
   readRuntimePluginIdentity,
   type RuntimePluginIdentity,
 } from './plugin-identity.js';
@@ -59,8 +61,11 @@ import { startOwnedResourceMonitor, type OwnedResourceMonitor, type ResourceMoni
 import type { OperationalFailurePrimaryV1 } from './failure-artifact.js';
 import { TextDecoder } from 'node:util';
 
-function controlCapabilities(mode: PreparedRun['scenario']['mode']): readonly ControlCapability[] {
-  return Object.freeze([mode === 'civilization' ? 'civilization_v1' : 'hunger_games_v1']);
+function requiredControlCapability(mode: PreparedRun['scenario']['mode']): ControlCapability {
+  switch (mode) {
+    case 'hunger_games': return 'hunger_games_v1';
+    case 'civilization': return 'civilization_v1';
+  }
 }
 const SERVER_DIRECTORY = Buffer.from('/server', 'ascii');
 const CLIENT_HOST = '127.0.0.1' as const;
@@ -217,7 +222,7 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
     listener = await bindControlListener({
       runId: options.preparedRun.runId,
       token,
-      capabilities: controlCapabilities(scenario.mode),
+      capabilities: CONTROL_CAPABILITIES,
     });
     serverProcess = await startPaper(options, serverInputs, listener.address.port, token, runSignal);
     resourceMonitor = observeResourceMonitor(await startOwnedResourceMonitor({
@@ -234,6 +239,7 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
     coldStartDeadline.clear();
     await runtimeTrace.recordReady(session.ready);
     assertRuntimePluginIdentity(session.ready, pluginIdentity);
+    assertRuntimePluginCapability(session.ready, requiredControlCapability(scenario.mode));
 
     const outcome = deferred<OutcomePayload>();
     void outcome.promise.catch(() => {});
@@ -703,7 +709,7 @@ async function createBootstrapWorld(options: Readonly<{
   const listener = await bindControlListener({
     runId: options.options.preparedRun.runId,
     token,
-    capabilities: controlCapabilities(options.options.preparedRun.scenario.mode),
+    capabilities: CONTROL_CAPABILITIES,
   });
   let server: OwnedServerProcess | undefined;
   let resourceMonitor: ObservedResourceMonitor | undefined;
@@ -729,6 +735,7 @@ async function createBootstrapWorld(options: Readonly<{
       options.leaseLost,
     );
     assertRuntimePluginIdentity(session.ready, options.pluginIdentity);
+    assertRuntimePluginCapability(session.ready, requiredControlCapability(options.options.preparedRun.scenario.mode));
     await stopResourceMonitor(resourceMonitor);
     resourceMonitor = undefined;
     assertSuccessfulExit(await server.shutdown());

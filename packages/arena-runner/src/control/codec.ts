@@ -5,6 +5,7 @@ import {
   strictJsonNumberToken,
   type StrictJsonValue
 } from "./strict-json.js";
+import { CONTROL_CAPABILITIES } from "./types.js";
 import type {
   AbortReason,
   AuthoritativeTick,
@@ -226,7 +227,7 @@ export class ControlReceiver {
 }
 
 const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
-const CAPABILITIES = new Set<ControlCapability>(["hunger_games_v1", "civilization_v1"]);
+const CAPABILITIES = new Set<ControlCapability>(CONTROL_CAPABILITIES);
 const ABORT_REASONS = new Set<AbortReason>([
   "operator", "lease_lost", "invalid_world", "protocol_error", "runtime_timeout"
 ]);

@@ -4,15 +4,132 @@ import { once } from 'node:events';
 import test from 'node:test';
 import {
   decodeControlFrame,
+  CONTROL_CAPABILITIES,
   encodeControlFrame,
   MAX_CONTROL_FRAME_BYTES,
   type ControlCapability,
 } from '../src/control/index.js';
 import { bindControlListener, ControlSessionError, createControlToken } from '../src/runtime/session.js';
+import { assertRuntimePluginCapability } from '../src/runtime/plugin-identity.js';
+import { RunnerError } from '../src/errors.js';
 
 const RUN_ID = 'runtime-session-test';
 const TOKEN = 'test-token-that-is-never-logged';
 const CAPABILITIES = ['hunger_games_v1'] as const;
+
+test('runtime accepts a dual-capability plugin for either selected match mode', async (t) => {
+  const pluginCapabilities = ['hunger_games_v1', 'civilization_v1'] as const;
+  for (const selectedCapability of pluginCapabilities) {
+    const listener = await bindControlListener({
+      runId: RUN_ID,
+      token: TOKEN,
+      capabilities: CONTROL_CAPABILITIES,
+    });
+    const client = connectTo(listener.address.port);
+    t.after(async () => {
+      client.destroy();
+      await listener.close();
+    });
+    const accepting = listener.accept();
+    const accepted = assert.doesNotReject(accepting);
+    await once(client, 'connect');
+    client.write(Buffer.concat([
+      encodeControlFrame({
+        protocol: 1, run_id: RUN_ID, sequence: 1n, type: 'hello',
+        payload: { token: TOKEN, capabilities: pluginCapabilities },
+      }),
+      encodeControlFrame({
+        protocol: 1, run_id: RUN_ID, sequence: 2n, correlation: 1n, type: 'ready',
+        payload: {
+          server: { name: 'Paper', version: 'test', minecraft_version: 'test', protocol_version: 1 },
+          plugin: { name: 'Arena', version: 'test' },
+          capabilities: pluginCapabilities,
+        },
+      }),
+    ]));
+    await accepted;
+    const session = await accepting;
+    assert.doesNotThrow(() => assertRuntimePluginCapability(session.ready, selectedCapability));
+    assert.ok(session.ready.payload.capabilities.includes(selectedCapability));
+    await session.close();
+  }
+});
+
+test('runtime requires the selected capability from an authenticated single-capability plugin', async (t) => {
+  for (const advertised of CONTROL_CAPABILITIES) {
+    const required = advertised === 'hunger_games_v1' ? 'civilization_v1' : 'hunger_games_v1';
+    const listener = await bindControlListener({ runId: RUN_ID, token: TOKEN, capabilities: CONTROL_CAPABILITIES });
+    const client = connectTo(listener.address.port);
+    t.after(async () => {
+      client.destroy();
+      await listener.close();
+    });
+    const accepting = listener.accept();
+    await once(client, 'connect');
+    client.write(Buffer.concat([
+      encodeControlFrame({
+        protocol: 1, run_id: RUN_ID, sequence: 1n, type: 'hello',
+        payload: { token: TOKEN, capabilities: [advertised] },
+      }),
+      encodeControlFrame({
+        protocol: 1, run_id: RUN_ID, sequence: 2n, correlation: 1n, type: 'ready',
+        payload: {
+          server: { name: 'Paper', version: 'test', minecraft_version: 'test', protocol_version: 1 },
+          plugin: { name: 'Arena', version: 'test' }, capabilities: [advertised],
+        },
+      }),
+    ]));
+    const session = await accepting;
+    assert.doesNotThrow(() => assertRuntimePluginCapability(session.ready, advertised));
+    assert.throws(() => assertRuntimePluginCapability(session.ready, required), (error: unknown) =>
+      error instanceof RunnerError && error.category === 'runtime_failure'
+      && error.source.kind === 'unsupported_capability' && error.source.field === required);
+    await session.close();
+  }
+});
+
+test('full runtime capability support still rejects unknown advertised capabilities', async (t) => {
+  const listener = await bindControlListener({ runId: RUN_ID, token: TOKEN, capabilities: CONTROL_CAPABILITIES });
+  const client = connectTo(listener.address.port);
+  t.after(async () => {
+    client.destroy();
+    await listener.close();
+  });
+  const rejected = assert.rejects(listener.accept(), (error: unknown) =>
+    error instanceof ControlSessionError && error.code === 'unsupported_capability');
+  await once(client, 'connect');
+  client.write(rawFrame(JSON.stringify({
+    protocol: 1, run_id: RUN_ID, sequence: '1', type: 'hello',
+    payload: { token: TOKEN, capabilities: ['hunger_games_v1', 'unrecognized_v1'] },
+  })));
+  await rejected;
+});
+
+test('full runtime capability support still requires ready to repeat the authenticated hello set', async (t) => {
+  const listener = await bindControlListener({ runId: RUN_ID, token: TOKEN, capabilities: CONTROL_CAPABILITIES });
+  const client = connectTo(listener.address.port);
+  t.after(async () => {
+    client.destroy();
+    await listener.close();
+  });
+  const rejected = assert.rejects(listener.accept(), (error: unknown) =>
+    error instanceof ControlSessionError && error.code === 'invalid_handshake');
+  await once(client, 'connect');
+  client.write(Buffer.concat([
+    encodeControlFrame({
+      protocol: 1, run_id: RUN_ID, sequence: 1n, type: 'hello',
+      payload: { token: TOKEN, capabilities: CONTROL_CAPABILITIES },
+    }),
+    encodeControlFrame({
+      protocol: 1, run_id: RUN_ID, sequence: 2n, correlation: 1n, type: 'ready',
+      payload: {
+        server: { name: 'Paper', version: 'test', minecraft_version: 'test', protocol_version: 1 },
+        plugin: { name: 'Arena', version: 'test' }, capabilities: ['hunger_games_v1'],
+      },
+    }),
+  ]));
+  await rejected;
+});
 
 test('runtime control tokens carry 32 random bytes in base64url form', () => {
   const first = createControlToken();

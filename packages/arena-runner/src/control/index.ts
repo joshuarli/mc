@@ -9,6 +9,7 @@ export {
   MAX_CONTROL_FRAME_BYTES
 } from "./codec.js";
 export { parseStrictJson, StrictJsonError } from "./strict-json.js";
+export { CONTROL_CAPABILITIES } from "./types.js";
 export type { ControlCodecErrorCode } from "./codec.js";
 export type { StrictJsonErrorCode, StrictJsonValue } from "./strict-json.js";
 export type {

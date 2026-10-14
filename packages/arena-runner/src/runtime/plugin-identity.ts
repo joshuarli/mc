@@ -1,6 +1,6 @@
 import { RunnerError } from '../errors.js';
 import { MAX_OWNED_READ_BYTES, readOwnedFile } from '../owned-files/index.js';
-import type { ControlMessage } from '../control/index.js';
+import type { ControlCapability, ControlMessage } from '../control/index.js';
 import { TextDecoder } from 'node:util';
 
 const PLUGIN_DESCRIPTOR_PATH = Buffer.from('server/arena-plugin/src/main/resources/plugin.yml', 'ascii');
@@ -67,6 +67,19 @@ export function assertRuntimePluginIdentity(
     throw new RunnerError('runtime_failure', 'Paper plugin identity', {
       kind: 'plugin_identity_mismatch',
       field: 'version',
+    });
+  }
+}
+
+/** Supported wire capabilities do not imply that the authenticated plugin supports this match. */
+export function assertRuntimePluginCapability(
+  ready: Extract<ControlMessage, { readonly type: 'ready' }>,
+  required: ControlCapability,
+): void {
+  if (!ready.payload.capabilities.includes(required)) {
+    throw new RunnerError('runtime_failure', 'Paper plugin capabilities', {
+      kind: 'unsupported_capability',
+      field: required,
     });
   }
 }
