@@ -1,10 +1,80 @@
 # Arena Frontier: from a six-bot experiment to competitive worlds
 
-**Status:** resumed 2026-10-14. Active priorities: bot quality and UHC-style duel training (Priority override). Integration branch `campaign/frontier`. Q-trapped, D-ladder, D-rules, Q-engage, and Q-resilience are merged. `curriculum-melee` passed live. One `uhc_duel` smoke finished with a winner. The six-seed quality table is recorded and fails loot, self-inflicted rejections, and unexplained idle. D-pool is merged offline. D-skills has retreat, eat, and a bow shot on `improved`. One UHC duel finished with no shots and no PvP. One search leg may now fall farther than 4 blocks toward a blocked player. That rerun is in progress. Shield policy, strafe, and fall avoidance are still open. `--opponent pool` plans pool version 1. Written against `master` at `f479b16` (2026-10-14). It supersedes the earlier agent campaign plans, which G0 deleted.
+**Status:** stopped 2026-10-14 at the owner's request. Integration branch `campaign/frontier` at `185bae7`. The live order is Steering order below. The one-leg drop (`7e93161`) is merged offline and was not live-checked. The owner stopped that duel before a match result. That run has no score. Next work, when resumed, is S0, then S1. S3 may run beside them only as a pure `arena-core` module that does not edit `skills.ts`. Seed 260114 stays a navigation and perception red. Its 0.75 score is a match outcome and is excluded from combat-skill qualification. Do not grind that seed with more look or path patches. Written against `master` at `f479b16` (2026-10-14). This document supersedes the earlier agent campaign plans, which G0 deleted.
+
+## Steering order (2026-10-14, owner)
+
+This order replaces the Priority override sequence and the pit-search method in `92a09ea`, `eea8169`, `6accccf`, and `7e93161`. Those commits stay on the branch. Do not extend them, and do not build `frontier-v1` on them. The four-heading sweep (`6a2d5dd`) may stay while every heading is fixed and independent of entity coordinates.
+
+These stay in force: completion gates, world generation, ordinary mechanics, fairness, plugin-owned outcomes, fault tests, civilization, human admission, hunger-24, frontier-war-64, capacity, checkpoint and resume, and delivery. Keep `baseline@1` frozen. Keep historical trace readers. A changed meaning gets a new schema version. Keep an accepted commit that a review snapshot omitted.
+
+On resume the executor runs from S0 through S9 without asking. Competitive-seat tests use a headless surrogate. No owner playtest. No LLM, GPU, or paid cloud. No push. No new runtime dependency. Keep Paper 26.1.2 build 74, protocol 775, Java 25, Node.js 26.11.1, pnpm, TypeScript 7, Mineflayer 4.39.0, and mineflayer-pathfinder 2.4.5. Do not add Azalea, SoulFire, Python, XState, an ECS, GOAP, or a behavior-tree library.
+
+### Evidence that sets this order
+
+- Finished duels on seed 260114 (`./arena duel --scenario scenarios/uhc-duel.toml --candidate improved --opponent baseline --seeds 260114 --rounds 1 --concurrency 1`) scored 0.75. One assignment is a border death. The swap draws at tick 7200. Attacks issued 0. PvP hits 0. Opponent observations 0. The closest recorded approach was about 5.1 blocks horizontal and 20 vertical. Combat qualification uses the S1 layouts. A safe draw on seed 260114 is an acceptable diagnostic result.
+- Six-seed quality on 481516..481521: terminate pass, loot 0.556 (gate 0.75), PvP eliminations 0.655 (gate 0.40), self-inflicted 0.268 (gate 0.05), unexplained idle span 1,288 (gate 600). Improved seats are 16 self-inflicted of 92 issued, 12 of them `ownershipDeferred`, and their longest unexplained span is 108. The 1,288 span is a baseline seat. S0 splits those denominators before any aim change.
+- `decideV5` calls v4 `decide`, then `chooseOverride`. `GOAL_SCORE` is read only inside `explain`. `decideOpeningV5` calls `decideV5`, ignores `OpeningPolicyContext.style`, and copies `context.state` through. Confirm that with a failing end-to-end opening-style regression. Leave frozen `improved` replay inputs unchanged.
+- Pool version 1 names are ahead of the mechanics. `bow-kiter` does not shoot. `shield-user` does not raise a shield. `eatUnderPressure` selects the food stack with the greatest `restores`. With `NATURAL_REGENERATION` false, ordinary food is not a health cure. The observation has no golden-apple id.
+
+### What counts as competence
+
+Four envelopes stay separate. A is a 1v1 UHC duel. B is hunger games at 6 and at 24. C is faction war with logistics. D is hundreds of protocol bots doing the measured workload. Idle connections do not satisfy D.
+
+Report legal PvP opportunities, contact coverage, damage per combat second, healing, survival given an engagement, environmental deaths, resource use, falls, task completion, idle and trapped time, the action-failure taxonomy, and whole-system cost. A policy that avoids every fight fails the duelist check. A policy that rushes and dies fails the survivor check. There is no omniscient scalar reward. When a rule separates combat from environmental wins, publish both measures.
+
+### The next candidate
+
+Add one versioned candidate, `frontier-v1`, in `packages/arena-core`. Freeze `baseline@1` and `improved`. `stepAgent` is pure: no Promise, Mineflayer, clock, global RNG, or filesystem. One step updates belief from the observation, applies safety constraints, scores goal proposals, keeps one task, and emits commands for one skill owner. Use hierarchical tasks, utility arbitration, and small skill state machines. Navigation phases are plan, follow, validate, and recover. Weapon cooldown is a combat phase, not a top-level goal.
+
+One owner per fact. A mode is a discriminated union. Each goal declares eligibility, utility, commitment, success, failure, interruption, and cooldown. The trace stores the proposals and rejections that selected the goal. Lethal damage and an active border escape outrank ordinary scores. A goal holds a lease. An unchanged skill continues across policy ticks. Replan on a material observation, an invalid route, an emergency, or a skill result.
+
+`skills.ts` may forward while a slice moves. It gains no new global heuristic. Split along `skills/navigation`, `skills/combat`, `skills/inventory`, and `skills/civilization` behind the existing adapter when a slice needs that split. Scanning is a client action on a world-independent schedule. `knownLastSeen` is an earlier sighting that passed the cone and the voxel ray. Coordinates of an entity that failed that check do not choose gaze, a step, a path endpoint, or a sweep angle. Do not raise `maxDropDown` so a seat can fall about 20 blocks to force a duel.
+
+`explain` shows the proposals the selector used. `decisionDiff` compares identical legal inputs and does not prove a counterfactual win. On resume, cancel in-flight actions and treat observations as unknown until they arrive again.
+
+The first goal union is `escapeBorder`, `heal`, `loot`, `engage`, and a safe `explore` fallback. Evade is the retreat side of `engage`. Raid, craft, escort, and the other civilization jobs wait until that slice is live. Those jobs reuse this arbitration. They do not get a second state machine.
+
+### S0 through S9
+
+Ids S0 through S9 here are this steering sequence. Section 4 items S1 through S13 are the earlier scenario work. The numbers do not match across the two lists.
+
+Independent offline work may run in disjoint worktrees. Live proofs stay in the order below. Park a blocked item with a reproducer and continue anything that does not depend on it.
+
+| Item | Owns | Delivers and proof |
+|---|---|---|
+| **S0** | RUN | A ledger of this tip against earlier proofs. Reports separate wins and survival from `competitive_exposure` (time both seats could legally perceive or reach each other, attack opportunities, attacks, damage, and death cause). Label each case fixture-invalid, perception failure, policy failure, skill failure, or a valid loss or win. An idle valid game still counts in the game-quality metrics. Funnel stages are attempted, admitted, issued, confirmed, and rejected, and the counts conserve. `ownershipDeferred` is a deferral, not an issued illegal swing. If the 5% gate mixed those denominators, version the metric and keep the old report. Duel reports gain `contact_validity` and `combat_opportunities`. A run with 0 attacks and 0 PvP is `no combat demonstrated`. Proof: fixtures for zero contact, blocked line of sight, unreachable terrain, an illegal issued attack, a strategic deferral, contact with no swing, and contact with confirmed damage. No policy or skill tuning in this item. |
+| **S1** | SRV, then MECH | Keep `scenarios/uhc-duel.toml` (natural 1024) as the transfer diagnostic. Add a small symmetric planned arena: flat ground, optional cover, equal elevation, spawns 10 to 16 blocks apart, walkable, reciprocal line of sight. Schema 3 cannot express that arena, so add the smallest versioned spec and plan extension. Four layouts: clear flat melee, a clear bow lane, symmetric cover, and symmetric elevation on ramps with no unescapable 20-block pit. A layout where an attack is impossible fails arena validation before training. Proof: one legal player-caused damage event in each combat layout, reciprocal interaction on both seat swaps, and a start-to-first-contact distribution. Headless. |
+| **S2** | MECH | `bow-kiter` fires arrows and keeps distance. `shield-user` raises and lowers a shield. `strafer` shows measurable lateral movement. `aggressive-rusher` starts contact. A defender heals with a permitted item. `stationary-dummy` is a diagnostic, not an equal expert. Hunger food, golden apples, absorption, and potion duration stay distinct. A member without a live receipt of its named action is `unqualified` and stays out of promotion scoring, with the reason in the report. Version the pool when a mechanic changes. Proof: client and server receipts, plus a cross-play matrix. A promotion cannot rest on killing a stationary, trapped, or border-stalling opponent. |
+| **S3** | MECH | A short note in `docs/policies.md`. Pure modules under `packages/arena-core/src/`. Belief, scored proposals, one persistent task, recovery, and one tactical state machine. The four goals above, one end-to-end slice at a time. Do not wrap `chooseOverride`. Property checks use the existing test runner. No new property-test dependency. `improved` keeps ignoring opening style. `frontier-v1` diverges on a distinguishing observation. Proof: a registry entry, a replay, and a trace whose scores selected the goal. Frozen baseline output stays byte-identical on historical inputs. This lane does not edit `skills.ts`. |
+| **S4** | MECH | Scanning is its own client action. Local topological memory comes from received terrain. The pathfinder follows a connected path. Recovery replans one edge, steps back, or abandons the goal. An unreachable target 20 blocks below is not a reason to fall. Seed 260114 stays a diagnostic. Proof: a hole with no legal exit, a ramp, water, lava, partial cover, a cliff, a moving border, a visible occluded target, and an unloaded frontier. No lethal fall when an admitted safe alternative exists. |
+| **S5** | MECH | Combat is an owned tick-driven state machine: acquire an admitted target, approach, space, aim, cooldown or draw, swing or release, confirm, recover, shield, eat a golden apple, disengage. Preserve `curriculum-melee`, `curriculum-ranged`, and `curriculum-survival`. Proof: live reciprocal engagements. If the 5% rejection gate still fails, the report names the funnel stage that dominates. |
+| **S6** | MECH, RUN | Three fidelities: pure fixtures, short live microarenas, then natural hunger and faction matches. At most 12 tunables, searched with the existing helper. A quality-diversity archive is optional, adds no dependency, and waits until S0 through S5 have a passing slice. Before adding a heuristic, name the observation it uses, its failure mode, the other goal it can disrupt, the measurement, and the ablation. No score for avoiding contact, waiting on a trapped opponent, or farming `stationary-dummy`. Proof: the ablation and the tie-break, written down before the search. |
+| **S7** | RUN | Compare `baseline@1`, frozen `improved`, and `frontier-v1` on the same scenario and seeds, both seat assignments. A candidate histogram that contains only `delegatedBaselineRules` is void. Hunger development seeds are 500001..500012. Held-out 600001..600024 is consumed once. Duel seeds are a new list, disjoint from 260114. Promote only at mean ≥ 0.65 and a 95% lower bound above 0.5 against a qualified pool, with completion, engagement exposure, and no loot, survival, or legality regression. Proof: `./arena quality`, `./arena league`, and `./arena duel` on those seeds. |
+| **S8** | per the original item | After the S7 foundation, finish open original items. C0, then C1 through C5, on this same arbitration. R1 and R1c with a headless surrogate. Hunger-24, S12, M4, the H items, K1 preservation, benches, and Z1. No human attendance. No claim of expert-human play. |
+| **S9** | INT | Focused suites, the full compiled offline suite, the Java unit, the live cases the items require, and a fresh checkout on a supported host when one is available. The report separates implemented, unit tested, live verified, qualified opponent, promoted candidate, and capacity certified. |
+
+### Regressions that stay red until shown otherwise
+
+- A UHC duel on the S1 arena shows legal PvP. A zero-contact win does not qualify as duel-skill improvement.
+- Opening style on `improved` is characterized. `frontier-v1` rotates style from a client-confirmed cache transfer.
+- `bow-kiter` shoots and `shield-user` blocks, or the report marks them `unqualified`.
+- Low health with full hunger does not treat ordinary food as a golden apple.
+- Hidden opponent coordinates do not drive gaze, a step, pathfinding, or a sweep.
+- Goal persistence, preemption, phase timeout, cancellation, and retry are pure, bounded, and replayable.
+- Two skill completions cannot corrupt a newer task or consume another action's receipt.
+- Scheduling deferrals and illegal issued attacks use different funnel stages.
+- A seat in a hole is not told to take an unsurvivable 20-block drop to force a fight.
+- Pool members used in a promotion have a live receipt of the named action.
+- Civilization conservation and team-private observations hold under `frontier-v1`.
+
+The recorded 260114 duels are the evidence for that seed. Rerunning the same command until a fight appears is not an S0 or S1 step. Do not start S6, or a quality-diversity archive, before S0 through S5 have a passing slice.
 
 ## Priority override (2026-10-14, owner)
 
-Bot quality is the top immediate priority; every other item waits unless it unblocks a Q item. Quality is judged by live full-match numbers and the league, never by offline tests alone.
+**Sequence superseded by Steering order.** The definitions in this section stay. D-train and Q2 run as steering items S6 and S7, against a qualified pool, after S0 through S5. A zero-contact duel score does not meet D-train.
+
+These item definitions were the 2026-10-14 quality sprint. Steering order now decides which of them runs, and when. Quality is judged by live full-match numbers and the league, never by offline tests alone.
 
 | Item | Delivers and proof |
 |---|---|
@@ -36,18 +106,18 @@ Quality gates fixed now are the Hunger-24 gates row in Decisions plus: self-infl
 
 ## Item status (2026-10-14)
 
-Merged means on `campaign/frontier` and verified at least offline. Partial and parked items carry their next step in the Handoff.
+Merged means on `campaign/frontier` and verified at least offline. Partial and parked items carry their next step in the Handoff. The S ids in this table are section 4 scenario items, not the steering sequence S0 through S9.
 
 | State | Items |
 |---|---|
 | Merged and live-verified | G0, G1, G2 (baseline recorded), S1, S2, M0, M1 (melee curriculum), M2 (ranged curriculum), K1 plugin and runner (`checkpoint-resume` live), Q0, Q-loop |
 | Merged, offline only or partly live | R1b (rules sent by the runner; no live run uses a rule mode), S3/S3a, S4–S7, S8/S8b, S9, S10, S11, S13, M3, M3a, L1a, R2, R3, L1, B1, Q1 (v5 set), `steadyMeleeEngagement`, Q-trapped, D-ladder (`./arena duel`), D-pool (pool version 1; `bow-kiter` does not shoot; `shield-user` does not raise a shield), D-skills (`improved` eats under pressure, then disengages with no food; outside melee with arrows it shoots; no shield policy, strafe, or fall avoidance), D-rules (`uhc_duel` v1; natural terrain; one live smoke won), Q-engage (led strike; `curriculum-melee` passed; six-seed quality fails the 5% rejection gate at 0.268), Q-resilience (one quarantined client; `--workers 1` marks the run degraded; `--workers` greater than 1 does not) |
 | Partial / parked | C0 (craft defect), M4 (`curriculum-survival` unrun, calibration unmeasured), R1/R1c (`external-seat` row 1), S12 (seed matrix incomplete), Q1 (live comparison mixed) |
-| Not started | D-skills shield policy, strafe, and fall avoidance; D-train, Q2, C1–C5, H-SRV/MECH/RUN/CIV, O1, L2, Z1 |
+| Not started | S0 through S9 (Steering order). Still open inside that order: a shield raise and strafe that the pool actually performs, fall avoidance that does not drop into the pit, D-train, Q2, C1–C5, H-SRV/MECH/RUN/CIV, O1, L2, Z1 |
 
-## Handoff (paused 2026-10-14, second pause)
+## Handoff (stopped 2026-10-14)
 
-**Resume.** Prompt: `Execute docs/minecraft-arena-frontier-campaign.md: continue the bot-quality sprint (Priority override) from the Handoff "Not started" list on branch campaign/frontier; finish every deliverable; never push.` First commands: `git switch campaign/frontier && ./arena build --package all`. No lane worktrees exist; recreate under `.work/wt/frontier-<lane>` with `git worktree add .work/wt/frontier-<lane> -b campaign/frontier-<lane> campaign/frontier`, then `pnpm install --frozen-lockfile --offline --store-dir <repo>/.work/arena/pnpm-store` and `git checkout pnpm-lock.yaml` (pnpm adds `@pnpm/exe`; never commit it). Lanes that run live need `.work/arena/{toolchains,downloads,gradle}` cloned with `cp -cR`.
+**Resume.** Prompt: `Execute docs/minecraft-arena-frontier-campaign.md from Steering order on branch campaign/frontier. Start at S0, then S1. S3 may run beside them only as a pure arena-core module that does not edit skills.ts. Finish every deliverable. Never push. Do not grind seed 260114. Do not extend the rejected search and drop commits.` First commands: `git switch campaign/frontier && ./arena build --package all`. No lane worktrees exist; recreate under `.work/wt/frontier-<lane>` with `git worktree add .work/wt/frontier-<lane> -b campaign/frontier-<lane> campaign/frontier`, then `pnpm install --frozen-lockfile --offline --store-dir <repo>/.work/arena/pnpm-store` and `git checkout pnpm-lock.yaml` (pnpm adds `@pnpm/exe`; never commit it). Lanes that run live need `.work/arena/{toolchains,downloads,gradle}` cloned with `cp -cR`.
 
 **State.** Branch `campaign/frontier` at the commit that contains this handoff; `master` untouched. Everything from the first pause (see Decision and Campaign logs) plus this sprint is merged: runner wiring of per-seat candidates, `baseline@1` frozen with `improved` (policy-v5) and `decisionDiff`/`explain` introspection, `./arena quality` (ephemeral ports, `--concurrency 1-4`, per-seat quality table, reason histograms, gates), `decision-diff`, seat timelines in `explain`, S8b duplicate-login fix, S9 tick metrics, S10/S11/S13 spawn and cache search with reachability and whole-formation translation (`world-search-v6`), `steadyMeleeEngagement`, observed-support travel targets, feedback-contract fix, combat-arena latency options for tests.
 
@@ -57,7 +127,7 @@ Merged means on `campaign/frontier` and verified at least offline. Partial and p
 - No promotion verdict: league never run live; mean over those matches about 0.5.
 
 **Known red / open defects.**
-- One UHC duel, seed 260114, produced no fight: 0 attacks issued, 0 PvP hits, no `shoot`. Baseline died to the border at tick 6091 after moving 3 blocks; the swapped seats drew at the time limit. `eatUnderPressure` did fire. In the first match, 3,046 decisions recorded no visible opponent. The seats still came within about 9 blocks horizontally while one was 19 blocks lower, outside a level look's vertical cone. Seat 1 failed 412 navigations and stayed in that hole.
+- Every finished UHC duel on seed 260114 produced no fight: 0 attacks issued, 0 PvP hits, no `shoot`. Score mean 0.75 is a border death or a draw. Steering order marks that `no combat demonstrated` and excludes it from combat-skill qualification. Baseline died to the border at tick 6091 after moving a few blocks; the swapped seats drew at tick 7200. `eatUnderPressure` did fire. In the first match, 3,046 decisions recorded no visible opponent. Later reruns still had an empty opponent list. The closest samples were about 5.1 blocks apart horizontally and 20 vertically, near (520, 63, 508) and (525, 43, 509). The upper seat cannot path down under the default 4-block drop. The search, rim, and drop commits aimed a step or a fall at a player the visibility ray had not admitted. That method is rejected. The drop duel was stopped before a match result.
 - Six-seed quality (`improved` on seats 0/2/4, concurrency 2) fails three gates: loot 0.556 (threshold 0.75), self-inflicted rejections 0.268 (threshold 0.05), longest unexplained idle span 1,288 ticks (threshold 600). Improved seats alone are 16/92 self-inflicted (0.174) and their longest unexplained span is 108. The idle-gate failures are baseline seats. Improved attack rejections are mostly `targetNoLongerVisible` (53), which is outside the self-inflicted set; the self-inflicted count is `ownershipDeferred` 12, `blockedLineOfSight` 2, `aimNotReady` 1, and `clientOperationFailed` 1.
 - A client quarantine with `--workers` greater than 1 still disconnects only that seat and does not fail the worker, but the supervisor result does not receive `degraded` (`d917f87`). The default `--workers 1` path, which quality and league use, records the degradation.
 - v5 travel/probe still produces little distance in some seats (idle 3,000+ ticks); orbit/probe loops need re-measurement after the observed-support fix and S13.
@@ -68,21 +138,24 @@ Merged means on `campaign/frontier` and verified at least offline. Partial and p
 **Open lanes.** None; all lane branches merged by cherry-pick and deleted. **Retained worktrees.** None.
 
 **Not started (in order).**
-1. Q-engage (also the foundation for duels): implement the planned strike-phase rewrite and rerun `curriculum-melee` live, then `./arena quality --scenario scenarios/hunger-six.toml --seeds 481516,481517,481518,481519 --candidate improved --concurrency 2 --accept-minecraft-eula` and compare with baseline (self-inflicted rejection share must drop below 0.05).
-1b. UHC duel track (owner priority, see Priority override): D-rules, D-pool, D-ladder, D-skills, D-train in that order; D-rules and D-ladder can start in parallel with Q-engage on disjoint files.
-2. Export `baselineExplanation` from core, wire `EngagementSummary`. Q-resilience is merged offline (`d917f87`): one quarantined client is eliminated and, when `--workers` is 1, the run is `degraded`. Q-trapped is merged offline (`7707b16`): stationary `navigate` or `approach` whose policy effect failed with `noProgress`, `noPath`, or `timeout` is `trapped:<intent>`, listed as `trapped_ticks` and `max_trapped_span_ticks`, and kept out of the unexplained-idle gate.
-3. The six-seed improved-vs-baseline quality table is recorded and fails loot, self-inflicted rejections, and unexplained idle. Remaining: the S12 matrix, then the league on development seeds 500001..500012 (promotion needs mean ≥ 0.65 and lower bound > 0.5; held-out 600001..600024 is unconsumed), then Q2 tuning with the candidate search helper.
-4. Then the earlier backlog: C0 craft fix and C1–C5, hardening, bench matrix (O1), Z1.
+1. S0 evaluation honesty. No behavior tuning. Split the six-seed 5% denominator before treating 0.268 as an aim failure. Mark the finished 260114 duels `no combat demonstrated`.
+2. S1, a symmetric reachable UHC arena. Keep `scenarios/uhc-duel.toml` as the transfer case. Schema 3 needs a versioned extension for a planned flat arena.
+3. S3, beside S0 and S1, only as pure `arena-core`. Four goals. That lane does not edit `skills.ts`.
+4. S2 real pool mechanics, then S4 and S5.
+5. S6 and S7 after a passing slice of S0 through S5. D-train and Q2 live here, against a qualified pool. Do not start a quality-diversity archive first. Do not rerun seed 260114 as a combat gate.
+6. S8, the earlier backlog: C0 craft fix and C1–C5, R1 and R1c with a headless surrogate, hunger-24, S12, M4, hardening, the bench matrix (O1), Z1. Then S9.
+
+Q-engage, D-rules, D-pool, D-ladder, and the eat, retreat, and bow slices of D-skills are merged. See the campaign log. Q-resilience (`d917f87`) and Q-trapped (`7707b16`) are merged offline. `baselineExplanation` is already exported. Duel engagement summaries still omit swings, time in reach, heals, bow shots, bow hits, and first strike. The six-seed table is recorded and fails loot, self-inflicted rejections, and unexplained idle. Held-out 600001..600024 is unconsumed.
 
 **Operational notes.** Quality and league runs use ephemeral ports; acceptance `hunger-six`, lifecycle, faults and external-seat still bind 25565: serialize them with `until mkdir .work/live.lock 2>/dev/null; do sleep 10; done; <cmd>; rmdir .work/live.lock` and wait for the port. `./arena build --package all` does not build the `arena-fs` helper (`make -C native/arena-fs build`). Quality runs print Paper logs only to stderr.
 
 **Owner decisions owed.** None blocking. Logged calls to review: `[rules]` table in scenario 3; squads outcome last-survivor by seat; `hunger-six` on scenario schema 3; v5 ships as candidate `improved`, baseline stays frozen until a league verdict.
 
-**Verified at pause.** No worktrees besides the main checkout, no unmerged campaign branches, no campaign process or live lock, working tree clean, offline suite 631/631, lint clean, Java unit green, build clean on the final tip. Not re-run after the final merges: live `stack`/`legal-player`.
+**Verified at this stop.** Branch `campaign/frontier` at `185bae7`. One worktree, the main checkout. No live lock. The drop duel was stopped before a match result. The 631 and 644 suite counts in the log are earlier tips, not a count of `185bae7`. Not re-run on this tip: the full compiled suite, lint, and live `stack` / `legal-player`.
 
 ## 1. Charter
 
-The executor has this document and the repo. It runs from G0 to the last item without asking anything.
+The executor has this document and the repo. On a resume it runs from Steering order item S0 through S9, then any original item still open, without asking anything. Steering order wins when it conflicts with the Priority override sequence or with section 4.
 
 - **Decide, log, continue.** Make the smallest reversible choice inside the bounds below and append one line to the decision log. Never ask, never wait for approval, send no check-ins. Run until every deliverable is met or every remaining item is parked.
 - **Hard stops** park the item and nothing else: an irreversible action, anything outside the repo and `.work/`, a boundary this document forbids, a loop that cannot check the item. Pushing is always forbidden. Park by committing the item's checkpoint on its branch, writing a reproducer in the campaign log, and moving to the next item that does not depend on it.
@@ -90,7 +163,7 @@ The executor has this document and the repo. It runs from G0 to the last item wi
 - **Cause before fix.** Inspect the first wrong value, not the final timeout (`root-cause`). A bug fix starts with a minimal failing test and keeps it. A live reproduction may be the first test when the defect has no offline form; retain a compact fixture afterwards. Never weaken a test, drop a seed, extend a deadline or redefine success to pass. A test changes only when its contract is wrong, with the reason in the commit body.
 - **Parity before optimization.** Phases P1 and P2 finish every feature and every test. Performance budgets in P1 and P2 are measured and logged, never gating. Item O1 and later are the only optimization work.
 - **Fix on the way** what is egregious, in its own `fix` commit: a warm focused command over 120 s, a same-workload regression over 2× baseline, a baseline-red test that blocks the item. Record anything else and leave it.
-- **Honest labels.** Implemented, behavior verified at N, capacity certified at N, and open limit are four different things. A headless surrogate is not an expert human. Configuration support is not capacity. An action admission rate is not hit accuracy.
+- **Honest labels.** Implemented, unit tested, live verified, qualified opponent, promoted candidate, capacity certified at N, and open limit are different claims. A headless surrogate is not an expert human. Configuration support is not capacity. An action admission rate is not hit accuracy. A match score with zero attacks is no combat demonstrated.
 - **A comparison is valid only if the candidate ran.** Every candidate-versus-baseline report must show the candidate's own reason codes firing in the seat reason histograms and record the commit it ran on. A run whose histograms show only `delegatedBaselineRules` for candidate seats is void. (A runner wiring bug once made "improved" seats decide with baseline; this rule is why it was caught.)
 - **Evidence is stamped.** Every quality, league, duel or bench result names the branch tip it ran on, scenario and seeds, candidate ids and versions, concurrency, and whether the host was shared; concurrent matches are labeled timing-sensitive.
 - **Merging lanes.** Lanes commit on their own branches; the coordinator integrates by `git cherry-pick` of `git cherry campaign/frontier <lane-branch>`, resolves conflicts in favor of keeping both sides, runs `./arena build --package all`, `./arena check lint` and the compiled offline suite, then updates the verify worktree before any live run. Live evidence is never gathered from a tree that is behind the merged tip.
@@ -121,6 +194,7 @@ The executor has this document and the repo. It runs from G0 to the last item wi
 | 2026-10-13 | Host run-count, free-space, aggregate-size, host-memory, RSS and swap admission gates are removed and stay removed. Per-operation parser, frame, queue, search, trace and filesystem bounds stay. |
 | 2026-10-12 | The Minecraft EULA is accepted for local runs; pass `--accept-minecraft-eula`. Shipped software still requires explicit operator acceptance and never defaults to it. Paper downloads use the contact already configured in `./arena`. Homebrew is a permitted fallback for prerequisite tools only; no root, no global runtime-default changes. |
 | 2026-10-13 | pnpm-only packages, Node runtime and tests, TypeScript 7, Oxlint with tsgolint, Effect 4 only at real I/O boundaries (`runPreparedRun`). |
+| 2026-10-14 | Steering order replaces the Priority override sequence and the pit-search method. Seed 260114 is a navigation diagnostic. Its 0.75 score stays a match fact and is excluded from combat-skill qualification. |
 
 ### Prescribed
 
@@ -203,7 +277,7 @@ The executor has this document and the repo. It runs from G0 to the last item wi
 
 ## 4. Sequence
 
-Quality sprint items (Priority override) precede every item below that is not marked merged in Item status. Items are capabilities a lane delivers end to end. A lane takes several in a go. Prerequisites that cross workstreams are written on the item.
+Steering order (S0 through S9) precedes every item below that is not marked merged in Item status. The Priority override sequence no longer sets the order. Items are capabilities a lane delivers end to end. A lane takes several in a go. Prerequisites that cross workstreams are written on the item.
 
 ### Workstreams and ownership
 
@@ -437,13 +511,13 @@ Progress, connection and version information go to stderr; structured results go
 - **Per-agent knowledge.** Visited regions and reachable frontiers; locally seen resources and containers with discovered contents and depletion; last-seen opponents with tick, uncertainty and identity lifetime; known routes, hazards, cover and blocked links; current goal, route, supplies, fallback; personal claims and received faction reports. Unknown stays unknown; stale is not visible. Never feed the server seed, resource map, evaluator census, enemy inventory or global entity list.
 - **Failure memory.** A failed target is suppressed until relevant evidence changes, and a saturated memory triggers recovery: inspect another reachable frontier, backtrack to known safe ground, request a legal team report, or wait with a stated reason. Never teleport, replan omnisciently or retry blindly.
 - **Geometry.** Integer coordinates for block identity and hashing; a validated finite fractional view for position, velocity, orientation and bounding boxes; nonfinite values rejected; encoding and tolerances specified for replay; cross-platform bit identity not promised.
-- **Exploration and goals.** A lazy hierarchical navigation map from each client's permitted world; destinations resolve to observed traversable support. Goals (food, weapon upgrade, safe terrain, cached chest, ammunition, avoiding a stronger group, ambush, pre-border reposition) by utility scoring or a bounded planner with an explicit work budget and known state only. Opening styles are biases, not handicaps; a style name without a distinct verified behavior does not count.
+- **Exploration and goals.** A lazy hierarchical navigation map from each client's permitted world; destinations resolve to observed traversable support. Goals (food, weapon upgrade, safe terrain, cached chest, ammunition, avoiding a stronger group, ambush, pre-border reposition) use utility scoring or a bounded planner with an explicit work budget and known state only. The next candidate is `frontier-v1` (Steering order). Its recorded scores are the scores that selected the goal. `GOAL_SCORE` in `policy-v5.ts` is explanation-only and stays frozen with `improved`. The first goal union is `escapeBorder`, `heal`, `loot`, `engage`, and a safe `explore` fallback. Later jobs reuse that arbitration. Opening styles are biases, not handicaps; a style name without a distinct verified behavior does not count. `decideOpeningV5` ignores `OpeningPolicyContext.style` and copies `context.state` through.
 - **Scenario DSL.** A small composition layer with only consumed features (terrain rules, placement constraints, prefab blueprints, kits, loot tables, rosters, objectives, material and recipe sets), compiled to canonical IR. No embedded evaluation.
 
 ### Fairness
 
 - Visible entities and items inform decisions only through the bot's own receipts and declared line of sight and field of view. Hidden chest contents, buried ore, unseen players, inaccessible health and evaluator state never enter policy inputs. A loaded chunk is collision data, not permission to select hidden ore or containers.
-- Facts learned earlier are remembered with timestamps. A target behind a wall may be searched for, not attacked as visible. Motion prediction uses observed history, never future server positions.
+- Facts learned earlier are remembered with timestamps. `knownLastSeen` is an earlier sighting that passed the cone and the voxel ray. A sweep uses a fixed, world-independent schedule. Coordinates of an entity that failed that check do not choose gaze, a step, a path endpoint, or a sweep angle. Motion prediction uses observed history, never future server positions.
 - Teammates share facts only through authenticated, bounded, versioned messages. No shared inventories. Alliances do not merge knowledge. Message entitlements say exactly what crosses.
 - Spectator omniscience is for viewing and reporting only. A human competitor cannot request an evaluator map.
 
@@ -495,6 +569,7 @@ Do not spend a research phase rediscovering launchers, server replacements, bot 
 - 2026-10-14 S7: natural hunger-six moved to scenario schema 3 so the spawn search applies; schema 1/2 stay strict.
 - 2026-10-14 resume: Q-resilience stays behind Q-engage (shared `skills.ts`); D-ladder accepts any two-seat hunger scenario until `uhc_duel` merges; Q-trapped runs beside D-ladder because it only edits seat quality.
 - 2026-10-14 Q-resilience: a Mineflayer error whose message contains `this client is quarantined` retires that seat only. `RunDegradation.worker` and `epoch` are `number | null`; a quarantine row uses null, so result JSON `worker_losses` can contain nulls. It is not a `worker-loss-v1` trace note. `--workers` greater than 1 does not copy that row onto the supervisor result.
+- 2026-10-14 steering: the owner stopped execution during the drop duel. That run is not a result. Search and drop commits `92a09ea`, `eea8169`, `6accccf`, and `7e93161` stay on the branch and are a rejected method. Seed 260114 score 0.75 is a match fact and is excluded from combat-skill qualification. Next order is S0, then S1. `decideOpeningV5` ignores `OpeningPolicyContext.style` and returns `context.state` unchanged.
 
 ## 12. Campaign log (append-only, one line per phase end or parked item)
 
@@ -525,9 +600,12 @@ Do not spend a research phase rediscovering launchers, server replacements, bot 
 - 2026-10-14 D-sight search live rerun, same command and seed 260114. Score mean 0.75 again: improved won on a border death at tick 6091, and the swap drew at tick 7200. PvP hits 0, attacks issued 0. The first match still had 3,046 decisions and an empty opponent list. Closest samples were 11 blocks apart horizontally and 19 vertically. A failed step to the same block can repeat until the navigation deadline.
 - 2026-10-14 D-sight rim merged offline at `eea8169` and `6accccf`. A blocked step is used only when the block below is solid and the feet and head are empty. If the next block is air, the bot walks to 0.3 blocks in from the current block's near edge, without a path goal, for at most 8 physics ticks. A following look that sees the player ends travel. A nudge or exact step that already failed is not selected again. Melee and pickup do not sweep. The travel-look test and the arrival test passed.
 - 2026-10-14 D-sight rim live rerun, same command and seed 260114. Score mean 0.75 again: improved won on a border death at tick 6091, and the swap drew at tick 7200. PvP hits 0, attacks issued 0. The first match still had 3,046 decisions and an empty opponent list. Closest samples were 5.1 blocks apart horizontally and 20 vertically, at about (520, 63, 508) and (525, 43, 509). The default pathfinder drop is 4 blocks, so the upper seat cannot path down to the trapped seat.
-- 2026-10-14 D-sight drop merged offline at `7e93161`. When a player the current look classifies as blocked is below and the next column is a drop, one travel leg raises `maxDropDown` enough to reach that floor, at most 24, and restores the previous value in `finally`. Parkour, digging, and towers stay off. A failed drop is not repeated. A fully visible player still ends travel. The travel-look test and the arrival test passed. Not live-checked yet.
+- 2026-10-14 D-sight drop merged offline at `7e93161`. When a player the current look classifies as blocked is below and the next column is a drop, one travel leg raises `maxDropDown` enough to reach that floor, at most 24, and restores the previous value in `finally`. Parkour, digging, and towers stay off. A failed drop is not repeated. A fully visible player still ends travel. The travel-look test and the arrival test passed. Not live-checked. The owner stopped the seed-260114 rerun before a match result. Live lock released. Steering order rejects this method. Do not extend it.
+- 2026-10-14 steering order incorporated from `arena_frontier_steering_v2.md`, and that file deleted. Execution stays stopped until the owner says resume. Next work is S0, then S1. S3 may run beside them only as pure `arena-core` that does not edit `skills.ts`.
 
 ## 13. For the owner afterwards
+
+While the campaign is open, resume from the Handoff prompt. The launch line below is for a finished campaign.
 
 - Read `docs/acceptance-report.md`, the league report, the capacity summaries and the list of parked items in the campaign log.
 - Cherry-pick from `campaign/frontier`; nothing is pushed.
