@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import test from 'node:test';
 import { compileMap } from '@arena/spec';
-import { encodeWorldPlanV1, WorldPlanError } from '../src/world-plan.js';
+import { encodeWorldPlan, encodeWorldPlanV1, encodeWorldPlanV2, WorldPlanError } from '../src/world-plan.js';
 
 const repositoryRoot = process.cwd();
 const worldPlanFixture = join(repositoryRoot, 'tests/fixtures/world-plan/world-plan-v1.json');
@@ -28,6 +28,17 @@ operations = [
   { kind = "spawn", seat = 0, position = { x = 512, z = 500 } },
   { kind = "spawn", seat = 1, position = { x = 512, z = 524 } },
   { kind = "loot_container", position = { x = 510, z = 512 }, inventory = ["minecraft:apple"] }
+]
+`;
+
+const worldPlanV2FixtureMap = `
+schema = 2
+name = "fixture"
+terrain = "vanilla"
+dimensions = { width = 1024, depth = 1024 }
+operations = [
+  { kind = "spawn", seat = 0, position = { x = 0, z = 0 } },
+  { kind = "loot_container", position = { x = 2, z = 2 }, inventory = ["minecraft:apple"] }
 ]
 `;
 
@@ -68,4 +79,32 @@ test('world-plan-v1 rejects natural maps instead of inventing surface heights', 
     assert.equal(error.kind, 'unsupported_terrain');
     return true;
   });
+});
+test('world-plan-v2 matches the Java fixture and canonical natural-map semantic ID', async () => {
+  const map = compileMap(worldPlanV2FixtureMap);
+  if (map.terrain !== 'vanilla') assert.fail('natural map required');
+  const encoded = encodeWorldPlanV2('fixture-run', 18_446_744_073_709_551_615n, map);
+  const fixture = JSON.parse(await readFile(join(repositoryRoot, 'tests/fixtures/world-plan/world-plan-v2.json'), 'utf8')) as object;
+
+  assert.equal(map.semanticId, '873116af0230b7c6f7ba3eeb1a999ebc3952d15ab771a77f5da12959ed8d126b');
+  assert.equal(encoded.toString('utf8'), JSON.stringify(fixture));
+});
+
+test('world-plan-v2 dispatch preserves schema 1 and rejects non-u64 seeds', () => {
+  const planned = compileMap(fixtureMap);
+  const natural = compileMap(worldPlanV2FixtureMap);
+  assert.equal(encodeWorldPlan('fixture-run', 4n, planned).toString('utf8'),
+    encodeWorldPlanV1('fixture-run', planned).toString('utf8'));
+  if (natural.terrain !== 'vanilla') assert.fail('natural map required');
+
+  assert.throws(() => encodeWorldPlanV2('fixture-run', 18_446_744_073_709_551_616n, natural),
+    (error: unknown) => error instanceof WorldPlanError && error.kind === 'invalid_world_seed');
+});
+
+test('world-plan-v2 rejects natural footprints outside the fixed world dimensions', () => {
+  const map = compileMap(worldPlanV2FixtureMap.replace('width = 1024, depth = 1024', 'width = 64, depth = 64'));
+  if (map.terrain !== 'vanilla') assert.fail('natural map required');
+
+  assert.throws(() => encodeWorldPlanV2('fixture-run', 4n, map),
+    (error: unknown) => error instanceof WorldPlanError && error.kind === 'invalid_natural_dimensions');
 });

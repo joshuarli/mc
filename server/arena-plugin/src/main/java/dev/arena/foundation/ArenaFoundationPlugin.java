@@ -109,7 +109,9 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
     private final List<MatchController.ResolvedElimination> civilizationCountdownEliminations = new ArrayList<>();
     private final Map<ControlProtocol.FactionId, Boolean> outpostCompletion = new EnumMap<>(ControlProtocol.FactionId.class);
     private StartupMode startupMode;
-    private MapPlan generationPlan;
+    private WorldPlan generationPlan;
+    private List<MapPlan.SpawnPoint> resolvedSpawns = List.of();
+    private List<MapPlan.LootContainer> resolvedLootContainers = List.of();
     private ArenaChunkGenerator chunkGenerator;
     private ControlSession controlSession;
     private String runId;
@@ -183,11 +185,14 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
         if (startupMode != StartupMode.PLAN) {
             throw new IllegalStateException("the arena world generator requires a staged world plan");
         }
+        if (generationPlan instanceof NaturalMapPlan) {
+            return null;
+        }
         if (!PLAN_GENERATOR_ID.equals(id)) {
             throw new IllegalArgumentException("the arena world generator id must be 'plan'");
         }
         if (chunkGenerator == null) {
-            chunkGenerator = new ArenaChunkGenerator(generationPlan);
+            chunkGenerator = new ArenaChunkGenerator(requirePlannedPlan());
         }
         generatorRequested = true;
         return chunkGenerator;
@@ -390,11 +395,16 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
             throw new CommandFailure(ControlProtocol.ErrorCode.INVALID_STATE,
                     "civilization material census requires a civilization match");
         }
+        if (prepare.settings() instanceof ControlProtocol.CivilizationPrepareSettings
+                && !(generationPlan instanceof MapPlan)) {
+            throw new CommandFailure(ControlProtocol.ErrorCode.INVALID_STATE,
+                    "civilization matches require a planned-block world plan");
+        }
         if (!generationPlan.mapSemanticId().equals(prepare.mapSemanticId())) {
             throw new CommandFailure(ControlProtocol.ErrorCode.INVALID_WORLD,
                     "prepare does not identify the staged arena map");
         }
-        if (prepare.roster().size() > generationPlan.spawns().size()) {
+        if (prepare.roster().size() > resolvedSpawns.size()) {
             throw new CommandFailure(ControlProtocol.ErrorCode.INVALID_WORLD,
                     "the staged map has no spawn point for every configured seat");
         }
@@ -412,24 +422,25 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
                     border.finalDiameterBlocks());
             outcomeAuthority = MatchController.OutcomeAuthority.LAST_SURVIVOR;
         } else {
+            MapPlan plannedPlan = requirePlannedPlan();
             ControlProtocol.CivilizationPrepareSettings civilization =
                     (ControlProtocol.CivilizationPrepareSettings) prepare.settings();
             try {
-                CivilizationWorldRules.validateGeometry(civilization.civilization(), generationPlan.dimensions(),
-                        generationPlan.spawns());
+                CivilizationWorldRules.validateGeometry(civilization.civilization(), plannedPlan.dimensions(),
+                        resolvedSpawns);
             } catch (IllegalArgumentException invalidObjectives) {
                 throw new CommandFailure(ControlProtocol.ErrorCode.INVALID_WORLD,
                         "civilization objectives do not fit the staged map", invalidObjectives);
             }
             if (civilizationEvaluatorEnabled) {
-                nextNaturalOakLogPositions = generationPlan.blocks().stream()
+                nextNaturalOakLogPositions = plannedPlan.blocks().stream()
                         .filter(block -> block.material().equals(Material.OAK_LOG.getKey().toString()))
                         .map(MapPlan.BlockPlacement::position)
                         .toList();
                 if (nextNaturalOakLogPositions.isEmpty()) {
                     throw new IllegalStateException("civilization material census requires planned natural oak logs");
                 }
-                nextCivilizationMaterialCensusMapChunks = generationPlan.chunksWithViewHalo(0);
+                nextCivilizationMaterialCensusMapChunks = plannedPlan.chunksWithViewHalo(0);
             }
             borderPolicy = new MatchController.FixedBorder(civilization.border().diameterBlocks());
             outcomeAuthority = MatchController.OutcomeAuthority.EXTERNAL;
@@ -447,7 +458,7 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
             world.setGameRule(GameRule.DO_MOB_SPAWNING, settings.naturalMobs());
             world.setGameRule(GameRule.RANDOM_TICK_SPEED, settings.naturalRandomTicks() ? 3 : 0);
             WorldBorder worldBorder = world.getWorldBorder();
-            MapPlan.Dimensions dimensions = generationPlan.dimensions();
+            WorldPlan.Footprint dimensions = generationPlan.footprint();
             worldBorder.setCenter(dimensions.width() / 2.0, dimensions.depth() / 2.0);
             worldBorder.setSize(prepare.initialBorderDiameterBlocks());
         } catch (IllegalArgumentException invalidWorldSetting) {
@@ -548,10 +559,10 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
 
     private List<MapPlan.SpawnPoint> spectatorSpawns() {
         if (preparedMatch == null) {
-            return generationPlan.spawns();
+            return resolvedSpawns;
         }
         return preparedMatch.roster().stream()
-                .map(bot -> generationPlan.spawns().get(bot.seat()))
+                .map(bot -> resolvedSpawns.get(bot.seat()))
                 .toList();
     }
 
@@ -583,7 +594,7 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
         }
 
         resetInitialSeatState(player);
-        MapPlan.Position spawn = generationPlan.spawns().get(seat).position();
+        MapPlan.Position spawn = resolvedSpawns.get(seat).position();
         if (!player.teleport(new Location(Bukkit.getWorld(ARENA_WORLD), spawn.x() + 0.5, spawn.y(), spawn.z() + 0.5))) {
             throw new IllegalStateException("could not place a competitive bot at its assigned spawn");
         }
@@ -796,7 +807,6 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
         outcomeEmitted = true;
     }
 
-    /** Retains countdown causes until civilization applies those eliminated seats at match tick zero. */
     static List<MatchController.ResolvedElimination> civilizationEliminationBatch(
             List<MatchController.ResolvedElimination> countdown,
             List<MatchController.ResolvedElimination> matchTick) {
@@ -924,7 +934,7 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
         }
 
         List<CivilizationMaterialCensus.ContainerSnapshot> containers = new ArrayList<>();
-        for (MapPlan.LootContainer container : generationPlan.lootContainers()) {
+        for (MapPlan.LootContainer container : resolvedLootContainers) {
             MapPlan.Position position = container.position();
             requireCivilizationMaterialPositionChunkLoaded(world, position);
             Block block = world.getBlockAt(position.x(), position.y(), position.z());
@@ -1191,15 +1201,28 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
 
         int preparedChunks = 0;
         if (startupMode == StartupMode.TEST_FIXTURE) {
-            // The fixture is available only when the runner explicitly selects smoke-test mode.
             createStackSmokeFixture(world);
         } else {
-            if (!generatorRequested) {
-                throw new IllegalStateException(
-                        "the staged world plan is loaded, but Paper did not request the arena generator; "
-                                + "configure world as ArenaFoundation:plan");
+            if (generationPlan instanceof MapPlan plannedPlan) {
+                if (!generatorRequested) {
+                    throw new IllegalStateException(
+                            "the planned world plan is loaded, but Paper did not request the arena generator; "
+                                    + "configure world as ArenaFoundation:plan");
+                }
+                preparedChunks = prepareMapWorld(world, plannedPlan);
+            } else if (generationPlan instanceof NaturalMapPlan naturalPlan) {
+                if (world.getSeed() != naturalPlan.worldSeed().longValue()) {
+                    throw new IllegalStateException("loaded vanilla world seed does not match the staged world plan");
+                }
+                NaturalWorldSetup.PreparedWorld naturalWorld = NaturalWorldSetup.prepare(
+                        naturalPlan, new PaperNaturalWorldAccess(world), world.getViewDistance(),
+                        ArenaChunkGenerator.paperMaterialCatalog());
+                resolvedSpawns = naturalWorld.spawns();
+                resolvedLootContainers = naturalWorld.lootContainers();
+                preparedChunks = naturalWorld.preparedChunkCount();
+            } else {
+                throw new IllegalStateException("staged world plan variant is unsupported");
             }
-            preparedChunks = prepareMapWorld(world);
         }
 
         worldInitialized = true;
@@ -1216,20 +1239,20 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
         getLogger().info("ARENA_READY|protocol=775|port=" + Bukkit.getServer().getPort());
     }
 
-    private int prepareMapWorld(World world) {
-        MapPlan.Dimensions dimensions = generationPlan.dimensions();
+    private int prepareMapWorld(World world, MapPlan plan) {
+        MapPlan.Dimensions dimensions = plan.dimensions();
         if (dimensions.minY() < world.getMinHeight() || dimensions.maxY() >= world.getMaxHeight()) {
             throw new IllegalStateException("world-plan vertical bounds do not fit the arena world's build height");
         }
 
-        List<MapPlan.ChunkPosition> chunks = generationPlan.chunksWithViewHalo(world.getViewDistance());
+        List<MapPlan.ChunkPosition> chunks = plan.chunksWithViewHalo(world.getViewDistance());
         for (MapPlan.ChunkPosition chunk : chunks) {
             world.getChunkAt(chunk.x(), chunk.z());
         }
 
-        validateGeneratedMap(world);
+        validateGeneratedMap(world, plan);
 
-        for (MapPlan.LootContainer container : generationPlan.lootContainers()) {
+        for (MapPlan.LootContainer container : plan.lootContainers()) {
             MapPlan.Position position = container.position();
             Block block = world.getBlockAt(position.x(), position.y(), position.z());
             if (!(block.getState() instanceof Chest chest)) {
@@ -1243,14 +1266,23 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
             }
         }
 
-        MapPlan.Position firstSpawn = generationPlan.spawns().getFirst().position();
-        validateRuntimeSpawns(world);
+        MapPlan.Position firstSpawn = plan.spawns().getFirst().position();
+        validateRuntimeSpawns(world, plan.spawns());
         world.setSpawnLocation(firstSpawn.x(), firstSpawn.y(), firstSpawn.z());
+        resolvedSpawns = plan.spawns();
+        resolvedLootContainers = plan.lootContainers();
         return chunks.size();
     }
 
-    private void validateGeneratedMap(World world) {
-        for (MapPlan.BlockPlacement placement : generationPlan.blocks()) {
+    private MapPlan requirePlannedPlan() {
+        if (generationPlan instanceof MapPlan plannedPlan) {
+            return plannedPlan;
+        }
+        throw new IllegalStateException("the staged world plan does not contain resolved blocks");
+    }
+
+    private void validateGeneratedMap(World world, MapPlan plan) {
+        for (MapPlan.BlockPlacement placement : plan.blocks()) {
             MapPlan.Position position = placement.position();
             Block block = world.getBlockAt(position.x(), position.y(), position.z());
             if (!placement.material().equals(block.getType().getKey().toString())) {
@@ -1260,8 +1292,8 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
         }
     }
 
-    private void validateRuntimeSpawns(World world) {
-        for (MapPlan.SpawnPoint spawn : generationPlan.spawns()) {
+    private void validateRuntimeSpawns(World world, List<MapPlan.SpawnPoint> spawns) {
+        for (MapPlan.SpawnPoint spawn : spawns) {
             MapPlan.Position position = spawn.position();
             Block support = world.getBlockAt(position.x(), position.y() - 1, position.z());
             Block feet = world.getBlockAt(position.x(), position.y(), position.z());
@@ -1279,7 +1311,6 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
         world.setTime(1000);
         world.setStorm(false);
         world.setThundering(false);
-        // Keep fixture clients at the declared spawn; server.properties does not control this world rule.
         world.setGameRule(GameRule.SPAWN_RADIUS, 0);
         world.setSpawnLocation(0, FLOOR_Y + 1, 0);
 
@@ -1482,7 +1513,7 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
                     && location.getBlockY() == FLOOR_Y + 1
                     && location.getBlockZ() == CHEST_Z;
         }
-        for (MapPlan.LootContainer container : generationPlan.lootContainers()) {
+        for (MapPlan.LootContainer container : resolvedLootContainers) {
             MapPlan.Position position = container.position();
             if (position.x() == location.getBlockX()
                     && position.y() == location.getBlockY()

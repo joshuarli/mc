@@ -1,6 +1,7 @@
 package dev.arena.foundation;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import com.google.gson.stream.JsonReader;
@@ -13,16 +14,30 @@ import org.junit.jupiter.api.Test;
 
 final class MapPlanReaderTest {
     private static final Path FIXTURE = Path.of("../../tests/fixtures/world-plan/world-plan-v1.json");
+    private static final Path NATURAL_FIXTURE = Path.of("../../tests/fixtures/world-plan/world-plan-v2.json");
 
     @Test
     void readsTheCrossLanguageWorldPlanFixtureAndChecksItsSemanticId() throws IOException {
-        MapPlan plan = MapPlanReader.read(FIXTURE);
+        MapPlan plan = assertInstanceOf(MapPlan.class, MapPlanReader.read(FIXTURE));
 
         assertEquals("fixture-run", plan.runId());
         assertEquals("94f1cf73fef47c767b574477350ee7ce59f139e4a680464d88f99c1a25b2eedb",
                 plan.mapSemanticId());
         assertEquals(10, plan.blocks().size());
         assertEquals(1, plan.spawns().size());
+        assertEquals(List.of("minecraft:apple"), plan.lootContainers().getFirst().inventory());
+    }
+
+    @Test
+    void readsTheNaturalCrossLanguageFixtureAndChecksItsSemanticIdAndSeed() throws IOException {
+        NaturalMapPlan plan = assertInstanceOf(NaturalMapPlan.class, MapPlanReader.read(NATURAL_FIXTURE));
+
+        assertEquals("fixture-run", plan.runId());
+        assertEquals(java.math.BigInteger.ONE.shiftLeft(64).subtract(java.math.BigInteger.ONE), plan.worldSeed());
+        assertEquals("873116af0230b7c6f7ba3eeb1a999ebc3952d15ab771a77f5da12959ed8d126b",
+                plan.mapSemanticId());
+        assertEquals(1024, plan.footprint().width());
+        assertEquals(new NaturalMapPlan.SurfaceColumn(0, 0), plan.spawns().getFirst().column());
         assertEquals(List.of("minecraft:apple"), plan.lootContainers().getFirst().inventory());
     }
 
@@ -56,12 +71,44 @@ final class MapPlanReaderTest {
     void rejectsUnknownSchemaValuesAndMapIdsThatDoNotMatchContent() throws IOException {
         String fixture = Files.readString(FIXTURE);
 
-        assertThrows(IllegalArgumentException.class,
+        assertThrows(IOException.class,
                 () -> readJson(fixture.replace("\"schema\": 1", "\"schema\": 2")));
         assertThrows(IllegalArgumentException.class,
                 () -> readJson(fixture.replace("\"width\": 4", "\"width\": 2147483649")));
         assertThrows(IllegalArgumentException.class,
                 () -> readJson(fixture.replace("94f1cf73", "00000000")));
+    }
+
+    @Test
+    void rejectsNaturalPlansWithWrongFieldsSeedDimensionsOrBlockContent() throws IOException {
+        String fixture = Files.readString(NATURAL_FIXTURE);
+
+        assertThrows(IOException.class, () -> readJson(fixture.replace("\"schema\":2,", "\"schema\":2,\"extra\":true,")));
+        assertThrows(IOException.class, () -> readJson(fixture.replace("\"world_seed\":\"18446744073709551615\",", "")));
+        assertThrows(IllegalArgumentException.class, () -> readJson(fixture.replace("\"depth\":1024", "\"depth\":1024,\"min_y\":-64")));
+        assertThrows(IOException.class, () -> readJson(fixture.replace("\"world_seed\":\"18446744073709551615\"", "\"world_seed\":\"018446744073709551615\"")));
+        assertThrows(IOException.class, () -> readJson(fixture.replace("\"world_seed\":\"18446744073709551615\"", "\"world_seed\":\"18446744073709551616\"")));
+        assertThrows(IOException.class, () -> readJson(fixture.replace("\"blocks\":[]", "\"blocks\":[{\"position\":{\"x\":0,\"y\":1,\"z\":0},\"block\":\"minecraft:stone\"}]")));
+        assertThrows(IOException.class, () -> readJson(fixture.replace("\"terrain\":\"vanilla\"", "\"terrain\":\"flat\"")));
+        assertThrows(IllegalArgumentException.class, () -> readJson(fixture.replace("\"width\":1024", "\"width\":64")));
+        assertThrows(IOException.class, () -> readJson(fixture.replace("\"column\":{\"x\":0,\"z\":0}", "\"column\":{\"x\":0,\"y\":1,\"z\":0}")));
+        assertThrows(IllegalArgumentException.class,
+                () -> readJson(fixture.replace("873116af", "00000000")));
+    }
+
+    @Test
+    void rejectsNaturalPlansWithNonCanonicalSpawnAndLootOrder() throws IOException {
+        String fixture = Files.readString(NATURAL_FIXTURE);
+        String reversedSpawns = fixture.replace(
+                "\"spawns\":[{\"seat\":0,\"column\":{\"x\":0,\"z\":0}}]",
+                "\"spawns\":[{\"seat\":1,\"column\":{\"x\":3,\"z\":0}},{\"seat\":0,\"column\":{\"x\":0,\"z\":0}}]");
+        String reversedLoot = fixture.replace(
+                "\"loot_containers\":[{\"column\":{\"x\":2,\"z\":2},\"inventory\":[\"minecraft:apple\"]}]",
+                "\"loot_containers\":[{\"column\":{\"x\":2,\"z\":2},\"inventory\":[\"minecraft:apple\"]},"
+                        + "{\"column\":{\"x\":1,\"z\":2},\"inventory\":[\"minecraft:bread\"]}]");
+
+        assertThrows(IOException.class, () -> readJson(reversedSpawns));
+        assertThrows(IOException.class, () -> readJson(reversedLoot));
     }
 
     @Test
@@ -102,7 +149,7 @@ final class MapPlanReaderTest {
         }
     }
 
-    private static MapPlan readJson(String contents) throws IOException {
+    private static WorldPlan readJson(String contents) throws IOException {
         try (JsonReader json = new JsonReader(new StringReader(contents))) {
             json.setLenient(false);
             return MapPlanReader.readJson(json);

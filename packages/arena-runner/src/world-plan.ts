@@ -1,8 +1,9 @@
-import type { MapIr } from '@arena/spec';
+import type { MapIr, NaturalMapIr } from '@arena/spec';
 import { MAX_WORLD_PLAN_BYTES } from './owned-files/index.js';
 import { isValidRunId } from './run-id.js';
 
-const WORLD_PLAN_SCHEMA_VERSION = 1;
+const MAX_U64 = (1n << 64n) - 1n;
+const NATURAL_FOOTPRINT_BLOCKS = 1024;
 
 export type WorldPlanErrorKind =
   | 'invalid_run_id'
@@ -10,6 +11,8 @@ export type WorldPlanErrorKind =
   | 'too_many_spawns'
   | 'spawn_seat_outside_schema'
   | 'noncontiguous_spawn_seats'
+  | 'invalid_world_seed'
+  | 'invalid_natural_dimensions'
   | 'encoded_output_too_large';
 
 export class WorldPlanError extends Error {
@@ -24,7 +27,7 @@ export function encodeWorldPlanV1(runId: string, map: MapIr): Buffer {
   validateSpawnSeats(map);
 
   const writer = new BoundedJsonWriter(MAX_WORLD_PLAN_BYTES);
-  writer.write(`{"schema":${WORLD_PLAN_SCHEMA_VERSION},"run_id":`);
+  writer.write('{"schema":1,"run_id":');
   writer.writeJsonString(runId);
   writer.write(',"map_semantic_id":');
   writer.writeJsonString(map.semanticId);
@@ -70,6 +73,57 @@ export function encodeWorldPlanV1(runId: string, map: MapIr): Buffer {
   return writer.finish();
 }
 
+export function encodeWorldPlanV2(runId: string, worldSeed: bigint, map: NaturalMapIr): Buffer {
+  validateRunId(runId);
+  validateSpawnSeats(map);
+  if (map.dimensions.width !== NATURAL_FOOTPRINT_BLOCKS
+      || map.dimensions.depth !== NATURAL_FOOTPRINT_BLOCKS) {
+    throw new WorldPlanError('invalid_natural_dimensions');
+  }
+  if (worldSeed < 0n || worldSeed > MAX_U64) throw new WorldPlanError('invalid_world_seed');
+
+  const writer = new BoundedJsonWriter(MAX_WORLD_PLAN_BYTES);
+  writer.write('{"schema":2,"run_id":');
+  writer.writeJsonString(runId);
+  writer.write(',"world_seed":');
+  writer.writeJsonString(worldSeed.toString(10));
+  writer.write(',"map_semantic_id":');
+  writer.writeJsonString(map.semanticId);
+  writer.write(',"terrain":"vanilla","dimensions":{"width":');
+  writer.writeNumber(map.dimensions.width);
+  writer.write(',"depth":');
+  writer.writeNumber(map.dimensions.depth);
+  writer.write('},"blocks":[],"spawns":[');
+  for (const [index, spawn] of map.spawns.entries()) {
+    if (index !== 0) writer.write(',');
+    writer.write('{"seat":');
+    writer.writeNumber(spawn.seat);
+    writer.write(',"column":');
+    writeColumn(writer, spawn.column);
+    writer.write('}');
+  }
+  writer.write('],"loot_containers":[');
+  for (const [index, container] of map.lootContainers.entries()) {
+    if (index !== 0) writer.write(',');
+    writer.write('{"column":');
+    writeColumn(writer, container.column);
+    writer.write(',"inventory":[');
+    for (const [itemIndex, item] of container.inventory.entries()) {
+      if (itemIndex !== 0) writer.write(',');
+      writer.writeJsonString(item);
+    }
+    writer.write(']}');
+  }
+  writer.write(']}');
+  return writer.finish();
+}
+
+export function encodeWorldPlan(runId: string, seed: bigint, map: MapIr): Buffer {
+  return map.terrain === 'planned'
+    ? encodeWorldPlanV1(runId, map)
+    : encodeWorldPlanV2(runId, seed, map);
+}
+
 function validateRunId(runId: string): void {
   if (!isValidRunId(runId)) {
     throw new WorldPlanError('invalid_run_id');
@@ -82,6 +136,14 @@ function validateSpawnSeats(map: MapIr): void {
     if (spawn.seat > 5) throw new WorldPlanError('spawn_seat_outside_schema');
     if (spawn.seat !== expected) throw new WorldPlanError('noncontiguous_spawn_seats');
   }
+}
+
+function writeColumn(writer: BoundedJsonWriter, column: { readonly x: number; readonly z: number }): void {
+  writer.write('{"x":');
+  writer.writeNumber(column.x);
+  writer.write(',"z":');
+  writer.writeNumber(column.z);
+  writer.write('}');
 }
 
 function writePosition(writer: BoundedJsonWriter, position: { readonly x: number; readonly y: number; readonly z: number }): void {

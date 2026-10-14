@@ -12,7 +12,7 @@ import {
   OwnedFilesError,
 } from './owned-files/index.js';
 import { RunnerError } from './errors.js';
-import { encodeWorldPlanV1 } from './world-plan.js';
+import { encodeWorldPlan } from './world-plan.js';
 
 const RUN_DIRECTORY_PREFIX = '.work/arena/runs/';
 const WORLD_PLAN_NAME = 'world-plan.json';
@@ -28,7 +28,6 @@ export interface PreparedRun {
   readonly worldPlanIdentity: FileIdentity;
 }
 
-/** Compiles a repository scenario and publishes its world plan into a new run directory. */
 export async function prepareRun(
   helperPath: string,
   ownedRoot: Buffer,
@@ -58,7 +57,7 @@ export async function prepareRun(
 
   let plan: Buffer;
   try {
-    plan = encodeWorldPlanV1(runId, scenario.map);
+    plan = encodeWorldPlan(runId, scenario.seed, scenario.map);
   } catch (error) {
     if (error instanceof Error && 'kind' in error && typeof error.kind === 'string') {
       throw new RunnerError('invalid_input', 'world plan', { kind: error.kind });
@@ -159,7 +158,6 @@ function decodeSource(bytes: Buffer, resource: string): string {
   }
 }
 
-/** Resolves a compiled scenario resource reference against its declaring file. */
 export function resolveScenarioResource(options: Readonly<{
   scenarioPath: Buffer;
   reference: ResourceReference;

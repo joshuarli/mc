@@ -1,35 +1,67 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://arena.invalid/schemas/world-plan-v1.schema.json",
-  "title": "Arena resolved world plan version 1",
-  "type": "object",
-  "additionalProperties": false,
-  "required": ["schema", "run_id", "map_semantic_id", "dimensions", "blocks", "spawns", "loot_containers"],
-  "properties": {
-    "schema": { "const": 1 },
-    "run_id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$" },
-    "map_semantic_id": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
-    "dimensions": { "$ref": "#/$defs/dimensions" },
-    "blocks": {
-      "type": "array",
-      "minItems": 1,
-      "maxItems": 1000000,
-      "items": { "$ref": "#/$defs/block" }
-    },
-    "spawns": {
-      "type": "array",
-      "minItems": 1,
-      "maxItems": 6,
-      "items": { "$ref": "#/$defs/spawn" }
-    },
-    "loot_containers": {
-      "type": "array",
-      "minItems": 1,
-      "maxItems": 100000,
-      "items": { "$ref": "#/$defs/loot_container" }
-    }
-  },
+  "$id": "https://arena.invalid/schemas/world-plan.schema.json",
+  "title": "Arena world plan versions 1 and 2",
+  "oneOf": [
+    { "$ref": "#/$defs/planned" },
+    { "$ref": "#/$defs/natural" }
+  ],
   "$defs": {
+    "planned": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "run_id", "map_semantic_id", "dimensions", "blocks", "spawns", "loot_containers"],
+      "properties": {
+        "schema": { "const": 1 },
+        "run_id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$" },
+        "map_semantic_id": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "dimensions": { "$ref": "#/$defs/planned_dimensions" },
+        "blocks": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1000000,
+          "items": { "$ref": "#/$defs/block" }
+        },
+        "spawns": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 6,
+          "items": { "$ref": "#/$defs/planned_spawn" }
+        },
+        "loot_containers": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 100000,
+          "items": { "$ref": "#/$defs/planned_loot_container" }
+        }
+      }
+    },
+    "natural": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "run_id", "world_seed", "map_semantic_id", "terrain", "dimensions", "blocks", "spawns", "loot_containers"],
+      "properties": {
+        "schema": { "const": 2 },
+        "run_id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$" },
+        "world_seed": { "type": "string", "maxLength": 20, "pattern": "^(0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-4][0-9]{0}|18446744073709551615)$" },
+        "map_semantic_id": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "terrain": { "const": "vanilla" },
+        "dimensions": { "$ref": "#/$defs/natural_dimensions" },
+        "blocks": { "type": "array", "maxItems": 0 },
+        "spawns": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 6,
+          "items": { "$ref": "#/$defs/natural_spawn" }
+        },
+        "loot_containers": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 100000,
+          "items": { "$ref": "#/$defs/natural_loot_container" }
+        }
+      }
+    },
     "position": {
       "type": "object",
       "additionalProperties": false,
@@ -40,11 +72,20 @@
         "z": { "type": "integer", "minimum": 0, "maximum": 2147483647 }
       }
     },
+    "column": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "z"],
+      "properties": {
+        "x": { "type": "integer", "minimum": 0, "maximum": 2147483647 },
+        "z": { "type": "integer", "minimum": 0, "maximum": 2147483647 }
+      }
+    },
     "resource_id": {
       "type": "string",
       "pattern": "^[a-z0-9_.-]+:[a-z0-9_.-]+(/[a-z0-9_.-]+)*$"
     },
-    "dimensions": {
+    "planned_dimensions": {
       "type": "object",
       "additionalProperties": false,
       "required": ["width", "depth", "min_y", "max_y"],
@@ -53,6 +94,15 @@
         "depth": { "type": "integer", "minimum": 1, "maximum": 2147483648 },
         "min_y": { "type": "integer", "minimum": -2147483648, "maximum": 2147483647 },
         "max_y": { "type": "integer", "minimum": -2147483648, "maximum": 2147483647 }
+      }
+    },
+    "natural_dimensions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["width", "depth"],
+      "properties": {
+        "width": { "const": 1024 },
+        "depth": { "const": 1024 }
       }
     },
     "block": {
@@ -64,7 +114,7 @@
         "block": { "$ref": "#/$defs/resource_id" }
       }
     },
-    "spawn": {
+    "planned_spawn": {
       "type": "object",
       "additionalProperties": false,
       "required": ["seat", "position"],
@@ -73,19 +123,38 @@
         "position": { "$ref": "#/$defs/position" }
       }
     },
-    "loot_container": {
+    "natural_spawn": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["seat", "column"],
+      "properties": {
+        "seat": { "type": "integer", "minimum": 0, "maximum": 5 },
+        "column": { "$ref": "#/$defs/column" }
+      }
+    },
+    "planned_loot_container": {
       "type": "object",
       "additionalProperties": false,
       "required": ["position", "inventory"],
       "properties": {
         "position": { "$ref": "#/$defs/position" },
-        "inventory": {
-          "type": "array",
-          "minItems": 1,
-          "maxItems": 27,
-          "items": { "$ref": "#/$defs/resource_id" }
-        }
+        "inventory": { "$ref": "#/$defs/inventory" }
       }
+    },
+    "natural_loot_container": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["column", "inventory"],
+      "properties": {
+        "column": { "$ref": "#/$defs/column" },
+        "inventory": { "$ref": "#/$defs/inventory" }
+      }
+    },
+    "inventory": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 27,
+      "items": { "$ref": "#/$defs/resource_id" }
     }
   }
 }

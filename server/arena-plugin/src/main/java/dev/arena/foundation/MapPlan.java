@@ -13,13 +13,13 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
 
-/** Immutable resolved map content shared by chunk workers and server-thread setup. */
-final class MapPlan {
+final class MapPlan extends WorldPlan {
     static final int SCHEMA_VERSION = 1;
     static final int MAX_BLOCK_PLACEMENTS = 1_000_000;
     static final int MAX_LOOT_CONTAINERS = 100_000;
+    static final int MAX_SPAWNS = 6;
     static final int MAX_PREPARED_CHUNKS = 8_192;
-    private static final int MAX_CHEST_ITEMS = 27;
+    static final int MAX_CHEST_ITEMS = 27;
 
     record Position(int x, int y, int z) {}
 
@@ -106,7 +106,7 @@ final class MapPlan {
         requireSemanticId(mapSemanticId, "map");
         if (dimensions == null || blocks == null || spawns == null || lootContainers == null
                 || blocks.isEmpty() || blocks.size() > MAX_BLOCK_PLACEMENTS
-                || spawns.isEmpty() || spawns.size() > 6
+                || spawns.isEmpty() || spawns.size() > MAX_SPAWNS
                 || lootContainers.isEmpty() || lootContainers.size() > MAX_LOOT_CONTAINERS) {
             throw new IllegalArgumentException("map plan is missing bounded resolved world content");
         }
@@ -125,16 +125,23 @@ final class MapPlan {
         }
     }
 
+    @Override
     String runId() {
         return runId;
     }
 
+    @Override
     String mapSemanticId() {
         return mapSemanticId;
     }
 
     Dimensions dimensions() {
         return dimensions;
+    }
+
+    @Override
+    WorldPlan.Footprint footprint() {
+        return new WorldPlan.Footprint(dimensions.width(), dimensions.depth());
     }
 
     List<BlockPlacement> blocks() {

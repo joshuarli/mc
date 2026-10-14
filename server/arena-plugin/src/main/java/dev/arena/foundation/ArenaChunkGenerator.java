@@ -15,12 +15,7 @@ import org.bukkit.generator.BlockPopulator;
 import org.bukkit.generator.ChunkGenerator;
 import org.bukkit.generator.WorldInfo;
 
-/** Generates resolved map blocks from immutable data without querying or mutating other chunks. */
 final class ArenaChunkGenerator extends ChunkGenerator {
-    /**
-     * Paper resolves material kind information through its initialized registries. Keeping those facts
-     * behind this boundary lets offline tests use deterministic material properties.
-     */
     interface MaterialCatalog {
         boolean isBlock(Material material);
 
@@ -172,7 +167,7 @@ final class ArenaChunkGenerator extends ChunkGenerator {
         return material;
     }
 
-    private static Material requireItemMaterial(String resourceId, MaterialCatalog materials) {
+    static Material requireItemMaterial(String resourceId, MaterialCatalog materials) {
         Material material = requireMinecraftMaterial(resourceId);
         if (!materials.isItem(material)) {
             throw new IllegalArgumentException("loot id is not an obtainable Minecraft item: " + resourceId);
@@ -182,6 +177,10 @@ final class ArenaChunkGenerator extends ChunkGenerator {
 
     static Material requireItemMaterial(String resourceId) {
         return requireItemMaterial(resourceId, PAPER_MATERIALS);
+    }
+
+    static MaterialCatalog paperMaterialCatalog() {
+        return PAPER_MATERIALS;
     }
 
     static boolean isSafeSpawnSupport(Material material) {

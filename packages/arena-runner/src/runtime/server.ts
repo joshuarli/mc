@@ -21,7 +21,6 @@ export interface RuntimeServerInputs {
   readonly signal?: AbortSignal;
 }
 
-/** Reads the pinned plugin artifact through the helper's confined read operation. */
 export async function readRuntimePluginJar(options: RuntimeServerInputs): Promise<Buffer> {
   const relativePath = repositoryRelativePath(options.ownedRoot, options.pluginJarPath);
   try {
@@ -37,7 +36,6 @@ export async function readRuntimePluginJar(options: RuntimeServerInputs): Promis
   }
 }
 
-/** Creates the private per-server directory and stages all small mutable inputs via the helper. */
 export async function stageServerDirectory(options: Readonly<{
   inputs: RuntimeServerInputs;
   scenario: ScenarioIr;
@@ -71,14 +69,16 @@ export async function stageServerDirectory(options: Readonly<{
       maxBytes: 16 * 1024,
       ...(signal === undefined ? {} : { signal }),
     });
-    await stageOwnedFile({
-      helperPath: inputs.helperPath,
-      ownedRoot: inputs.ownedRoot,
-      relativePath: Buffer.concat([serverPath, BUKKIT_PROPERTIES_PATH]),
-      contents: Buffer.from('worlds:\n  world:\n    generator: ArenaFoundation:plan\n', 'ascii'),
-      maxBytes: 1024,
-      ...(signal === undefined ? {} : { signal }),
-    });
+    if (scenario.map.terrain === 'planned') {
+      await stageOwnedFile({
+        helperPath: inputs.helperPath,
+        ownedRoot: inputs.ownedRoot,
+        relativePath: Buffer.concat([serverPath, BUKKIT_PROPERTIES_PATH]),
+        contents: Buffer.from('worlds:\n  world:\n    generator: ArenaFoundation:plan\n', 'ascii'),
+        maxBytes: 1024,
+        ...(signal === undefined ? {} : { signal }),
+      });
+    }
     await stageOwnedFile({
       helperPath: inputs.helperPath,
       ownedRoot: inputs.ownedRoot,
@@ -153,6 +153,9 @@ function serverProperties(scenario: ScenarioIr): Buffer {
     `max-players=${maxPlayers}`,
     `view-distance=${scenario.server.viewDistanceChunks}`,
     `simulation-distance=${scenario.server.simulationDistanceChunks}`,
+    ...(scenario.map.terrain === 'vanilla'
+      ? [`level-seed=${BigInt.asIntN(64, scenario.seed).toString(10)}`]
+      : []),
     'level-name=world',
     'level-type=minecraft:normal',
     'generate-structures=false',
