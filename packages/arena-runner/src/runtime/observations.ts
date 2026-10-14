@@ -27,7 +27,6 @@ export type StoppedPlayerStatsFile =
       contents: null;
     }>;
 
-/** Reads Minecraft statistics through the owned-files helper after the server has stopped. */
 export async function readStoppedPlayerStats(options: Readonly<{
   helperPath: string;
   ownedRoot: Buffer;
@@ -49,7 +48,6 @@ export async function readStoppedPlayerStats(options: Readonly<{
   return Object.freeze(results);
 }
 
-/** Reads and validates one stopped stats file while retaining its exact bytes for archival. */
 export async function readStoppedPlayerStatsFile(options: Readonly<{
   helperPath: string;
   ownedRoot: Buffer;

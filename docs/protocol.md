@@ -70,10 +70,8 @@ under `fixtures/protocol/control-*.json`.
   `lease_lost`, `invalid_world`, `protocol_error`, or `runtime_timeout`.
 - `build_progress` reports only its stage and bounded completed/total counts.
   `prepare` carries `map_semantic_id`, `scenario_semantic_id`, `seed`, `mode`,
-  `settings`, and `roster`. P0 accepts `mode: "hunger_games"`. Its `settings`
-  contain the resolved scenario `match` and `border` fields with their source
-  names and no Java-side defaults. Civilization settings are unsupported until
-  their schema and values are defined.
+  `settings`, and `roster`. Hunger Games settings contain the resolved scenario
+  `match` and `border` fields. Civilization settings are defined below.
 - Every roster entry is a fixed bot identity with `kind`, `seat`,
   `participant_id`, `username`, and `offline_uuid`. Seats are ordered,
   contiguous, and bounded to zero through five. Non-roster players are

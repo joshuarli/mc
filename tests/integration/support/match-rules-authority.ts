@@ -15,7 +15,6 @@ export interface ExpectedMatchStatistics {
 type AcceptanceRun = Awaited<ReturnType<typeof runOwnedAcceptanceScenario>>;
 type AcceptanceInspection = Awaited<ReturnType<typeof inspectOwnedAcceptanceRun>>;
 
-/** Checks terminal authority events and the independently reconstructed stopped-run report. */
 export function assertCompletedMatchOutcome(
   run: AcceptanceRun,
   expected: OutcomePayload,

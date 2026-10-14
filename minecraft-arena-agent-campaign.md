@@ -1,5 +1,7 @@
 # Arena: unattended Minecraft implementation campaign
 
+> Superseded by the [current campaign plan](docs/minecraft-arena-agent-campaign.md). This draft remains as a record.
+
 **Status: not ready under the live-foundation proof requirement; execution decisions and owner prerequisites are closed.** EULA acceptance, download contact, and Brew authorization are supplied. The exact Paper/Azalea stack and per-client observation isolation still need the live proofs in P0. The executor can start F0 unattended; unproven foundations and blocked proofs never count as passes.
 
 **Goal:** one command starts a real local six-competitor Minecraft world with independently controlled headless bots, plus a small resource-producing two-faction scenario. Scripted policies need no LLM, API key, GPU, graphical bot process, or paid bot accounts. Hundreds of active players and expert-human skill remain measured future objectives.

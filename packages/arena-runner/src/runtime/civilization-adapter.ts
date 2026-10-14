@@ -24,7 +24,6 @@ export function createCivilizationRuntimeGameplayAdapter(
 
   const rules = scenario.civilization;
   const anchor = rules.blueprint.anchors[profile.faction];
-  // Keep raw input for the client's strict validator; the validated context adds a private own symbol.
   const contextInput: CivilizationPolicyContextInput = {
     ...profile,
     objective: {

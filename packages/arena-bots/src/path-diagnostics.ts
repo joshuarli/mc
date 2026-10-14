@@ -430,7 +430,6 @@ export class PathDiagnosticRing {
   }
 }
 
-/** Records skill-owner and search-admission transitions when a test has attached a ring. */
 export function recordPathDiagnostic(bot: Bot, event: InternalPathDiagnostic): void {
   const ring = ringsByBot.get(bot);
   if (ring === undefined) return;

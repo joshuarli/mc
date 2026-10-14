@@ -19,8 +19,7 @@ requested run directory with mode `0700`, and syncs each changed directory.
 It returns the created directory's device and inode. On failure, it removes
 directories created by that call in reverse order when their type and identity
 still match. Creating an immediate run directory under `.work/arena/runs`
-serializes against other owned-run creators and removals, and the helper caps
-that directory at 10 real run directories.
+serializes against other owned-run creators and removals.
 An ID is reserved while any entry at `.work/arena/traces/<run-id>` exists,
 including a partial archive. The helper checks this before creating missing run
 parents and again while holding the runs-directory lock.

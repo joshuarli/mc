@@ -12,7 +12,6 @@ export interface RuntimePluginIdentity {
   readonly version: string;
 }
 
-/** Reads the expected plugin identity from the descriptor that is packaged into the Paper artifact. */
 export async function readRuntimePluginIdentity(options: Readonly<{
   helperPath: string;
   ownedRoot: Buffer;
@@ -71,7 +70,6 @@ export function assertRuntimePluginIdentity(
   }
 }
 
-/** Supported wire capabilities do not imply that the authenticated plugin supports this match. */
 export function assertRuntimePluginCapability(
   ready: Extract<ControlMessage, { readonly type: 'ready' }>,
   required: ControlCapability,

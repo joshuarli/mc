@@ -13,7 +13,6 @@ import type { ScenarioIr } from '@arena/spec';
 
 const templateBuilds = new Map<string, Promise<void>>();
 
-/** Clones an immutable generated world into a fresh owned server directory. */
 export async function clonePristineWorld(options: Readonly<{
   helperPath: string;
   ownedRoot: Buffer;

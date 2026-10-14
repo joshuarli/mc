@@ -34,7 +34,6 @@ export interface CivilizationCombatEngagement {
   readonly victimSeat: number;
 }
 
-/** Requires both fixed factions to complete the same real-material action chain. */
 export function assertBothFactionsCompletedMaterialChain(
   actions: readonly CivilizationActionEvidence[],
   layout: CivilizationActionLayout,
@@ -57,7 +56,6 @@ export function assertBothFactionsCompletedMaterialChain(
   assertFactionMaterialChain(actions, "tide", layout.tide);
 }
 
-/** Checks client-observed hit receipts against the fixed faction roster. */
 export function assertCrossFactionCombat(engagements: readonly CivilizationCombatEngagement[]): void {
   if (engagements.length === 0) throw new Error("civilization combat requires an observed player hit");
   let crossFactionHit = false;
@@ -72,7 +70,6 @@ export function assertCrossFactionCombat(engagements: readonly CivilizationComba
   if (!crossFactionHit) throw new Error("civilization combat requires an opposing-faction hit");
 }
 
-/** Requires the configured gatherer, builder, and defender on each faction to contribute. */
 export function assertCivilizationRoleContributions(
   actions: readonly CivilizationActionEvidence[],
   factions: readonly CivilizationFactionIr[],

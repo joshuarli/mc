@@ -1,12 +1,28 @@
-# Arena working rules
+# Arena
 
-- Keep `packages/arena-core` free of runtime, network, filesystem, and server dependencies. `packages/arena-spec` may depend on core; `packages/arena-bots` may depend on core, Mineflayer, and `mineflayer-pathfinder`; `packages/arena-runner` owns process and filesystem effects.
-- Keep competitors and automated spectators headless. The owner may connect an external native Minecraft client as a spectator; do not add human competitors, GUI, renderer, or protocol-bridge work.
-- Keep the Paper plugin as the sole match and outcome authority. TypeScript clients consume only their own Mineflayer observations plus explicitly permitted team messages.
-- Treat `versions.lock.toml` as the Paper, Node.js, Java, and Gradle version authority. Keep `pnpm-lock.yaml`, Gradle verification metadata, and tool versions aligned with it.
-- Keep pnpm caches, generated output, toolchains, server files, test worlds, and temporary files under `.work/`; `.work/` is excluded locally. Keep `TMPDIR` under `.work/tmp`.
-- Use Node.js 26.8.2 and the pnpm workspace lockfile.
-- Install with `pnpm install --frozen-lockfile`; run `./arena check lint`, `./arena build --package all`, and named `./arena test` cases.
-- Do not bind a Minecraft server outside loopback. Bot identities are offline and non-operator.
-- Never set shipped EULA acceptance by default. Local campaign smoke runs may write explicit acceptance in their disposable world directory.
-- Reject unsupported schema versions and unknown fields. Keep code comments self-contained.
+Arena is a headless Minecraft competition stack. Build with `./arena build --package all`, test one named case with `./arena test --suite <suite> --case <case>`, and check with `./arena check lint`.
+
+## Invariants
+
+- `packages/arena-core` has no runtime, network, filesystem, or server dependencies; `arena-spec` may depend on core, `arena-bots` may depend on core and Mineflayer, and `arena-runner` owns process and filesystem effects.
+- Keep competitors and automated spectators headless; an external native client may spectate, and Arena adds no human competitors, GUI, renderer, or protocol bridge.
+- The Paper plugin owns match state and outcomes; bots use only their own Mineflayer observations and permitted team messages.
+- Use the Node.js and pnpm versions in [compatibility](docs/compatibility.md); `versions.lock.toml` owns Paper, Minecraft, Node.js, Java, and Gradle versions, and `pnpm-lock.yaml` owns workspace package versions.
+- Keep caches, toolchains, generated output, server files, test worlds, and temporary files under `.work/`; set `TMPDIR` to `.work/tmp`.
+- Bind Minecraft servers to loopback; bot identities are offline and non-operator.
+- Shipped runs do not accept the Minecraft EULA by default; local runs require explicit operator acceptance.
+- Reject unsupported schema versions and unknown fields at input boundaries.
+
+## Topics
+
+- End-user setup and matches: [README](README.md).
+- Toolchain and Minecraft compatibility: [compatibility](docs/compatibility.md).
+- Scenarios, maps, and policy configuration: [scenarios](docs/scenarios.md).
+- Match and world rules: [rules](docs/rules.md).
+- Control wire format: [protocol](docs/protocol.md).
+- Policy behavior and client fairness: [policies](docs/policies.md), [fairness](docs/fairness.md).
+- Runner lifecycle and commands: [runtime](docs/runtime.md), [operations](docs/operations.md).
+- Owned files and path safety: [filesystem](docs/filesystem.md).
+- Trace formats, replay, and reports: [determinism](docs/determinism.md).
+- Current verification status: [acceptance report](docs/acceptance-report.md), [civilization acceptance](docs/civilization-acceptance.md).
+- Campaign instructions and decisions: [campaign plan](docs/minecraft-arena-agent-campaign.md).

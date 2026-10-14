@@ -1,45 +1,44 @@
 # Arena
 
-Arena is a headless Minecraft competition stack. Mineflayer bots compete; an external native Minecraft client may join as a spectator. The Paper plugin owns authoritative world and match rules. Toolchain versions are pinned in [`versions.lock.toml`](versions.lock.toml), while package versions are pinned in the npm manifests and lockfile. See [compatibility](docs/compatibility.md) for the full matrix.
+Arena runs Minecraft competitions with headless Mineflayer bots and an authoritative Paper server. A native Minecraft client can join as a spectator.
 
-The TypeScript runner supports configured Paper runs, scenario preparation, stopped-run inspection and cleanup, and trace inspection, policy replay, reporting, and comparison. Runtime lifecycle and authority behavior have focused live proofs; full gameplay acceptance remains in progress.
+## Install
 
-## Set up and check
+Install Node.js 26.8.2 and pnpm 12.13.0. From the repository root, install the workspace and check the launcher:
 
 ```sh
+pnpm install --frozen-lockfile
 ./arena bootstrap
-./arena build --package spec
-./arena test --suite spec --case scenario_v1_compiles_hunger_six_and_duel
-./arena test --suite integration --case stack
-./arena test --suite java --case unit
-./arena check compatibility
-./arena check build-script
 ```
 
-`bootstrap` installs the pinned Node.js, npm, and package workspace. `build` accepts `core`, `spec`, `bots`, `control`, `owned-files`, `runtime`, `runner`, or `all`. Tests select one exact registered case by suite and name. The `stack` case starts the pinned Paper fixture and exercises two Mineflayer clients; Java unit tests use the pinned JDK and Gradle wrapper.
+The first live run downloads the pinned JDK and Paper server and builds the plugin. See [`versions.lock.toml`](versions.lock.toml) for the toolchain and Minecraft version.
 
-## Implemented commands
+## Run a match
 
-Use `./arena help` for launcher syntax. The implemented runner commands are:
+After accepting the Minecraft EULA, start the six-bot Hunger Games scenario:
 
 ```sh
-./arena doctor
-./arena prepare --scenario scenarios/hunger-six.toml --run-id smoke-001
-./arena inspect tests/fixtures/replay-report-v2/segment-0001.json
-./arena report tests/fixtures/replay-report-v2/segment-0002.json tests/fixtures/replay-report-v2/segment-0001.json
-./arena compare tests/fixtures/replay-report-v2/segment-0001.json tests/fixtures/replay-report-v2/segment-0001-other-run.json
+./arena run --scenario scenarios/hunger-six.toml --accept-minecraft-eula
 ```
 
-`prepare` compiles a scenario and stages its world plan. `inspect` and `report` read complete trace segments; `compare` checks two single-segment streams. These evidence commands do not start Paper or run a match. See [runner operations](docs/operations.md) for input and output details.
+The runner prints progress and the connection address to stderr. After the match stops, stdout contains a JSON result with the run ID, created paths, trace segments, outcome report, and player statistics. Use the printed run ID with `./arena inspect --run-id <id>` to inspect a stopped run.
 
-## Watch a local match
+Scenario files in [`scenarios/`](scenarios/) select the map and policy. Validate a scenario without starting Paper:
 
-Run `make server` from the repository. Explicit EULA acceptance is required: use `make server ACCEPT_MINECRAFT_EULA=1`, or set `ACCEPT_MINECRAFT_EULA := 1` in the ignored `.work/arena/server.mk` after accepting the Minecraft EULA. No acceptance is shipped by default.
+```sh
+./arena validate --scenario scenarios/hunger-six.toml
+```
 
-The target starts `scenarios/hunger-six.toml` with six bots and three automated spectators, reserving the fourth spectator slot for your client. It prints the actual Minecraft Java Edition version and connection address after server and bot readiness. Use a matching native client and connect to `127.0.0.1:25565` as a spectator. The server stops when the match ends or when you press Ctrl-C. Plain `make` only shows help.
+## Watch as a spectator
 
-## Current proof
+To wait for a native client before the match starts, run:
 
-Historical Paper proofs cover the two-client stack, configured-map reset, authority variants, duel, fairness, replay, and lifecycle cleanup. The current baseline policy passed `./arena test --suite integration --case policy-border-preemption`, with strict replay and independent outcome inspection. Checkpoints, active-skill responsiveness, failed-target feedback, and actual AStar compute scheduling have focused behavioral proofs. The exact ramp now passes after correcting the pinned client/server player-width mismatch; the complete legal-player chain remains pending. Campaign execution continues after an owner-authorized archival exception restored two live run slots. Six-seed gameplay, current Paper fault closure, civilization acceptance, full functional/release gates, fresh-checkout execution, and Linux remain unverified. See the [acceptance report](docs/acceptance-report.md) for committed evidence and reproduction commands.
+```sh
+make server ACCEPT_MINECRAFT_EULA=1
+```
 
-Pinned toolchains, downloads, dependencies, generated builds, test runs, and prepared run data stay under the repository-local `.work/` directory.
+This starts six bots and three automated spectators, reserves a fourth spectator slot, and waits for your client. Connect to `127.0.0.1:25565` with the Minecraft version in `versions.lock.toml`. The server stops when the match ends or you press Ctrl-C.
+
+## Help and license
+
+Run `./arena help` for launcher commands and `./arena doctor` for available runner capabilities. This repository does not declare a license.

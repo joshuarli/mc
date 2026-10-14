@@ -1,33 +1,47 @@
 # Runner operations
 
-The runner supports scenario validation and preparation, configured headless Paper runs, stopped-run inspection, selected-run cleanup, and evidence commands. `validate` compiles the scenario, map, and policy without creating a run. `prepare` compiles a repository scenario and stages its world plan in a new run directory. `run` stages the world plan, starts an owned Paper server, runs the configured competitors with the baseline policy, stops the server, and reports the reconstructed result and player statistics. `inspect --run-id` reads a stopped run and its player stats; `gc --apply` explicitly archives eligible evidence before removing a selected run. `replay-policy` checks recorded policy decisions against the core policy.
+`./arena` validates scenarios, prepares run data, starts Paper matches, inspects stopped runs, removes selected run data, and reads trace evidence. Use `./arena help` for launcher commands.
+
+## Run and inspect
+
+`validate` compiles a scenario, map, and policy without creating a run. `prepare` stages a world plan under `.work/arena/runs/<run-id>`. `run` starts an owned Paper server, runs the configured competitors with the baseline policy, and prints the result and created paths as JSON.
 
 ```sh
 ./arena doctor
 ./arena validate --scenario scenarios/hunger-six.toml
-./arena prepare --scenario scenarios/hunger-six.toml --run-id smoke-001
-./arena run --scenario scenarios/hunger-six.toml --run-id smoke-002
-./arena inspect --run-id smoke-002
-./arena gc --dry-run --run-id failed-old-001
+./arena prepare --scenario scenarios/hunger-six.toml --run-id ops-prepare
+./arena run --scenario scenarios/hunger-six.toml --run-id ops-run --accept-minecraft-eula
+./arena inspect --run-id ops-run
+```
+
+`run` requires explicit Minecraft EULA acceptance. It generates a UUID if you omit `--run-id`. Use `--reserve-external-spectator-slot` to leave one configured spectator connection open for a native client. Add `--wait-for-external-player` to wait for that client before the match starts.
+
+`inspect --run-id` reads only stopped runs. Use the run ID from the `run` result. A run ID cannot be reused while its path exists under `.work/arena/traces/`, including a partial archive.
+
+## Remove run data
+
+Use `gc --dry-run` to review selected run directories. Use `gc --apply` to archive eligible evidence and remove selected directories. The command does not select unrelated runs for removal.
+
+```sh
+./arena gc --dry-run --run-id ops-run
+```
+
+## Read trace evidence
+
+`inspect`, `replay-policy`, and `report` accept complete trace segments. The runner orders segments by sequence range and requires one run with no gaps or overlaps. `inspect` displays generic records. `replay-policy` checks recorded decisions against the core policy. `report` reconstructs the terminal outcome from typed lifecycle records. `compare` requires exactly two single-segment files and compares their sequence ranges and records. See [determinism and evidence](determinism.md) for schemas and replay limits.
+
+```sh
 ./arena inspect tests/fixtures/replay-report-v2/segment-0001.json
-./arena replay-policy path/to/policy-trace-segment.json
-./arena report path/to/lifecycle-trace-segment.json
+./arena replay-policy tests/fixtures/policy-border-preemption/trace-v2-000001.json
+./arena report tests/fixtures/legal-player-passed/trace-v2-000001.json
 ./arena compare tests/fixtures/replay-report-v2/segment-0001.json tests/fixtures/replay-report-v2/segment-0001-other-run.json
 ```
 
-Successful commands print one JSON object to stdout. `inspect`, `replay-policy`, and `report` accept one or more complete trace segments; segments are sorted by their declared sequence range and must belong to one run with no gaps or overlaps. `inspect` accepts generic records. `replay-policy` verifies `policy-replay-v1` decisions and post-decision RNG states against the core policy; separate correlated `policy-effect-v1` records preserve skill outcomes and actual path updates. `report` requires the typed lifecycle stream and reconstructs the terminal outcome and elimination counts from the prepared roster, ordered elimination events, public states, and terminal clock. `compare` accepts two single-segment files and compares sequence ranges and ordered records exactly. It ignores only the envelope `run_id`; it does not normalize any record content.
+Successful commands write one JSON object to stdout. Failures write one JSON error to stderr. Exit codes are 0 for success, 2 for invalid input, 3 for a missing prerequisite, 4 for a resource conflict, 5 for corrupt or incomplete evidence, 6 for runtime failure, and 130 for cancellation.
 
-`prepare` requires a repository-relative scenario path and a run ID of 1–64 ASCII letters, digits, underscores, or hyphens, beginning with a letter or digit. An ID cannot be reused while any entry at `.work/arena/traces/<run-id>` exists, including a partial archive. It reads bounded UTF-8 scenario and map sources, then writes `.work/arena/runs/<run-id>/world-plan.json`; it does not scan the work tree or reject based on available space, aggregate bytes, or retained run count. `validate` also compiles the referenced policy and does not create a run directory. `run` accepts the same repository-relative scenario path and an optional run ID; without one, it generates a UUID. It requires the Java runtime, Paper server JAR, plugin JAR, and owned-files helper configured by `./arena`. A successful run prints the concrete created paths, trace segments, reconstructed result, and stopped player statistics. `doctor` describes the available runner and runtime paths.
+## Runtime fault selectors
 
-`inspect --run-id <id>` reads the completed run's consecutive TypeScript trace-v2 segments, reconstructs its authoritative result, and reads stopped-player statistics by the offline UUIDs in the prepared roster. It rejects an active run while holding the run lease. After a completed run is removed, inspection reads its archive under `.work/arena/traces/<id>`. Missing stats files are reported as absent with null counters; a missing Minecraft counter in an existing stats file is reported as zero.
-
-`gc --dry-run --run-id <id>...` checks only the selected owned runs and reports which completed run directories can be removed. `gc --apply --run-id <id>...` uses the same checks and removes only selected eligible run directories while holding their leases. Before removing a validated winner, draw, or authority-aborted run, it copies the raw trace segments and each present roster stats file into `.work/arena/traces/<id>`, verifies the archive, and publishes the terminal trace segment last. Existing partial archives resume only when every existing expected file matches the source bytes. Operational-failure runs are not archived. The latest three validated runner failures are retained; incomplete or corrupt evidence is protected and excluded from retention ranking; an operational failure with failed cleanup is always protected.
-
-Trace readers follow a user-selected symlink and accept only regular-file targets. Reads are bounded to 8 MiB per segment and 256 MiB per supplied evidence set; JSON nesting is limited to 32 containers. The reader does not write to the selected path. TypeScript trace-v2 files with unsupported schema values, unknown envelope fields, duplicate JSON object names at any depth, excessive nesting, invalid ranges, malformed completion trailers, or checksum failures are rejected. Trace schema version 1 is not accepted. Sequence bounds are canonical decimal strings in the range 1 through 18446744073709551615. The record checksum covers only the `records` array as compact UTF-8 JSON with object keys sorted by JavaScript string order and numbers serialized by `JSON.stringify`; see [determinism](determinism.md).
-
-The TypeScript runtime target is macOS arm64 or Linux x86_64. Linux arm64 remains unverified. The runner uses a native handle-relative helper for bounded source reads, safe world-plan staging, and owned run directories; it clones the pristine world into each owned run directory.
-
-Focused live runtime proofs can be run one at a time. Each fault selector starts the prepared Paper stack for one failure path. The port-conflict, second-owner, plugin-identity, and server-crash selectors have passed individually; the corrected SIGINT assertion is pending a live rerun. The aggregate `faults` command runs all five sequentially but is not currently claimed as passed.
+Each named fault selector starts the prepared Paper stack for one failure path. Run selectors separately when you need focused evidence; `faults` runs all five sequentially.
 
 ```sh
 ./arena test --suite integration --case faults-port-conflict
@@ -37,18 +51,3 @@ Focused live runtime proofs can be run one at a time. Each fault selector starts
 ./arena test --suite integration --case faults-sigint
 ./arena test --suite integration --case faults
 ```
-
-The prepared Civilization selectors are pending live verification and run only after M1 passes. `civilization-six` checks both faction material chains and capture changes; `civilization-rules` checks cancellation and competing material actions; `civilization-baseline` checks the autonomous six-seat policy and resource evidence. Registering these commands does not establish live acceptance.
-
-```sh
-./arena test --suite integration --case civilization-six
-./arena test --suite integration --case civilization-rules
-./arena test --suite acceptance --case civilization-baseline
-```
-
-`lifecycle-smoke` checks one start/stop and archive cycle. `lifecycle` runs ten sequential cycles and checks resource cleanup after each.
-The lifecycle check expects the one-connection control listener to be closed once authentication completes and observes the live control and bot sockets during evaluation. After Paper is reaped, it checks that the listener and sockets return to baseline before opening the temporary port-25565 probe, then confirms that the port can be rebound; the probe's own TCP handle stays outside the runtime resource counts.
-
-Errors are one JSON object on stderr. Exit codes are 0 for success, 2 for invalid input, 3 for a missing resource or prerequisite, 4 for an owned-resource or port conflict, 5 for corrupt or incomplete evidence, 6 for runtime failures, and 130 for operator cancellation. An authoritative abort outcome is a runtime failure; its error includes the outcome reason, run ID, and final trace path when available. Error output carries a category, a generic resource label, and structured source details such as the scenario field and source location, OS error codes, the primary and cleanup failure kinds, or whether a failed staging operation may have published a file. It omits parser text and file contents.
-
-Live proofs cover stack startup, configured-map reset, eight authority variants, extended-grace duel, fairness, policy replay, ten-cycle lifecycle cleanup, the complete legal-player chain including real knockback, and all six Hunger Games acceptance seeds. The frozen M1 baseline is `296c3c9`, with five winners and one draw. Civilization source is merged; its live proofs remain pending. Delivery readiness, comparative performance, fresh-checkout behavior, and Linux support remain unverified. The runner does not claim that replaying core decisions reproduces Mineflayer actions or the server trajectory. An event report is only as complete as the supplied trace sequence span. Live lifecycle tests require the prepared Paper/Mineflayer stack and authenticated control event sources.

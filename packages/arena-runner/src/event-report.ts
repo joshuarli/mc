@@ -13,7 +13,6 @@ export interface EventDerivedResult {
   };
 }
 
-/** Reconstructs terminal survivors from the prepared roster and resolved elimination events. */
 export function reconstructEventResult(
   runId: string,
   prepare: PreparePayload,
@@ -192,7 +191,6 @@ function validateOutcome(
     if (lastPublicState === undefined || !sameSeats(lastPublicState.seats, survivors)) {
       throw reportFailure('terminal_public_state_mismatch', record);
     }
-    // Countdown eliminations are emitted immediately and settled by civilization at its first match tick.
     const eliminationResolvedAtOutcome = lastEliminationTick !== undefined
       && (sameTick(lastEliminationTick, outcome.at)
         || (lastEliminationTick.domain === 'countdown' && outcome.at.domain === 'match' && outcome.at.value === 0n));

@@ -73,7 +73,6 @@ const CLIENT_HOST = '127.0.0.1' as const;
 const GAME_PORT = 25565;
 const STARTUP_TIMEOUT_MS = 60_000;
 const EVALUATOR_JOIN_TIMEOUT_MS = 5_000;
-// Retained events feed both outcome reconstruction and the returned run result.
 const MAX_RETAINED_AUTHORITY_EVENTS = 100_000;
 const UTF8 = new TextDecoder('utf-8', { fatal: true });
 
@@ -100,7 +99,6 @@ export interface RunPreparedRunOptions {
   }>) => void;
 }
 
-/** Owns a Paper run from its pristine world through stopped evidence. */
 export async function runPreparedRun(options: RunPreparedRunOptions): Promise<CompletedOwnedRun> {
   if (options.acceptMinecraftEula !== true) {
     throw new RunnerError('missing_prerequisite', 'Minecraft EULA', { kind: 'missing_eula' });

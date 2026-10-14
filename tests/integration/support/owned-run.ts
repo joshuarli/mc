@@ -12,7 +12,6 @@ import type { StoppedPlayerStats } from "../../../packages/arena-runner/src/runt
 export type AcceptanceEvaluator = NonNullable<Parameters<typeof runPreparedRun>[0]["evaluate"]>;
 export type AcceptanceRunContext = Parameters<AcceptanceEvaluator>[0];
 
-/** Prepares an owned run and resolves the pinned runtime artifacts used by acceptance cases. */
 export async function prepareOwnedAcceptanceRun(
   scenarioPath: string,
   runId: string,
@@ -51,7 +50,6 @@ export async function prepareOwnedAcceptanceRun(
   };
 }
 
-/** Prepares one fresh run and delegates its world clone, server, and bot cleanup to the runtime. */
 export async function runOwnedAcceptanceScenario(
   scenarioPath: string,
   runId: string,
@@ -104,7 +102,6 @@ async function inspectCompletedRun(helperPath: string, runId: string): Promise<{
   };
 }
 
-/** Inspects a stopped run whose runner returned early after an authoritative abort. */
 export async function inspectOwnedAcceptanceRun(runId: string) {
   const repositoryRoot = process.cwd();
   const helperPath = process.env.ARENA_FS_HELPER ?? resolve(repositoryRoot, ".work/arena-fs/arena-fs");

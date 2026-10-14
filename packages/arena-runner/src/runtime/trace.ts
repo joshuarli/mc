@@ -53,7 +53,6 @@ export interface RuntimeTraceOptions {
   readonly preparedRun: Pick<PreparedRun, 'runId' | 'runDirectoryPath'>;
 }
 
-/** Stages ordered trace segments and keeps the outcome segment private until the JVM stops. */
 export class RuntimeTraceBuilder {
   readonly #runId: string;
   readonly #helperPath: string;
@@ -67,7 +66,6 @@ export class RuntimeTraceBuilder {
   #mode: 'hunger_games' | 'civilization' | undefined;
   readonly #activePolicyActions = new Map<number, string>();
   readonly #policyActionSeats = new Map<string, number>();
-  // An action can still settle after Java publishes the terminal result.
   readonly #pendingPolicyEffectSequences = new Set<string>();
   readonly #policyEffectSequences = new Set<string>();
   #recordBytes = 0;
@@ -98,7 +96,6 @@ export class RuntimeTraceBuilder {
     this.#runDirectoryPath = Buffer.from(options.preparedRun.runDirectoryPath);
   }
 
-  /** Records the authenticated ready envelope while excluding the hello token. */
   recordReady(ready: Extract<ControlMessage, { readonly type: 'ready' }>): Promise<void> {
     return this.#enqueue(async () => {
       if (this.#hasReady || this.#totalRecordCount !== 0) {
@@ -119,7 +116,6 @@ export class RuntimeTraceBuilder {
     });
   }
 
-  /** Records non-secret runner commands so evidence retains the configured match roster. */
   recordRunnerCommand(message: RunnerCommandEnvelope): Promise<void> {
     return this.#enqueue(async () => {
       this.#assertMutable();
@@ -155,7 +151,6 @@ export class RuntimeTraceBuilder {
     });
   }
 
-  /** Records authenticated plugin events, omitting non-semantic heartbeat and metrics frames. */
   recordControlMessage(message: ControlMessage): Promise<void> {
     return this.#enqueue(async () => {
       this.#assertMutable();
@@ -208,7 +203,6 @@ export class RuntimeTraceBuilder {
     });
   }
 
-  /** Records the exact core policy input, decision, and resulting random state. */
   recordPolicyDecision(record: PolicyReplayRecord): Promise<void> {
     return this.#enqueue(async () => {
       this.#assertMutable();
@@ -262,7 +256,6 @@ export class RuntimeTraceBuilder {
     });
   }
 
-  /** Records completed skill effects, including late cancellation of an already recorded decision. */
   recordPolicyEffect(record: PolicyEffectRecord): Promise<void> {
     return this.#enqueue(async () => {
       this.#assertMutable();
@@ -301,9 +294,6 @@ export class RuntimeTraceBuilder {
     });
   }
 
-  /** Persists each nonterminal checkpoint at recorded decision counts 200, 400, and onward.
-   * Pending effects are absent until they settle; this watermark does not assert action completion.
-   */
   checkpoint(globalObservationCount: number): Promise<void> {
     return this.#enqueue(async () => {
       this.#assertMutable();
@@ -317,7 +307,6 @@ export class RuntimeTraceBuilder {
     });
   }
 
-  /** Stages the outcome segment after the JVM stops and returns every staged segment identity. */
   finalize(): Promise<RuntimeTraceResult> {
     if (this.#finalized !== undefined) return Promise.resolve(copyTraceResult(this.#finalized));
     return this.#enqueue(async () => {
@@ -344,7 +333,6 @@ export class RuntimeTraceBuilder {
     });
   }
 
-  /** Persists actual pending records after Paper has been reaped, without asserting a valid match. */
   persistFailurePartial(
     primary: OperationalFailurePrimaryV1,
     cleanup: OperationalFailureCleanupV1,

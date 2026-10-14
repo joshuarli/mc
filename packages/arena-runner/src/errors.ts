@@ -26,7 +26,6 @@ export interface ErrorSource {
 
 export const MAX_ERROR_REASON_CODE_POINTS = 1024;
 
-/** Keep local assertion text useful in failure evidence without copying an unbounded message. */
 export function boundedErrorReason(error: unknown): string | undefined {
   if (!(error instanceof Error) || error.message.length === 0) return undefined;
   let codePoints = 0;

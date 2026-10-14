@@ -29,12 +29,10 @@ export interface RuntimeOpeningPolicyDecision {
   readonly rngStateAfter: bigint;
 }
 
-/** Compares the public match tick to the configured cadence without rounding u64 values. */
 export function isStrategyDecisionTick(tick: bigint, intervalTicks: bigint): boolean {
   return tick % intervalTicks === 0n;
 }
 
-/** Captures replay inputs before the policy consumes any exploration draws. */
 export function decideRuntimePolicy(
   observation: AgentObservation,
   memory: PolicyMemory,

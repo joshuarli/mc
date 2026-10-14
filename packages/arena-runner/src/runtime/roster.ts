@@ -8,7 +8,6 @@ export const MAX_RUNTIME_SPECTATORS = 4;
 
 export type RuntimeSpectatorMode = 'automated' | 'reserveExternalSlot';
 
-/** Creates stable offline identities from seat numbers so every run preserves roster identity. */
 export function createRuntimeRoster(
   scenario: ScenarioIr,
   options: Readonly<{ spectatorMode?: RuntimeSpectatorMode }> = {},

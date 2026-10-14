@@ -495,7 +495,6 @@ async function waitForTraceCheckpoint(
   throw new Error(`run ${run.runId} did not stage ${TRACE_CHECKPOINT_POLICY_OBSERVATIONS} policy observations within ${timeoutMs} ms`);
 }
 
-/** Trace segments do not store observation counts, so the live helper counts policy decisions at the writer cadence. */
 const TRACE_CHECKPOINT_POLICY_OBSERVATIONS = 200;
 
 function hasTraceCheckpointWatermark(records: readonly TraceRecord[]): boolean {

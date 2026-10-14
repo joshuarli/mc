@@ -9,7 +9,6 @@ export interface RuntimeDeadline {
   clear(): void;
 }
 
-/** Aborts the owned run with a stable timeout error when its deadline expires. */
 export function armRuntimeDeadline(
   controller: AbortController,
   phase: RuntimeDeadlinePhase,

@@ -87,7 +87,6 @@ type HeldRun = Readonly<{
   lease: OwnedRunLease;
 }>;
 
-/** Removes selected validated runs while retaining the newest three validated failures. */
 export async function collectOwnedRuns(options: Readonly<{
   helperPath: string;
   ownedRoot: Buffer;
@@ -442,7 +441,6 @@ function isArchivableRun(classification: ClassifiedRun): boolean {
     || (classification.kind === 'failure' && classification.failureType === 'authority_abort');
 }
 
-// The final trace segment marks archive completion, so it is published after every prefix and stats file.
 async function archiveCompletedRun(
   options: Readonly<{ helperPath: string; ownedRoot: Buffer }>,
   snapshot: OwnedRunSnapshot,

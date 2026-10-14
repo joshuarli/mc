@@ -1,4 +1,3 @@
-/** Closed wire capabilities understood by the control codec and runtime. */
 export const CONTROL_CAPABILITIES = Object.freeze(["hunger_games_v1", "civilization_v1"] as const);
 export type ControlCapability = typeof CONTROL_CAPABILITIES[number];
 export type FactionId = "ember" | "tide";

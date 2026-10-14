@@ -57,7 +57,6 @@ interface Sample<T> {
 type MineflayerBlock = NonNullable<ReturnType<Bot['blockAt']>>;
 type MineflayerEntity = Bot['entity'];
 
-/** Builds each policy input from this bot's received packets and loaded client world. */
 export class MineflayerObserver {
   readonly #bot: Bot;
   readonly #border: ClientWorldBorder;

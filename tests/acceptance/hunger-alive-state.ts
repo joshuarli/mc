@@ -1,6 +1,5 @@
 import type { RuntimeAuthorityEvent } from "../../packages/arena-runner/src/runtime/types.js";
 
-/** Alive state persists between changes; a later match clock proves observation after reconnect. */
 export function hasEliminatedSeatEvidence(
   events: readonly RuntimeAuthorityEvent[],
   seat: number,

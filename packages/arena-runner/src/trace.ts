@@ -89,7 +89,6 @@ export async function readSegment(path: PathLike, argument: number): Promise<Tra
       try {
         await file.close();
       } catch (error) {
-        // A close error cannot replace the read or validation failure that caused this scope to unwind.
         if (!operationFailed) throw mapIoError(resource, argument, error);
       }
     }

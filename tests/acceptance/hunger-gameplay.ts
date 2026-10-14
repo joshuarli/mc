@@ -120,7 +120,6 @@ interface ItemSlotBot {
   readonly heldItem: InventoryItem | null;
 }
 
-/** Records bounded movement, inventory, chest-transfer, health, and hit observations from each client. */
 export function recordHungerGameplayEvidence(
   active: AcceptanceRunContext,
   authorityTick: () => number | null = () => null,

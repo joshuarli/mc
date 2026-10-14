@@ -357,7 +357,6 @@ export function validateSpawnSeats(map: MapIr, count: number, path: string): voi
   }
 }
 
-/** Scenario objectives must begin on the same walkable component as the spawn seats. */
 export function validateReachableSurfacePosition(map: PlannedMapIr, position: BlockPosition, path: string): void {
   const metadata = geometryByMap.get(map);
   if (metadata === undefined) throw new Error("compiled map geometry is missing");
@@ -473,7 +472,6 @@ function parseSurfaceColumn(value: raw.RawValue, path: string, dimensions: MapFo
   return Object.freeze({ x, z });
 }
 
-/** Parses signed block coordinates before a caller applies map-specific bounds. */
 export function parseBlockPosition(value: raw.RawValue, path: string): BlockPosition {
   const table = raw.asTable(value, path);
   raw.checkFields(table, ["x", "y", "z"], ["x", "y", "z"], path);

@@ -1,7 +1,6 @@
 import type { Bot, Player } from 'mineflayer';
 import { RunnerError } from '../errors.js';
 
-/** Waits for a connected player whose name is not owned by this runtime roster. */
 export function waitForExternalPlayer(
   bots: readonly Bot[],
   runtimeUsernames: ReadonlySet<string>,

@@ -56,7 +56,6 @@ export interface PolicyReplayRecordV1 {
   readonly rng_state_after: string;
 }
 
-/** An accepted action is owned by its initiating decision, even while replacement cleanup waits. */
 export type PolicyDisposition =
   | { readonly kind: 'hold' }
   | { readonly kind: 'start'; readonly action_sequence: string }
@@ -101,7 +100,6 @@ interface OpeningPolicyReplayTransition {
 }
 
 export interface PolicyPathPoint {
-  /** Pathfinder may place a waypoint at a fractional block coordinate. */
   readonly x: number;
   readonly y: number;
   readonly z: number;
@@ -125,7 +123,6 @@ export interface CivilizationPolicyEffectRecordV1 extends Omit<PolicyEffectRecor
 
 export type PolicyEffectRecord = PolicyEffectRecordV1 | CivilizationPolicyEffectRecordV1;
 
-/** Captures complete civilization state while retaining the survival policy validation rules. */
 export function normalizeCivilizationPolicyReplayInput(source: Readonly<
   Omit<PolicyReplayInputSource, 'observation' | 'memory' | 'feedback'> & {
     memory: CivilizationPolicyMemory;
@@ -188,7 +185,6 @@ export function makeCivilizationPolicyEffectRecord(
   return Object.freeze({ ...makePolicyEffectRecord(decisionSequence, skill, pathUpdates), schema: 'civilization-policy-effect-v1' });
 }
 
-/** Settled progress belongs to material work; shared actions still require terminal outcomes. */
 export function isCivilizationMaterialAction(decision: CivilizationDecision): decision is CivilizationDecision & {
   readonly goal: Extract<CivilizationGoal, { readonly kind: 'gatherMaterial' | 'craftMaterial' | 'transferMaterial' | 'buildOutpost' }>;
   readonly intent: CivilizationActionIntent;
@@ -254,7 +250,6 @@ interface MutableOpeningEvidence {
 
 const MAX_OPENING_EVIDENCE_OPPORTUNITIES = 64;
 
-/** Records the decision separately from whether it starts, continues, or defers an owned action. */
 export function makePolicyReplayRecord(options: Readonly<{
   sequence: bigint;
   seat: number;
@@ -310,7 +305,6 @@ export function makeOpeningPolicyReplayRecord(options: Readonly<{
     rng_state_after: rngStateAfter.toString(), disposition: Object.freeze(validated), opening_state_after: openingStateAfter });
 }
 
-/** Builds a bounded effect record without inventing path results the client did not emit. */
 export function makePolicyEffectRecord(
   decisionSequence: bigint,
   skill: SkillOutcome,

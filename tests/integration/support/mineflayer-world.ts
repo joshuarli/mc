@@ -15,7 +15,6 @@ const CHUNK_LOAD_TIMEOUT_MS = 30_000;
 const CHEST_SLOT_COUNT = 27;
 const MAX_RECEIPT_EVENTS = 4_096;
 
-/** Reads only world data received by one ordinary Mineflayer client. */
 export function createMineflayerSemanticWorldReader(
   bot: Bot,
   usernamesBySeat: ReadonlyMap<number, string>,
@@ -60,7 +59,6 @@ export interface MineflayerReceiptHistory {
   }[];
 }
 
-/** Keeps the ordered chunk and entity events delivered to one client connection. */
 export function recordMineflayerReceipts(bot: Bot): {
   snapshot(): MineflayerReceiptHistory;
   close(): void;
@@ -114,7 +112,6 @@ export function recordMineflayerReceipts(bot: Bot): {
   };
 }
 
-/** Reads every player slot in order and fails if the client cursor holds an item. */
 export function observePlayerInventory(bot: Bot): PlayerInventoryObservation {
   assert.equal(bot.inventory.selectedItem, null, "player cursor must be empty");
   const items: PlayerInventoryObservation["items"][number][] = [];

@@ -8,7 +8,6 @@ import {
 
 type MineflayerEntity = Bot['entity'];
 
-/** Uses this connection's current aim and loaded voxel raycast for entity visibility. */
 export function isVisibleEntity(bot: Bot, entity: Pick<MineflayerEntity, 'position' | 'height'>): boolean {
   return isVisiblePosition(bot, entity.position, entity.height);
 }

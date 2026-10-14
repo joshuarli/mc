@@ -27,7 +27,6 @@ const AStar = createRequire(import.meta.url)('mineflayer-pathfinder/lib/astar') 
 const { version: PATHFINDER_VERSION } = createRequire(import.meta.url)('mineflayer-pathfinder/package.json') as { version: string };
 
 const MAX_PATH_SEARCH_RADIUS_BLOCKS = 16;
-/** Keep long routes inside the pathfinder's fixed search horizon. */
 const MAX_PATH_LEG_BLOCKS = 8;
 const MAX_NAVIGATION_LEGS = 128;
 const MAX_PATH_THINK_MS = 1_000;
@@ -79,7 +78,6 @@ interface ActiveSkill {
   promise: Promise<SkillOutcome>;
 }
 
-/** Separates the existing near-target policy behavior from exact bot-owned block arrival. */
 type NavigationArrival =
   | { readonly kind: 'withinRange'; readonly range: number }
   | { readonly kind: 'exactBlock' };
@@ -470,7 +468,6 @@ class PathSearchWorker {
 
 const pathSearchWorker = new PathSearchWorker();
 
-/** Serializes skill intents and quarantines Mineflayer operations that outlive cancellation. */
 export class SkillOwner {
   readonly #bot: Bot;
   readonly #observer: MineflayerObserver;
@@ -2084,7 +2081,6 @@ function requireWindowSynchronizer(bot: Bot): (window: MineflayerWindow) => Prom
   return (window) => synchronize.call(bot, window);
 }
 
-/** Watches full client snapshots until both sides of a requested container transfer are visible. */
 function waitForWindowTransferReceipt(
   bot: Bot,
   window: MineflayerWindow,

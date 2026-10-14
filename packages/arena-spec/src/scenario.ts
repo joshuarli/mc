@@ -747,7 +747,6 @@ function validateMode(mode: GameMode, roster: Roster, settings: MatchSettings): 
   }
 }
 
-/** Objectives must start clear and reachable because players activate them during a match. */
 function validateCivilizationMap(map: MapIr, rules: CivilizationRulesIr): void {
   const path = "scenario.civilization";
   if (map.terrain !== "planned") {

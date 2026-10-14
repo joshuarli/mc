@@ -1,6 +1,5 @@
 import type { Bot } from 'mineflayer';
 
-/** Stops policy actions after a bot dies or leaves a controllable game mode. */
 export class PolicyCompetitorGate {
   readonly #bot: Bot;
   readonly #onIneligible: () => void;

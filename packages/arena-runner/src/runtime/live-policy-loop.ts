@@ -40,7 +40,6 @@ interface OwnedAction {
   startedAtTick: number | null;
 }
 
-/** Reobserves at the strategy cadence while one owner per seat executes or replaces its action. */
 export class LivePolicyLoop {
   readonly #trace: PolicyTrace;
   readonly #params: ReturnType<typeof compilePolicy>['params'];
@@ -183,7 +182,6 @@ export class LivePolicyLoop {
       }
       const frame = this.#trace.recordPolicyDecision(record);
       this.#observationCount += 1;
-      // The decision watermark does not assert that its owned effect has completed.
       if (this.#observationCount % 200 === 0) this.#checkpointTail = this.#trace.checkpoint(this.#observationCount);
       recorded = Promise.all([frame, this.#checkpointTail]).then(() => undefined);
     }
@@ -216,7 +214,6 @@ export class LivePolicyLoop {
     const report = { sourceTick: tick, declaredStale: false, kind: 'resourceSighting',
       resource: resource.kind === 'logBlock' ? 'oakLogBlock' : resource.kind === 'container' ? 'container'
         : resource.item === 'oak_log' ? 'oakLogDrop' : 'oakPlankDrop', position: resource.position };
-    // The sender is bound by the owned competitor channel; payloads carry no sender identity.
     const frame = Buffer.from(canonicalJson(report), 'utf8');
     if (frame.byteLength > CIVILIZATION_TEAM_MESSAGE_MAX_BYTES) {
       throw new RunnerError('runtime_failure', 'civilization team channel', { kind: 'team_frame_too_large' });
@@ -239,7 +236,6 @@ export class LivePolicyLoop {
     const priority = goalPriority(decision);
     const previousPriority = previous.priority;
     if (same) {
-      // The same controls may now serve a more urgent goal; preserve that urgency while they run.
       previous.priority = Math.max(previousPriority, priority);
       return previous.state === 'running'
         ? { kind: 'continue', action_sequence: activeSequence }
@@ -248,7 +244,6 @@ export class LivePolicyLoop {
     if (decision.intent.kind === 'hold' || priority < previousPriority) return { kind: 'defer', action_sequence: activeSequence, reason: 'lowerPriority' };
     if (priority === previousPriority) {
       if (previous.state === 'reserved') return { kind: 'defer', action_sequence: activeSequence, reason: 'cleanupPending' };
-      // Exploration redraws a target on every observation; a fresh draw does not invalidate the owned route.
       if (previous.decision.goal.kind === 'explore' && decision.goal.kind === 'explore') {
         return { kind: 'defer', action_sequence: activeSequence, reason: 'goalPersistence' };
       }
@@ -291,8 +286,6 @@ export class LivePolicyLoop {
       capture = undefined;
       if (outcome.kind === 'pending' || (outcome.kind === 'progress'
           && (action.competitor.gameplay.mode !== 'civilization' || !isMaterialAction(action.decision)))) throw new RunnerError('runtime_failure', 'policy skill', { kind: 'nonterminal_skill_outcome' });
-      // The skill promise includes its resource cleanup. Release ownership before trace I/O so
-      // a later observation cannot claim to continue an already settled action.
       action.state = 'settled';
       if (this.#actions.get(action.competitor.seat) === action) this.#actions.delete(action.competitor.seat);
       const source = outcome.kind === 'progress' ? null : sharedFeedbackSource(action, outcome);
@@ -318,7 +311,6 @@ export class LivePolicyLoop {
       this.#onActivity?.({ kind: 'action', seat: action.competitor.seat, actionSequence: action.sequence.toString(),
         intent: action.decision.intent, startedAtNs: action.startedAtNs, settledAtNs: settledAtNs!, outcome, cleanupIncluded: true });
     } catch (error) {
-      // A failed cleanup never transfers control to a successor. The seat remains quarantined.
       this.#disabledSeats.add(action.competitor.seat);
       if (action.state === 'reserved' && decisionRecorded && !effectRecorded && this.#recordPolicy) {
         await this.#trace.recordPolicyEffect(action.competitor.gameplay.mode === 'civilization'
@@ -342,7 +334,6 @@ export class LivePolicyLoop {
     action.cancelTask = boundedCleanup((async () => {
       if (wasRunning) await action.competitor.gameplay.client.cancel(reason);
       await action.task;
-      // A superseded reservation still waits for the original control owner to release.
       await action.barrier;
     })());
     this.#ownTask(action.cancelTask);

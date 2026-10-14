@@ -1,7 +1,6 @@
 import * as raw from "./raw.js";
 import { SpecError, SpecErrorKind } from "./errors.js";
 
-/** Normalizes and validates Minecraft resource identifiers shared by map and scenario inputs. */
 export function parseResourceId(value: raw.RawValue, path: string): string {
   const text = raw.string(value, path);
   const separator = text.indexOf(":");

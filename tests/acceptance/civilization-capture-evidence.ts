@@ -31,7 +31,6 @@ interface ExpectedCaptureState {
   readonly progress: bigint;
 }
 
-/** Replays authoritative occupants and verifies every emitted capture owner, challenge, and score. */
 export function assertCivilizationCaptureEvidence(
   events: readonly CivilizationEvidenceEvent[],
   settings: Readonly<{ graceTicks: bigint; uncontestedCaptureTicks: bigint }>,

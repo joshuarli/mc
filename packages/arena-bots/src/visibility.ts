@@ -32,7 +32,6 @@ interface LocalVoxelRayTarget {
   readonly rayTarget: Parameters<Bot['blockAt']>[0];
 }
 
-/** Applies the arena's fixed range and view-cone limits to client-received positions. */
 export function isInsidePerceptionCone(viewer: ViewDirection, target: ViewTarget): boolean {
   if (!isFinitePosition(viewer.position) || !isFinitePosition(target.position)) return false;
   if (!Number.isFinite(viewer.eyeHeight) || !Number.isFinite(viewer.yaw) || !Number.isFinite(viewer.pitch)) return false;
@@ -57,7 +56,6 @@ export function isInsidePerceptionCone(viewer: ViewDirection, target: ViewTarget
     && Math.abs(shortestAngle(targetPitch - viewer.pitch)) <= HALF_VERTICAL_FOV_RADIANS;
 }
 
-/** Checks visibility to the center of a loaded block using this client's collision shapes. */
 export function hasLocalVoxelLineOfSight(
   bot: Pick<Bot, 'blockAt' | 'entity' | 'world'>,
   position: Parameters<Bot['blockAt']>[0],
@@ -71,7 +69,6 @@ export function hasLocalVoxelLineOfSight(
   });
 }
 
-/** Checks visibility to an exact ray endpoint in a loaded voxel. */
 export function hasLocalVoxelRayToTarget(
   bot: Pick<Bot, 'blockAt' | 'entity' | 'world'>,
   target: LocalVoxelRayTarget,
@@ -116,7 +113,6 @@ function isSafePosition(position: { readonly x: number; readonly y: number; read
   return Number.isSafeInteger(position.x) && Number.isSafeInteger(position.y) && Number.isSafeInteger(position.z);
 }
 
-/** Fails closed when any voxel traversed by the ray is outside the client's loaded world. */
 function hasLoadedVoxelRay(
   bot: Pick<Bot, 'blockAt'>,
   from: Parameters<Bot['blockAt']>[0],

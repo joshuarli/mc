@@ -13,7 +13,6 @@ const ELIMINATION_TIMEOUT_MS = 3_000;
 const MAX_ATTACKS = 20;
 const ATTACK_COOLDOWN_MS = 700;
 
-/** Runtime shutdown can settle a skill as cancelled; keep its initiating failure ahead of success assertions. */
 export async function runEvaluatorSkill(
   client: Pick<MineflayerArenaClient, "run">,
   intent: ArenaSkillIntent,
@@ -90,7 +89,6 @@ export async function waitForActivePhase(active: AcceptanceRunContext, signal: A
   throw new Error(`duel did not reach the active phase within ${ACTIVE_PHASE_TIMEOUT_MS} ms`);
 }
 
-/** Uses ordinary block navigation and verifies the competitor reaches the selected staging tile. */
 export async function stageOpponentForCombat(
   active: AcceptanceRunContext,
   opponentSeat: number,
@@ -115,7 +113,6 @@ interface DuelCombatMarker {
   mark(kind: string, data?: Readonly<Record<string, unknown>>): void;
 }
 
-/** Eliminates a stationary competitor using visible upgrades, opponents, and Mineflayer skills. */
 export async function eliminateOpponentWithSkillAttacks(
   active: AcceptanceRunContext,
   attackerSeat: number,

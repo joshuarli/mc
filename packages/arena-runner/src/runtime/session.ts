@@ -25,7 +25,6 @@ export type RunnerCommandEnvelope = Extract<ControlMessage, { readonly type: 'pr
 
 const authenticatedMessages = new WeakSet<object>();
 
-/** Returns true only for the immutable envelope accepted or sent by a live control session. */
 export function isAuthenticatedControlMessage(message: ControlMessage): boolean {
   return authenticatedMessages.has(message);
 }
@@ -46,7 +45,6 @@ export type ControlSessionErrorCode =
   | 'sequence_exhausted'
   | 'control_closed';
 
-/** A control failure with a stable code for runner error mapping. */
 export class ControlSessionError extends Error {
   constructor(readonly code: ControlSessionErrorCode, cause?: unknown) {
     super(code, cause === undefined ? undefined : { cause });
@@ -65,12 +63,10 @@ export interface ControlListenerAddress {
   readonly port: number;
 }
 
-/** Creates the one-run credential that is passed only through the plugin's private environment. */
 export function createControlToken(): string {
   return randomBytes(32).toString('base64url');
 }
 
-/** Owns one ephemeral loopback listener and transfers one accepted connection to its session. */
 export interface ControlListenerLease {
   readonly address: ControlListenerAddress;
   accept(signal?: AbortSignal): Promise<ControlSession>;
@@ -106,7 +102,6 @@ class TcpControlListenerLease implements ControlListenerLease {
     });
   }
 
-  /** Accepts exactly one plugin socket, authenticates it, and stops listening before returning. */
   async accept(signal?: AbortSignal): Promise<ControlSession> {
     if (this.#acceptStarted) throw new ControlSessionError('already_accepted');
     if (this.#closed) throw new ControlSessionError('listener_closed');
@@ -167,7 +162,6 @@ class TcpControlListenerLease implements ControlListenerLease {
     return await this.#authenticate(acceptedSocket, signal);
   }
 
-  /** Stops accepting and waits until the transferred plugin socket has been closed. */
   async close(): Promise<void> {
     this.#closed = true;
     this.#acceptReject?.(new ControlSessionError('listener_closed'));
@@ -253,7 +247,6 @@ class TcpControlListenerLease implements ControlListenerLease {
   }
 }
 
-/** Binds before child startup; the caller owns the returned lease until shutdown. */
 export async function bindControlListener(options: ControlListenerOptions): Promise<ControlListenerLease> {
   const server = createServer();
   const listening = once(server, 'listening');
@@ -271,7 +264,6 @@ export async function bindControlListener(options: ControlListenerOptions): Prom
   }
 }
 
-/** Owns the authenticated plugin socket and its independent runner sequence. */
 export interface ControlSession {
   readonly ready: Extract<ControlMessage, { readonly type: 'ready' }>;
   send(command: RunnerCommand): Promise<RunnerCommandEnvelope>;
@@ -310,7 +302,6 @@ class AuthenticatedControlSession implements ControlSession {
     this.#socket.on('error', (error) => { this.#socketFailure = error; });
   }
 
-  /** Sends one command without retrying it and returns its correlation sequence. */
   async send(command: RunnerCommand): Promise<RunnerCommandEnvelope> {
     this.#assertOpen();
     if (this.#terminal) throw new ControlSessionError('control_closed');
@@ -351,7 +342,6 @@ class AuthenticatedControlSession implements ControlSession {
     }
   }
 
-  /** Reads accepted plugin messages with TCP backpressure and no application-side drop queue. */
   async *messages(): AsyncGenerator<ControlMessage> {
     if (this.#messagesStarted) throw new ControlSessionError('control_closed');
     this.#messagesStarted = true;
@@ -387,7 +377,6 @@ class AuthenticatedControlSession implements ControlSession {
     }
   }
 
-  /** Closes the accepted socket; repeated cleanup calls share one completion. */
   async close(): Promise<void> {
     if (this.#closePromise !== undefined) return await this.#closePromise;
     this.#closePromise = new Promise<void>((resolve) => {

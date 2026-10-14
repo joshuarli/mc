@@ -24,7 +24,6 @@ export interface CivilizationContainerCount extends CivilizationMaterialCounts {
   readonly position: BlockPosition;
 }
 
-/** One complete server-side material view at an end-of-tick boundary. */
 export interface CivilizationMaterialCheckpoint {
   readonly sequence: bigint;
   readonly atMatchTick: bigint;
@@ -35,7 +34,6 @@ export interface CivilizationMaterialCheckpoint {
   readonly placedOakPlanks: readonly BlockPosition[];
 }
 
-/** Cargo and dropped stacks are both copied from the authoritative death event. */
 export interface CivilizationDeathCargo {
   readonly sequence: bigint;
   readonly atMatchTick: bigint;
@@ -52,18 +50,12 @@ export type CivilizationMaterialRecord =
   | Readonly<{ kind: "checkpoint"; checkpoint: CivilizationMaterialCheckpoint }>
   | Readonly<{ kind: "death_cargo"; death: CivilizationDeathCargo }>;
 
-/** Defines wood sources and starting stock from the prepared map and roster. */
 export interface CivilizationMaterialBaseline {
   readonly naturalOakLogSources: readonly BlockPosition[];
   readonly initialStock: CivilizationMaterialCounts;
   readonly containerPositions: readonly BlockPosition[];
 }
 
-/**
- * Reads only complete ArenaFoundation records from Paper's server-thread INFO log lines.
- * Checkpoints must change material state, except for the mandatory same-tick checkpoint after death cargo.
- * Marker count, line size, run id, keys, decimal values, and ordering are strict.
- */
 export function parseCivilizationMaterialLog(log: string, expectedRunId: string): readonly CivilizationMaterialRecord[] {
   if (expectedRunId.length === 0) throw new Error("civilization material log requires the owned run id");
 
@@ -139,10 +131,6 @@ export function parseCivilizationMaterialLog(log: string, expectedRunId: string)
   return Object.freeze(records);
 }
 
-/**
- * Checks fixed-map wood conservation. Four planks equal one log; placed planks remain in the total.
- * Any source restoration, untracked transformation, grant, loss, or missing container fails.
- */
 export function assertCivilizationMaterialConservation(
   checkpoints: readonly CivilizationMaterialCheckpoint[],
   baseline: CivilizationMaterialBaseline,
@@ -213,7 +201,6 @@ function assertMaterialConservation(
   }
 }
 
-/** Requires every configured outpost cell to appear in the census; other plank placements remain valid. */
 export function assertCivilizationOutpostsPresent(
   checkpoint: CivilizationMaterialCheckpoint,
   outpostPositions: readonly BlockPosition[],
@@ -224,7 +211,6 @@ export function assertCivilizationOutpostsPresent(
   assertCivilizationPlacedPositionsPresent(checkpoint, outpostPositions, "the two complete outposts");
 }
 
-/** Requires selected configured cells in the authoritative census while preserving other legal placements. */
 export function assertCivilizationPlacedPositionsPresent(
   checkpoint: CivilizationMaterialCheckpoint,
   expectedPositions: readonly BlockPosition[],
@@ -238,7 +224,6 @@ export function assertCivilizationPlacedPositionsPresent(
   }
 }
 
-/** Requires every ordinary death to agree with its event cargo and post-death checkpoint. */
 export function assertCivilizationCargoDeaths(
   records: readonly CivilizationMaterialRecord[],
   events: readonly RuntimeAuthorityEvent[],

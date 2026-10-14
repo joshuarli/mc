@@ -47,7 +47,6 @@ export type CivilizationAcceptanceOptions = Readonly<{
   readonly onPolicyActivity?: RunPreparedRunOptions["onPolicyActivity"];
 }>;
 
-/** Runs one owned Civilization scenario with private census enabled only for its Paper child. */
 export async function runOwnedCivilizationAcceptanceScenario(
   scenarioPath: string,
   runId: string,
@@ -103,7 +102,6 @@ export async function runOwnedCivilizationAcceptanceScenario(
   return { ...completed, inspection, materialLog: UTF8.decode(log) };
 }
 
-/** Verifies that all six connected clients use the fixed scenario roles and factions. */
 export function assertCivilizationRoster(active: AcceptanceRunContext): CivilizationScenarioIr {
   const scenario = active.preparedRun.scenario;
   if (scenario.mode !== "civilization") throw new Error("acceptance scenario must compile as Civilization");
@@ -131,7 +129,6 @@ export function assertCivilizationRoster(active: AcceptanceRunContext): Civiliza
   return scenario;
 }
 
-/** Returns the mode-specific client only after checking its runtime seat and adapter. */
 export function civilizationClientForSeat(active: AcceptanceRunContext, seat: number): MineflayerCivilizationClient {
   const competitor = active.competitors.find((candidate) => candidate.seat === seat);
   assert.ok(competitor, `civilization runtime must contain seat ${seat}`);
@@ -142,7 +139,6 @@ export function civilizationClientForSeat(active: AcceptanceRunContext, seat: nu
   return gameplay.client;
 }
 
-/** Resolves source logs, faction chests, and blueprint cells from the compiled run input. */
 export function civilizationActionLayout(scenario: CivilizationScenarioIr): CivilizationActionLayout {
   const allSources = scenario.map.blocks
     .filter(({ block }) => block === "minecraft:oak_log")
@@ -175,7 +171,6 @@ export function civilizationActionLayout(scenario: CivilizationScenarioIr): Civi
   return { ember, tide };
 }
 
-/** Derives tracked starting stock from the compiled player kits and declared chest inventories. */
 export function civilizationMaterialBaseline(scenario: CivilizationScenarioIr): CivilizationMaterialBaseline {
   const count = (item: "minecraft:oak_log" | "minecraft:oak_planks"): number => {
     const kitCount = scenario.civilization.startingKit.reduce(
@@ -197,7 +192,6 @@ export function civilizationMaterialBaseline(scenario: CivilizationScenarioIr): 
   };
 }
 
-/** Assigns each evaluator skill call one monotonic interval and a unique local action id. */
 export async function recordCivilizationAction(
   actions: CivilizationActionEvidence[],
   seat: number,
@@ -227,7 +221,6 @@ export function currentCivilizationObservation(
   return client.observe(currentMatchTick(active));
 }
 
-/** Waits for the public match clock or one client observation without substituting local state. */
 export async function waitForCivilizationPhase(
   active: AcceptanceRunContext,
   phase: "grace" | "active" | "finished",
@@ -258,7 +251,6 @@ export async function waitForCurrentCivilizationMaterials(
   throw new Error(`civilization inventory did not synchronize within ${OBSERVATION_TIMEOUT_MS} ms`);
 }
 
-/** Runs the fixed natural-log to chest to fifteen-block outpost chain with ordinary client skills. */
 export async function completeCivilizationFactionMaterialChain(
   active: AcceptanceRunContext,
   gathererSeat: number,
@@ -517,7 +509,6 @@ export function assertSucceeded(outcome: SkillOutcome, description: string): voi
   assert.deepStrictEqual(outcome, { kind: "succeeded" }, description);
 }
 
-/** Runs ordinary client combat and retains the victim's own damage receipts. */
 export async function eliminateCivilizationWithSkillAttacks(
   active: AcceptanceRunContext,
   attackerSeat: number,

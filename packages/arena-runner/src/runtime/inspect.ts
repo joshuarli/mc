@@ -34,7 +34,6 @@ export interface StoppedRunInspection {
   readonly stats: readonly StoppedPlayerStats[];
 }
 
-/** Inspects a stopped owned run from its persisted lifecycle evidence and Minecraft stats. */
 export async function inspectStoppedRun(options: Readonly<{
   helperPath: string;
   ownedRoot: Buffer;

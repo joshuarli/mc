@@ -25,7 +25,6 @@ const ARMOR_SLOT: Readonly<Record<string, Exclude<EquipmentSlot, 'weapon'>>> = O
   boots: 'boots',
 });
 
-/** Ratings order vanilla material tiers; the core compares them only within a gear slot. */
 export function classifyItem(bot: Bot, item: MineflayerItem): KnownItem | null {
   if (bot.registry.foodsByName[item.name] !== undefined) return { kind: 'food' };
 

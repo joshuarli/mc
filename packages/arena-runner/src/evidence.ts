@@ -194,8 +194,6 @@ export function reconstructRunEvidence(evidence: Evidence): ReconstructedRunEvid
     const authoritativeEvent = message.type === 'public_clock' || message.type === 'public_state'
       || message.type === 'elimination' || message.type === 'civilization_state' || message.type === 'outcome';
     if (authoritativeEvent && pendingRunnerCommand !== undefined) {
-      // Abort receipt is asynchronous; ongoing authority may already be in flight before it is processed.
-      // Terminal effects still require the matching acknowledgment before reconstruction accepts them.
       const inFlightBeforeAbort = pendingRunnerCommand.type === 'abort'
         && (message.type === 'public_state' || message.type === 'civilization_state' || message.type === 'elimination'
           || (message.type === 'public_clock' && message.payload.phase !== 'aborted' && message.payload.phase !== 'finished'));

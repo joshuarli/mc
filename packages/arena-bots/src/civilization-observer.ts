@@ -47,7 +47,6 @@ interface DecodedCivilizationTeamReport {
   readonly position: BlockPosition;
 }
 
-/** Public identity mapping supplied by the authenticated match roster. */
 export interface CivilizationRosterMember {
   readonly seat: number;
   readonly username: string;
@@ -59,7 +58,6 @@ interface Observed<T> {
   readonly observedAt: ReturnType<typeof tick>;
 }
 
-/** Builds civilization observations from this client's inventory, entities, and loaded blocks. */
 export class MineflayerCivilizationObserver {
   readonly #bot: Bot;
   readonly #context: CivilizationPolicyContext;
@@ -139,7 +137,6 @@ export class MineflayerCivilizationObserver {
     return observation;
   }
 
-  /** Returns true only for an opponent matched by both public roster identity fields. */
   isRosteredOpponent(entityIdValue: number): boolean {
     this.#assertOpen();
     this.#assertOwnRosterIdentity();
@@ -151,10 +148,6 @@ export class MineflayerCivilizationObserver {
     return profile !== null && profile.faction !== this.#profile.faction;
   }
 
-  /**
-   * Accepts a report from the runtime's authenticated caller boundary.
-   * The sender seat comes from the runtime channel binding, never from the report payload.
-   */
   receiveTeamReport(
     authenticatedSenderSeat: number,
     decodedReport: unknown,

@@ -32,7 +32,6 @@ export interface StartServerProcessOptions {
   }>;
 }
 
-/** Starts one child without a shell and keeps ownership until its exit is observed. */
 export async function startOwnedServerProcess(
   options: StartServerProcessOptions,
 ): Promise<OwnedServerProcess> {
