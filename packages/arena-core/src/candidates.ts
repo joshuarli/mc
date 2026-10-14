@@ -1,0 +1,439 @@
+import { isNearOrOutsideBorder, offsetBlockPosition, squaredDistance, type BlockPosition } from './geometry.js';
+import {
+  agentObservation,
+  currentKnowledge,
+  type AgentObservation,
+  type AgentState,
+  type VisibleOpponent,
+} from './observation.js';
+import {
+  PolicyParams,
+  decide,
+  decideOpening,
+  policyMemory,
+  type Decision,
+  type Goal,
+  type OpeningDecision,
+  type OpeningPolicyContext,
+  type PolicyFeedbackBatch,
+  type PolicyMemory,
+  type PolicyParamValues,
+} from './policy.js';
+import { DeterministicRandom, RandomStream } from './random.js';
+
+export const CANDIDATE_IDS = [
+  'baseline',
+  'cautious-survivor',
+  'equipment-skirmisher',
+  'melee-duelist',
+  'ranged-kiter',
+] as const;
+
+export type CandidateId = typeof CANDIDATE_IDS[number];
+export type CandidateImplementationId = 'policy-v4' | 'tactical-v1';
+
+export const CANDIDATE_TUNABLES = [
+  'eatAtHungerOrBelow',
+  'retreatAtHealthHalfHeartsOrBelow',
+  'borderMarginBlocks',
+  'fightRangeBlocks',
+  'opponentMemoryTicks',
+  'lootHysteresisBlocks',
+  'searchRadiusBlocks',
+  'lootFirstRangeBlocks',
+  'kiteRangeBlocks',
+] as const;
+
+export type CandidateTunable = typeof CANDIDATE_TUNABLES[number];
+export type CandidateParamValues = Readonly<Record<CandidateTunable, number>>;
+
+export const CANDIDATE_PARAMETER_RANGES: Readonly<Record<CandidateTunable, { readonly min: number; readonly max: number }>> =
+  Object.freeze({
+    eatAtHungerOrBelow: Object.freeze({ min: 1, max: 20 }),
+    retreatAtHealthHalfHeartsOrBelow: Object.freeze({ min: 1, max: 39 }),
+    borderMarginBlocks: Object.freeze({ min: 0, max: 8 }),
+    fightRangeBlocks: Object.freeze({ min: 1, max: 8 }),
+    opponentMemoryTicks: Object.freeze({ min: 1, max: 100 }),
+    lootHysteresisBlocks: Object.freeze({ min: 0, max: 16 }),
+    searchRadiusBlocks: Object.freeze({ min: 1, max: 16 }),
+    lootFirstRangeBlocks: Object.freeze({ min: 0, max: 8 }),
+    kiteRangeBlocks: Object.freeze({ min: 0, max: 4 }),
+  });
+
+interface CandidateDefinition {
+  readonly version: number;
+  readonly implementation: CandidateImplementationId;
+  readonly defaults: CandidateParamValues;
+}
+
+const KITE_STEP_BLOCKS = 4;
+
+const DEFINITIONS: Readonly<Record<CandidateId, CandidateDefinition>> = Object.freeze({
+  baseline: Object.freeze({
+    version: 1,
+    implementation: 'policy-v4' as const,
+    defaults: Object.freeze({
+      eatAtHungerOrBelow: 8,
+      retreatAtHealthHalfHeartsOrBelow: 8,
+      borderMarginBlocks: 2,
+      fightRangeBlocks: 4,
+      opponentMemoryTicks: 100,
+      lootHysteresisBlocks: 2,
+      searchRadiusBlocks: 8,
+      lootFirstRangeBlocks: 0,
+      kiteRangeBlocks: 0,
+    }),
+  }),
+  'cautious-survivor': Object.freeze({
+    version: 1,
+    implementation: 'tactical-v1' as const,
+    defaults: Object.freeze({
+      eatAtHungerOrBelow: 12,
+      retreatAtHealthHalfHeartsOrBelow: 14,
+      borderMarginBlocks: 4,
+      fightRangeBlocks: 3,
+      opponentMemoryTicks: 100,
+      lootHysteresisBlocks: 2,
+      searchRadiusBlocks: 8,
+      lootFirstRangeBlocks: 0,
+      kiteRangeBlocks: 0,
+    }),
+  }),
+  'equipment-skirmisher': Object.freeze({
+    version: 1,
+    implementation: 'tactical-v1' as const,
+    defaults: Object.freeze({
+      eatAtHungerOrBelow: 8,
+      retreatAtHealthHalfHeartsOrBelow: 10,
+      borderMarginBlocks: 2,
+      fightRangeBlocks: 4,
+      opponentMemoryTicks: 100,
+      lootHysteresisBlocks: 6,
+      searchRadiusBlocks: 12,
+      lootFirstRangeBlocks: 2,
+      kiteRangeBlocks: 0,
+    }),
+  }),
+  'melee-duelist': Object.freeze({
+    version: 1,
+    implementation: 'tactical-v1' as const,
+    defaults: Object.freeze({
+      eatAtHungerOrBelow: 6,
+      retreatAtHealthHalfHeartsOrBelow: 5,
+      borderMarginBlocks: 2,
+      fightRangeBlocks: 7,
+      opponentMemoryTicks: 100,
+      lootHysteresisBlocks: 1,
+      searchRadiusBlocks: 8,
+      lootFirstRangeBlocks: 0,
+      kiteRangeBlocks: 0,
+    }),
+  }),
+  'ranged-kiter': Object.freeze({
+    version: 1,
+    implementation: 'tactical-v1' as const,
+    defaults: Object.freeze({
+      eatAtHungerOrBelow: 8,
+      retreatAtHealthHalfHeartsOrBelow: 9,
+      borderMarginBlocks: 3,
+      fightRangeBlocks: 4,
+      opponentMemoryTicks: 100,
+      lootHysteresisBlocks: 4,
+      searchRadiusBlocks: 10,
+      lootFirstRangeBlocks: 3,
+      kiteRangeBlocks: 3,
+    }),
+  }),
+});
+
+export interface CompiledCandidate {
+  readonly id: CandidateId;
+  readonly version: number;
+  readonly implementation: CandidateImplementationId;
+  readonly params: CandidateParamValues;
+  readonly semanticId: string;
+  decide(
+    observation: AgentObservation,
+    memory: PolicyMemory,
+    random: DeterministicRandom,
+    feedback?: PolicyFeedbackBatch,
+  ): Decision;
+  decideOpening(
+    observation: AgentObservation,
+    memory: PolicyMemory,
+    random: DeterministicRandom,
+    feedback: PolicyFeedbackBatch,
+    context: OpeningPolicyContext,
+  ): OpeningDecision;
+}
+
+export class InvalidCandidateError extends RangeError {
+  constructor(readonly code: 'unknown-candidate' | 'unknown-parameter' | 'parameter-out-of-range' | 'frozen-candidate', detail: string) {
+    super(`invalid candidate: ${code}: ${detail}`);
+    this.name = 'InvalidCandidateError';
+  }
+}
+
+export function candidateDefaults(id: CandidateId): CandidateParamValues {
+  return definition(id).defaults;
+}
+
+export function candidateVersion(id: CandidateId): number {
+  return definition(id).version;
+}
+
+export function candidateSemanticId(id: CandidateId, params: CandidateParamValues): string {
+  const entry = definition(id);
+  const values = CANDIDATE_TUNABLES.map((name) => `${name}=${params[name]}`).join(',');
+  return `${id}@${entry.version}/${entry.implementation}/${values}`;
+}
+
+export function validateCandidateParams(
+  id: CandidateId,
+  overrides: Readonly<Partial<Record<string, number>>> = {},
+): CandidateParamValues {
+  const entry = definition(id);
+  const merged: Record<CandidateTunable, number> = { ...entry.defaults };
+  for (const [name, value] of Object.entries(overrides)) {
+    if (!(CANDIDATE_TUNABLES as readonly string[]).includes(name)) {
+      throw new InvalidCandidateError('unknown-parameter', name);
+    }
+    const range = CANDIDATE_PARAMETER_RANGES[name as CandidateTunable];
+    if (!Number.isSafeInteger(value) || value! < range.min || value! > range.max) {
+      throw new InvalidCandidateError('parameter-out-of-range', `${name}=${String(value)}`);
+    }
+    merged[name as CandidateTunable] = value!;
+  }
+  if (id === 'baseline') {
+    for (const name of CANDIDATE_TUNABLES) {
+      if (merged[name] !== entry.defaults[name]) throw new InvalidCandidateError('frozen-candidate', name);
+    }
+  }
+  if (entry.implementation === 'policy-v4' && (merged.lootFirstRangeBlocks !== 0 || merged.kiteRangeBlocks !== 0)) {
+    throw new InvalidCandidateError('frozen-candidate', 'policy-v4 has no tactical knobs');
+  }
+  return Object.freeze(merged);
+}
+
+export function compileCandidate(
+  id: CandidateId,
+  overrides: Readonly<Partial<Record<string, number>>> = {},
+): CompiledCandidate {
+  const entry = definition(id);
+  const params = validateCandidateParams(id, overrides);
+  const policyParams = PolicyParams.create(policyValues(params));
+  const implementation = IMPLEMENTATIONS[entry.implementation];
+  const compiled: CompiledCandidate = {
+    id,
+    version: entry.version,
+    implementation: entry.implementation,
+    params,
+    semanticId: candidateSemanticId(id, params),
+    decide: (observation, memory, random, feedback = []) => (
+      implementation.decide(observation, memory, policyParams, params, random, feedback)
+    ),
+    decideOpening: (observation, memory, random, feedback, context) => (
+      implementation.decideOpening(observation, memory, policyParams, params, random, feedback, context)
+    ),
+  };
+  return Object.freeze(compiled);
+}
+
+interface CandidateImplementation {
+  decide(
+    observation: AgentObservation,
+    memory: PolicyMemory,
+    policyParams: PolicyParams,
+    params: CandidateParamValues,
+    random: DeterministicRandom,
+    feedback: PolicyFeedbackBatch,
+  ): Decision;
+  decideOpening(
+    observation: AgentObservation,
+    memory: PolicyMemory,
+    policyParams: PolicyParams,
+    params: CandidateParamValues,
+    random: DeterministicRandom,
+    feedback: PolicyFeedbackBatch,
+    context: OpeningPolicyContext,
+  ): OpeningDecision;
+}
+
+const IMPLEMENTATIONS: Readonly<Record<CandidateImplementationId, CandidateImplementation>> = {
+  'policy-v4': {
+    decide: (observation, memory, policyParams, _params, random, feedback) => (
+      decide(observation, memory, policyParams, random, feedback)
+    ),
+    decideOpening: (observation, memory, policyParams, _params, random, feedback, context) => (
+      decideOpening(observation, memory, policyParams, random, feedback, context)
+    ),
+  },
+  'tactical-v1': {
+    decide: (observation, memory, policyParams, params, random, feedback) => {
+      const decision = decide(lootFirstView(observation, params), memory, policyParams, random, feedback);
+      return kite(observation, decision, params, policyParams.values);
+    },
+    decideOpening: (observation, memory, policyParams, params, random, feedback, context) => {
+      const decision = decideOpening(lootFirstView(observation, params), memory, policyParams, random, feedback, context);
+      const kited = kite(observation, decision, params, policyParams.values);
+      return kited === decision ? decision : Object.freeze({ ...kited, openingState: decision.openingState });
+    },
+  },
+};
+
+function lootFirstView(observation: AgentObservation, params: CandidateParamValues): AgentObservation {
+  const range = params.lootFirstRangeBlocks;
+  if (range === 0 || observation.agent.kind !== 'current' || observation.opponents.kind !== 'current'
+      || observation.loot.kind !== 'current' || observation.loot.value.length === 0) {
+    return observation;
+  }
+  const agent = observation.agent.value;
+  const limit = BigInt(range) ** 2n;
+  const kept = observation.opponents.value.filter((opponent) => (
+    opponent.attackingAgent || squaredDistance(agent.position, opponent.position) <= limit
+  ));
+  if (kept.length === observation.opponents.value.length) return observation;
+  return agentObservation({
+    tick: observation.tick,
+    sequence: observation.sequence,
+    agent: observation.agent,
+    border: observation.border,
+    opponents: currentKnowledge(kept),
+    loot: observation.loot,
+  });
+}
+
+function kite<T extends Decision>(
+  observation: AgentObservation,
+  decision: T,
+  params: CandidateParamValues,
+  policy: PolicyParamValues,
+): T {
+  const range = params.kiteRangeBlocks;
+  if (range === 0 || decision.goal.kind !== 'engageVisibleOpponent') return decision;
+  if (observation.agent.kind !== 'current' || observation.opponents.kind !== 'current'
+      || observation.border.kind !== 'current') return decision;
+  const agent = observation.agent.value;
+  if (agent.ranged === undefined || agent.ranged.arrows < 1) return decision;
+  if (isNearOrOutsideBorder(observation.border.value, agent.position, policy.borderMarginBlocks)) return decision;
+  const threat = nearestWithin(agent, observation.opponents.value, range);
+  if (threat === null) return decision;
+  const retreat = awayFrom(agent.position, threat.position);
+  if (retreat === null) return decision;
+  const goal: Goal = Object.freeze({ kind: 'retreatFromOpponent', target: threat.id });
+  return Object.freeze({
+    ...decision,
+    goal,
+    intent: Object.freeze({ kind: 'navigate', target: retreat }),
+    memory: policyMemory({ ...decision.memory, lastGoal: goal }),
+  }) as T;
+}
+
+function nearestWithin(agent: AgentState, opponents: readonly VisibleOpponent[], range: number): VisibleOpponent | null {
+  const limit = BigInt(range) ** 2n;
+  let best: VisibleOpponent | null = null;
+  let bestDistance = 0n;
+  for (const opponent of opponents) {
+    const distance = squaredDistance(agent.position, opponent.position);
+    if (distance > limit) continue;
+    if (best === null || distance < bestDistance || (distance === bestDistance && opponent.id < best.id)) {
+      best = opponent;
+      bestDistance = distance;
+    }
+  }
+  return best;
+}
+
+function awayFrom(position: BlockPosition, threat: BlockPosition): BlockPosition | null {
+  let dx = Math.sign(position.x - threat.x);
+  const dz = Math.sign(position.z - threat.z);
+  if (dx === 0 && dz === 0) dx = 1;
+  const moved = offsetBlockPosition(position, dx * KITE_STEP_BLOCKS, 0, dz * KITE_STEP_BLOCKS);
+  return moved.ok ? moved.value : null;
+}
+
+function policyValues(params: CandidateParamValues): PolicyParamValues {
+  return {
+    version: 1,
+    eatAtHungerOrBelow: params.eatAtHungerOrBelow,
+    retreatAtHealthHalfHeartsOrBelow: params.retreatAtHealthHalfHeartsOrBelow,
+    borderMarginBlocks: params.borderMarginBlocks,
+    fightRangeBlocks: params.fightRangeBlocks,
+    opponentMemoryTicks: params.opponentMemoryTicks,
+    lootHysteresisBlocks: params.lootHysteresisBlocks,
+    searchRadiusBlocks: params.searchRadiusBlocks,
+  };
+}
+
+function definition(id: CandidateId): CandidateDefinition {
+  const entry = (DEFINITIONS as Record<string, CandidateDefinition | undefined>)[id];
+  if (entry === undefined) throw new InvalidCandidateError('unknown-candidate', String(id));
+  return entry;
+}
+
+const SEARCH_ROUNDS_MAX = 8;
+
+export function coordinateSearchProposals(
+  id: CandidateId,
+  current: CandidateParamValues,
+  seed: bigint,
+  round: number,
+  maxProposals: number,
+): readonly CandidateParamValues[] {
+  if (id === 'baseline') throw new InvalidCandidateError('frozen-candidate', 'baseline is not tunable');
+  if (!Number.isSafeInteger(round) || round < 0 || round >= SEARCH_ROUNDS_MAX) {
+    throw new RangeError(`search round must be between 0 and ${SEARCH_ROUNDS_MAX - 1}`);
+  }
+  if (!Number.isSafeInteger(maxProposals) || maxProposals < 1 || maxProposals > 64) {
+    throw new RangeError('maxProposals must be between 1 and 64');
+  }
+  const random = DeterministicRandom.forStream(seed, RandomStream.setup());
+  for (let skip = 0; skip < round * 7; skip += 1) random.nextU64();
+  const order = shuffled(CANDIDATE_TUNABLES, random);
+  const seen = new Set<string>([candidateSemanticId(id, current)]);
+  const proposals: CandidateParamValues[] = [];
+  for (const name of order) {
+    const range = CANDIDATE_PARAMETER_RANGES[name];
+    const step = Math.max(1, Math.round((range.max - range.min) / 2 ** (round + 3)));
+    for (const direction of [1, -1] as const) {
+      const value = Math.min(range.max, Math.max(range.min, current[name] + direction * step));
+      if (value === current[name]) continue;
+      const candidate = validateCandidateParams(id, { ...current, [name]: value });
+      const key = candidateSemanticId(id, candidate);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      proposals.push(candidate);
+      if (proposals.length >= maxProposals) return Object.freeze(proposals);
+    }
+  }
+  return Object.freeze(proposals);
+}
+
+export function randomSearchProposals(
+  id: CandidateId,
+  seed: bigint,
+  count: number,
+): readonly CandidateParamValues[] {
+  if (id === 'baseline') throw new InvalidCandidateError('frozen-candidate', 'baseline is not tunable');
+  if (!Number.isSafeInteger(count) || count < 1 || count > 64) throw new RangeError('count must be between 1 and 64');
+  const random = DeterministicRandom.forStream(seed, RandomStream.setup());
+  const proposals: CandidateParamValues[] = [];
+  for (let index = 0; index < count; index += 1) {
+    const sampled: Record<string, number> = {};
+    for (const name of CANDIDATE_TUNABLES) {
+      const range = CANDIDATE_PARAMETER_RANGES[name];
+      sampled[name] = range.min + Number(random.nextU64() % BigInt(range.max - range.min + 1));
+    }
+    proposals.push(validateCandidateParams(id, sampled));
+  }
+  return Object.freeze(proposals);
+}
+
+function shuffled<T>(values: readonly T[], random: DeterministicRandom): T[] {
+  const result = [...values];
+  for (let index = result.length - 1; index > 0; index -= 1) {
+    const swap = Number(random.nextU64() % BigInt(index + 1));
+    [result[index], result[swap]] = [result[swap]!, result[index]!];
+  }
+  return result;
+}

@@ -257,3 +257,24 @@ export type {
   ReportedResource,
   StoredMaterialStack,
 } from './civilization.js';
+
+export {
+  CANDIDATE_IDS,
+  CANDIDATE_PARAMETER_RANGES,
+  CANDIDATE_TUNABLES,
+  InvalidCandidateError,
+  candidateDefaults,
+  candidateSemanticId,
+  candidateVersion,
+  compileCandidate,
+  coordinateSearchProposals,
+  randomSearchProposals,
+  validateCandidateParams,
+} from './candidates.js';
+export type {
+  CandidateId,
+  CandidateImplementationId,
+  CandidateParamValues,
+  CandidateTunable,
+  CompiledCandidate,
+} from './candidates.js';
