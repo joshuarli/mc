@@ -6,6 +6,7 @@ import { ActionFunnelCollector } from '../runtime/funnel.js';
 import { RuntimeCompetitorClient, type RuntimeClientOptions } from '../runtime/clients.js';
 import type { PlayerIdentity } from '../runtime/observations.js';
 import { DiagnosticCoalescer } from './outbox.js';
+import { DelayTracker } from '../bench/delays.js';
 import {
   assertWorkerMessageBound,
   type CriticalKind,
@@ -28,6 +29,7 @@ export class WorkerRuntime {
   readonly #send: (message: WorkerToSupervisor) => Promise<void>;
   readonly #createCompetitor: WorkerCompetitorFactory;
   readonly #diagnostics = new DiagnosticCoalescer();
+  readonly #delays = new DelayTracker();
   readonly #abort = new AbortController();
   #init: WorkerInit | undefined;
   #loop: LivePolicyLoop | undefined;
@@ -50,6 +52,11 @@ export class WorkerRuntime {
     switch (message.type) {
       case 'init': return await this.#start(message);
       case 'tick': return this.#tick(message.tick);
+      case 'telemetry-reset': return this.#delays.reset();
+      case 'telemetry-request': return await this.#send({
+        type: 'telemetry', worker: this.#init?.worker ?? 0, epoch: this.#init?.epoch ?? 0,
+        request: message.request, telemetry: this.#delays.snapshot(),
+      });
       case 'stop': return await this.#stop();
     }
   }
@@ -57,6 +64,7 @@ export class WorkerRuntime {
   async #start(init: WorkerInit): Promise<void> {
     if (this.#init !== undefined) throw new RunnerError('runtime_failure', 'worker', { kind: 'worker_already_initialized' });
     this.#init = init;
+    this.#delays.start();
     const policy = compilePolicy(init.policy_source);
     const collector = new ActionFunnelCollector(new Map(init.roster.map((entry) => [entry.username, entry.seat])));
     collector.onDiagnostic = (seat, record) => {
@@ -123,6 +131,7 @@ export class WorkerRuntime {
   async #stop(): Promise<void> {
     if (this.#stopped || this.#init === undefined) return;
     this.#stopped = true;
+    this.#delays.stop();
     this.#abort.abort();
     this.#loop?.stopLaunching();
     await this.#loop?.stopAndJoin();
@@ -139,6 +148,7 @@ export class WorkerRuntime {
   }
 
   #activity(event: PolicyActivityEvent): void {
+    this.#delays.onActivity(event);
     this.#diagnostics.note(event.kind === 'decision' ? `decision.${event.disposition.kind}` : event.kind);
   }
 

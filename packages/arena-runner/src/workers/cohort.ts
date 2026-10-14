@@ -17,6 +17,12 @@ import {
 } from './protocol.js';
 import { PolicySequenceMap } from './sequence-map.js';
 
+export interface WorkerCohortTelemetry {
+  readonly worker: number;
+  readonly seats: number;
+  readonly telemetry: import('../bench/delays.js').WorkerTelemetry;
+}
+
 export const WORKER_READY_TIMEOUT_MS = 90_000;
 export const WORKER_STOP_TIMEOUT_MS = 10_000;
 const CHECKPOINT_INTERVAL = 200;
@@ -58,6 +64,7 @@ interface WorkerState {
   stopRequested: boolean;
   readonly readyWaiters: Array<{ resolve(): void; reject(error: unknown): void }>;
   readonly stoppedWaiters: Array<() => void>;
+  readonly telemetryWaiters: Map<number, (telemetry: unknown) => void>;
 }
 
 export class WorkerCohort {
@@ -76,6 +83,7 @@ export class WorkerCohort {
   readonly #failureState: Promise<never>;
   #rejectFailure!: (error: unknown) => void;
   #decisionCount = 0;
+  #telemetryRequest = 0;
   #droppedDiagnostics = 0;
 
   constructor(options: Readonly<{
@@ -128,7 +136,7 @@ export class WorkerCohort {
       const channel = this.#launcher(worker);
       const state: WorkerState = {
         worker, epoch: 1, seats, channel, ready: false, stopped: false, lost: false, stopRequested: false,
-        readyWaiters: [], stoppedWaiters: [],
+        readyWaiters: [], stoppedWaiters: [], telemetryWaiters: new Map(),
       };
       this.#states.set(worker, state);
       assignments.push({ worker, epoch: 1, seats: seatNumbers });
@@ -155,6 +163,29 @@ export class WorkerCohort {
       }));
     }
     await Promise.all(starting);
+  }
+
+  resetTelemetry(): void {
+    for (const state of this.#states.values()) {
+      if (state.ready && !state.lost) state.channel.send({ type: 'telemetry-reset' });
+    }
+  }
+
+  async requestTelemetry(timeoutMs = 5_000): Promise<readonly WorkerCohortTelemetry[]> {
+    const request = ++this.#telemetryRequest;
+    const results: WorkerCohortTelemetry[] = [];
+    await Promise.all([...this.#states.values()].filter((state) => state.ready && !state.lost).map((state) =>
+      new Promise<void>((resolve) => {
+        const timer = setTimeout(() => { state.telemetryWaiters.delete(request); resolve(); }, timeoutMs);
+        state.telemetryWaiters.set(request, (telemetry) => {
+          clearTimeout(timer);
+          results.push({ worker: state.worker, seats: state.seats.length,
+            telemetry: telemetry as WorkerCohortTelemetry['telemetry'] });
+          resolve();
+        });
+        state.channel.send({ type: 'telemetry-request', request });
+      })));
+    return results.sort((left, right) => left.worker - right.worker);
   }
 
   onTick(tick: number): void {
@@ -203,6 +234,12 @@ export class WorkerCohort {
         state.ready = true;
         for (const waiter of state.readyWaiters.splice(0)) waiter.resolve();
         return;
+      case 'telemetry': {
+        const waiter = state.telemetryWaiters.get(message.request);
+        state.telemetryWaiters.delete(message.request);
+        waiter?.(message.telemetry);
+        return;
+      }
       case 'stopped':
         state.stopped = true;
         for (const waiter of state.stoppedWaiters.splice(0)) waiter();

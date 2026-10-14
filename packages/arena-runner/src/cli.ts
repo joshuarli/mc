@@ -12,6 +12,10 @@ import { parseWorkerCount } from './workers/assignment.js';
 import { compileCandidateProfile } from '@arena/spec';
 import { loadCheckpoint } from './checkpoint/persist.js';
 import { readSaveResult, requestSave } from './checkpoint/save-request.js';
+import { LiveBenchExecutor } from './bench/executor-live.js';
+import { benchReport, runMatrix, type MatrixFilter } from './bench/matrix.js';
+import { commandPerfGate } from './bench/perf-gate.js';
+import { profileById, WORKLOAD_KINDS, type WorkerLayout, type WorkloadKind, type WorldRegime } from './bench/profile.js';
 import { runLeague } from './league/harness.js';
 import { LiveMatchRunner } from './league/live-runner.js';
 import { parseLeagueManifest, parseSeedManifest, profileSpec, resolveLeagueManifest, type CandidateSpec } from './league/manifest.js';
@@ -78,6 +82,7 @@ async function dispatchCliBytes(args: readonly Buffer[]): Promise<CliResult> {
   }
   if (command === 'explain') return await explainCommand(rest);
   if (command === 'league') return await leagueCommand(rest);
+  if (command === 'bench') return await benchCommand(rest);
   if (command === 'prepare') return await prepareCommand(rest);
   if (command === 'validate') return await validateCommand(rest);
   if (command === 'run' || command === 'play' || command === 'watch' || command === 'resume') return await matchCommand(command, rest);
@@ -187,6 +192,76 @@ async function inspectRunCommand(args: readonly Buffer[]): Promise<CliResult> {
     runId,
   });
   return success(inspection);
+}
+
+async function benchCommand(args: readonly Buffer[]): Promise<CliResult> {
+  let profileName: string | undefined;
+  let accepted = false;
+  let workloads: WorkloadKind[] | undefined;
+  let layouts: WorkerLayout[] | undefined;
+  let regimes: WorldRegime[] | undefined;
+  let maxLevel: number | undefined;
+  const list = (value: string): string[] => value.split(',').filter((entry) => entry.length > 0);
+  for (let index = 0; index < args.length;) {
+    const option = argumentText(args[index]!, index + 1);
+    if (option === '--accept-minecraft-eula') {
+      if (accepted) throw invalidInput('bench_accept_minecraft_eula_repeated');
+      accepted = true;
+      index += 1;
+      continue;
+    }
+    if (index + 1 >= args.length) throw invalidInput('unexpected_argument');
+    const value = argumentText(args[index + 1]!, index + 2);
+    if (option === '--profile' && profileName === undefined) profileName = value;
+    else if (option === '--workloads' && workloads === undefined) {
+      workloads = list(value).map((entry) => {
+        if (!(WORKLOAD_KINDS as readonly string[]).includes(entry)) throw invalidInput('bench_unknown_workload');
+        return entry as WorkloadKind;
+      });
+    } else if (option === '--layouts' && layouts === undefined) {
+      layouts = list(value).map((entry) => {
+        if (entry !== '1' && entry !== '2' && entry !== '4') throw invalidInput('bench_invalid_layout');
+        return Number(entry) as WorkerLayout;
+      });
+    } else if (option === '--regimes' && regimes === undefined) {
+      regimes = list(value).map((entry) => {
+        if (entry !== 'cold_world' && entry !== 'prepared_world') throw invalidInput('bench_invalid_regime');
+        return entry;
+      });
+    } else if (option === '--max-level' && maxLevel === undefined) {
+      if (!/^[1-9][0-9]{0,2}$/.test(value)) throw invalidInput('bench_invalid_max_level');
+      maxLevel = Number(value);
+    } else throw invalidInput('unexpected_argument');
+    index += 2;
+  }
+  if (profileName === undefined) throw invalidInput('bench_requires_profile');
+  const profile = profileById(profileName);
+  if (profile === undefined) throw invalidInput('bench_unknown_profile');
+  if (!accepted) throw new RunnerError('missing_prerequisite', 'Minecraft EULA', { kind: 'missing_eula' });
+  const helperPath = configuredAbsolutePath('ARENA_FS_HELPER', 'filesystem helper');
+  const javaHome = configuredAbsolutePath('ARENA_JAVA_HOME', 'Java runtime');
+  const paperJarPath = configuredAbsolutePath('ARENA_PAPER_JAR', 'Paper server JAR');
+  const pluginJarPath = configuredAbsolutePath('ARENA_PLUGIN_JAR', 'Arena plugin JAR');
+  const ownedRoot = Buffer.from(process.cwd(), 'utf8');
+  const templatePath = Buffer.from('scenarios/hunger-24.toml', 'utf8');
+  return await withProcessAbortSignal(async (signal) => {
+    const templateSource = decodeSource(await readSource(helperPath, ownedRoot, templatePath, 'scenario input', signal), 'scenario input');
+    const executor = new LiveBenchExecutor({
+      helperPath, ownedRoot, javaExecutable: resolve(javaHome, 'bin', 'java'), paperJarPath, pluginJarPath,
+      profileId: profile.id, templatePath, templateSource,
+    });
+    const filter: MatrixFilter = {
+      ...(workloads === undefined ? {} : { workloads }),
+      ...(layouts === undefined ? {} : { layouts }),
+      ...(regimes === undefined ? {} : { regimes }),
+      ...(maxLevel === undefined ? {} : { maxLevel }),
+    };
+    const cells = await runMatrix({
+      profile, executor, gate: commandPerfGate(), signal, filter,
+      progress: (message) => writeProgress([`Bench ${profile.id}: ${message}`]),
+    });
+    return success(benchReport(profile, cells));
+  });
 }
 
 async function saveCommand(args: readonly Buffer[]): Promise<CliResult> {
@@ -834,6 +909,7 @@ function helpJson(): object {
       'report <segment>...': 'Reconstruct the terminal result from prepared-roster and authoritative event records.',
       'compare <left-segment> <right-segment>': 'Compare two single-segment record streams exactly.',
       'explain --run-id <id> --seat <n>': 'Tie one seat\'s recorded decisions to permitted evidence, skill outcomes, funnel stages, and authoritative effects.',
+      'bench --profile scale-v1 --accept-minecraft-eula [--workloads <list>] [--layouts <1,2,4>] [--regimes <list>] [--max-level <n>]': 'Measure the highest qualifying population per workload against fixed quality floors.',
       'save --run-id <id> [--checkpoint-id <id>]': 'Checkpoint a running generalized-roster Hunger match, stop it, and publish the checkpoint.',
       'resume --checkpoint <id> --accept-minecraft-eula [--run-id <id>] [--join-timeout-seconds <n>]': 'Resume a saved match in a new run at the next epoch.',
       'league --manifest <path> --accept-minecraft-eula': 'Run or resume a league of candidate policies against frozen opponents and report the paired analysis.',

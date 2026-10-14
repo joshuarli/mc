@@ -40,6 +40,18 @@ Progress goes to stderr: run ID, Minecraft version, address, mode, role and seat
 
 `./arena explain --run-id <id> --seat <n>` prints one seat's recorded decisions, skill outcomes, action-funnel stages, and authoritative effects for a stopped run. It needs a schema 4 trace for funnel and effect fields and states only what the trace records. See [determinism](determinism.md).
 
+## Capacity benchmark
+
+`./arena bench --profile scale-v1 --accept-minecraft-eula [--workloads <list>] [--layouts <1,2,4>] [--regimes <cold_world,prepared_world>] [--max-level <n>]` measures the highest population that meets fixed quality floors, per workload, worker layout and world regime. The filters narrow the matrix; they do not change the profile.
+
+`scale-v1` data: levels 6, 12, 24, 48, 96, 128 and 256 competitors, advancing only while the previous level qualifies; 3 valid runs per level; a 30 s warmup then a 120 s steady window; worker layouts 1, 2 and 4 for natural Hunger matches (idle connections and traversal run in the supervisor, layout 1); cold-world (a fresh world seed per run) and prepared-world (one seed per level, primed by an unmeasured run) reported separately. Economy, siege and dense-combat are typed slots reported as `workload_not_implemented`.
+
+Floors, fixed in the profile and never edited after a failure: mean TPS at least 97% of 20; per-tick service p95 < 40 ms and p99 < 50 ms; event-loop delay p99 < 25 ms for each worker that made decisions; at least 90% of expected decisions useful or waiting with a stated reason; queue depth not growing without bound; zero critical evidence lost. A percentile with too few samples (p95 < 20, p99 < 100) is `insufficient_samples` and cannot pass. Idle connections exempts the policy-engagement floors.
+
+Every measured run is bracketed by `perf-gate-ready` and `perf-gate-ready -1`. A busy host defers the run (`perf gate deferred: host busy`) and is never a pass; a run that overlapped load is discarded and retried once. A level needs 3 valid runs. A failing run stops the level and the report names the stop reason (`quality_floor_failed`, `operational_failure`, `insufficient_valid_runs`, `perf_gate_deferred_host_busy`, `perf_gate_unavailable`) and the bottleneck floor.
+
+Metrics: authoritative TPS from clock ticks over arrival time, tick service time from the plugin's `metrics` message, event-loop delay and utilization per worker, tick-arrival-to-decision and decision-to-execution delay per worker (never averaged across skipped actors), action outcomes, queue depth, dropped optional metrics, and Paper and supervisor CPU time. Metrics the stack cannot measure (search work, chunk generation, encoded bytes, log throughput, memory) stay `null`. The plugin does not yet emit `metrics`, so tick service time is `null` and no level can qualify until it does.
+
 ## Save and resume
 
 `./arena save --run-id <id> [--checkpoint-id <id>]` checkpoints a running generalized-roster Hunger match (schema 3 scenario, or a schema 2 scenario with `play`; civilization is excluded). The run's process settles bot skills, sends `checkpoint` with its epoch, waits for `checkpoint_written`, stops Paper cleanly, copies the stopped world and the plugin's record under `.work/arena/checkpoints/<id>/`, verifies the record digest and length, and publishes `manifest.json` last. A missing manifest means an incomplete checkpoint. `save` returns after the run's process writes `save-result.json` in the run directory; a failed save names its reason and the original run keeps going unless the failure came after the barrier. The saved run has no outcome; `report` names it `checkpointed_without_outcome`.

@@ -28,6 +28,8 @@ export interface WorkerInit {
 export type SupervisorToWorker =
   | WorkerInit
   | Readonly<{ type: 'tick'; tick: number }>
+  | Readonly<{ type: 'telemetry-reset' }>
+  | Readonly<{ type: 'telemetry-request'; request: number }>
   | Readonly<{ type: 'stop' }>;
 
 export type CriticalKind = 'decision' | 'effect' | 'funnel' | 'diagnostic';
@@ -43,6 +45,7 @@ export type WorkerToSupervisor =
   | (Readonly<{ type: 'ready' }> & Pick<SourceStamp, 'worker' | 'epoch'>)
   | (Readonly<{ type: 'critical'; kind: CriticalKind; record: unknown }> & SourceStamp)
   | (Readonly<{ type: 'diagnostic'; counters: Readonly<Record<string, number>>; dropped: number }> & SourceStamp)
+  | (Readonly<{ type: 'telemetry'; request: number; telemetry: unknown }> & Pick<SourceStamp, 'worker' | 'epoch'>)
   | (Readonly<{ type: 'stopped' }> & Pick<SourceStamp, 'worker' | 'epoch'>)
   | (Readonly<{ type: 'failure'; kind: string }> & Pick<SourceStamp, 'worker' | 'epoch'>);
 
@@ -74,6 +77,9 @@ export function decodeWorkerMessage(value: unknown): WorkerToSupervisor {
     case 'ready':
     case 'stopped':
       return Object.freeze({ type: value.type, worker, epoch });
+    case 'telemetry':
+      if (!nonNegativeInteger(value.request) || !isRecord(value.telemetry)) throw invalid();
+      return Object.freeze({ type: 'telemetry', worker, epoch, request: value.request, telemetry: value.telemetry });
     case 'failure':
       if (typeof value.kind !== 'string' || value.kind.length === 0 || value.kind.length > 64) throw invalid();
       return Object.freeze({ type: 'failure', worker, epoch, kind: value.kind });

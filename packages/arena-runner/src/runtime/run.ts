@@ -135,6 +135,13 @@ export interface RunPreparedRunOptions {
   readonly onUnexpectedPlayer?: (username: string) => void;
   readonly onPhase?: (phase: ClockPayload['phase']) => void;
   readonly onPolicyActivity?: (event: PolicyActivityEvent) => void;
+  readonly onServerStarted?: (pid: number) => void;
+  readonly onMetrics?: (payload: import('../control/types.js').MetricsPayload) => void;
+  readonly onAuthorityEvent?: (event: RuntimeAuthorityEvent, arrivalNs: bigint) => void;
+  readonly onWorkerCohort?: (handle: {
+    reset(): void;
+    request(): Promise<readonly import('../workers/cohort.js').WorkerCohortTelemetry[]>;
+  }) => void;
   readonly onRosterReady?: (details: Readonly<{
     host: typeof CLIENT_HOST;
     port: typeof GAME_PORT;
@@ -345,6 +352,7 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
       capabilities: CONTROL_CAPABILITIES,
     });
     serverProcess = await startPaper(options, serverInputs, listener.address.port, token, runSignal);
+    options.onServerStarted?.(serverProcess.pid);
     const processFailure = unexpectedExit(serverProcess);
     session = await withStartupTimeout(
       listener.accept(runSignal),
@@ -381,6 +389,8 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
         ? { openingStyleCycle: scenario.openingStyleCycle }
         : {}),
       rosterSize: roster.competitors.length,
+      ...(options.onMetrics === undefined ? {} : { onMetrics: options.onMetrics }),
+      ...(options.onAuthorityEvent === undefined ? {} : { onAuthorityEvent: options.onAuthorityEvent }),
       ...(options.onPhase === undefined ? {} : { onPhase: options.onPhase }),
       competitors: () => clients,
       ...(options.onPolicyActivity === undefined ? {} : { onPolicyActivity: options.onPolicyActivity }),
@@ -412,6 +422,7 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
         },
       });
       coordinator.attachCohort(cohort);
+      options.onWorkerCohort?.({ reset: () => cohort!.resetTelemetry(), request: () => cohort!.requestTelemetry() });
     }
     coordinator.startPump();
 
@@ -785,6 +796,8 @@ class ControlCoordinator {
   #phase: ClockPayload['phase'] | undefined;
   #cohort: WorkerCohort | undefined;
   #cohortStopped = false;
+  readonly #onMetrics: ((payload: import('../control/types.js').MetricsPayload) => void) | undefined;
+  readonly #onAuthorityEvent: ((event: RuntimeAuthorityEvent, arrivalNs: bigint) => void) | undefined;
   #checkpointed = false;
   readonly #checkpointWritten = deferred<CheckpointWrittenPayload>();
   #lastMatchTick: number | null = null;
@@ -813,6 +826,8 @@ class ControlCoordinator {
     candidates?: ReadonlyMap<number, CompiledCandidate>;
     restore?: ReadonlyMap<number, SeatPolicyState>;
     rosterSize: number;
+    onMetrics?: (payload: import('../control/types.js').MetricsPayload) => void;
+    onAuthorityEvent?: (event: RuntimeAuthorityEvent, arrivalNs: bigint) => void;
     onPhase?: (phase: ClockPayload['phase']) => void;
     recordPolicy: boolean;
     onPolicyActivity?: (event: PolicyActivityEvent) => void;
@@ -828,6 +843,8 @@ class ControlCoordinator {
     this.#leaseLost = options.leaseLost;
     this.#competitors = options.competitors;
     this.#rosterSize = options.rosterSize;
+    this.#onMetrics = options.onMetrics;
+    this.#onAuthorityEvent = options.onAuthorityEvent;
     this.#onPhase = options.onPhase;
     this.#measurePolicyActivity = options.onPolicyActivity !== undefined;
     this.#runnerSequence = options.session.ready.correlation!;
@@ -958,6 +975,10 @@ class ControlCoordinator {
   async #consume(): Promise<void> {
     try {
       for await (const message of this.#session.messages()) {
+        if (message.type === 'metrics') this.#onMetrics?.(message.payload);
+        if (this.#onAuthorityEvent !== undefined && isAuthorityEvent(message)) {
+          this.#onAuthorityEvent(message, process.hrtime.bigint());
+        }
         const tickReceivedAtNs = this.#measurePolicyActivity && message.type === 'public_clock' ? process.hrtime.bigint() : undefined;
         if (message.type === 'outcome') {
           this.#outcomeReceived = true;
