@@ -140,7 +140,15 @@ max_block_edits_per_seat: 1-100000}` requires block breaking and placing on
 with mobs and random ticks off in `settings.match`. `{kind: "squads",
 version: 1, squads: [{id, seats}]}` declares 2 to 64 uniquely named squads
 whose ascending seats partition every roster seat, and requires the classic
-block rules. The codec and the plugin both check these cross-field rules.
+block rules. `{kind: "uhc_duel", version: 1, kit: {armor, sword, arrows,
+golden_apples, food, food_count, shield?}}` requires exactly two roster seats
+and the classic match booleans, including `respawn: false`. `armor` and
+`sword` are material tokens, `food` is a closed Minecraft item id, and
+`shield` may be omitted, which means no shield. The codec rejects unknown
+kit items, a per-seat kit field, a missing required kit field, and any other
+roster size. The plugin gives that one kit to each admitted competitor and
+sets natural regeneration off. Classic prepares without `rules` are unchanged.
+The codec and the plugin both check these cross-field rules.
 
 ## Tick metrics
 

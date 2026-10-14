@@ -1,0 +1,19 @@
+schema = 2
+name = "uhc-duel"
+terrain = "vanilla"
+dimensions = { width = 1024, depth = 1024 }
+
+[[operations]]
+kind = "spawn"
+seat = 0
+position = { x = 496, z = 512 }
+
+[[operations]]
+kind = "spawn"
+seat = 1
+position = { x = 528, z = 512 }
+
+[[operations]]
+kind = "loot_container"
+position = { x = 512, z = 512 }
+inventory = ["minecraft:arrow"]

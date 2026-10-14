@@ -95,6 +95,16 @@ export interface SquadDefinition {
   readonly seats: readonly number[];
 }
 
+export interface UhcDuelKit {
+  readonly armor: string;
+  readonly sword: string;
+  readonly arrows: number;
+  readonly golden_apples: number;
+  readonly food: string;
+  readonly food_count: number;
+  readonly shield?: true;
+}
+
 export type PrepareRules =
   | {
     readonly kind: "frontier_survival";
@@ -102,7 +112,8 @@ export type PrepareRules =
     readonly edit_radius_blocks: number;
     readonly max_block_edits_per_seat: number;
   }
-  | { readonly kind: "squads"; readonly version: 1; readonly squads: readonly SquadDefinition[] };
+  | { readonly kind: "squads"; readonly version: 1; readonly squads: readonly SquadDefinition[] }
+  | { readonly kind: "uhc_duel"; readonly version: 1; readonly kit: UhcDuelKit };
 
 export interface MatchSettings {
   readonly countdown_ticks: bigint;

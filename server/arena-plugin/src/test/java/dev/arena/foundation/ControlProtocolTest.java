@@ -1,6 +1,7 @@
 package dev.arena.foundation;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -12,6 +13,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
+import org.bukkit.Material;
 import org.junit.jupiter.api.Test;
 
 final class ControlProtocolTest {
@@ -42,6 +45,7 @@ final class ControlProtocolTest {
             "control-checkpoint-written.json",
             "control-prepare-rules-frontier.json",
             "control-prepare-rules-squads.json",
+            "control-prepare-rules-uhc.json",
             "control-prepare-roster-v2-256.json",
             "control-prepare-civilization.json",
             "control-public-clock.json",
@@ -80,6 +84,10 @@ final class ControlProtocolTest {
             "control-invalid-rules-frontier-radius.json",
             "control-invalid-rules-frontier-random-ticks.json",
             "control-invalid-rules-squads-gap.json",
+            "control-invalid-rules-uhc-food.json",
+            "control-invalid-rules-uhc-kit.json",
+            "control-invalid-rules-uhc-respawn.json",
+            "control-invalid-rules-uhc-roster.json",
             "control-invalid-rules-without-roster-version.json",
             "control-invalid-roster-v1-external.json",
             "control-invalid-roster-v1-seven-seats.json",
@@ -159,6 +167,49 @@ final class ControlProtocolTest {
         ControlProtocol.SquadsRules rules = (ControlProtocol.SquadsRules) squads.rules().orElseThrow();
         assertEquals(java.util.Optional.of("bravo"), rules.squadOf(5));
         assertEquals(java.util.Optional.of("alpha"), rules.squadOf(0));
+
+        ControlProtocol.PreparePayload uhc = (ControlProtocol.PreparePayload) ControlProtocol.decodeBody(
+                Files.readAllBytes(fixturePath("control-prepare-rules-uhc.json"))).payload();
+        assertFalse(ControlProtocol.naturalRegeneration(uhc.rules()));
+        assertTrue(ControlProtocol.naturalRegeneration(squads.rules()));
+        assertTrue(ControlProtocol.naturalRegeneration(java.util.Optional.empty()));
+        ControlProtocol.UhcKit kit = ((ControlProtocol.UhcDuelRules) uhc.rules().orElseThrow()).kit();
+        List<ControlProtocol.UhcKit.Grant> grants = kit.grants();
+        assertEquals(new ControlProtocol.UhcKit("iron", "iron", 16, 2, "minecraft:cooked_beef", 8, true).grants(),
+                grants);
+        assertEquals(ControlProtocol.UhcKit.Slot.OFFHAND, grants.getLast().slot());
+        assertEquals(List.of(
+                "minecraft:iron_helmet",
+                "minecraft:iron_chestplate",
+                "minecraft:iron_leggings",
+                "minecraft:iron_boots",
+                "minecraft:iron_sword",
+                "minecraft:bow",
+                "minecraft:arrow",
+                "minecraft:golden_apple",
+                "minecraft:cooked_beef",
+                "minecraft:shield"),
+                grants.stream().map(ControlProtocol.UhcKit.Grant::itemId).toList());
+        for (ControlProtocol.UhcKit.Grant grant : grants) {
+            assertKnownMinecraftItem(grant.itemId());
+        }
+        for (String item : ControlProtocol.UhcKit.FOOD_STACKS.keySet()) {
+            assertKnownMinecraftItem(item);
+        }
+        for (String tier : ControlProtocol.UhcKit.ARMOR_TIERS) {
+            for (String piece : List.of("helmet", "chestplate", "leggings", "boots")) {
+                assertKnownMinecraftItem("minecraft:" + tier + "_" + piece);
+            }
+        }
+        for (String material : ControlProtocol.UhcKit.SWORD_MATERIALS) {
+            assertKnownMinecraftItem("minecraft:" + material + "_sword");
+        }
+        assertTrue(new ControlProtocol.UhcKit("iron", "iron", 16, 2, "minecraft:cooked_beef", 8, false).grants()
+                .stream().noneMatch(grant -> grant.slot() == ControlProtocol.UhcKit.Slot.OFFHAND));
+        assertThrows(IllegalArgumentException.class, () -> new ControlProtocol.UhcKit(
+                "iron", "iron", 1, 1, "minecraft:mushroom_stew", 2, false));
+        assertThrows(IllegalArgumentException.class, () -> new ControlProtocol.UhcKit(
+                "iron", "iron", 1, 1, "minecraft:diamond_sword", 1, false));
     }
 
     @Test
@@ -264,6 +315,12 @@ final class ControlProtocolTest {
         assertThrows(IllegalArgumentException.class,
                 () -> new ControlProtocol.ErrorPayload(ControlProtocol.ErrorCode.INTERNAL,
                         String.valueOf((char) 0xd800)));
+    }
+
+    private static void assertKnownMinecraftItem(String resourceId) {
+        assertTrue(resourceId.startsWith("minecraft:"), resourceId);
+        assertTrue(Material.getMaterial(resourceId.substring("minecraft:".length()).toUpperCase(Locale.ROOT)) != null,
+                resourceId);
     }
 
     private static Path fixturePath(String filename) {

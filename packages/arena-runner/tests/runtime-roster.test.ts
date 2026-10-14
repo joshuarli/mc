@@ -181,6 +181,37 @@ squads = [
   assert.equal(decoded.type, 'prepare');
 });
 
+test('uhc duel rules prepare one shared kit for two seats', () => {
+  const scenario = compileScenario(
+    readFileSync(join(repositoryRoot, 'scenarios/uhc-duel.toml'), 'utf8'),
+    readFileSync(join(repositoryRoot, 'maps/uhc-duel.toml'), 'utf8'),
+  );
+  const prepare = createPreparePayload(scenario, createRuntimeRoster(scenario).competitors);
+  assert.equal('roster_version' in prepare ? prepare.roster_version : undefined, 2);
+  assert.equal(prepare.roster.length, 2);
+  assert.deepEqual('rules' in prepare ? prepare.rules : undefined, {
+    kind: 'uhc_duel',
+    version: 1,
+    kit: {
+      armor: 'iron',
+      sword: 'iron',
+      arrows: 16,
+      golden_apples: 2,
+      food: 'minecraft:cooked_beef',
+      food_count: 8,
+      shield: true,
+    },
+  });
+  const decoded = decodeControlEnvelope(encodeControlEnvelope({
+    protocol: 1, run_id: 'rules-run', sequence: 1n, type: 'prepare', payload: prepare,
+  } as ControlMessage));
+  assert.equal(decoded.type, 'prepare');
+  if (decoded.type !== 'prepare' || !('rules' in decoded.payload) || decoded.payload.rules?.kind !== 'uhc_duel') {
+    assert.fail('uhc prepare expected');
+  }
+  assert.equal(decoded.payload.rules.kit.shield, true);
+});
+
 test('frontier survival rules map the spec fields onto the wire names', () => {
   const { scenario: source, map } = hunger12Source();
   const text = `${source}

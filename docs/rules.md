@@ -66,7 +66,15 @@ loot chest, and only up to the per-seat edit budget; denied edits are
 cancelled. The plugin creates no resources for the mode, and random ticks stay
 off. Squads (rule mode `squads` v1) keep the classic rules; chat from a
 competitor is delivered only to its own squad's competitors and to
-non-competitors. Last-survivor outcomes are unchanged.
+non-competitors. UHC duel (rule mode `uhc_duel` v1) admits exactly two
+competitors and gives each the same declared kit once, when the seat is
+admitted, and not again after death. The kit is one armor tier, a sword, a
+bow, arrows, golden apples, food, and a shield only when the kit includes
+one. The plugin sets natural health regeneration off and adds no heal,
+damage, reach, or teleport rule. Last survivor still wins, and a tick limit
+with both competitors alive is still a draw. The arena stays on the natural
+1024 by 1024 plan because schema 3 has no superflat world; the declared
+spawns mirror across the border center. Last-survivor outcomes are unchanged.
 
 A checkpointed match resumes in a new runtime epoch. The plugin loads the
 complete record at startup and skips the loot-chest placement and world-spawn

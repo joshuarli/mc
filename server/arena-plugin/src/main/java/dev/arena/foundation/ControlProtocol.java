@@ -489,7 +489,7 @@ final class ControlProtocol {
         }
     }
 
-    sealed interface PrepareRules permits FrontierSurvivalRules, SquadsRules {}
+    sealed interface PrepareRules permits FrontierSurvivalRules, SquadsRules, UhcDuelRules {}
 
     record FrontierSurvivalRules(int editRadiusBlocks, int maxBlockEditsPerSeat) implements PrepareRules {
         FrontierSurvivalRules {
@@ -518,6 +518,99 @@ final class ControlProtocol {
         Optional<String> squadOf(int seat) {
             return squads.stream().filter(squad -> squad.seats().contains(seat)).map(Squad::id).findFirst();
         }
+    }
+
+    record UhcKit(
+            String armor,
+            String sword,
+            int arrows,
+            int goldenApples,
+            String food,
+            int foodCount,
+            boolean shield) {
+        static final Set<String> ARMOR_TIERS = Set.of(
+                "leather", "chainmail", "iron", "golden", "diamond", "netherite");
+        static final Set<String> SWORD_MATERIALS = Set.of(
+                "wooden", "stone", "iron", "golden", "diamond", "netherite");
+        static final Map<String, Integer> FOOD_STACKS = Map.ofEntries(
+                Map.entry("minecraft:apple", 64),
+                Map.entry("minecraft:baked_potato", 64),
+                Map.entry("minecraft:beetroot_soup", 1),
+                Map.entry("minecraft:bread", 64),
+                Map.entry("minecraft:carrot", 64),
+                Map.entry("minecraft:cooked_beef", 64),
+                Map.entry("minecraft:cooked_chicken", 64),
+                Map.entry("minecraft:cooked_cod", 64),
+                Map.entry("minecraft:cooked_mutton", 64),
+                Map.entry("minecraft:cooked_porkchop", 64),
+                Map.entry("minecraft:cooked_rabbit", 64),
+                Map.entry("minecraft:cooked_salmon", 64),
+                Map.entry("minecraft:cookie", 64),
+                Map.entry("minecraft:dried_kelp", 64),
+                Map.entry("minecraft:glow_berries", 64),
+                Map.entry("minecraft:golden_carrot", 64),
+                Map.entry("minecraft:honey_bottle", 16),
+                Map.entry("minecraft:melon_slice", 64),
+                Map.entry("minecraft:mushroom_stew", 1),
+                Map.entry("minecraft:potato", 64),
+                Map.entry("minecraft:pumpkin_pie", 64),
+                Map.entry("minecraft:rabbit_stew", 1),
+                Map.entry("minecraft:sweet_berries", 64));
+
+        enum Slot {
+            HELMET, CHESTPLATE, LEGGINGS, BOOTS, HOTBAR, OFFHAND
+        }
+
+        record Grant(Slot slot, int hotbarIndex, String itemId, int count) {
+            Grant {
+                Objects.requireNonNull(slot, "kit slot");
+                require(itemId != null && itemId.startsWith("minecraft:"), "kit item id");
+                require(count >= 1 && count <= 64, "kit count");
+                require(slot == Slot.HOTBAR ? hotbarIndex >= 0 && hotbarIndex <= 8 : hotbarIndex == -1,
+                        "kit hotbar index");
+            }
+        }
+
+        UhcKit {
+            require(ARMOR_TIERS.contains(armor), "unknown uhc armor tier");
+            require(SWORD_MATERIALS.contains(sword), "unknown uhc sword");
+            require(arrows >= 1 && arrows <= 64, "uhc arrows must fit one stack");
+            require(goldenApples >= 1 && goldenApples <= 64, "uhc golden apples must fit one stack");
+            Integer foodStack = FOOD_STACKS.get(food);
+            require(foodStack != null && foodCount >= 1 && foodCount <= foodStack,
+                    "unknown uhc food or count above its stack size");
+        }
+
+        List<Grant> grants() {
+            List<Grant> grants = new ArrayList<>();
+            grants.add(armor("helmet", Slot.HELMET));
+            grants.add(armor("chestplate", Slot.CHESTPLATE));
+            grants.add(armor("leggings", Slot.LEGGINGS));
+            grants.add(armor("boots", Slot.BOOTS));
+            grants.add(new Grant(Slot.HOTBAR, 0, "minecraft:" + sword + "_sword", 1));
+            grants.add(new Grant(Slot.HOTBAR, 1, "minecraft:bow", 1));
+            grants.add(new Grant(Slot.HOTBAR, 2, "minecraft:arrow", arrows));
+            grants.add(new Grant(Slot.HOTBAR, 3, "minecraft:golden_apple", goldenApples));
+            grants.add(new Grant(Slot.HOTBAR, 4, food, foodCount));
+            if (shield) {
+                grants.add(new Grant(Slot.OFFHAND, -1, "minecraft:shield", 1));
+            }
+            return List.copyOf(grants);
+        }
+
+        private Grant armor(String piece, Slot slot) {
+            return new Grant(slot, -1, "minecraft:" + armor + "_" + piece, 1);
+        }
+    }
+
+    record UhcDuelRules(UhcKit kit) implements PrepareRules {
+        UhcDuelRules {
+            Objects.requireNonNull(kit, "uhc kit");
+        }
+    }
+
+    static boolean naturalRegeneration(Optional<PrepareRules> rules) {
+        return !(rules.orElse(null) instanceof UhcDuelRules);
     }
 
     enum RosterVersion {
@@ -812,6 +905,13 @@ final class ControlProtocol {
                 require(assigned == competitorCount && squadRules.squads().stream()
                                 .flatMap(squad -> squad.seats().stream()).allMatch(seat -> seat < competitorCount),
                         "squads must assign every competitor seat");
+            }
+            if (rules.isPresent() && rules.get() instanceof UhcDuelRules) {
+                MatchSettings match = settings.match();
+                require(roster.size() == 2, "uhc duel requires exactly two competitors");
+                require(!match.respawn() && !match.blockBreaking() && !match.blockPlacing()
+                                && !match.naturalMobs() && !match.naturalRandomTicks(),
+                        "uhc duel uses the classic hunger games match rules");
             }
             require(!(settings instanceof CivilizationPrepareSettings)
                             || (rosterVersion == RosterVersion.BOTS_ONLY
@@ -1263,7 +1363,7 @@ final class ControlProtocol {
     private static PrepareRules readPrepareRules(Object value) throws IOException {
         String path = "payload.rules";
         Map<String, Object> header = object(value, path,
-                Set.of("kind", "version", "edit_radius_blocks", "max_block_edits_per_seat", "squads"),
+                Set.of("kind", "version", "edit_radius_blocks", "max_block_edits_per_seat", "squads", "kit"),
                 Set.of("kind", "version"));
         String kind = readString(header.get("kind"), path + ".kind", 1, 32, null);
         readInteger(header.get("version"), path + ".version", 1, 1);
@@ -1291,7 +1391,26 @@ final class ControlProtocol {
             }
             return new SquadsRules(squads);
         }
+        if ("uhc_duel".equals(kind)) {
+            object(value, path, Set.of("kind", "version", "kit"), Set.of("kind", "version", "kit"));
+            return new UhcDuelRules(readUhcKit(header.get("kit"), path + ".kit"));
+        }
         throw invalid(path + ".kind", "unknown rule mode");
+    }
+
+    private static UhcKit readUhcKit(Object value, String path) throws IOException {
+        Map<String, Object> kit = object(value, path,
+                Set.of("armor", "sword", "arrows", "golden_apples", "food", "food_count", "shield"),
+                Set.of("armor", "sword", "arrows", "golden_apples", "food", "food_count"));
+        boolean shield = kit.containsKey("shield") && readBoolean(kit.get("shield"), path + ".shield");
+        return new UhcKit(
+                readString(kit.get("armor"), path + ".armor", 1, 16, null),
+                readString(kit.get("sword"), path + ".sword", 1, 16, null),
+                readInteger(kit.get("arrows"), path + ".arrows", 1, 64),
+                readInteger(kit.get("golden_apples"), path + ".golden_apples", 1, 64),
+                readString(kit.get("food"), path + ".food", 1, 64, null),
+                readInteger(kit.get("food_count"), path + ".food_count", 1, 64),
+                shield);
     }
 
     private static HungerGamesPrepareSettings readHungerGamesPrepareSettings(Object value) throws IOException {
@@ -1874,14 +1993,29 @@ final class ControlProtocol {
     }
 
     private static Object rulesValue(PrepareRules rules) {
-        if (rules instanceof FrontierSurvivalRules frontier) {
-            return object("kind", "frontier_survival", "version", 1,
+        return switch (rules) {
+            case FrontierSurvivalRules frontier -> object("kind", "frontier_survival", "version", 1,
                     "edit_radius_blocks", frontier.editRadiusBlocks(),
                     "max_block_edits_per_seat", frontier.maxBlockEditsPerSeat());
+            case SquadsRules squads -> object("kind", "squads", "version", 1, "squads", squads.squads().stream()
+                    .map(squad -> object("id", squad.id(), "seats", squad.seats())).toList());
+            case UhcDuelRules uhc -> uhcRulesValue(uhc);
+        };
+    }
+
+    private static Object uhcRulesValue(UhcDuelRules rules) {
+        UhcKit kit = rules.kit();
+        Map<String, Object> value = object(
+                "armor", kit.armor(),
+                "sword", kit.sword(),
+                "arrows", kit.arrows(),
+                "golden_apples", kit.goldenApples(),
+                "food", kit.food(),
+                "food_count", kit.foodCount());
+        if (kit.shield()) {
+            value.put("shield", true);
         }
-        SquadsRules squads = (SquadsRules) rules;
-        return object("kind", "squads", "version", 1, "squads", squads.squads().stream()
-                .map(squad -> object("id", squad.id(), "seats", squad.seats())).toList());
+        return object("kind", "uhc_duel", "version", 1, "kit", value);
     }
 
     private static Object competitorValue(Competitor competitor) {

@@ -628,6 +628,7 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
         try {
             world.setGameRule(GameRule.DO_MOB_SPAWNING, settings.naturalMobs());
             world.setGameRule(GameRule.RANDOM_TICK_SPEED, settings.naturalRandomTicks() ? 3 : 0);
+            world.setGameRule(GameRule.NATURAL_REGENERATION, ControlProtocol.naturalRegeneration(prepare.rules()));
             WorldBorder worldBorder = world.getWorldBorder();
             WorldPlan.Footprint dimensions = generationPlan.footprint();
             if (generationPlan instanceof NaturalMapPlan naturalPlan) {
@@ -678,15 +679,20 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
         frontierEdits = null;
         squadRules = null;
         if (preparedMatch.rules().isPresent()) {
-            ControlProtocol.PrepareRules rules = preparedMatch.rules().get();
-            if (rules instanceof ControlProtocol.FrontierSurvivalRules frontier) {
-                NaturalMapPlan natural = (NaturalMapPlan) generationPlan;
-                frontierEdits = new FrontierEdits(
-                        resolvedBorderCenter != null ? resolvedBorderCenter : natural.borderCenter(), frontier,
-                        resolvedLootContainers.stream().map(MapPlan.LootContainer::position)
-                                .collect(java.util.stream.Collectors.toSet()));
-            } else {
-                squadRules = (ControlProtocol.SquadsRules) rules;
+            switch (preparedMatch.rules().get()) {
+                case ControlProtocol.FrontierSurvivalRules frontier -> {
+                    NaturalMapPlan natural = (NaturalMapPlan) generationPlan;
+                    frontierEdits = new FrontierEdits(
+                            resolvedBorderCenter != null ? resolvedBorderCenter : natural.borderCenter(), frontier,
+                            resolvedLootContainers.stream().map(MapPlan.LootContainer::position)
+                                    .collect(java.util.stream.Collectors.toSet()));
+                }
+                case ControlProtocol.SquadsRules squads -> squadRules = squads;
+                case ControlProtocol.UhcDuelRules uhc -> {
+                    if (uhc.kit().grants().isEmpty()) {
+                        throw new IllegalStateException("uhc duel kit is empty");
+                    }
+                }
             }
         }
         for (Player player : new ArrayList<>(Bukkit.getOnlinePlayers())) {
@@ -932,14 +938,28 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
     }
 
     private void applyCompiledStartingKit(Player player) {
-        if (!(preparedMatch.settings() instanceof ControlProtocol.CivilizationPrepareSettings civilization)) {
+        if (preparedMatch.settings() instanceof ControlProtocol.CivilizationPrepareSettings civilization) {
+            List<ControlProtocol.StartingItem> startingKit = civilization.civilization().startingKit();
+            for (int slot = 0; slot < startingKit.size(); slot++) {
+                ControlProtocol.StartingItem item = startingKit.get(slot);
+                Material material = ArenaChunkGenerator.requireItemMaterial(item.resourceId());
+                player.getInventory().setItem(slot, new ItemStack(material, item.count()));
+            }
             return;
         }
-        List<ControlProtocol.StartingItem> startingKit = civilization.civilization().startingKit();
-        for (int slot = 0; slot < startingKit.size(); slot++) {
-            ControlProtocol.StartingItem item = startingKit.get(slot);
-            Material material = ArenaChunkGenerator.requireItemMaterial(item.resourceId());
-            player.getInventory().setItem(slot, new ItemStack(material, item.count()));
+        if (preparedMatch.rules().orElse(null) instanceof ControlProtocol.UhcDuelRules uhc) {
+            org.bukkit.inventory.PlayerInventory inventory = player.getInventory();
+            for (ControlProtocol.UhcKit.Grant grant : uhc.kit().grants()) {
+                ItemStack stack = new ItemStack(ArenaChunkGenerator.requireItemMaterial(grant.itemId()), grant.count());
+                switch (grant.slot()) {
+                    case HELMET -> inventory.setHelmet(stack);
+                    case CHESTPLATE -> inventory.setChestplate(stack);
+                    case LEGGINGS -> inventory.setLeggings(stack);
+                    case BOOTS -> inventory.setBoots(stack);
+                    case HOTBAR -> inventory.setItem(grant.hotbarIndex(), stack);
+                    case OFFHAND -> inventory.setItemInOffHand(stack);
+                }
+            }
         }
     }
 

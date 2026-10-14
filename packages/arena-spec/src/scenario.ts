@@ -72,10 +72,59 @@ export const MIN_FRONTIER_EDIT_RADIUS_BLOCKS = 16;
 export const MAX_FRONTIER_EDIT_RADIUS_BLOCKS = 512;
 export const MAX_FRONTIER_EDITS_PER_SEAT = 100_000;
 export const MAX_SQUADS = 64;
+export const UHC_ARMOR_TIERS = ["leather", "chainmail", "iron", "golden", "diamond", "netherite"] as const;
+export const UHC_SWORD_MATERIALS = ["wooden", "stone", "iron", "golden", "diamond", "netherite"] as const;
+export const UHC_FOOD_ITEMS = Object.freeze([
+  Object.freeze({ item: "minecraft:apple", stack: 64 }),
+  Object.freeze({ item: "minecraft:baked_potato", stack: 64 }),
+  Object.freeze({ item: "minecraft:beetroot_soup", stack: 1 }),
+  Object.freeze({ item: "minecraft:bread", stack: 64 }),
+  Object.freeze({ item: "minecraft:carrot", stack: 64 }),
+  Object.freeze({ item: "minecraft:cooked_beef", stack: 64 }),
+  Object.freeze({ item: "minecraft:cooked_chicken", stack: 64 }),
+  Object.freeze({ item: "minecraft:cooked_cod", stack: 64 }),
+  Object.freeze({ item: "minecraft:cooked_mutton", stack: 64 }),
+  Object.freeze({ item: "minecraft:cooked_porkchop", stack: 64 }),
+  Object.freeze({ item: "minecraft:cooked_rabbit", stack: 64 }),
+  Object.freeze({ item: "minecraft:cooked_salmon", stack: 64 }),
+  Object.freeze({ item: "minecraft:cookie", stack: 64 }),
+  Object.freeze({ item: "minecraft:dried_kelp", stack: 64 }),
+  Object.freeze({ item: "minecraft:glow_berries", stack: 64 }),
+  Object.freeze({ item: "minecraft:golden_carrot", stack: 64 }),
+  Object.freeze({ item: "minecraft:honey_bottle", stack: 16 }),
+  Object.freeze({ item: "minecraft:melon_slice", stack: 64 }),
+  Object.freeze({ item: "minecraft:mushroom_stew", stack: 1 }),
+  Object.freeze({ item: "minecraft:potato", stack: 64 }),
+  Object.freeze({ item: "minecraft:pumpkin_pie", stack: 64 }),
+  Object.freeze({ item: "minecraft:rabbit_stew", stack: 1 }),
+  Object.freeze({ item: "minecraft:sweet_berries", stack: 64 }),
+] as const);
+
+export type UhcArmorTier = (typeof UHC_ARMOR_TIERS)[number];
+export type UhcSwordMaterial = (typeof UHC_SWORD_MATERIALS)[number];
+export type UhcFoodItem = (typeof UHC_FOOD_ITEMS)[number]["item"];
+
+const UHC_ARMOR_TIER_SET = new Set<string>(UHC_ARMOR_TIERS);
+const UHC_SWORD_MATERIAL_SET = new Set<string>(UHC_SWORD_MATERIALS);
+const UHC_FOOD_STACKS = new Map<string, number>(UHC_FOOD_ITEMS.map((entry) => [entry.item, entry.stack]));
+
+export function uhcFoodStackLimit(item: string): number | undefined {
+  return UHC_FOOD_STACKS.get(item);
+}
 
 export interface SquadIr {
   readonly id: string;
   readonly seats: readonly number[];
+}
+
+export interface UhcDuelKitIr {
+  readonly armor: UhcArmorTier;
+  readonly sword: UhcSwordMaterial;
+  readonly arrows: number;
+  readonly goldenApples: number;
+  readonly food: UhcFoodItem;
+  readonly foodCount: number;
+  readonly shield: boolean;
 }
 
 /** Versioned rule mode of a schema-3 Hunger Games scenario; `classic` is the frozen rule set. */
@@ -87,7 +136,8 @@ export type RuleModeIr =
     readonly editRadiusBlocks: number;
     readonly maxBlockEditsPerSeat: number;
   }
-  | { readonly kind: "squads"; readonly version: 1; readonly squads: readonly SquadIr[] };
+  | { readonly kind: "squads"; readonly version: 1; readonly squads: readonly SquadIr[] }
+  | { readonly kind: "uhc_duel"; readonly version: 1; readonly kit: UhcDuelKitIr };
 
 export interface Roster {
   readonly competitors: number;
@@ -312,6 +362,7 @@ export function compileScenario(scenarioSource: string, mapSource: string): Scen
     throw new SpecError(SpecErrorKind.InvalidValue, "scenario.map", `schema version ${schemaVersion} requires a natural terrain map`);
   }
   validateSpawnSeats(map, roster.competitors, "scenario.roster.competitors");
+  if (rules.kind === "uhc_duel") validateUhcSpawnMirror(map);
   validatePreparedChunks(map, server.viewDistanceChunks);
   if (border.mode === GameMode.HungerGames) {
     validateBorder(map, border.settings.initialDiameterBlocks, border.settings.finalDiameterBlocks, "scenario.border");
@@ -850,7 +901,64 @@ function parseRules(value: raw.RawValue, roster: Roster): RuleModeIr {
     raw.checkFields(table, ["kind", "version", "squads"], ["kind", "version", "squads"], path);
     return Object.freeze({ kind, version: 1, squads: parseSquads(raw.field(table, "squads", path), roster) });
   }
+  if (kind === "uhc_duel") {
+    raw.checkFields(table, ["kind", "version", "kit"], ["kind", "version", "kit"], path);
+    return Object.freeze({ kind, version: 1, kit: parseUhcKit(raw.field(table, "kit", path)) });
+  }
   throw new SpecError(SpecErrorKind.InvalidValue, `${path}.kind`, `unknown rule mode \`${kind}\``);
+}
+
+function parseUhcKit(value: raw.RawValue): UhcDuelKitIr {
+  const path = "scenario.rules.kit";
+  const table = raw.asTable(value, path);
+  raw.checkFields(
+    table,
+    ["armor", "sword", "arrows", "golden_apples", "food", "food_count", "shield"],
+    ["armor", "sword", "arrows", "golden_apples", "food", "food_count"],
+    path,
+  );
+  const armor = raw.string(raw.field(table, "armor", path), `${path}.armor`);
+  if (!UHC_ARMOR_TIER_SET.has(armor)) {
+    throw new SpecError(SpecErrorKind.InvalidValue, `${path}.armor`, "unknown armor tier");
+  }
+  const sword = raw.string(raw.field(table, "sword", path), `${path}.sword`);
+  if (!UHC_SWORD_MATERIAL_SET.has(sword)) {
+    throw new SpecError(SpecErrorKind.InvalidValue, `${path}.sword`, "unknown sword material");
+  }
+  const food = parseResourceId(raw.field(table, "food", path), `${path}.food`);
+  const foodStack = UHC_FOOD_STACKS.get(food);
+  if (foodStack === undefined) {
+    throw new SpecError(SpecErrorKind.InvalidValue, `${path}.food`, "unknown food item");
+  }
+  const shield = table.has("shield")
+    ? raw.boolean(raw.field(table, "shield", path), `${path}.shield`)
+    : false;
+  return Object.freeze({
+    armor: armor as UhcArmorTier,
+    sword: sword as UhcSwordMaterial,
+    arrows: boundedNumber(raw.field(table, "arrows", path), `${path}.arrows`, 1n, 64n),
+    goldenApples: boundedNumber(raw.field(table, "golden_apples", path), `${path}.golden_apples`, 1n, 64n),
+    food: food as UhcFoodItem,
+    foodCount: boundedNumber(raw.field(table, "food_count", path), `${path}.food_count`, 1n, BigInt(foodStack)),
+    shield,
+  });
+}
+
+function validateUhcSpawnMirror(map: MapIr): void {
+  if (map.terrain !== "vanilla" || map.spawns.length !== 2) {
+    throw new SpecError(SpecErrorKind.Geometry, "scenario.map", "uhc duel requires two natural spawn columns");
+  }
+  const [first, second] = map.spawns;
+  if (first === undefined || second === undefined) throw new Error("uhc duel spawn pair is missing");
+  const centerX = Math.floor((first.column.x + second.column.x) / 2);
+  const centerZ = Math.floor((first.column.z + second.column.z) / 2);
+  if (second.column.x !== centerX * 2 - first.column.x || second.column.z !== centerZ * 2 - first.column.z) {
+    throw new SpecError(
+      SpecErrorKind.Geometry,
+      "scenario.map",
+      "uhc duel spawn columns must mirror across the border center",
+    );
+  }
 }
 
 function parseSquads(value: raw.RawValue, roster: Roster): readonly SquadIr[] {
@@ -903,6 +1011,9 @@ function validateMode(mode: GameMode, roster: Roster, settings: MatchSettings, r
   }
   switch (mode) {
     case GameMode.HungerGames:
+      if (rules.kind === "uhc_duel" && roster.competitors !== 2) {
+        throw new SpecError(SpecErrorKind.Range, "scenario.roster.competitors", "uhc duel requires exactly two competitors");
+      }
       if (rules.kind === "frontier_survival") {
         if (!settings.blockBreaking || !settings.blockPlacing) {
           throw new SpecError(SpecErrorKind.InvalidValue, "scenario.match", "frontier survival enables block breaking and placing");
@@ -1234,6 +1345,18 @@ function hashRules(hash: CanonicalHasher, rules: RuleModeIr): void {
         hash.u16(squad.seats.length);
         for (const seat of squad.seats) hash.u16(seat);
       }
+      return;
+    case "uhc_duel":
+      hash.u8(3);
+      hash.u8(rules.version);
+      hash.string(rules.kit.armor);
+      hash.string(rules.kit.sword);
+      hash.u16(rules.kit.arrows);
+      hash.u16(rules.kit.goldenApples);
+      hash.string(rules.kit.food);
+      hash.u16(rules.kit.foodCount);
+      hash.u8(Number(rules.kit.shield));
+      return;
   }
 }
 

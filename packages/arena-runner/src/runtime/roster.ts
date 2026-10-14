@@ -128,6 +128,19 @@ function preparedRules(rules: RuleModeIr): PrepareRules | undefined {
       version: rules.version,
       squads: Object.freeze(rules.squads.map((squad) => Object.freeze({ id: squad.id, seats: squad.seats }))),
     });
+    case 'uhc_duel': return Object.freeze({
+      kind: 'uhc_duel',
+      version: rules.version,
+      kit: Object.freeze({
+        armor: rules.kit.armor,
+        sword: rules.kit.sword,
+        arrows: rules.kit.arrows,
+        golden_apples: rules.kit.goldenApples,
+        food: rules.kit.food,
+        food_count: rules.kit.foodCount,
+        ...(rules.kit.shield ? { shield: true as const } : {}),
+      }),
+    });
   }
 }
 

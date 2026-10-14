@@ -58,6 +58,25 @@ test("control rule modes decode with their parameters and reject inconsistent ma
   });
   const squadRules = "rules" in squads.payload ? squads.payload.rules : undefined;
   assert.equal(squadRules?.kind === "squads" ? squadRules.squads.length : 0, 2);
+  const uhc = decodeControlEnvelope(fixture("control-prepare-rules-uhc.json"));
+  if (uhc.type !== "prepare" || !("rules" in uhc.payload) || uhc.payload.rules?.kind !== "uhc_duel") {
+    assert.fail("uhc prepare expected");
+  }
+  assert.equal(uhc.payload.roster.length, 2);
+  assert.equal(uhc.payload.rules.kit.shield, true);
+  const omittedShield = JSON.parse(new TextDecoder().decode(fixture("control-prepare-rules-uhc.json"))) as {
+    payload: { rules: { kit: { shield?: boolean } } };
+  };
+  delete omittedShield.payload.rules.kit.shield;
+  const withoutShield = decodeControlEnvelope(JSON.stringify(omittedShield));
+  if (withoutShield.type !== "prepare" || !("rules" in withoutShield.payload) || withoutShield.payload.rules?.kind !== "uhc_duel") {
+    assert.fail("unshielded uhc prepare expected");
+  }
+  assert.equal(withoutShield.payload.rules.kit.shield, undefined);
+  const reencoded = JSON.parse(new TextDecoder().decode(encodeControlEnvelope(withoutShield))) as {
+    payload: { rules: { kit: { shield?: boolean } } };
+  };
+  assert.equal(reencoded.payload.rules.kit.shield, undefined);
 });
 
 const checkpointDirectory = join(process.cwd(), "fixtures", "checkpoint");

@@ -8,7 +8,10 @@ import {
   MAX_FRONTIER_EDIT_RADIUS_BLOCKS,
   MAX_SQUADS,
   MIN_FRONTIER_EDIT_RADIUS_BLOCKS,
-  SQUAD_ID_PATTERN
+  SQUAD_ID_PATTERN,
+  UHC_ARMOR_TIERS,
+  UHC_SWORD_MATERIALS,
+  uhcFoodStackLimit
 } from "@arena/spec";
 
 import {
@@ -61,7 +64,8 @@ import type {
   ReadyPayload,
   RosterCompetitor,
   SquadDefinition,
-  TideFaction
+  TideFaction,
+  UhcDuelKit
 } from "./types.js";
 
 export const MAX_CONTROL_FRAME_BYTES = 1_048_576;
@@ -70,6 +74,8 @@ const CIVILIZATION_SEAT_COUNT = 6;
 const MAX_SEAT = MAX_COMPETITORS - 1;
 const MAX_EPOCH = 1_000_000;
 const RESERVED_RUNNER_USERNAME = /^arena(?:bot|spec)/i;
+const UHC_ARMOR = new Set<string>(UHC_ARMOR_TIERS);
+const UHC_SWORDS = new Set<string>(UHC_SWORD_MATERIALS);
 
 const MAX_U64 = 18_446_744_073_709_551_615n;
 const U64_DECIMAL = /^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0][0-9]|1844674407370955161[0-5]|18446744073709551615)$/;
@@ -529,7 +535,7 @@ function readPrepareRules(
   settings: HungerGamesPrepareSettings
 ): PrepareRules {
   const path = "payload.rules";
-  const header = readObject(value, path, ["kind", "version", "edit_radius_blocks", "max_block_edits_per_seat", "squads"],
+  const header = readObject(value, path, ["kind", "version", "edit_radius_blocks", "max_block_edits_per_seat", "squads", "kit"],
     ["kind", "version"]);
   const kind = readString(header.kind, `${path}.kind`, 1, 32);
   readSafeInteger(header.version, `${path}.version`, 1, 1, header, "version");
@@ -579,7 +585,39 @@ function readPrepareRules(
     if (assigned.size !== competitors) invalid(`${path}.squads`, "squads must assign every competitor seat");
     return { kind, version: 1, squads };
   }
+  if (kind === "uhc_duel") {
+    readObject(value, path, ["kind", "version", "kit"], ["kind", "version", "kit"]);
+    if (competitors !== 2) invalid("payload.roster", "uhc duel requires exactly two competitors");
+    if (settings.match.respawn || settings.match.block_breaking || settings.match.block_placing
+        || settings.match.natural_mobs || settings.match.natural_random_ticks) {
+      invalid("payload.settings.match", "uhc duel uses the classic hunger games match rules");
+    }
+    return { kind, version: 1, kit: readUhcKit(header.kit, `${path}.kit`) };
+  }
   return invalid(`${path}.kind`, "unknown rule mode");
+}
+
+function readUhcKit(value: StrictJsonValue | undefined, path: string): UhcDuelKit {
+  const kit = readObject(value, path,
+    ["armor", "sword", "arrows", "golden_apples", "food", "food_count", "shield"],
+    ["armor", "sword", "arrows", "golden_apples", "food", "food_count"]);
+  const armor = readString(kit.armor, `${path}.armor`, 1, 16);
+  if (!UHC_ARMOR.has(armor)) invalid(`${path}.armor`, "unknown armor tier");
+  const sword = readString(kit.sword, `${path}.sword`, 1, 16);
+  if (!UHC_SWORDS.has(sword)) invalid(`${path}.sword`, "unknown sword material");
+  const food = readString(kit.food, `${path}.food`, 1, 64);
+  const foodStack = uhcFoodStackLimit(food);
+  if (foodStack === undefined) invalid(`${path}.food`, "unknown food item");
+  const shield = Object.hasOwn(kit, "shield") ? readBoolean(kit.shield, `${path}.shield`) : false;
+  return {
+    armor,
+    sword,
+    arrows: readSafeInteger(kit.arrows, `${path}.arrows`, 1, 64, kit, "arrows"),
+    golden_apples: readSafeInteger(kit.golden_apples, `${path}.golden_apples`, 1, 64, kit, "golden_apples"),
+    food,
+    food_count: readSafeInteger(kit.food_count, `${path}.food_count`, 1, foodStack, kit, "food_count"),
+    ...(shield ? { shield: true as const } : {})
+  };
 }
 
 function readHungerGamesPrepareSettings(value: StrictJsonValue): HungerGamesPrepareSettings {

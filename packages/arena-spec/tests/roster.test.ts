@@ -248,6 +248,47 @@ squads = [
   reject('{ id = "bravo", seats = [] }', "scenario.rules.squads[1].seats");
 });
 
+test("scenario_v3_uhc_duel_requires_two_mirrored_seats_and_one_kit", () => {
+  const source = readRepoFile("scenarios/uhc-duel.toml");
+  const map = readRepoFile("maps/uhc-duel.toml");
+  const scenario = compileScenario(source, map);
+  if (scenario.schemaVersion !== 3 || scenario.rules.kind !== "uhc_duel") throw new Error("uhc duel expected");
+  assert.equal(scenario.roster.competitors, 2);
+  assert.equal(scenario.matchSettings.respawn, false);
+  assert.deepEqual(scenario.rules.kit, {
+    armor: "iron",
+    sword: "iron",
+    arrows: 16,
+    goldenApples: 2,
+    food: "minecraft:cooked_beef",
+    foodCount: 8,
+    shield: true,
+  });
+  const classic = compileScenario(source.replace(/\n\[rules\][\s\S]*$/, "\n"), map);
+  if (classic.schemaVersion !== 3) throw new Error("schema 3 expected");
+  assert.deepEqual(classic.rules, { kind: "classic" });
+  assert.notEqual(classic.semanticId, scenario.semanticId);
+  const unshielded = compileScenario(source.replace("\nshield = true\n", "\n"), map);
+  if (unshielded.schemaVersion !== 3 || unshielded.rules.kind !== "uhc_duel") throw new Error("unshielded uhc expected");
+  assert.equal(unshielded.rules.kit.shield, false);
+  assert.notEqual(unshielded.semanticId, scenario.semanticId);
+
+  const reject = (scenarioText: string, mapText: string, path: string): void => {
+    assert.equal(specError(() => compileScenario(scenarioText, mapText)).path, path);
+  };
+  reject(source.replace("competitors = 2", "competitors = 1"), map, "scenario.roster.competitors");
+  reject(source.replace("respawn = false", "respawn = true"), map, "scenario.match.respawn");
+  reject(source.replace("block_breaking = false", "block_breaking = true"), map, "scenario.match");
+  reject(source.replace('armor = "iron"', 'armor = "netherite_helmet"'), map, "scenario.rules.kit.armor");
+  reject(source.replace('food = "minecraft:cooked_beef"', 'food = "minecraft:diamond_sword"'), map, "scenario.rules.kit.food");
+  reject(source.replace("\ngolden_apples = 2\n", "\n"), map, "scenario.rules.kit.golden_apples");
+  reject(source.replace('food = "minecraft:cooked_beef"\nfood_count = 8', 'food = "minecraft:mushroom_stew"\nfood_count = 2'), map, "scenario.rules.kit.food_count");
+  reject(source + "seat = 0\n", map, "scenario.rules.kit.seat");
+  reject(source.replace("[rules.kit]", "[[rules.kit]]"), map, "scenario.rules.kit");
+  reject(source, map.replace("x = 528", "x = 529"), "scenario.map");
+  reject(SCENARIO_V2 + '\n[rules]\nkind = "uhc_duel"\nversion = 1\n', MAP_V2_SIX, "scenario.rules");
+});
+
 test("scenario_v2_rejects_rule_tables", () => {
   const error = specError(() => compileScenario(
     SCENARIO_V2 + '\n[rules]\nkind = "frontier_survival"\nversion = 1\n', MAP_V2_SIX));
