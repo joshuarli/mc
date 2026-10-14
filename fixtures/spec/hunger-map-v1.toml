@@ -1,0 +1,118 @@
+schema = 1
+name = "hunger-six"
+
+[dimensions]
+width = 128
+depth = 128
+min_y = 0
+max_y = 128
+
+[[operations]]
+kind = "cuboid"
+from = { x = 0, y = 64, z = 0 }
+to = { x = 127, y = 64, z = 127 }
+block = "minecraft:stone"
+
+[[operations]]
+kind = "path"
+position = { x = 64, y = 64, z = 62 }
+block = "minecraft:gravel"
+
+[[operations]]
+kind = "path"
+position = { x = 64, y = 64, z = 63 }
+block = "minecraft:gravel"
+
+[[operations]]
+kind = "path"
+position = { x = 64, y = 64, z = 65 }
+block = "minecraft:gravel"
+
+[[operations]]
+kind = "path"
+position = { x = 64, y = 64, z = 66 }
+block = "minecraft:gravel"
+
+[[operations]]
+kind = "ramp"
+position = { x = 64, y = 65, z = 45 }
+block = "minecraft:cobblestone"
+
+[[operations]]
+kind = "ramp"
+position = { x = 64, y = 65, z = 82 }
+block = "minecraft:cobblestone"
+
+[[operations]]
+kind = "cuboid"
+from = { x = 30, y = 65, z = 30 }
+to = { x = 30, y = 66, z = 30 }
+block = "minecraft:oak_log"
+
+[[operations]]
+kind = "cuboid"
+from = { x = 97, y = 65, z = 30 }
+to = { x = 97, y = 66, z = 30 }
+block = "minecraft:oak_log"
+
+[[operations]]
+kind = "cuboid"
+from = { x = 30, y = 65, z = 97 }
+to = { x = 30, y = 66, z = 97 }
+block = "minecraft:oak_log"
+
+[[operations]]
+kind = "cuboid"
+from = { x = 97, y = 65, z = 97 }
+to = { x = 97, y = 66, z = 97 }
+block = "minecraft:oak_log"
+
+[[operations]]
+kind = "spawn"
+seat = 0
+position = { x = 64, y = 65, z = 40 }
+
+[[operations]]
+kind = "spawn"
+seat = 1
+position = { x = 84, y = 65, z = 52 }
+
+[[operations]]
+kind = "spawn"
+seat = 2
+position = { x = 84, y = 65, z = 76 }
+
+[[operations]]
+kind = "spawn"
+seat = 3
+position = { x = 64, y = 65, z = 88 }
+
+[[operations]]
+kind = "spawn"
+seat = 4
+position = { x = 44, y = 65, z = 76 }
+
+[[operations]]
+kind = "spawn"
+seat = 5
+position = { x = 44, y = 65, z = 52 }
+
+[[operations]]
+kind = "loot_container"
+position = { x = 62, y = 65, z = 62 }
+inventory = ["minecraft:bread", "minecraft:stone_sword"]
+
+[[operations]]
+kind = "loot_container"
+position = { x = 66, y = 65, z = 62 }
+inventory = ["minecraft:bread", "minecraft:leather_helmet"]
+
+[[operations]]
+kind = "loot_container"
+position = { x = 62, y = 65, z = 66 }
+inventory = ["minecraft:bread", "minecraft:stone_axe"]
+
+[[operations]]
+kind = "loot_container"
+position = { x = 66, y = 65, z = 66 }
+inventory = ["minecraft:bread", "minecraft:leather_chestplate"]

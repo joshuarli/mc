@@ -24,8 +24,8 @@ import {
   scenarioMapReference,
 } from "../src/index.js";
 
-const HUNGER = readRepoFile("scenarios/hunger-six.toml");
-const HUNGER_MAP = readRepoFile("maps/hunger-six.toml");
+const HUNGER = readRepoFile("fixtures/spec/hunger-v1.toml");
+const HUNGER_MAP = readRepoFile("fixtures/spec/hunger-map-v1.toml");
 const NATURAL_HUNGER_MAP = `
 schema = 2
 name = "natural-fixture"
@@ -462,10 +462,26 @@ test("chest_inventory_limit_matches_cross_language_contracts", () => {
 
   const mapSchema = JSON.parse(readRepoFile("schemas/map.schema.json")) as Record<string, unknown>;
   const worldPlanSchema = JSON.parse(readRepoFile("schemas/world-plan.schema.json")) as Record<string, unknown>;
-  assert.ok(JSON.stringify(mapSchema).includes('"maxItems": 27'));
-  assert.ok(JSON.stringify(mapSchema).includes('"minItems": 1'));
-  assert.ok(JSON.stringify(worldPlanSchema).includes('"maxItems": 27'));
-  assert.ok(JSON.stringify(worldPlanSchema).includes('"minItems": 1'));
+  const mapDefinitions = mapSchema.$defs as {
+    operation: { oneOf: { properties: { kind: { const?: string }; inventory?: { minItems?: number; maxItems?: number } } }[] };
+  };
+  const mapInventory = mapDefinitions.operation.oneOf.find(
+    ({ properties }) => properties.kind.const === "loot_container",
+  )?.properties.inventory;
+  const worldPlanDefinitions = worldPlanSchema.$defs as {
+    loot_container: { properties: { inventory: { minItems?: number; maxItems?: number } } };
+  };
+  assert.deepEqual(
+    { minItems: mapInventory?.minItems, maxItems: mapInventory?.maxItems },
+    { minItems: 1, maxItems: 27 },
+  );
+  assert.deepEqual(
+    {
+      minItems: worldPlanDefinitions.loot_container.properties.inventory.minItems,
+      maxItems: worldPlanDefinitions.loot_container.properties.inventory.maxItems,
+    },
+    { minItems: 1, maxItems: 27 },
+  );
   assert.ok(readRepoFile("docs/scenarios.md").includes("Loot lists contain 1–27 items"));
 });
 
