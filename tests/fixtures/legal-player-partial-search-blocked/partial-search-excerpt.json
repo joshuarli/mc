@@ -1,0 +1,3258 @@
+{
+  "target": {
+    "x": 31,
+    "y": 66,
+    "z": 21
+  },
+  "ownArrivalReceipt": {
+    "clientMs": 98024.330416,
+    "authorityTick": 1223,
+    "position": {
+      "x": 31.8707310901793,
+      "y": 66.02442408821369,
+      "z": 21.891855377664864
+    }
+  },
+  "observerArrivalReceipt": {
+    "clientMs": 98032.283958,
+    "authorityTick": 1223,
+    "position": {
+      "x": 31.870731129304424,
+      "y": 66.02449217438698,
+      "z": 21.89193185295198
+    }
+  },
+  "recordCount": 512,
+  "selectedRecords": [
+    {
+      "index": 398,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97000.700708,
+        "authorityTick": 1203,
+        "kind": "goalReached",
+        "goal": {
+          "type": "GoalNear",
+          "x": 29,
+          "y": 66,
+          "z": 23,
+          "rangeSq": 4,
+          "entityId": null
+        }
+      }
+    },
+    {
+      "index": 400,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97001.194125,
+        "authorityTick": 1203,
+        "kind": "navigation",
+        "active": false
+      }
+    },
+    {
+      "index": 401,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97001.463708,
+        "authorityTick": 1203,
+        "kind": "navigation",
+        "active": true
+      }
+    },
+    {
+      "index": 402,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97001.492333,
+        "authorityTick": 1203,
+        "kind": "goalUpdated",
+        "goal": {
+          "type": "GoalBlock",
+          "x": 31,
+          "y": 66,
+          "z": 21,
+          "rangeSq": null,
+          "entityId": null
+        },
+        "dynamic": false
+      }
+    },
+    {
+      "index": 403,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97051.898208,
+        "authorityTick": 1204,
+        "kind": "pathSearch",
+        "transition": "acquired",
+        "activeSearches": 1,
+        "queuedSearches": 0
+      }
+    },
+    {
+      "index": 404,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97055.550125,
+        "authorityTick": 1204,
+        "kind": "pathSearch",
+        "transition": "released",
+        "activeSearches": 0,
+        "queuedSearches": 0
+      }
+    },
+    {
+      "index": 405,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97055.56375,
+        "authorityTick": 1204,
+        "kind": "pathSearch",
+        "transition": "queued",
+        "activeSearches": 0,
+        "queuedSearches": 1
+      }
+    },
+    {
+      "index": 406,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97055.604541,
+        "authorityTick": 1204,
+        "kind": "pathUpdate",
+        "path": {
+          "status": "partial",
+          "cost": 5.242640687119286,
+          "contextTimeMs": 3.7447919999976875,
+          "visitedNodes": 3,
+          "generatedNodes": 19,
+          "nodeCount": 3,
+          "nodes": [
+            {
+              "x": 29.5,
+              "y": 65,
+              "z": 23.5,
+              "cost": 1.4142135623730951,
+              "remainingBlocks": 0,
+              "toBreakCount": 0,
+              "toPlaceCount": 0
+            },
+            {
+              "x": 30.5,
+              "y": 65,
+              "z": 22.5,
+              "cost": 1.4142135623730951,
+              "remainingBlocks": 0,
+              "toBreakCount": 0,
+              "toPlaceCount": 0
+            },
+            {
+              "x": 31.5,
+              "y": 66,
+              "z": 21.5,
+              "cost": 2.414213562373095,
+              "remainingBlocks": 0,
+              "toBreakCount": 0,
+              "toPlaceCount": 0
+            }
+          ],
+          "nodesTruncated": false
+        }
+      }
+    },
+    {
+      "index": 408,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97103.03475,
+        "authorityTick": 1205,
+        "kind": "pathSearch",
+        "transition": "acquired",
+        "activeSearches": 1,
+        "queuedSearches": 0
+      }
+    },
+    {
+      "index": 409,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97106.191041,
+        "authorityTick": 1205,
+        "kind": "pathSearch",
+        "transition": "released",
+        "activeSearches": 0,
+        "queuedSearches": 0
+      }
+    },
+    {
+      "index": 410,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97106.203125,
+        "authorityTick": 1205,
+        "kind": "pathSearch",
+        "transition": "queued",
+        "activeSearches": 0,
+        "queuedSearches": 1
+      }
+    },
+    {
+      "index": 411,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97106.248541,
+        "authorityTick": 1205,
+        "kind": "pathUpdate",
+        "path": {
+          "status": "partial",
+          "cost": 5.242640687119286,
+          "contextTimeMs": 54.385083999994094,
+          "visitedNodes": 6,
+          "generatedNodes": 26,
+          "nodeCount": 3,
+          "nodes": [
+            {
+              "x": 29.5,
+              "y": 65,
+              "z": 23.5,
+              "cost": 1.4142135623730951,
+              "remainingBlocks": 0,
+              "toBreakCount": 0,
+              "toPlaceCount": 0
+            },
+            {
+              "x": 30.5,
+              "y": 65,
+              "z": 22.5,
+              "cost": 1.4142135623730951,
+              "remainingBlocks": 0,
+              "toBreakCount": 0,
+              "toPlaceCount": 0
+            },
+            {
+              "x": 31.5,
+              "y": 66,
+              "z": 21.5,
+              "cost": 2.414213562373095,
+              "remainingBlocks": 0,
+              "toBreakCount": 0,
+              "toPlaceCount": 0
+            }
+          ],
+          "nodesTruncated": false
+        }
+      }
+    },
+    {
+      "index": 413,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97153.933291,
+        "authorityTick": 1206,
+        "kind": "pathSearch",
+        "transition": "acquired",
+        "activeSearches": 1,
+        "queuedSearches": 0
+      }
+    },
+    {
+      "index": 414,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97157.22775,
+        "authorityTick": 1206,
+        "kind": "pathSearch",
+        "transition": "released",
+        "activeSearches": 0,
+        "queuedSearches": 0
+      }
+    },
+    {
+      "index": 415,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97157.249125,
+        "authorityTick": 1206,
+        "kind": "pathSearch",
+        "transition": "queued",
+        "activeSearches": 0,
+        "queuedSearches": 1
+      }
+    },
+    {
+      "index": 416,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97157.291416,
+        "authorityTick": 1206,
+        "kind": "pathUpdate",
+        "path": {
+          "status": "partial",
+          "cost": 5.242640687119286,
+          "contextTimeMs": 105.42241699999431,
+          "visitedNodes": 9,
+          "generatedNodes": 29,
+          "nodeCount": 3,
+          "nodes": [
+            {
+              "x": 29.5,
+              "y": 65,
+              "z": 23.5,
+              "cost": 1.4142135623730951,
+              "remainingBlocks": 0,
+              "toBreakCount": 0,
+              "toPlaceCount": 0
+            },
+            {
+              "x": 30.5,
+              "y": 65,
+              "z": 22.5,
+              "cost": 1.4142135623730951,
+              "remainingBlocks": 0,
+              "toBreakCount": 0,
+              "toPlaceCount": 0
+            },
+            {
+              "x": 31.5,
+              "y": 66,
+              "z": 21.5,
+              "cost": 2.414213562373095,
+              "remainingBlocks": 0,
+              "toBreakCount": 0,
+              "toPlaceCount": 0
+            }
+          ],
+          "nodesTruncated": false
+        }
+      }
+    },
+    {
+      "index": 418,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97205.60825,
+        "authorityTick": 1207,
+        "kind": "pathSearch",
+        "transition": "acquired",
+        "activeSearches": 1,
+        "queuedSearches": 0
+      }
+    },
+    {
+      "index": 419,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97208.979708,
+        "authorityTick": 1207,
+        "kind": "pathSearch",
+        "transition": "released",
+        "activeSearches": 0,
+        "queuedSearches": 0
+      }
+    },
+    {
+      "index": 420,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97208.991291,
+        "authorityTick": 1207,
+        "kind": "pathSearch",
+        "transition": "queued",
+        "activeSearches": 0,
+        "queuedSearches": 1
+      }
+    },
+    {
+      "index": 421,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97209.035291,
+        "authorityTick": 1207,
+        "kind": "pathUpdate",
+        "path": {
+          "status": "partial",
+          "cost": 5.242640687119286,
+          "contextTimeMs": 157.1750839999877,
+          "visitedNodes": 12,
+          "generatedNodes": 32,
+          "nodeCount": 3,
+          "nodes": [
+            {
+              "x": 29.5,
+              "y": 65,
+              "z": 23.5,
+              "cost": 1.4142135623730951,
+              "remainingBlocks": 0,
+              "toBreakCount": 0,
+              "toPlaceCount": 0
+            },
+            {
+              "x": 30.5,
+              "y": 65,
+              "z": 22.5,
+              "cost": 1.4142135623730951,
+              "remainingBlocks": 0,
+              "toBreakCount": 0,
+              "toPlaceCount": 0
+            },
+            {
+              "x": 31.5,
+              "y": 66,
+              "z": 21.5,
+              "cost": 2.414213562373095,
+              "remainingBlocks": 0,
+              "toBreakCount": 0,
+              "toPlaceCount": 0
+            }
+          ],
+          "nodesTruncated": false
+        }
+      }
+    },
+    {
+      "index": 423,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97255.798583,
+        "authorityTick": 1208,
+        "kind": "pathSearch",
+        "transition": "acquired",
+        "activeSearches": 1,
+        "queuedSearches": 0
+      }
+    },
+    {
+      "index": 424,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97259.229875,
+        "authorityTick": 1208,
+        "kind": "pathSearch",
+        "transition": "released",
+        "activeSearches": 0,
+        "queuedSearches": 0
+      }
+    },
+    {
+      "index": 425,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97259.236625,
+        "authorityTick": 1208,
+        "kind": "pathSearch",
+        "transition": "queued",
+        "activeSearches": 0,
+        "queuedSearches": 1
+      }
+    },
+    {
+      "index": 426,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97259.259458,
+        "authorityTick": 1208,
+        "kind": "pathUpdate",
+        "path": {
+          "status": "partial",
+          "cost": 5.242640687119286,
+          "contextTimeMs": 207.4283749999886,
+          "visitedNodes": 17,
+          "generatedNodes": 39,
+          "nodeCount": 3,
+          "nodes": [
+            {
+              "x": 29.5,
+              "y": 65,
+              "z": 23.5,
+              "cost": 1.4142135623730951,
+              "remainingBlocks": 0,
+              "toBreakCount": 0,
+              "toPlaceCount": 0
+            },
+            {
+              "x": 30.5,
+              "y": 65,
+              "z": 22.5,
+              "cost": 1.4142135623730951,
+              "remainingBlocks": 0,
+              "toBreakCount": 0,
+              "toPlaceCount": 0
+            },
+            {
+              "x": 31.5,
+              "y": 66,
+              "z": 21.5,
+              "cost": 2.414213562373095,
+              "remainingBlocks": 0,
+              "toBreakCount": 0,
+              "toPlaceCount": 0
+            }
+          ],
+          "nodesTruncated": false
+        }
+      }
+    },
+    {
+      "index": 428,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97307.331083,
+        "authorityTick": 1209,
+        "kind": "pathSearch",
+        "transition": "acquired",
+        "activeSearches": 1,
+        "queuedSearches": 0
+      }
+    },
+    {
+      "index": 429,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97310.814666,
+        "authorityTick": 1209,
+        "kind": "pathSearch",
+        "transition": "released",
+        "activeSearches": 0,
+        "queuedSearches": 0
+      }
+    },
+    {
+      "index": 430,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97310.821041,
+        "authorityTick": 1209,
+        "kind": "pathSearch",
+        "transition": "queued",
+        "activeSearches": 0,
+        "queuedSearches": 1
+      }
+    },
+    {
+      "index": 431,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97310.84775,
+        "authorityTick": 1209,
+        "kind": "pathUpdate",
+        "path": {
+          "status": "partial",
+          "cost": 5.242640687119286,
+          "contextTimeMs": 259.01299999999173,
+          "visitedNodes": 22,
+          "generatedNodes": 50,
+          "nodeCount": 3,
+          "nodes": [
+            {
+              "x": 29.5,
+              "y": 65,
+              "z": 23.5,
+              "cost": 1.4142135623730951,
+              "remainingBlocks": 0,
+              "toBreakCount": 0,
+              "toPlaceCount": 0
+            },
+            {
+              "x": 30.5,
+              "y": 65,
+              "z": 22.5,
+              "cost": 1.4142135623730951,
+              "remainingBlocks": 0,
+              "toBreakCount": 0,
+              "toPlaceCount": 0
+            },
+            {
+              "x": 31.5,
+              "y": 66,
+              "z": 21.5,
+              "cost": 2.414213562373095,
+              "remainingBlocks": 0,
+              "toBreakCount": 0,
+              "toPlaceCount": 0
+            }
+          ],
+          "nodesTruncated": false
+        }
+      }
+    },
+    {
+      "index": 433,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97357.788166,
+        "authorityTick": 1210,
+        "kind": "pathSearch",
+        "transition": "acquired",
+        "activeSearches": 1,
+        "queuedSearches": 0
+      }
+    },
+    {
+      "index": 434,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97361.206125,
+        "authorityTick": 1210,
+        "kind": "pathSearch",
+        "transition": "released",
+        "activeSearches": 0,
+        "queuedSearches": 0
+      }
+    },
+    {
+      "index": 435,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97361.212541,
+        "authorityTick": 1210,
+        "kind": "pathSearch",
+        "transition": "queued",
+        "activeSearches": 0,
+        "queuedSearches": 1
+      }
+    },
+    {
+      "index": 436,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97361.235583,
+        "authorityTick": 1210,
+        "kind": "pathUpdate",
+        "path": {
+          "status": "partial",
+          "cost": 5.242640687119286,
+          "contextTimeMs": 309.403833999997,
+          "visitedNodes": 28,
+          "generatedNodes": 56,
+          "nodeCount": 2,
+          "nodes": [
+            {
+              "x": 30.5,
+              "y": 65,
+              "z": 22.5,
+              "cost": 1.4142135623730951,
+              "remainingBlocks": 0,
+              "toBreakCount": 0,
+              "toPlaceCount": 0
+            },
+            {
+              "x": 31.5,
+              "y": 66,
+              "z": 21.5,
+              "cost": 2.414213562373095,
+              "remainingBlocks": 0,
+              "toBreakCount": 0,
+              "toPlaceCount": 0
+            }
+          ],
+          "nodesTruncated": false
+        }
+      }
+    },
+    {
+      "index": 438,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97408.573333,
+        "authorityTick": 1211,
+        "kind": "pathSearch",
+        "transition": "acquired",
+        "activeSearches": 1,
+        "queuedSearches": 0
+      }
+    },
+    {
+      "index": 439,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97412.073833,
+        "authorityTick": 1211,
+        "kind": "pathSearch",
+        "transition": "released",
+        "activeSearches": 0,
+        "queuedSearches": 0
+      }
+    },
+    {
+      "index": 440,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97412.084666,
+        "authorityTick": 1211,
+        "kind": "pathSearch",
+        "transition": "queued",
+        "activeSearches": 0,
+        "queuedSearches": 1
+      }
+    },
+    {
+      "index": 441,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97412.106083,
+        "authorityTick": 1211,
+        "kind": "pathUpdate",
+        "path": {
+          "status": "partial",
+          "cost": 5.242640687119286,
+          "contextTimeMs": 360.2714169999963,
+          "visitedNodes": 34,
+          "generatedNodes": 62,
+          "nodeCount": 2,
+          "nodes": [
+            {
+              "x": 30.5,
+              "y": 65,
+              "z": 22.5,
+              "cost": 1.4142135623730951,
+              "remainingBlocks": 0,
+              "toBreakCount": 0,
+              "toPlaceCount": 0
+            },
+            {
+              "x": 31.5,
+              "y": 66,
+              "z": 21.5,
+              "cost": 2.414213562373095,
+              "remainingBlocks": 0,
+              "toBreakCount": 0,
+              "toPlaceCount": 0
+            }
+          ],
+          "nodesTruncated": false
+        }
+      }
+    },
+    {
+      "index": 443,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97459.726791,
+        "authorityTick": 1212,
+        "kind": "pathSearch",
+        "transition": "acquired",
+        "activeSearches": 1,
+        "queuedSearches": 0
+      }
+    },
+    {
+      "index": 444,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97462.857791,
+        "authorityTick": 1212,
+        "kind": "pathSearch",
+        "transition": "released",
+        "activeSearches": 0,
+        "queuedSearches": 0
+      }
+    },
+    {
+      "index": 445,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97462.863458,
+        "authorityTick": 1212,
+        "kind": "pathSearch",
+        "transition": "queued",
+        "activeSearches": 0,
+        "queuedSearches": 1
+      }
+    },
+    {
+      "index": 446,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97462.8855,
+        "authorityTick": 1212,
+        "kind": "pathUpdate",
+        "path": {
+          "status": "partial",
+          "cost": 5.242640687119286,
+          "contextTimeMs": 411.0562499999942,
+          "visitedNodes": 39,
+          "generatedNodes": 73,
+          "nodeCount": 2,
+          "nodes": [
+            {
+              "x": 30.5,
+              "y": 65,
+              "z": 22.5,
+              "cost": 1.4142135623730951,
+              "remainingBlocks": 0,
+              "toBreakCount": 0,
+              "toPlaceCount": 0
+            },
+            {
+              "x": 31.5,
+              "y": 66,
+              "z": 21.5,
+              "cost": 2.414213562373095,
+              "remainingBlocks": 0,
+              "toBreakCount": 0,
+              "toPlaceCount": 0
+            }
+          ],
+          "nodesTruncated": false
+        }
+      }
+    },
+    {
+      "index": 448,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97510.060291,
+        "authorityTick": 1213,
+        "kind": "pathSearch",
+        "transition": "acquired",
+        "activeSearches": 1,
+        "queuedSearches": 0
+      }
+    },
+    {
+      "index": 449,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97513.492583,
+        "authorityTick": 1213,
+        "kind": "pathSearch",
+        "transition": "released",
+        "activeSearches": 0,
+        "queuedSearches": 0
+      }
+    },
+    {
+      "index": 450,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97513.501166,
+        "authorityTick": 1213,
+        "kind": "pathSearch",
+        "transition": "queued",
+        "activeSearches": 0,
+        "queuedSearches": 1
+      }
+    },
+    {
+      "index": 451,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97513.523708,
+        "authorityTick": 1213,
+        "kind": "pathUpdate",
+        "path": {
+          "status": "partial",
+          "cost": 5.242640687119286,
+          "contextTimeMs": 461.6899999999878,
+          "visitedNodes": 45,
+          "generatedNodes": 81,
+          "nodeCount": 2,
+          "nodes": [
+            {
+              "x": 30.5,
+              "y": 65,
+              "z": 22.5,
+              "cost": 1.4142135623730951,
+              "remainingBlocks": 0,
+              "toBreakCount": 0,
+              "toPlaceCount": 0
+            },
+            {
+              "x": 31.5,
+              "y": 66,
+              "z": 21.5,
+              "cost": 2.414213562373095,
+              "remainingBlocks": 0,
+              "toBreakCount": 0,
+              "toPlaceCount": 0
+            }
+          ],
+          "nodesTruncated": false
+        }
+      }
+    },
+    {
+      "index": 453,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97561.11,
+        "authorityTick": 1214,
+        "kind": "pathSearch",
+        "transition": "acquired",
+        "activeSearches": 1,
+        "queuedSearches": 0
+      }
+    },
+    {
+      "index": 454,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97564.277583,
+        "authorityTick": 1214,
+        "kind": "pathSearch",
+        "transition": "released",
+        "activeSearches": 0,
+        "queuedSearches": 0
+      }
+    },
+    {
+      "index": 455,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97564.283791,
+        "authorityTick": 1214,
+        "kind": "pathSearch",
+        "transition": "queued",
+        "activeSearches": 0,
+        "queuedSearches": 1
+      }
+    },
+    {
+      "index": 456,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97564.306208,
+        "authorityTick": 1214,
+        "kind": "pathUpdate",
+        "path": {
+          "status": "partial",
+          "cost": 5.242640687119286,
+          "contextTimeMs": 512.4765419999894,
+          "visitedNodes": 50,
+          "generatedNodes": 86,
+          "nodeCount": 2,
+          "nodes": [
+            {
+              "x": 30.5,
+              "y": 65,
+              "z": 22.5,
+              "cost": 1.4142135623730951,
+              "remainingBlocks": 0,
+              "toBreakCount": 0,
+              "toPlaceCount": 0
+            },
+            {
+              "x": 31.5,
+              "y": 66,
+              "z": 21.5,
+              "cost": 2.414213562373095,
+              "remainingBlocks": 0,
+              "toBreakCount": 0,
+              "toPlaceCount": 0
+            }
+          ],
+          "nodesTruncated": false
+        }
+      }
+    },
+    {
+      "index": 458,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97612.165458,
+        "authorityTick": 1215,
+        "kind": "pathSearch",
+        "transition": "acquired",
+        "activeSearches": 1,
+        "queuedSearches": 0
+      }
+    },
+    {
+      "index": 459,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97615.716083,
+        "authorityTick": 1215,
+        "kind": "pathSearch",
+        "transition": "released",
+        "activeSearches": 0,
+        "queuedSearches": 0
+      }
+    },
+    {
+      "index": 460,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97615.727916,
+        "authorityTick": 1215,
+        "kind": "pathSearch",
+        "transition": "queued",
+        "activeSearches": 0,
+        "queuedSearches": 1
+      }
+    },
+    {
+      "index": 461,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97615.757291,
+        "authorityTick": 1215,
+        "kind": "pathUpdate",
+        "path": {
+          "status": "partial",
+          "cost": 5.242640687119286,
+          "contextTimeMs": 563.9104169999919,
+          "visitedNodes": 55,
+          "generatedNodes": 91,
+          "nodeCount": 1,
+          "nodes": [
+            {
+              "x": 31.5,
+              "y": 66,
+              "z": 21.5,
+              "cost": 2.414213562373095,
+              "remainingBlocks": 0,
+              "toBreakCount": 0,
+              "toPlaceCount": 0
+            }
+          ],
+          "nodesTruncated": false
+        }
+      }
+    },
+    {
+      "index": 463,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97662.999291,
+        "authorityTick": 1216,
+        "kind": "pathSearch",
+        "transition": "acquired",
+        "activeSearches": 1,
+        "queuedSearches": 0
+      }
+    },
+    {
+      "index": 464,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97666.36775,
+        "authorityTick": 1216,
+        "kind": "pathSearch",
+        "transition": "released",
+        "activeSearches": 0,
+        "queuedSearches": 0
+      }
+    },
+    {
+      "index": 465,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97666.376583,
+        "authorityTick": 1216,
+        "kind": "pathSearch",
+        "transition": "queued",
+        "activeSearches": 0,
+        "queuedSearches": 1
+      }
+    },
+    {
+      "index": 466,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97666.397875,
+        "authorityTick": 1216,
+        "kind": "pathUpdate",
+        "path": {
+          "status": "partial",
+          "cost": 5.242640687119286,
+          "contextTimeMs": 614.5663749999949,
+          "visitedNodes": 60,
+          "generatedNodes": 98,
+          "nodeCount": 1,
+          "nodes": [
+            {
+              "x": 31.5,
+              "y": 66,
+              "z": 21.5,
+              "cost": 2.414213562373095,
+              "remainingBlocks": 0,
+              "toBreakCount": 0,
+              "toPlaceCount": 0
+            }
+          ],
+          "nodesTruncated": false
+        }
+      }
+    },
+    {
+      "index": 468,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97714.225875,
+        "authorityTick": 1217,
+        "kind": "pathSearch",
+        "transition": "acquired",
+        "activeSearches": 1,
+        "queuedSearches": 0
+      }
+    },
+    {
+      "index": 469,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97717.266208,
+        "authorityTick": 1217,
+        "kind": "pathSearch",
+        "transition": "released",
+        "activeSearches": 0,
+        "queuedSearches": 0
+      }
+    },
+    {
+      "index": 470,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97717.274291,
+        "authorityTick": 1217,
+        "kind": "pathSearch",
+        "transition": "queued",
+        "activeSearches": 0,
+        "queuedSearches": 1
+      }
+    },
+    {
+      "index": 471,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97717.299583,
+        "authorityTick": 1217,
+        "kind": "pathUpdate",
+        "path": {
+          "status": "partial",
+          "cost": 5.242640687119286,
+          "contextTimeMs": 665.4644999999873,
+          "visitedNodes": 64,
+          "generatedNodes": 106,
+          "nodeCount": 1,
+          "nodes": [
+            {
+              "x": 31.5,
+              "y": 66,
+              "z": 21.5,
+              "cost": 2.414213562373095,
+              "remainingBlocks": 0,
+              "toBreakCount": 0,
+              "toPlaceCount": 0
+            }
+          ],
+          "nodesTruncated": false
+        }
+      }
+    },
+    {
+      "index": 473,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97764.491375,
+        "authorityTick": 1218,
+        "kind": "pathSearch",
+        "transition": "acquired",
+        "activeSearches": 1,
+        "queuedSearches": 0
+      }
+    },
+    {
+      "index": 474,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97768.15975,
+        "authorityTick": 1218,
+        "kind": "pathSearch",
+        "transition": "released",
+        "activeSearches": 0,
+        "queuedSearches": 0
+      }
+    },
+    {
+      "index": 475,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97768.167166,
+        "authorityTick": 1218,
+        "kind": "pathSearch",
+        "transition": "queued",
+        "activeSearches": 0,
+        "queuedSearches": 1
+      }
+    },
+    {
+      "index": 476,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97768.196958,
+        "authorityTick": 1218,
+        "kind": "pathUpdate",
+        "path": {
+          "status": "partial",
+          "cost": 5.242640687119286,
+          "contextTimeMs": 716.3577499999956,
+          "visitedNodes": 68,
+          "generatedNodes": 112,
+          "nodeCount": 1,
+          "nodes": [
+            {
+              "x": 31.5,
+              "y": 66,
+              "z": 21.5,
+              "cost": 2.414213562373095,
+              "remainingBlocks": 0,
+              "toBreakCount": 0,
+              "toPlaceCount": 0
+            }
+          ],
+          "nodesTruncated": false
+        }
+      }
+    },
+    {
+      "index": 478,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97816.032833,
+        "authorityTick": 1219,
+        "kind": "pathSearch",
+        "transition": "acquired",
+        "activeSearches": 1,
+        "queuedSearches": 0
+      }
+    },
+    {
+      "index": 479,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97819.135208,
+        "authorityTick": 1219,
+        "kind": "pathSearch",
+        "transition": "released",
+        "activeSearches": 0,
+        "queuedSearches": 0
+      }
+    },
+    {
+      "index": 480,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97819.143666,
+        "authorityTick": 1219,
+        "kind": "pathSearch",
+        "transition": "queued",
+        "activeSearches": 0,
+        "queuedSearches": 1
+      }
+    },
+    {
+      "index": 481,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97819.177791,
+        "authorityTick": 1219,
+        "kind": "pathUpdate",
+        "path": {
+          "status": "partial",
+          "cost": 5.242640687119286,
+          "contextTimeMs": 767.331708999991,
+          "visitedNodes": 71,
+          "generatedNodes": 115,
+          "nodeCount": 1,
+          "nodes": [
+            {
+              "x": 31.5,
+              "y": 66,
+              "z": 21.5,
+              "cost": 2.414213562373095,
+              "remainingBlocks": 0,
+              "toBreakCount": 0,
+              "toPlaceCount": 0
+            }
+          ],
+          "nodesTruncated": false
+        }
+      }
+    },
+    {
+      "index": 483,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97867.49325,
+        "authorityTick": 1220,
+        "kind": "pathSearch",
+        "transition": "acquired",
+        "activeSearches": 1,
+        "queuedSearches": 0
+      }
+    },
+    {
+      "index": 484,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97871.338625,
+        "authorityTick": 1220,
+        "kind": "pathSearch",
+        "transition": "released",
+        "activeSearches": 0,
+        "queuedSearches": 0
+      }
+    },
+    {
+      "index": 485,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97871.34775,
+        "authorityTick": 1220,
+        "kind": "pathSearch",
+        "transition": "queued",
+        "activeSearches": 0,
+        "queuedSearches": 1
+      }
+    },
+    {
+      "index": 486,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97871.387916,
+        "authorityTick": 1220,
+        "kind": "pathUpdate",
+        "path": {
+          "status": "partial",
+          "cost": 5.242640687119286,
+          "contextTimeMs": 819.5345839999936,
+          "visitedNodes": 74,
+          "generatedNodes": 118,
+          "nodeCount": 1,
+          "nodes": [
+            {
+              "x": 31.5,
+              "y": 66,
+              "z": 21.5,
+              "cost": 2.414213562373095,
+              "remainingBlocks": 0,
+              "toBreakCount": 0,
+              "toPlaceCount": 0
+            }
+          ],
+          "nodesTruncated": false
+        }
+      }
+    },
+    {
+      "index": 488,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97919.242375,
+        "authorityTick": 1221,
+        "kind": "pathSearch",
+        "transition": "acquired",
+        "activeSearches": 1,
+        "queuedSearches": 0
+      }
+    },
+    {
+      "index": 489,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97922.385875,
+        "authorityTick": 1221,
+        "kind": "pathSearch",
+        "transition": "released",
+        "activeSearches": 0,
+        "queuedSearches": 0
+      }
+    },
+    {
+      "index": 490,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97922.392125,
+        "authorityTick": 1221,
+        "kind": "pathSearch",
+        "transition": "queued",
+        "activeSearches": 0,
+        "queuedSearches": 1
+      }
+    },
+    {
+      "index": 491,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97922.41475,
+        "authorityTick": 1221,
+        "kind": "pathUpdate",
+        "path": {
+          "status": "partial",
+          "cost": 5.242640687119286,
+          "contextTimeMs": 870.5841669999936,
+          "visitedNodes": 79,
+          "generatedNodes": 124,
+          "nodeCount": 1,
+          "nodes": [
+            {
+              "x": 31.5,
+              "y": 66,
+              "z": 21.5,
+              "cost": 2.414213562373095,
+              "remainingBlocks": 0,
+              "toBreakCount": 0,
+              "toPlaceCount": 0
+            }
+          ],
+          "nodesTruncated": false
+        }
+      }
+    },
+    {
+      "index": 493,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97969.653041,
+        "authorityTick": 1222,
+        "kind": "pathSearch",
+        "transition": "acquired",
+        "activeSearches": 1,
+        "queuedSearches": 0
+      }
+    },
+    {
+      "index": 494,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97973.068375,
+        "authorityTick": 1222,
+        "kind": "pathSearch",
+        "transition": "released",
+        "activeSearches": 0,
+        "queuedSearches": 0
+      }
+    },
+    {
+      "index": 495,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97973.076708,
+        "authorityTick": 1222,
+        "kind": "pathSearch",
+        "transition": "queued",
+        "activeSearches": 0,
+        "queuedSearches": 1
+      }
+    },
+    {
+      "index": 496,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 97973.100791,
+        "authorityTick": 1222,
+        "kind": "pathUpdate",
+        "path": {
+          "status": "partial",
+          "cost": 5.242640687119286,
+          "contextTimeMs": 921.2654999999941,
+          "visitedNodes": 85,
+          "generatedNodes": 129,
+          "nodeCount": 1,
+          "nodes": [
+            {
+              "x": 31.5,
+              "y": 66,
+              "z": 21.5,
+              "cost": 2.414213562373095,
+              "remainingBlocks": 0,
+              "toBreakCount": 0,
+              "toPlaceCount": 0
+            }
+          ],
+          "nodesTruncated": false
+        }
+      }
+    },
+    {
+      "index": 498,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 98020.819333,
+        "authorityTick": 1223,
+        "kind": "pathSearch",
+        "transition": "acquired",
+        "activeSearches": 1,
+        "queuedSearches": 0
+      }
+    },
+    {
+      "index": 499,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 98024.012291,
+        "authorityTick": 1223,
+        "kind": "pathSearch",
+        "transition": "released",
+        "activeSearches": 0,
+        "queuedSearches": 0
+      }
+    },
+    {
+      "index": 500,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 98024.018166,
+        "authorityTick": 1223,
+        "kind": "pathSearch",
+        "transition": "queued",
+        "activeSearches": 0,
+        "queuedSearches": 1
+      }
+    },
+    {
+      "index": 501,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 98024.039875,
+        "authorityTick": 1223,
+        "kind": "pathUpdate",
+        "path": {
+          "status": "partial",
+          "cost": 5.242640687119286,
+          "contextTimeMs": 972.2108339999977,
+          "visitedNodes": 90,
+          "generatedNodes": 134,
+          "nodeCount": 1,
+          "nodes": [
+            {
+              "x": 31.5,
+              "y": 66,
+              "z": 21.5,
+              "cost": 2.414213562373095,
+              "remainingBlocks": 0,
+              "toBreakCount": 0,
+              "toPlaceCount": 0
+            }
+          ],
+          "nodesTruncated": false
+        }
+      }
+    },
+    {
+      "index": 502,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 98024.267458,
+        "authorityTick": 1223,
+        "kind": "physicsTick",
+        "owner": "navigateToBlock",
+        "navigationActive": true,
+        "position": {
+          "x": 31.8707310901793,
+          "y": 66.02442408821369,
+          "z": 21.891855377664864
+        },
+        "velocity": {
+          "x": 0.11842105387190795,
+          "y": -0.22768848754498797,
+          "z": -0.10186748924814333
+        },
+        "onGround": false,
+        "collidedHorizontally": false,
+        "collidedVertically": false,
+        "control": {
+          "forward": true,
+          "back": false,
+          "left": false,
+          "right": false,
+          "jump": false,
+          "sprint": true,
+          "sneak": false
+        },
+        "goal": {
+          "type": "GoalBlock",
+          "x": 31,
+          "y": 66,
+          "z": 21,
+          "rangeSq": null,
+          "entityId": null
+        },
+        "moving": true,
+        "path": {
+          "status": "partial",
+          "cost": 5.242640687119286,
+          "contextTimeMs": 972.2108339999977,
+          "visitedNodes": 90,
+          "generatedNodes": 134,
+          "nodeCount": 1,
+          "nodes": [
+            {
+              "x": 31.5,
+              "y": 66,
+              "z": 21.5,
+              "cost": 2.414213562373095,
+              "remainingBlocks": 0,
+              "toBreakCount": 0,
+              "toPlaceCount": 0
+            }
+          ],
+          "nodesTruncated": false
+        },
+        "blocks": [
+          {
+            "position": {
+              "x": 30,
+              "y": 65,
+              "z": 20
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 30,
+              "y": 65,
+              "z": 21
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 30,
+              "y": 65,
+              "z": 22
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 31,
+              "y": 65,
+              "z": 20
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 31,
+              "y": 65,
+              "z": 21
+            },
+            "loaded": true,
+            "name": "cobblestone",
+            "type": 12,
+            "stateId": 14,
+            "shapes": [
+              {
+                "values": [
+                  0,
+                  0,
+                  0,
+                  1,
+                  1,
+                  1
+                ]
+              }
+            ],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 31,
+              "y": 65,
+              "z": 22
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 32,
+              "y": 65,
+              "z": 20
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 32,
+              "y": 65,
+              "z": 21
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 32,
+              "y": 65,
+              "z": 22
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 30,
+              "y": 66,
+              "z": 20
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 30,
+              "y": 66,
+              "z": 21
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 30,
+              "y": 66,
+              "z": 22
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 31,
+              "y": 66,
+              "z": 20
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 31,
+              "y": 66,
+              "z": 21
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 31,
+              "y": 66,
+              "z": 22
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 32,
+              "y": 66,
+              "z": 20
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 32,
+              "y": 66,
+              "z": 21
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 32,
+              "y": 66,
+              "z": 22
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 30,
+              "y": 67,
+              "z": 20
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 30,
+              "y": 67,
+              "z": 21
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 30,
+              "y": 67,
+              "z": 22
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 31,
+              "y": 67,
+              "z": 20
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 31,
+              "y": 67,
+              "z": 21
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 31,
+              "y": 67,
+              "z": 22
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 32,
+              "y": 67,
+              "z": 20
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 32,
+              "y": 67,
+              "z": 21
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 32,
+              "y": 67,
+              "z": 22
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 30,
+              "y": 68,
+              "z": 20
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 30,
+              "y": 68,
+              "z": 21
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 30,
+              "y": 68,
+              "z": 22
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 31,
+              "y": 68,
+              "z": 20
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 31,
+              "y": 68,
+              "z": 21
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 31,
+              "y": 68,
+              "z": 22
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 32,
+              "y": 68,
+              "z": 20
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 32,
+              "y": 68,
+              "z": 21
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 32,
+              "y": 68,
+              "z": 22
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          }
+        ]
+      }
+    },
+    {
+      "index": 503,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 98073.787958,
+        "authorityTick": 1224,
+        "kind": "pathSearch",
+        "transition": "acquired",
+        "activeSearches": 1,
+        "queuedSearches": 0
+      }
+    },
+    {
+      "index": 504,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 98073.807125,
+        "authorityTick": 1224,
+        "kind": "pathSearch",
+        "transition": "released",
+        "activeSearches": 0,
+        "queuedSearches": 0
+      }
+    },
+    {
+      "index": 505,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 98073.834875,
+        "authorityTick": 1224,
+        "kind": "pathUpdate",
+        "path": {
+          "status": "timeout",
+          "cost": 5.242640687119286,
+          "contextTimeMs": 1022.0059589999873,
+          "visitedNodes": 90,
+          "generatedNodes": 134,
+          "nodeCount": 1,
+          "nodes": [
+            {
+              "x": 31.5,
+              "y": 66,
+              "z": 21.5,
+              "cost": 2.414213562373095,
+              "remainingBlocks": 0,
+              "toBreakCount": 0,
+              "toPlaceCount": 0
+            }
+          ],
+          "nodesTruncated": false
+        }
+      }
+    },
+    {
+      "index": 506,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 98074.1985,
+        "authorityTick": 1224,
+        "kind": "physicsTick",
+        "owner": "navigateToBlock",
+        "navigationActive": true,
+        "position": {
+          "x": 31.97166131668725,
+          "y": 66,
+          "z": 21.77145949512091
+        },
+        "velocity": {
+          "x": 0.09184650612223369,
+          "y": -0.0784000015258789,
+          "z": -0.10956025311499686
+        },
+        "onGround": true,
+        "collidedHorizontally": false,
+        "collidedVertically": true,
+        "control": {
+          "forward": true,
+          "back": false,
+          "left": false,
+          "right": false,
+          "jump": false,
+          "sprint": true,
+          "sneak": false
+        },
+        "goal": {
+          "type": "GoalBlock",
+          "x": 31,
+          "y": 66,
+          "z": 21,
+          "rangeSq": null,
+          "entityId": null
+        },
+        "moving": true,
+        "path": {
+          "status": "timeout",
+          "cost": 5.242640687119286,
+          "contextTimeMs": 1022.0059589999873,
+          "visitedNodes": 90,
+          "generatedNodes": 134,
+          "nodeCount": 1,
+          "nodes": [
+            {
+              "x": 31.5,
+              "y": 66,
+              "z": 21.5,
+              "cost": 2.414213562373095,
+              "remainingBlocks": 0,
+              "toBreakCount": 0,
+              "toPlaceCount": 0
+            }
+          ],
+          "nodesTruncated": false
+        },
+        "blocks": [
+          {
+            "position": {
+              "x": 30,
+              "y": 65,
+              "z": 20
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 30,
+              "y": 65,
+              "z": 21
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 30,
+              "y": 65,
+              "z": 22
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 31,
+              "y": 65,
+              "z": 20
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 31,
+              "y": 65,
+              "z": 21
+            },
+            "loaded": true,
+            "name": "cobblestone",
+            "type": 12,
+            "stateId": 14,
+            "shapes": [
+              {
+                "values": [
+                  0,
+                  0,
+                  0,
+                  1,
+                  1,
+                  1
+                ]
+              }
+            ],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 31,
+              "y": 65,
+              "z": 22
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 32,
+              "y": 65,
+              "z": 20
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 32,
+              "y": 65,
+              "z": 21
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 32,
+              "y": 65,
+              "z": 22
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 30,
+              "y": 66,
+              "z": 20
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 30,
+              "y": 66,
+              "z": 21
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 30,
+              "y": 66,
+              "z": 22
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 31,
+              "y": 66,
+              "z": 20
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 31,
+              "y": 66,
+              "z": 21
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 31,
+              "y": 66,
+              "z": 22
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 32,
+              "y": 66,
+              "z": 20
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 32,
+              "y": 66,
+              "z": 21
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 32,
+              "y": 66,
+              "z": 22
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 30,
+              "y": 67,
+              "z": 20
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 30,
+              "y": 67,
+              "z": 21
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 30,
+              "y": 67,
+              "z": 22
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 31,
+              "y": 67,
+              "z": 20
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 31,
+              "y": 67,
+              "z": 21
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 31,
+              "y": 67,
+              "z": 22
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 32,
+              "y": 67,
+              "z": 20
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 32,
+              "y": 67,
+              "z": 21
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 32,
+              "y": 67,
+              "z": 22
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 30,
+              "y": 68,
+              "z": 20
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 30,
+              "y": 68,
+              "z": 21
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 30,
+              "y": 68,
+              "z": 22
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 31,
+              "y": 68,
+              "z": 20
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 31,
+              "y": 68,
+              "z": 21
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 31,
+              "y": 68,
+              "z": 22
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 32,
+              "y": 68,
+              "z": 20
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 32,
+              "y": 68,
+              "z": 21
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 32,
+              "y": 68,
+              "z": 22
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          }
+        ]
+      }
+    },
+    {
+      "index": 507,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 98074.556291,
+        "authorityTick": 1224,
+        "kind": "physicsTick",
+        "owner": "navigateToBlock",
+        "navigationActive": true,
+        "position": {
+          "x": 31.953009755001474,
+          "y": 66,
+          "z": 21.59848828258854
+        },
+        "velocity": {
+          "x": -0.010183752680433547,
+          "y": -0.0784000015258789,
+          "z": -0.09444228204267434
+        },
+        "onGround": true,
+        "collidedHorizontally": false,
+        "collidedVertically": true,
+        "control": {
+          "forward": true,
+          "back": false,
+          "left": false,
+          "right": false,
+          "jump": false,
+          "sprint": true,
+          "sneak": false
+        },
+        "goal": {
+          "type": "GoalBlock",
+          "x": 31,
+          "y": 66,
+          "z": 21,
+          "rangeSq": null,
+          "entityId": null
+        },
+        "moving": true,
+        "path": {
+          "status": "timeout",
+          "cost": 5.242640687119286,
+          "contextTimeMs": 1022.0059589999873,
+          "visitedNodes": 90,
+          "generatedNodes": 134,
+          "nodeCount": 1,
+          "nodes": [
+            {
+              "x": 31.5,
+              "y": 66,
+              "z": 21.5,
+              "cost": 2.414213562373095,
+              "remainingBlocks": 0,
+              "toBreakCount": 0,
+              "toPlaceCount": 0
+            }
+          ],
+          "nodesTruncated": false
+        },
+        "blocks": [
+          {
+            "position": {
+              "x": 30,
+              "y": 65,
+              "z": 20
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 30,
+              "y": 65,
+              "z": 21
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 30,
+              "y": 65,
+              "z": 22
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 31,
+              "y": 65,
+              "z": 20
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 31,
+              "y": 65,
+              "z": 21
+            },
+            "loaded": true,
+            "name": "cobblestone",
+            "type": 12,
+            "stateId": 14,
+            "shapes": [
+              {
+                "values": [
+                  0,
+                  0,
+                  0,
+                  1,
+                  1,
+                  1
+                ]
+              }
+            ],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 31,
+              "y": 65,
+              "z": 22
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 32,
+              "y": 65,
+              "z": 20
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 32,
+              "y": 65,
+              "z": 21
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 32,
+              "y": 65,
+              "z": 22
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 30,
+              "y": 66,
+              "z": 20
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 30,
+              "y": 66,
+              "z": 21
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 30,
+              "y": 66,
+              "z": 22
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 31,
+              "y": 66,
+              "z": 20
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 31,
+              "y": 66,
+              "z": 21
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 31,
+              "y": 66,
+              "z": 22
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 32,
+              "y": 66,
+              "z": 20
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 32,
+              "y": 66,
+              "z": 21
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 32,
+              "y": 66,
+              "z": 22
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 30,
+              "y": 67,
+              "z": 20
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 30,
+              "y": 67,
+              "z": 21
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 30,
+              "y": 67,
+              "z": 22
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 31,
+              "y": 67,
+              "z": 20
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 31,
+              "y": 67,
+              "z": 21
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 31,
+              "y": 67,
+              "z": 22
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 32,
+              "y": 67,
+              "z": 20
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 32,
+              "y": 67,
+              "z": 21
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 32,
+              "y": 67,
+              "z": 22
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 30,
+              "y": 68,
+              "z": 20
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 30,
+              "y": 68,
+              "z": 21
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 30,
+              "y": 68,
+              "z": 22
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 31,
+              "y": 68,
+              "z": 20
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 31,
+              "y": 68,
+              "z": 21
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 31,
+              "y": 68,
+              "z": 22
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 32,
+              "y": 68,
+              "z": 20
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 32,
+              "y": 68,
+              "z": 21
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 32,
+              "y": 68,
+              "z": 22
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          }
+        ]
+      }
+    },
+    {
+      "index": 508,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 98074.799541,
+        "authorityTick": 1224,
+        "kind": "goalUpdated",
+        "goal": null,
+        "dynamic": false
+      }
+    },
+    {
+      "index": 509,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 98074.900916,
+        "authorityTick": 1224,
+        "kind": "pathStop"
+      }
+    },
+    {
+      "index": 510,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 98074.94875,
+        "authorityTick": 1224,
+        "kind": "navigation",
+        "active": false
+      }
+    },
+    {
+      "index": 511,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 98075.028333,
+        "authorityTick": 1224,
+        "kind": "skillOwner",
+        "owner": null
+      }
+    }
+  ]
+}

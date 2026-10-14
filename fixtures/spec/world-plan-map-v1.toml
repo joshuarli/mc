@@ -1,0 +1,24 @@
+schema = 1
+name = "world-plan-v1"
+
+[dimensions]
+width = 4
+depth = 4
+min_y = 0
+max_y = 3
+
+[[operations]]
+kind = "cuboid"
+from = { x = 0, y = 0, z = 0 }
+to = { x = 2, y = 0, z = 2 }
+block = "minecraft:stone"
+
+[[operations]]
+kind = "spawn"
+seat = 0
+position = { x = 0, y = 1, z = 0 }
+
+[[operations]]
+kind = "loot_container"
+position = { x = 2, y = 1, z = 2 }
+inventory = ["minecraft:apple"]

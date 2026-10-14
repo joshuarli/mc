@@ -1,0 +1,64 @@
+schema = 2
+name = "hunger-six"
+terrain = "vanilla"
+dimensions = { width = 1024, depth = 1024 }
+
+[[operations]]
+kind = "spawn"
+seat = 0
+position = { x = 425, z = 620 }
+
+[[operations]]
+kind = "spawn"
+seat = 1
+position = { x = 425, z = 557 }
+
+[[operations]]
+kind = "spawn"
+seat = 2
+position = { x = 484, z = 598 }
+
+[[operations]]
+kind = "spawn"
+seat = 3
+position = { x = 380, z = 588 }
+
+[[operations]]
+kind = "spawn"
+seat = 4
+position = { x = 471, z = 650 }
+
+[[operations]]
+kind = "spawn"
+seat = 5
+position = { x = 380, z = 649 }
+
+[[operations]]
+kind = "loot_container"
+position = { x = 437, z = 600 }
+inventory = ["minecraft:bread", "minecraft:stone_sword"]
+
+[[operations]]
+kind = "loot_container"
+position = { x = 434, z = 623 }
+inventory = ["minecraft:bread", "minecraft:leather_helmet"]
+
+[[operations]]
+kind = "loot_container"
+position = { x = 414, z = 615 }
+inventory = ["minecraft:bread", "minecraft:stone_axe"]
+
+[[operations]]
+kind = "loot_container"
+position = { x = 442, z = 620 }
+inventory = ["minecraft:bread", "minecraft:leather_chestplate"]
+
+[[operations]]
+kind = "loot_container"
+position = { x = 421, z = 627 }
+inventory = ["minecraft:bread", "minecraft:stone_sword"]
+
+[[operations]]
+kind = "loot_container"
+position = { x = 445, z = 604 }
+inventory = ["minecraft:bread", "minecraft:stone_axe"]

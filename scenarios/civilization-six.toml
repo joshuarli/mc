@@ -1,0 +1,90 @@
+schema = 1
+name = "civilization-six"
+mode = "civilization"
+seed = 122726668279276
+map = "../maps/civilization-six.toml"
+policy = "../policies/baseline.toml"
+
+[roster]
+competitors = 6
+spectator_capacity = 4
+
+[server]
+minecraft = "26.1.2"
+view_distance_chunks = 6
+simulation_distance_chunks = 5
+max_tick_rate = 20
+
+[match]
+countdown_ticks = 100
+grace_ticks = 2400
+authoritative_max_ticks = 18000
+respawn = false
+block_breaking = true
+block_placing = true
+natural_mobs = false
+natural_random_ticks = false
+
+[border]
+kind = "fixed"
+diameter_blocks = 192
+
+[bots]
+strategy_interval_ticks = 4
+path_expansions_per_slice = 2048
+max_pending_paths_per_bot = 1
+perception = "competitive-v1"
+
+[record]
+mode = "evaluation"
+policy_replay = true
+world_outcomes = true
+
+[[civilization.factions]]
+id = "ember"
+members = [
+  { seat = 0, role = "gatherer_crafter" },
+  { seat = 1, role = "builder" },
+  { seat = 2, role = "defender_scout" },
+]
+
+[[civilization.factions]]
+id = "tide"
+members = [
+  { seat = 3, role = "gatherer_crafter" },
+  { seat = 4, role = "builder" },
+  { seat = 5, role = "defender_scout" },
+]
+
+[[civilization.starting_kit]]
+item = "minecraft:bread"
+count = 4
+
+[[civilization.starting_kit]]
+item = "minecraft:wooden_axe"
+count = 1
+
+[[civilization.starting_kit]]
+item = "minecraft:wooden_pickaxe"
+count = 1
+
+[[civilization.starting_kit]]
+item = "minecraft:wooden_sword"
+count = 1
+
+[civilization.capture_zone]
+min = { x = 92, y = 65, z = 92 }
+max = { x = 99, y = 70, z = 99 }
+uncontested_ticks = 200
+score_points_per_tick = 1
+
+[civilization.blueprint]
+id = "oak-outpost-v1"
+
+[civilization.blueprint.anchors.ember]
+position = { x = 38, y = 65, z = 92 }
+rotation_degrees = 0
+
+[civilization.blueprint.anchors.tide]
+position = { x = 151, y = 65, z = 92 }
+rotation_degrees = 180

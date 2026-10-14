@@ -1,0 +1,2393 @@
+{
+  "target": {
+    "x": 31,
+    "y": 66,
+    "z": 21
+  },
+  "ownArrivalReceipt": {
+    "clientMs": 79634.840834,
+    "authorityTick": 1222,
+    "position": {
+      "x": 31.866467272391873,
+      "y": 66.02442408821369,
+      "z": 21.89287287782355
+    }
+  },
+  "observerArrivalReceipt": {
+    "clientMs": 79687.983,
+    "authorityTick": 1223,
+    "position": {
+      "x": 31.866534591923315,
+      "y": 66.02449217438698,
+      "z": 21.892822745362082
+    }
+  },
+  "source_record_count": 512,
+  "source_kind_counts": [
+    {
+      "kind": "externalMovementOwner",
+      "count": 1
+    },
+    {
+      "kind": "goalReached",
+      "count": 5
+    },
+    {
+      "kind": "goalUpdated",
+      "count": 5
+    },
+    {
+      "kind": "navigation",
+      "count": 12
+    },
+    {
+      "kind": "pathSearch",
+      "count": 61
+    },
+    {
+      "kind": "pathUpdate",
+      "count": 26
+    },
+    {
+      "kind": "physicsTick",
+      "count": 398
+    },
+    {
+      "kind": "skillOwner",
+      "count": 4
+    }
+  ],
+  "records": [
+    {
+      "index": 259,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 74764.379584,
+        "authorityTick": 1125,
+        "kind": "externalMovementOwner",
+        "owner": null
+      }
+    },
+    {
+      "index": 260,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 74952.655959,
+        "authorityTick": 1125,
+        "kind": "skillOwner",
+        "owner": "navigateToBlock"
+      }
+    },
+    {
+      "index": 261,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 74952.668959,
+        "authorityTick": 1125,
+        "kind": "navigation",
+        "active": false
+      }
+    },
+    {
+      "index": 262,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 74953.103875,
+        "authorityTick": 1125,
+        "kind": "navigation",
+        "active": true
+      }
+    },
+    {
+      "index": 263,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 74953.179542,
+        "authorityTick": 1125,
+        "kind": "goalUpdated",
+        "goal": {
+          "type": "GoalNear",
+          "x": 19,
+          "y": 65,
+          "z": 31,
+          "rangeSq": 4,
+          "entityId": null
+        },
+        "dynamic": false
+      }
+    },
+    {
+      "index": 299,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 76039.628,
+        "authorityTick": 1150,
+        "kind": "goalReached",
+        "goal": {
+          "type": "GoalNear",
+          "x": 19,
+          "y": 65,
+          "z": 31,
+          "rangeSq": 4,
+          "entityId": null
+        }
+      }
+    },
+    {
+      "index": 301,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 76042.145375,
+        "authorityTick": 1150,
+        "kind": "navigation",
+        "active": false
+      }
+    },
+    {
+      "index": 302,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 76042.671959,
+        "authorityTick": 1150,
+        "kind": "navigation",
+        "active": true
+      }
+    },
+    {
+      "index": 303,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 76042.701209,
+        "authorityTick": 1150,
+        "kind": "goalUpdated",
+        "goal": {
+          "type": "GoalNear",
+          "x": 24,
+          "y": 65,
+          "z": 27,
+          "rangeSq": 4,
+          "entityId": null
+        },
+        "dynamic": false
+      }
+    },
+    {
+      "index": 348,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 77320.832209,
+        "authorityTick": 1176,
+        "kind": "goalReached",
+        "goal": {
+          "type": "GoalNear",
+          "x": 24,
+          "y": 65,
+          "z": 27,
+          "rangeSq": 4,
+          "entityId": null
+        }
+      }
+    },
+    {
+      "index": 350,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 77322.092584,
+        "authorityTick": 1176,
+        "kind": "navigation",
+        "active": false
+      }
+    },
+    {
+      "index": 351,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 77322.329917,
+        "authorityTick": 1176,
+        "kind": "navigation",
+        "active": true
+      }
+    },
+    {
+      "index": 352,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 77322.354959,
+        "authorityTick": 1176,
+        "kind": "goalUpdated",
+        "goal": {
+          "type": "GoalNear",
+          "x": 29,
+          "y": 66,
+          "z": 23,
+          "rangeSq": 4,
+          "entityId": null
+        },
+        "dynamic": false
+      }
+    },
+    {
+      "index": 397,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 78648.018167,
+        "authorityTick": 1203,
+        "kind": "goalReached",
+        "goal": {
+          "type": "GoalNear",
+          "x": 29,
+          "y": 66,
+          "z": 23,
+          "rangeSq": 4,
+          "entityId": null
+        }
+      }
+    },
+    {
+      "index": 399,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 78648.515542,
+        "authorityTick": 1203,
+        "kind": "navigation",
+        "active": false
+      }
+    },
+    {
+      "index": 400,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 78648.690167,
+        "authorityTick": 1203,
+        "kind": "navigation",
+        "active": true
+      }
+    },
+    {
+      "index": 401,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 78648.71575,
+        "authorityTick": 1203,
+        "kind": "goalUpdated",
+        "goal": {
+          "type": "GoalBlock",
+          "x": 31,
+          "y": 66,
+          "z": 21,
+          "rangeSq": null,
+          "entityId": null
+        },
+        "dynamic": false
+      }
+    },
+    {
+      "index": 404,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 78700.738084,
+        "authorityTick": 1204,
+        "kind": "pathUpdate",
+        "path": {
+          "status": "success",
+          "cost": 5.242640687119286,
+          "contextTimeMs": 2.428541999994195,
+          "visitedNodes": 3,
+          "generatedNodes": 18,
+          "nodeCount": 3,
+          "nodes": [
+            {
+              "x": 29.5,
+              "y": 65,
+              "z": 23.5,
+              "cost": 1.4142135623730951,
+              "remainingBlocks": 0,
+              "toBreakCount": 0,
+              "toPlaceCount": 0
+            },
+            {
+              "x": 30.5,
+              "y": 65,
+              "z": 22.5,
+              "cost": 1.4142135623730951,
+              "remainingBlocks": 0,
+              "toBreakCount": 0,
+              "toPlaceCount": 0
+            },
+            {
+              "x": 31.5,
+              "y": 66,
+              "z": 21.5,
+              "cost": 2.414213562373095,
+              "remainingBlocks": 0,
+              "toBreakCount": 0,
+              "toPlaceCount": 0
+            }
+          ],
+          "nodesTruncated": false
+        }
+      }
+    },
+    {
+      "index": 424,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 79634.733042,
+        "authorityTick": 1222,
+        "kind": "physicsTick",
+        "owner": "navigateToBlock",
+        "navigationActive": true,
+        "position": {
+          "x": 31.866467272391873,
+          "y": 66.02442408821369,
+          "z": 21.89287287782355
+        },
+        "velocity": {
+          "x": 0.11924888441916667,
+          "y": -0.22768848754498797,
+          "z": -0.1017921210657663
+        },
+        "onGround": false,
+        "collidedHorizontally": false,
+        "collidedVertically": false,
+        "control": {
+          "forward": true,
+          "back": false,
+          "left": false,
+          "right": false,
+          "jump": false,
+          "sprint": true,
+          "sneak": false
+        },
+        "goal": {
+          "type": "GoalBlock",
+          "x": 31,
+          "y": 66,
+          "z": 21,
+          "rangeSq": null,
+          "entityId": null
+        },
+        "moving": true,
+        "path": {
+          "status": "success",
+          "cost": 5.242640687119286,
+          "contextTimeMs": 2.428541999994195,
+          "visitedNodes": 3,
+          "generatedNodes": 18,
+          "nodeCount": 3,
+          "nodes": [
+            {
+              "x": 29.5,
+              "y": 65,
+              "z": 23.5,
+              "cost": 1.4142135623730951,
+              "remainingBlocks": 0,
+              "toBreakCount": 0,
+              "toPlaceCount": 0
+            },
+            {
+              "x": 30.5,
+              "y": 65,
+              "z": 22.5,
+              "cost": 1.4142135623730951,
+              "remainingBlocks": 0,
+              "toBreakCount": 0,
+              "toPlaceCount": 0
+            },
+            {
+              "x": 31.5,
+              "y": 66,
+              "z": 21.5,
+              "cost": 2.414213562373095,
+              "remainingBlocks": 0,
+              "toBreakCount": 0,
+              "toPlaceCount": 0
+            }
+          ],
+          "nodesTruncated": false
+        },
+        "blocks": [
+          {
+            "position": {
+              "x": 30,
+              "y": 65,
+              "z": 20
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 30,
+              "y": 65,
+              "z": 21
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 30,
+              "y": 65,
+              "z": 22
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 31,
+              "y": 65,
+              "z": 20
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 31,
+              "y": 65,
+              "z": 21
+            },
+            "loaded": true,
+            "name": "cobblestone",
+            "type": 12,
+            "stateId": 14,
+            "shapes": [
+              {
+                "values": [
+                  0,
+                  0,
+                  0,
+                  1,
+                  1,
+                  1
+                ]
+              }
+            ],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 31,
+              "y": 65,
+              "z": 22
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 32,
+              "y": 65,
+              "z": 20
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 32,
+              "y": 65,
+              "z": 21
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 32,
+              "y": 65,
+              "z": 22
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 30,
+              "y": 66,
+              "z": 20
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 30,
+              "y": 66,
+              "z": 21
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 30,
+              "y": 66,
+              "z": 22
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 31,
+              "y": 66,
+              "z": 20
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 31,
+              "y": 66,
+              "z": 21
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 31,
+              "y": 66,
+              "z": 22
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 32,
+              "y": 66,
+              "z": 20
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 32,
+              "y": 66,
+              "z": 21
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 32,
+              "y": 66,
+              "z": 22
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 30,
+              "y": 67,
+              "z": 20
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 30,
+              "y": 67,
+              "z": 21
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 30,
+              "y": 67,
+              "z": 22
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 31,
+              "y": 67,
+              "z": 20
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 31,
+              "y": 67,
+              "z": 21
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 31,
+              "y": 67,
+              "z": 22
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 32,
+              "y": 67,
+              "z": 20
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 32,
+              "y": 67,
+              "z": 21
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 32,
+              "y": 67,
+              "z": 22
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 30,
+              "y": 68,
+              "z": 20
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 30,
+              "y": 68,
+              "z": 21
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 30,
+              "y": 68,
+              "z": 22
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 31,
+              "y": 68,
+              "z": 20
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 31,
+              "y": 68,
+              "z": 21
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 31,
+              "y": 68,
+              "z": 22
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 32,
+              "y": 68,
+              "z": 20
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 32,
+              "y": 68,
+              "z": 21
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 32,
+              "y": 68,
+              "z": 22
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          }
+        ]
+      }
+    },
+    {
+      "index": 427,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 79787.314042,
+        "authorityTick": 1225,
+        "kind": "goalReached",
+        "goal": {
+          "type": "GoalBlock",
+          "x": 31,
+          "y": 66,
+          "z": 21,
+          "rangeSq": null,
+          "entityId": null
+        }
+      }
+    },
+    {
+      "index": 429,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 79789.3325,
+        "authorityTick": 1225,
+        "kind": "navigation",
+        "active": false
+      }
+    },
+    {
+      "index": 430,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 79790.087375,
+        "authorityTick": 1225,
+        "kind": "skillOwner",
+        "owner": null
+      }
+    },
+    {
+      "index": 431,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 79794.786,
+        "authorityTick": 1225,
+        "kind": "skillOwner",
+        "owner": "navigate"
+      }
+    },
+    {
+      "index": 432,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 79794.807167,
+        "authorityTick": 1225,
+        "kind": "navigation",
+        "active": false
+      }
+    },
+    {
+      "index": 433,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 79795.206625,
+        "authorityTick": 1225,
+        "kind": "navigation",
+        "active": true
+      }
+    },
+    {
+      "index": 434,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 79795.23375,
+        "authorityTick": 1225,
+        "kind": "goalUpdated",
+        "goal": {
+          "type": "GoalNear",
+          "x": 40,
+          "y": 65,
+          "z": 17,
+          "rangeSq": 4,
+          "entityId": null
+        },
+        "dynamic": false
+      }
+    },
+    {
+      "index": 438,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 79850.242042,
+        "authorityTick": 1226,
+        "kind": "pathUpdate",
+        "path": {
+          "status": "partial",
+          "cost": 3.82842712474619,
+          "contextTimeMs": 3.373290999996243,
+          "visitedNodes": 4,
+          "generatedNodes": 18,
+          "nodeCount": 3,
+          "nodes": [
+            {
+              "x": 32.5,
+              "y": 65,
+              "z": 21.5,
+              "cost": 1,
+              "remainingBlocks": 0,
+              "toBreakCount": 0,
+              "toPlaceCount": 0
+            },
+            {
+              "x": 33.5,
+              "y": 65,
+              "z": 20.5,
+              "cost": 1.4142135623730951,
+              "remainingBlocks": 0,
+              "toBreakCount": 0,
+              "toPlaceCount": 0
+            },
+            {
+              "x": 34.5,
+              "y": 65,
+              "z": 19.5,
+              "cost": 1.4142135623730951,
+              "remainingBlocks": 0,
+              "toBreakCount": 0,
+              "toPlaceCount": 0
+            }
+          ],
+          "nodesTruncated": false
+        }
+      }
+    },
+    {
+      "index": 449,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 79957.420375,
+        "authorityTick": 1229,
+        "kind": "physicsTick",
+        "owner": "navigate",
+        "navigationActive": true,
+        "position": {
+          "x": 31.82427049485423,
+          "y": 66,
+          "z": 21.482994921811486
+        },
+        "velocity": {
+          "x": 0.10751057071263609,
+          "y": -0.0784000015258789,
+          "z": 0.0016388273100809948
+        },
+        "onGround": true,
+        "collidedHorizontally": false,
+        "collidedVertically": true,
+        "control": {
+          "forward": true,
+          "back": false,
+          "left": false,
+          "right": false,
+          "jump": false,
+          "sprint": true,
+          "sneak": false
+        },
+        "goal": {
+          "type": "GoalNear",
+          "x": 40,
+          "y": 65,
+          "z": 17,
+          "rangeSq": 4,
+          "entityId": null
+        },
+        "moving": true,
+        "path": {
+          "status": "partial",
+          "cost": 4.82842712474619,
+          "contextTimeMs": 109.69499999999243,
+          "visitedNodes": 6,
+          "generatedNodes": 22,
+          "nodeCount": 4,
+          "nodes": [
+            {
+              "x": 32.5,
+              "y": 65,
+              "z": 21.5,
+              "cost": 1,
+              "remainingBlocks": 0,
+              "toBreakCount": 0,
+              "toPlaceCount": 0
+            },
+            {
+              "x": 33.5,
+              "y": 65,
+              "z": 20.5,
+              "cost": 1.4142135623730951,
+              "remainingBlocks": 0,
+              "toBreakCount": 0,
+              "toPlaceCount": 0
+            },
+            {
+              "x": 34.5,
+              "y": 65,
+              "z": 20.5,
+              "cost": 1,
+              "remainingBlocks": 0,
+              "toBreakCount": 0,
+              "toPlaceCount": 0
+            },
+            {
+              "x": 35.5,
+              "y": 65,
+              "z": 19.5,
+              "cost": 1.4142135623730951,
+              "remainingBlocks": 0,
+              "toBreakCount": 0,
+              "toPlaceCount": 0
+            }
+          ],
+          "nodesTruncated": false
+        },
+        "blocks": [
+          {
+            "position": {
+              "x": 30,
+              "y": 65,
+              "z": 20
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 30,
+              "y": 65,
+              "z": 21
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 30,
+              "y": 65,
+              "z": 22
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 31,
+              "y": 65,
+              "z": 20
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 31,
+              "y": 65,
+              "z": 21
+            },
+            "loaded": true,
+            "name": "cobblestone",
+            "type": 12,
+            "stateId": 14,
+            "shapes": [
+              {
+                "values": [
+                  0,
+                  0,
+                  0,
+                  1,
+                  1,
+                  1
+                ]
+              }
+            ],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 31,
+              "y": 65,
+              "z": 22
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 32,
+              "y": 65,
+              "z": 20
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 32,
+              "y": 65,
+              "z": 21
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 32,
+              "y": 65,
+              "z": 22
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 30,
+              "y": 66,
+              "z": 20
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 30,
+              "y": 66,
+              "z": 21
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 30,
+              "y": 66,
+              "z": 22
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 31,
+              "y": 66,
+              "z": 20
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 31,
+              "y": 66,
+              "z": 21
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 31,
+              "y": 66,
+              "z": 22
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 32,
+              "y": 66,
+              "z": 20
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 32,
+              "y": 66,
+              "z": 21
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 32,
+              "y": 66,
+              "z": 22
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 30,
+              "y": 67,
+              "z": 20
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 30,
+              "y": 67,
+              "z": 21
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 30,
+              "y": 67,
+              "z": 22
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 31,
+              "y": 67,
+              "z": 20
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 31,
+              "y": 67,
+              "z": 21
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 31,
+              "y": 67,
+              "z": 22
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 32,
+              "y": 67,
+              "z": 20
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 32,
+              "y": 67,
+              "z": 21
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 32,
+              "y": 67,
+              "z": 22
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 30,
+              "y": 68,
+              "z": 20
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 30,
+              "y": 68,
+              "z": 21
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 30,
+              "y": 68,
+              "z": 22
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 31,
+              "y": 68,
+              "z": 20
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 31,
+              "y": 68,
+              "z": 21
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 31,
+              "y": 68,
+              "z": 22
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 32,
+              "y": 68,
+              "z": 20
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 32,
+              "y": 68,
+              "z": 21
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 32,
+              "y": 68,
+              "z": 22
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          }
+        ]
+      }
+    },
+    {
+      "index": 479,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 80259.839459,
+        "authorityTick": 1235,
+        "kind": "pathUpdate",
+        "path": {
+          "status": "success",
+          "cost": 9.65685424949238,
+          "contextTimeMs": 412.96612499999173,
+          "visitedNodes": 21,
+          "generatedNodes": 50,
+          "nodeCount": 7,
+          "nodes": [
+            {
+              "x": 33.5,
+              "y": 65,
+              "z": 20.5,
+              "cost": 1.4142135623730951,
+              "remainingBlocks": 0,
+              "toBreakCount": 0,
+              "toPlaceCount": 0
+            },
+            {
+              "x": 34.5,
+              "y": 65,
+              "z": 19.5,
+              "cost": 1.4142135623730951,
+              "remainingBlocks": 0,
+              "toBreakCount": 0,
+              "toPlaceCount": 0
+            },
+            {
+              "x": 35.5,
+              "y": 65,
+              "z": 18.5,
+              "cost": 1.4142135623730951,
+              "remainingBlocks": 0,
+              "toBreakCount": 0,
+              "toPlaceCount": 0
+            },
+            {
+              "x": 36.5,
+              "y": 65,
+              "z": 18.5,
+              "cost": 1,
+              "remainingBlocks": 0,
+              "toBreakCount": 0,
+              "toPlaceCount": 0
+            },
+            {
+              "x": 37.5,
+              "y": 65,
+              "z": 18.5,
+              "cost": 1,
+              "remainingBlocks": 0,
+              "toBreakCount": 0,
+              "toPlaceCount": 0
+            },
+            {
+              "x": 38.5,
+              "y": 65,
+              "z": 18.5,
+              "cost": 1,
+              "remainingBlocks": 0,
+              "toBreakCount": 0,
+              "toPlaceCount": 0
+            },
+            {
+              "x": 39.5,
+              "y": 65,
+              "z": 17.5,
+              "cost": 1.4142135623730951,
+              "remainingBlocks": 0,
+              "toBreakCount": 0,
+              "toPlaceCount": 0
+            }
+          ],
+          "nodesTruncated": false
+        }
+      }
+    },
+    {
+      "index": 508,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 81695.883792,
+        "authorityTick": 1264,
+        "kind": "goalReached",
+        "goal": {
+          "type": "GoalNear",
+          "x": 40,
+          "y": 65,
+          "z": 17,
+          "rangeSq": 4,
+          "entityId": null
+        }
+      }
+    },
+    {
+      "index": 509,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 81696.496,
+        "authorityTick": 1264,
+        "kind": "physicsTick",
+        "owner": "navigate",
+        "navigationActive": true,
+        "position": {
+          "x": 39.5,
+          "y": 65,
+          "z": 17.5
+        },
+        "velocity": {
+          "x": 0,
+          "y": -0.0784000015258789,
+          "z": 0
+        },
+        "onGround": true,
+        "collidedHorizontally": false,
+        "collidedVertically": true,
+        "control": {
+          "forward": false,
+          "back": false,
+          "left": false,
+          "right": false,
+          "jump": false,
+          "sprint": false,
+          "sneak": false
+        },
+        "goal": null,
+        "moving": false,
+        "path": {
+          "status": "success",
+          "cost": 9.65685424949238,
+          "contextTimeMs": 412.96612499999173,
+          "visitedNodes": 21,
+          "generatedNodes": 50,
+          "nodeCount": 7,
+          "nodes": [
+            {
+              "x": 33.5,
+              "y": 65,
+              "z": 20.5,
+              "cost": 1.4142135623730951,
+              "remainingBlocks": 0,
+              "toBreakCount": 0,
+              "toPlaceCount": 0
+            },
+            {
+              "x": 34.5,
+              "y": 65,
+              "z": 19.5,
+              "cost": 1.4142135623730951,
+              "remainingBlocks": 0,
+              "toBreakCount": 0,
+              "toPlaceCount": 0
+            },
+            {
+              "x": 35.5,
+              "y": 65,
+              "z": 18.5,
+              "cost": 1.4142135623730951,
+              "remainingBlocks": 0,
+              "toBreakCount": 0,
+              "toPlaceCount": 0
+            },
+            {
+              "x": 36.5,
+              "y": 65,
+              "z": 18.5,
+              "cost": 1,
+              "remainingBlocks": 0,
+              "toBreakCount": 0,
+              "toPlaceCount": 0
+            },
+            {
+              "x": 37.5,
+              "y": 65,
+              "z": 18.5,
+              "cost": 1,
+              "remainingBlocks": 0,
+              "toBreakCount": 0,
+              "toPlaceCount": 0
+            },
+            {
+              "x": 38.5,
+              "y": 65,
+              "z": 18.5,
+              "cost": 1,
+              "remainingBlocks": 0,
+              "toBreakCount": 0,
+              "toPlaceCount": 0
+            },
+            {
+              "x": 39.5,
+              "y": 65,
+              "z": 17.5,
+              "cost": 1.4142135623730951,
+              "remainingBlocks": 0,
+              "toBreakCount": 0,
+              "toPlaceCount": 0
+            }
+          ],
+          "nodesTruncated": false
+        },
+        "blocks": [
+          {
+            "position": {
+              "x": 38,
+              "y": 64,
+              "z": 16
+            },
+            "loaded": true,
+            "name": "stone",
+            "type": 1,
+            "stateId": 1,
+            "shapes": [
+              {
+                "values": [
+                  0,
+                  0,
+                  0,
+                  1,
+                  1,
+                  1
+                ]
+              }
+            ],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 38,
+              "y": 64,
+              "z": 17
+            },
+            "loaded": true,
+            "name": "stone",
+            "type": 1,
+            "stateId": 1,
+            "shapes": [
+              {
+                "values": [
+                  0,
+                  0,
+                  0,
+                  1,
+                  1,
+                  1
+                ]
+              }
+            ],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 38,
+              "y": 64,
+              "z": 18
+            },
+            "loaded": true,
+            "name": "stone",
+            "type": 1,
+            "stateId": 1,
+            "shapes": [
+              {
+                "values": [
+                  0,
+                  0,
+                  0,
+                  1,
+                  1,
+                  1
+                ]
+              }
+            ],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 39,
+              "y": 64,
+              "z": 16
+            },
+            "loaded": true,
+            "name": "stone",
+            "type": 1,
+            "stateId": 1,
+            "shapes": [
+              {
+                "values": [
+                  0,
+                  0,
+                  0,
+                  1,
+                  1,
+                  1
+                ]
+              }
+            ],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 39,
+              "y": 64,
+              "z": 17
+            },
+            "loaded": true,
+            "name": "stone",
+            "type": 1,
+            "stateId": 1,
+            "shapes": [
+              {
+                "values": [
+                  0,
+                  0,
+                  0,
+                  1,
+                  1,
+                  1
+                ]
+              }
+            ],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 39,
+              "y": 64,
+              "z": 18
+            },
+            "loaded": true,
+            "name": "stone",
+            "type": 1,
+            "stateId": 1,
+            "shapes": [
+              {
+                "values": [
+                  0,
+                  0,
+                  0,
+                  1,
+                  1,
+                  1
+                ]
+              }
+            ],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 40,
+              "y": 64,
+              "z": 16
+            },
+            "loaded": true,
+            "name": "stone",
+            "type": 1,
+            "stateId": 1,
+            "shapes": [
+              {
+                "values": [
+                  0,
+                  0,
+                  0,
+                  1,
+                  1,
+                  1
+                ]
+              }
+            ],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 40,
+              "y": 64,
+              "z": 17
+            },
+            "loaded": true,
+            "name": "stone",
+            "type": 1,
+            "stateId": 1,
+            "shapes": [
+              {
+                "values": [
+                  0,
+                  0,
+                  0,
+                  1,
+                  1,
+                  1
+                ]
+              }
+            ],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 40,
+              "y": 64,
+              "z": 18
+            },
+            "loaded": true,
+            "name": "stone",
+            "type": 1,
+            "stateId": 1,
+            "shapes": [
+              {
+                "values": [
+                  0,
+                  0,
+                  0,
+                  1,
+                  1,
+                  1
+                ]
+              }
+            ],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 38,
+              "y": 65,
+              "z": 16
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 38,
+              "y": 65,
+              "z": 17
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 38,
+              "y": 65,
+              "z": 18
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 39,
+              "y": 65,
+              "z": 16
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 39,
+              "y": 65,
+              "z": 17
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 39,
+              "y": 65,
+              "z": 18
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 40,
+              "y": 65,
+              "z": 16
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 40,
+              "y": 65,
+              "z": 17
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 40,
+              "y": 65,
+              "z": 18
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 38,
+              "y": 66,
+              "z": 16
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 38,
+              "y": 66,
+              "z": 17
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 38,
+              "y": 66,
+              "z": 18
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 39,
+              "y": 66,
+              "z": 16
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 39,
+              "y": 66,
+              "z": 17
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 39,
+              "y": 66,
+              "z": 18
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 40,
+              "y": 66,
+              "z": 16
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 40,
+              "y": 66,
+              "z": 17
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 40,
+              "y": 66,
+              "z": 18
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 38,
+              "y": 67,
+              "z": 16
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 38,
+              "y": 67,
+              "z": 17
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 38,
+              "y": 67,
+              "z": 18
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 39,
+              "y": 67,
+              "z": 16
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 39,
+              "y": 67,
+              "z": 17
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 39,
+              "y": 67,
+              "z": 18
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 40,
+              "y": 67,
+              "z": 16
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 40,
+              "y": 67,
+              "z": 17
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          },
+          {
+            "position": {
+              "x": 40,
+              "y": 67,
+              "z": 18
+            },
+            "loaded": true,
+            "name": "air",
+            "type": 0,
+            "stateId": 0,
+            "shapes": [],
+            "shapesTruncated": false
+          }
+        ]
+      }
+    },
+    {
+      "index": 510,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 81697.049084,
+        "authorityTick": 1264,
+        "kind": "navigation",
+        "active": false
+      }
+    },
+    {
+      "index": 511,
+      "record": {
+        "clientLabel": "seat-0",
+        "clientMs": 81697.099167,
+        "authorityTick": 1264,
+        "kind": "skillOwner",
+        "owner": null
+      }
+    }
+  ]
+}

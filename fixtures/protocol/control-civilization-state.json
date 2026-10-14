@@ -1,0 +1,1 @@
+{"protocol":1,"run_id":"fixture-run","sequence":"8","type":"civilization_state","payload":{"at":{"domain":"match","value":"600"},"occupants":[0,3],"owner_faction":"ember","challenger_faction":"tide","capture_progress_ticks":"199","scores":[{"faction_id":"ember","points":"12"},{"faction_id":"tide","points":"7"}]}}

@@ -1,0 +1,21 @@
+{
+  "name": "arena",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@12.13.0",
+  "devDependencies": {
+    "@arena/bots": "workspace:*",
+    "@arena/core": "workspace:*",
+    "@arena/runner": "workspace:*",
+    "@arena/spec": "workspace:*",
+    "@types/node": "24.19.2",
+    "effect": "4.0.2",
+    "mineflayer": "4.39.0",
+    "mineflayer-pathfinder": "2.4.5",
+    "oxlint": "1.87.0",
+    "oxlint-tsgolint": "7.0.2004",
+    "toml-eslint-parser": "1.0.3",
+    "typescript": "7.0.2"
+  }
+}

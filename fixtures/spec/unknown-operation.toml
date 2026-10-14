@@ -1,0 +1,9 @@
+schema = 1
+name = "unknown-operation"
+operations = [{ kind = "teleport" }]
+
+[dimensions]
+width = 8
+depth = 8
+min_y = 0
+max_y = 16

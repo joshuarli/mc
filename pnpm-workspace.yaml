@@ -1,0 +1,10 @@
+---
+packages:
+  - packages/arena-core
+  - packages/arena-spec
+  - packages/arena-bots
+  - packages/arena-runner
+linkWorkspacePackages: true
+storeDir: .work/arena/pnpm-store
+virtualStoreDir: .work/arena/pnpm-virtual-store
+...

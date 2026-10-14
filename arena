@@ -1,0 +1,546 @@
+#!/bin/sh
+set -eu
+
+root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+fail() {
+    printf '%s\n' "arena: $*" >&2
+    exit 2
+}
+
+ensure_work_directory() {
+    path=$1
+    [ ! -L "$path" ] || fail "working directory must not be a symlink: $path"
+    if [ ! -d "$path" ]; then
+        mkdir "$path" || fail "create working directory: $path"
+    fi
+    [ -d "$path" ] && [ ! -L "$path" ] || fail "working directory must be a real directory: $path"
+}
+
+ensure_work_excluded() {
+    exclude=$(git -C "$root" rev-parse --git-path info/exclude) || fail "locate the repository-local Git exclude file"
+    [ -f "$exclude" ] || fail "repository-local Git exclude file is unavailable: $exclude"
+    if ! grep -Fqx '.work/' "$exclude"; then
+        printf '\n.work/\n' >> "$exclude" || fail "exclude project-local .work state from Git"
+    fi
+}
+
+ensure_work_excluded
+ensure_work_directory "$root/.work"
+ensure_work_directory "$root/.work/tmp"
+ensure_work_directory "$root/.work/arena"
+export TMPDIR="$root/.work/tmp"
+export ARENA_JAVA_TMPDIR="$TMPDIR"
+download_tmp=
+jdk_stage=
+cleanup_work_files() {
+    [ -z "$download_tmp" ] || rm -f -- "$download_tmp"
+    [ -z "$jdk_stage" ] || rm -rf -- "$jdk_stage"
+}
+trap cleanup_work_files EXIT
+
+verify_jdk() {
+    java=$1
+    version=$2
+    runtime_build=$3
+    [ -x "$java" ] || fail "pinned JDK executable is unavailable: $java"
+    java_output=$("$java" -version 2>&1) || fail "pinned JDK does not start"
+    printf '%s\n' "$java_output" | awk -v version="$version" -v runtime_build="$runtime_build" '
+        index($0, "openjdk version \"" version "\"") { found_version = 1 }
+        index($0, "build " runtime_build) { found_build = 1 }
+        END { exit !(found_version && found_build) }
+    ' || fail "JDK version or runtime build does not match versions.lock.toml"
+}
+
+locked_value() {
+    key=$1
+    value=$(awk -F '"' -v name="$key" '$0 ~ "^" name " = " { print $2; matches++ } END { if (matches != 1) exit 1 }' "$root/versions.lock.toml") || fail "versions.lock.toml must contain one $key"
+    printf '%s\n' "$value"
+}
+
+locked_section_value() {
+    section=$1
+    key=$2
+    value=$(awk -F '"' -v section="[$section]" -v name="$key" '
+        $0 == section { active = 1; next }
+        active && /^\[/ { active = 0 }
+        active && $0 ~ "^" name " = " { print $2; matches++ }
+        END { if (matches != 1) exit 1 }
+    ' "$root/versions.lock.toml") || fail "versions.lock.toml must contain one $section.$key"
+    printf '%s\n' "$value"
+}
+
+locked_section_number() {
+    section=$1
+    key=$2
+    value=$(awk -F ' = ' -v section="[$section]" -v name="$key" '
+        $0 == section { active = 1; next }
+        active && /^\[/ { active = 0 }
+        active && $1 == name { if (NF != 2) malformed = 1; print $2; matches++ }
+        END { if (matches != 1 || malformed) exit 1 }
+    ' "$root/versions.lock.toml") || fail "versions.lock.toml must contain one numeric $section.$key"
+    case "$value" in
+        ''|0*|*[!0-9]*) fail "versions.lock.toml $section.$key must be a positive decimal integer" ;;
+    esac
+    printf '%s\n' "$value"
+}
+
+prepare_node() {
+    node_version=$(locked_section_value node version)
+    NODE_EXECUTABLE=$(command -v node) || fail "Node.js $node_version is not installed"
+    actual_node=$("$NODE_EXECUTABLE" --version) || fail "Node.js does not start"
+    [ "$actual_node" = "v$node_version" ] || fail "Node.js version mismatch: expected v$node_version, got $actual_node"
+    export NODE_EXECUTABLE
+    NODE_HOME=$(dirname "$NODE_EXECUTABLE")
+    export NODE_HOME
+    export PATH="$NODE_HOME:$PATH"
+}
+
+ensure_workspace_dependencies() {
+    [ -x "$root/node_modules/.bin/tsc" ] || fail "pnpm dependencies are not installed; run pnpm install --frozen-lockfile"
+}
+
+build_typescript() {
+    target=$1
+    ensure_workspace_dependencies
+    PATH="$root/node_modules/.bin:$PATH" \
+        "$NODE_EXECUTABLE" "$root/scripts/typescript-build.mjs" "$target"
+}
+
+run_named_tests() {
+    suite=$1
+    test_name=$2
+    "$NODE_EXECUTABLE" "$root/scripts/run-named-tests.mjs" "$suite" "$test_name"
+}
+
+prepare_jdk() {
+    GRADLE_USER_HOME="$root/.work/arena/gradle"
+    ensure_work_directory "$GRADLE_USER_HOME"
+    export GRADLE_USER_HOME
+    jdk_version=$(locked_section_value java version)
+    runtime_build=$(locked_section_value java runtime_build)
+    case "$(uname -s):$(uname -m)" in
+        Darwin:arm64) platform=macos_arm64 ;;
+        Linux:x86_64) platform=linux_x86_64 ;;
+        *) fail "locked Temurin JDK supports macOS arm64 and Linux x86_64" ;;
+    esac
+
+    archive_file=$(locked_section_value "java.$platform" archive_file)
+    archive_root=$(locked_section_value "java.$platform" archive_root)
+    archive_url=$(locked_section_value "java.$platform" archive_url)
+    archive_size=$(locked_section_number "java.$platform" archive_size_bytes)
+    archive_sha=$(locked_section_value "java.$platform" archive_sha256)
+    case "$archive_file" in
+        /*|*/*|*".."*) fail "unsafe JDK archive filename in versions.lock.toml" ;;
+    esac
+    case "$archive_root" in
+        /*|*/*|*".."*) fail "unsafe JDK archive root in versions.lock.toml" ;;
+    esac
+    case "$archive_url" in
+        https://github.com/adoptium/temurin25-binaries/releases/download/*) ;;
+        *) fail "JDK URL is not an official Temurin release URL" ;;
+    esac
+
+    download_root="$root/.work/arena/downloads"
+    ensure_work_directory "$download_root"
+    archive_path="$download_root/$archive_file"
+    [ ! -L "$archive_path" ] || fail "locked JDK archive path must not be a symlink"
+    if [ -e "$archive_path" ] && [ ! -f "$archive_path" ]; then
+        fail "locked JDK archive path must be a regular file"
+    fi
+    if [ ! -f "$archive_path" ]; then
+        download_tmp=$(mktemp "$download_root/.jdk.XXXXXXXX") || fail "create JDK download staging file"
+        curl --fail --location --proto '=https' --tlsv1.2 \
+            --output "$download_tmp" "$archive_url" || fail "download locked Temurin JDK archive"
+        actual_size=$(wc -c < "$download_tmp" | awk '{ print $1 }')
+        [ "$actual_size" = "$archive_size" ] || fail "JDK archive size mismatch: expected $archive_size bytes, got $actual_size"
+        actual_sha=$(sha256_file "$download_tmp")
+        [ "$actual_sha" = "$archive_sha" ] || fail "JDK archive SHA-256 mismatch: expected $archive_sha, got $actual_sha"
+        mv "$download_tmp" "$archive_path" || fail "install verified JDK archive"
+        download_tmp=
+    fi
+    actual_size=$(wc -c < "$archive_path" | awk '{ print $1 }')
+    [ "$actual_size" = "$archive_size" ] || fail "cached JDK size mismatch: expected $archive_size bytes, got $actual_size"
+    actual_sha=$(sha256_file "$archive_path")
+    [ "$actual_sha" = "$archive_sha" ] || fail "cached JDK SHA-256 mismatch: expected $archive_sha, got $actual_sha"
+
+    toolchains="$root/.work/arena/toolchains"
+    ensure_work_directory "$toolchains"
+    toolchain_root="$toolchains/$archive_root"
+    if [ ! -e "$toolchain_root" ]; then
+        jdk_stage=$(mktemp -d "$toolchains/.temurin.XXXXXXXX") || fail "create JDK extraction directory"
+        entries="$jdk_stage/archive.entries"
+        tar -tzf "$archive_path" > "$entries" || fail "list locked JDK archive contents"
+        while IFS= read -r entry; do
+            entry_path=${entry%/}
+            case "$entry_path" in
+                "$archive_root"|"$archive_root"/*) ;;
+                *) fail "JDK archive entry escaped its locked root: $entry" ;;
+            esac
+            case "/$entry_path/" in
+                *"/../"*|*"/./"*|*"//"*) fail "unsafe path in JDK archive: $entry" ;;
+            esac
+        done < "$entries"
+        tar -xzf "$archive_path" -C "$jdk_stage" || fail "extract locked JDK archive"
+        staged_root="$jdk_stage/$archive_root"
+        case "$platform" in
+            macos_arm64) java="$staged_root/Contents/Home/bin/java" ;;
+            linux_x86_64) java="$staged_root/bin/java" ;;
+        esac
+        verify_jdk "$java" "$jdk_version" "$runtime_build"
+        [ ! -L "$toolchain_root" ] || fail "project-local JDK path must not be a symlink"
+        mv -n "$staged_root" "$toolchain_root" || fail "install verified project-local JDK"
+        [ -d "$toolchain_root" ] && [ ! -L "$toolchain_root" ] || fail "project-local JDK was not installed"
+        rm -rf -- "$jdk_stage"
+        jdk_stage=
+    elif [ ! -d "$toolchain_root" ] || [ -L "$toolchain_root" ]; then
+        fail "project-local JDK path must be a real directory"
+    fi
+
+    case "$platform" in
+        macos_arm64) JAVA_HOME="$toolchain_root/Contents/Home" ;;
+        linux_x86_64) JAVA_HOME="$toolchain_root" ;;
+    esac
+    verify_jdk "$JAVA_HOME/bin/java" "$jdk_version" "$runtime_build"
+    export JAVA_HOME
+    export PATH="$JAVA_HOME/bin:$PATH"
+}
+
+verify_gradle_wrapper() {
+    gradle_version=$(locked_section_value gradle version)
+    distribution_url=$(locked_section_value gradle distribution)
+    distribution_sha=$(locked_section_value gradle distribution_sha256)
+    wrapper_jar_sha=$(locked_section_value gradle wrapper_jar_sha256)
+    wrapper_root="$root/server/arena-plugin"
+    wrapper_script="$wrapper_root/gradlew"
+    wrapper_jar="$wrapper_root/gradle/wrapper/gradle-wrapper.jar"
+    wrapper_properties="$wrapper_root/gradle/wrapper/gradle-wrapper.properties"
+    [ "$distribution_url" = "https://services.gradle.org/distributions/gradle-$gradle_version-bin.zip" ] || fail "Gradle URL does not match its locked version"
+    for path in "$wrapper_script" "$wrapper_jar" "$wrapper_properties"; do
+        [ ! -L "$path" ] || fail "Gradle wrapper path must not be a symlink: $path"
+        [ -f "$path" ] || fail "Gradle wrapper file is unavailable: $path"
+    done
+    [ -x "$wrapper_script" ] || fail "Gradle wrapper launcher is not executable"
+    actual_sha=$(sha256_file "$wrapper_jar")
+    [ "$actual_sha" = "$wrapper_jar_sha" ] || fail "Gradle wrapper JAR SHA-256 mismatch: expected $wrapper_jar_sha, got $actual_sha"
+    wrapper_url=$(awk -F '=' '/^distributionUrl=/ { value = substr($0, index($0, "=") + 1); gsub(/\\:/, ":", value); print value; matches++ } END { if (matches != 1) exit 1 }' "$wrapper_properties") || fail "Gradle wrapper properties must contain one distribution URL"
+    wrapper_distribution_sha=$(awk -F '=' '/^distributionSha256Sum=/ { print $2; matches++ } END { if (matches != 1) exit 1 }' "$wrapper_properties") || fail "Gradle wrapper properties must contain one distribution checksum"
+    [ "$wrapper_url" = "$distribution_url" ] || fail "Gradle wrapper URL does not match versions.lock.toml"
+    [ "$wrapper_distribution_sha" = "$distribution_sha" ] || fail "Gradle wrapper checksum does not match versions.lock.toml"
+}
+
+run_plugin_gradle() {
+    task=$1
+    api_group=$(locked_section_value paper api_group)
+    api_artifact=$(locked_section_value paper api_artifact)
+    api_version=$(locked_section_value paper api_version)
+    plugin_api_version=$(locked_section_value paper plugin_api_version)
+    project_cache="$root/.work/arena/gradle-project"
+    ensure_work_directory "$project_cache"
+    ensure_work_directory "$root/.work/arena/gradle-build"
+    ensure_work_directory "$root/.work/arena/gradle-build/libs"
+    verify_gradle_wrapper
+    (cd "$root/server/arena-plugin" && ./gradlew --dependency-verification=strict --project-cache-dir "$project_cache" --no-daemon \
+        -PpaperApiGroup="$api_group" \
+        -PpaperApiArtifact="$api_artifact" \
+        -PpaperApiVersion="$api_version" \
+        -PpluginApiVersion="$plugin_api_version" \
+        "$task") 1>&2
+}
+
+build_plugin() {
+    run_plugin_gradle jar
+}
+
+test_plugin() {
+    run_plugin_gradle test
+}
+
+sha256_file() {
+    file=$1
+    if command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$file" | awk '{ print $1 }'
+    elif command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$file" | awk '{ print $1 }'
+    else
+        fail "no SHA-256 utility is available"
+    fi
+}
+
+ensure_paper_artifact() {
+    paper_file=$(locked_value server_file)
+    paper_url=$(locked_value server_url)
+    expected_sha=$(locked_value server_sha256)
+    expected_size=$(awk -F ' = ' '$1 == "server_size_bytes" { print $2; matches++ } END { if (matches != 1) exit 1 }' "$root/versions.lock.toml") || fail "versions.lock.toml must contain one server_size_bytes"
+    case "$paper_file" in
+        /*|*".."*) fail "unsafe Paper filename in versions.lock.toml" ;;
+    esac
+    case "$paper_url" in
+        https://fill-data.papermc.io/*) ;;
+        *) fail "Paper URL is not an official Fill artifact URL" ;;
+    esac
+
+    download_root="$root/.work/arena/downloads"
+    paper_path="$download_root/$paper_file"
+    ensure_work_directory "$download_root"
+    [ ! -L "$paper_path" ] || fail "locked Paper artifact path must not be a symlink"
+    if [ -e "$paper_path" ] && [ ! -f "$paper_path" ]; then
+        fail "locked Paper artifact path must be a regular file"
+    fi
+    if [ ! -f "$paper_path" ]; then
+        download_tmp=$(mktemp "$download_root/.paper.XXXXXXXX") || fail "create Paper download staging file"
+        curl --fail --location --proto '=https' --tlsv1.2 \
+            -H 'User-Agent: Arena/0.1 (dankmeme133769@proton.me)' \
+            --output "$download_tmp" "$paper_url" || fail "download locked Paper artifact"
+        actual_size=$(wc -c < "$download_tmp" | awk '{ print $1 }')
+        [ "$actual_size" = "$expected_size" ] || fail "Paper size mismatch: expected $expected_size bytes, got $actual_size"
+        actual_sha=$(sha256_file "$download_tmp")
+        [ "$actual_sha" = "$expected_sha" ] || fail "Paper SHA-256 mismatch: expected $expected_sha, got $actual_sha"
+        mv "$download_tmp" "$paper_path" || fail "install verified Paper artifact"
+        download_tmp=
+    fi
+    actual_size=$(wc -c < "$paper_path" | awk '{ print $1 }')
+    [ "$actual_size" = "$expected_size" ] || fail "cached Paper size mismatch: expected $expected_size bytes, got $actual_size"
+    actual_sha=$(sha256_file "$paper_path")
+    [ "$actual_sha" = "$expected_sha" ] || fail "cached Paper SHA-256 mismatch: expected $expected_sha, got $actual_sha"
+}
+
+usage() {
+    cat <<'EOF'
+usage:
+  ./arena bootstrap
+  ./arena build [--package core|spec|bots|control|owned-files|runtime|runner|all]
+  ./arena check <compatibility|build-script|lint>
+  ./arena test --suite <core|spec|bots|owned-files|runtime|runner|protocol|integration|acceptance|java> --case <name>
+  ./arena <report|inspect|compare|prepare|validate|doctor|run|replay-policy|gc> <arguments...>
+EOF
+}
+
+bootstrap() {
+    [ "$#" -eq 0 ] || fail "bootstrap accepts no arguments"
+    prepare_node
+    ensure_workspace_dependencies
+    printf '%s\n' "Node.js $(locked_section_value node version) is available." \
+        "The pnpm workspace dependencies are installed."
+}
+
+build_command() {
+    target=all
+    if [ "$#" -gt 0 ]; then
+        [ "$#" -eq 2 ] && [ "$1" = --package ] || fail "usage: ./arena build [--package core|spec|bots|control|owned-files|runtime|runner|all]"
+        target=$2
+    fi
+    case "$target" in
+        core|spec|bots|control|owned-files|runtime|runner|all) ;;
+        *) fail "unknown TypeScript package: $target" ;;
+    esac
+    prepare_node
+    ensure_workspace_dependencies
+    build_typescript "$target"
+}
+
+launch_runner() {
+    cli_command=$1
+    shift
+    prepare_node
+    ensure_workspace_dependencies
+    build_typescript runner
+    build_fs_helper
+    fs_helper="$root/.work/arena-fs/arena-fs"
+    cli="$root/.work/build/packages/arena-runner/src/cli.js"
+    [ -f "$cli" ] || fail "runner CLI is not built at $cli"
+    if [ "$cli_command" = run ]; then
+        prepare_jdk
+        build_plugin
+        ensure_paper_artifact
+        runtime_java_home=$JAVA_HOME
+        runtime_paper_jar="$root/.work/arena/downloads/$paper_file"
+        runtime_plugin_jar="$root/.work/arena/gradle-build/libs/arena-plugin-0.1.0.jar"
+        [ -f "$runtime_plugin_jar" ] && [ ! -L "$runtime_plugin_jar" ] || fail "locked Paper plugin JAR is unavailable: $runtime_plugin_jar"
+        (cd "$root" && ARENA_FS_HELPER="$fs_helper" ARENA_JAVA_HOME="$runtime_java_home" \
+            ARENA_JAVA_TMPDIR="$root/.work/tmp" ARENA_PAPER_JAR="$runtime_paper_jar" ARENA_PLUGIN_JAR="$runtime_plugin_jar" \
+            "$fs_helper" launch-node "$NODE_EXECUTABLE" "$cli" "$cli_command" "$@")
+    else
+        (
+            cd "$root"
+            unset ARENA_JAVA_HOME ARENA_JAVA_TMPDIR ARENA_PAPER_JAR ARENA_PLUGIN_JAR
+            ARENA_FS_HELPER="$fs_helper" \
+                "$fs_helper" launch-node "$NODE_EXECUTABLE" "$cli" "$cli_command" "$@"
+        )
+    fi
+}
+
+build_fs_helper() {
+    fs_root="$root/.work/arena-fs"
+    ensure_work_directory "$fs_root"
+    helper="$fs_root/arena-fs"
+    [ ! -L "$helper" ] || fail "filesystem helper path must not be a symlink"
+    make -C "$root/native/arena-fs" build 1>&2 || fail "build the native filesystem helper"
+    [ -f "$helper" ] && [ -x "$helper" ] && [ ! -L "$helper" ] || fail "native filesystem helper is not executable at $helper"
+}
+
+check_command() {
+    [ "$#" -eq 1 ] || fail "usage: ./arena check <compatibility|build-script|lint>"
+    prepare_node
+    case "$1" in
+        compatibility) "$NODE_EXECUTABLE" "$root/scripts/check-compatibility-doc.mjs" ;;
+        lint)
+            [ -x "$root/node_modules/.bin/oxlint" ] || fail "Oxlint is unavailable; run pnpm install --frozen-lockfile"
+            "$root/node_modules/.bin/oxlint" --type-aware --quiet "$root/packages" "$root/tests"
+            ;;
+        build-script)
+            run_named_tests tooling "typescript build rejects an unknown target"
+            run_named_tests tooling "named test runner dispatches suite files and rejects unknown cases"
+            run_named_tests tooling "arena wrapper dispatches garbage collection to runner validation"
+            ;;
+        *) fail "unknown check: $1" ;;
+    esac
+}
+
+test_command() {
+    suite=
+    case_name=
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --suite)
+                [ -z "$suite" ] || fail "--suite may be specified once"
+                [ "$#" -ge 2 ] || fail "--suite requires a value"
+                suite=$2
+                shift 2
+                ;;
+            --case)
+                [ -z "$case_name" ] || fail "--case may be specified once"
+                [ "$#" -ge 2 ] || fail "--case requires a value"
+                case_name=$2
+                shift 2
+                ;;
+            *) fail "unknown test selector argument: $1" ;;
+        esac
+    done
+    [ -n "$suite" ] || fail "--suite is required"
+    [ -n "$case_name" ] || fail "--case is required"
+
+    case "$suite:$case_name" in
+        java:plugin)
+            prepare_jdk
+            build_plugin
+            ;;
+        java:unit)
+            prepare_jdk
+            test_plugin
+            ;;
+        core:*|spec:*|bots:*|runner:*)
+            prepare_node
+            ensure_workspace_dependencies
+            build_typescript "$suite"
+            if [ "$suite" = runner ]; then build_fs_helper; fi
+            run_named_tests "$suite" "$case_name"
+            ;;
+        protocol:*)
+            prepare_node
+            ensure_workspace_dependencies
+            build_typescript control
+            run_named_tests protocol "$case_name"
+            ;;
+        owned-files:*)
+            prepare_node
+            ensure_workspace_dependencies
+            build_typescript owned-files
+            build_fs_helper
+            run_named_tests owned-files "$case_name"
+            ;;
+        runtime:*)
+            prepare_node
+            ensure_workspace_dependencies
+            build_typescript runtime
+            build_fs_helper
+            run_named_tests runtime "$case_name"
+            ;;
+        integration:stack|integration:maps-reset|integration:match-rules|integration:lifecycle|integration:legal-player|integration:legal-player-ramp|integration:policy-border-preemption|integration:fairness|integration:replay-report|integration:civilization-six|integration:civilization-rules)
+            case "$case_name" in
+                legal-player-ramp) integration_source_name=legal-player ;;
+                *) integration_source_name=$case_name ;;
+            esac
+            [ -f "$root/tests/integration/$integration_source_name.ts" ] || fail "blocked: integration case is not ready: $integration_source_name"
+            prepare_node
+            ensure_workspace_dependencies
+            build_typescript stack
+            build_fs_helper
+            prepare_jdk
+            build_plugin
+            ensure_paper_artifact
+            run_named_tests integration "$case_name"
+            ;;
+        integration:faults|integration:faults-port-conflict|integration:faults-second-owner|integration:faults-plugin-identity|integration:faults-server-crash|integration:faults-sigint)
+            [ -f "$root/tests/integration/faults.ts" ] || fail "blocked: integration case is not ready: faults"
+            prepare_node
+            ensure_workspace_dependencies
+            build_typescript stack
+            build_fs_helper
+            prepare_jdk
+            build_plugin
+            ensure_paper_artifact
+            run_named_tests integration "$case_name"
+            ;;
+        integration:lifecycle-smoke)
+            [ -f "$root/tests/integration/lifecycle.ts" ] || fail "blocked: lifecycle smoke case is not ready"
+            prepare_node
+            ensure_workspace_dependencies
+            build_typescript stack
+            build_fs_helper
+            prepare_jdk
+            build_plugin
+            ensure_paper_artifact
+            run_named_tests integration "$case_name"
+            ;;
+        integration:match-rules-border-death|integration:match-rules-disconnect|integration:match-rules-timeout|integration:match-rules-abort|integration:match-rules-spectator-identity|integration:match-rules-duplicate-identity|integration:match-rules-eliminated-reconnect|integration:match-rules-same-tick-zero-survivors)
+            [ -f "$root/tests/integration/match-rules-authority.ts" ] || fail "blocked: integration case is not ready: $case_name"
+            prepare_node
+            ensure_workspace_dependencies
+            build_typescript stack
+            build_fs_helper
+            prepare_jdk
+            build_plugin
+            ensure_paper_artifact
+            run_named_tests integration "$case_name"
+            ;;
+        acceptance:hunger-six|acceptance:civilization-baseline)
+            case "$case_name" in
+                hunger-six) acceptance_source_name=hunger ;;
+                *) acceptance_source_name=$case_name ;;
+            esac
+            [ -f "$root/tests/acceptance/$acceptance_source_name.ts" ] || fail "blocked: acceptance case is not ready: $case_name"
+            prepare_node
+            ensure_workspace_dependencies
+            build_typescript stack
+            build_fs_helper
+            prepare_jdk
+            build_plugin
+            ensure_paper_artifact
+            run_named_tests acceptance "$case_name"
+            ;;
+        *)
+            fail "unknown or blocked test selector: $suite / $case_name"
+            ;;
+    esac
+}
+
+command=${1-}
+[ -n "$command" ] || {
+    usage >&2
+    exit 2
+}
+shift
+case "$command" in
+    bootstrap) bootstrap "$@" ;;
+    build) build_command "$@" ;;
+    check) check_command "$@" ;;
+    test) test_command "$@" ;;
+    report|inspect|compare|prepare|validate|doctor|run|replay-policy|gc)
+        launch_runner "$command" "$@"
+        ;;
+    help|-h|--help)
+        [ "$#" -eq 0 ] || fail "help accepts no arguments"
+        usage
+        ;;
+    *) fail "unknown command: $command" ;;
+esac

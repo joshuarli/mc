@@ -1,0 +1,238 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://arena.invalid/schemas/scenario-v1.schema.json",
+  "title": "Arena scenario schema version 1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "name", "mode", "seed", "map", "policy", "roster", "server", "match", "border", "bots", "record"],
+  "allOf": [
+    {
+      "if": { "properties": { "mode": { "const": "hunger_games" } }, "required": ["mode"] },
+      "then": {
+        "not": { "required": ["civilization"] },
+        "properties": { "border": { "$ref": "#/$defs/hunger_games_border" } }
+      }
+    },
+    {
+      "if": { "properties": { "mode": { "const": "civilization" } }, "required": ["mode"] },
+      "then": {
+        "required": ["civilization"],
+        "properties": {
+          "roster": { "properties": { "competitors": { "const": 6 } } },
+          "match": {
+            "properties": {
+              "grace_ticks": { "const": 2400 },
+              "authoritative_max_ticks": { "const": 18000 },
+              "respawn": { "const": false },
+              "block_breaking": { "const": true },
+              "block_placing": { "const": true }
+            }
+          },
+          "border": { "$ref": "#/$defs/civilization_border" }
+        }
+      }
+    }
+  ],
+  "properties": {
+    "schema": { "const": 1 },
+    "name": { "type": "string", "minLength": 1 },
+    "mode": { "enum": ["hunger_games", "civilization"] },
+    "seed": { "type": "integer", "minimum": 0 },
+    "map": { "type": "string", "minLength": 1 },
+    "policy": { "type": "string", "minLength": 1 },
+    "roster": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["competitors", "spectator_capacity"],
+      "properties": {
+        "competitors": { "type": "integer", "minimum": 1 },
+        "spectator_capacity": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "server": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["minecraft", "view_distance_chunks", "simulation_distance_chunks", "max_tick_rate"],
+      "properties": {
+        "minecraft": { "type": "string", "minLength": 1 },
+        "view_distance_chunks": { "type": "integer", "minimum": 2, "maximum": 32 },
+        "simulation_distance_chunks": { "type": "integer", "minimum": 2, "maximum": 32 },
+        "max_tick_rate": { "type": "integer", "minimum": 1, "maximum": 20 }
+      }
+    },
+    "match": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["countdown_ticks", "grace_ticks", "authoritative_max_ticks", "respawn", "block_breaking", "block_placing", "natural_mobs", "natural_random_ticks"],
+      "properties": {
+        "countdown_ticks": { "type": "integer", "minimum": 0 },
+        "grace_ticks": { "type": "integer", "minimum": 0 },
+        "authoritative_max_ticks": { "type": "integer", "minimum": 1 },
+        "respawn": { "type": "boolean" },
+        "block_breaking": { "type": "boolean" },
+        "block_placing": { "type": "boolean" },
+        "natural_mobs": { "type": "boolean" },
+        "natural_random_ticks": { "type": "boolean" }
+      }
+    },
+    "border": { "oneOf": [{ "$ref": "#/$defs/hunger_games_border" }, { "$ref": "#/$defs/civilization_border" }] },
+    "civilization": { "$ref": "#/$defs/civilization" },
+    "bots": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["strategy_interval_ticks", "path_expansions_per_slice", "max_pending_paths_per_bot", "perception"],
+      "properties": {
+        "strategy_interval_ticks": { "type": "integer", "minimum": 1 },
+        "path_expansions_per_slice": { "type": "integer", "minimum": 1 },
+        "max_pending_paths_per_bot": { "type": "integer", "minimum": 1 },
+        "perception": { "type": "string", "minLength": 1 }
+      }
+    },
+    "record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "policy_replay", "world_outcomes"],
+      "properties": {
+        "mode": { "enum": ["evaluation"] },
+        "policy_replay": { "type": "boolean" },
+        "world_outcomes": { "type": "boolean" }
+      }
+    }
+  },
+  "$defs": {
+    "block_position": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y", "z"],
+      "properties": {
+        "x": { "type": "integer", "minimum": 0, "maximum": 2147483647 },
+        "y": { "type": "integer", "minimum": -2147483648, "maximum": 2147483647 },
+        "z": { "type": "integer", "minimum": 0, "maximum": 2147483647 }
+      }
+    },
+    "hunger_games_border": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["initial_diameter_blocks", "shrink_start_tick", "shrink_end_tick", "final_diameter_blocks"],
+      "properties": {
+        "initial_diameter_blocks": { "type": "number", "exclusiveMinimum": 0 },
+        "shrink_start_tick": { "type": "integer", "minimum": 0 },
+        "shrink_end_tick": { "type": "integer", "minimum": 0 },
+        "final_diameter_blocks": { "type": "number", "exclusiveMinimum": 0 }
+      }
+    },
+    "civilization_border": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "diameter_blocks"],
+      "properties": {
+        "kind": { "const": "fixed" },
+        "diameter_blocks": { "const": 192 }
+      }
+    },
+    "ember_faction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "members"],
+      "properties": {
+        "id": { "const": "ember" },
+        "members": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "prefixItems": [
+            { "type": "object", "additionalProperties": false, "required": ["seat", "role"], "properties": { "seat": { "const": 0 }, "role": { "const": "gatherer_crafter" } } },
+            { "type": "object", "additionalProperties": false, "required": ["seat", "role"], "properties": { "seat": { "const": 1 }, "role": { "const": "builder" } } },
+            { "type": "object", "additionalProperties": false, "required": ["seat", "role"], "properties": { "seat": { "const": 2 }, "role": { "const": "defender_scout" } } }
+          ],
+          "items": false
+        }
+      }
+    },
+    "tide_faction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "members"],
+      "properties": {
+        "id": { "const": "tide" },
+        "members": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "prefixItems": [
+            { "type": "object", "additionalProperties": false, "required": ["seat", "role"], "properties": { "seat": { "const": 3 }, "role": { "const": "gatherer_crafter" } } },
+            { "type": "object", "additionalProperties": false, "required": ["seat", "role"], "properties": { "seat": { "const": 4 }, "role": { "const": "builder" } } },
+            { "type": "object", "additionalProperties": false, "required": ["seat", "role"], "properties": { "seat": { "const": 5 }, "role": { "const": "defender_scout" } } }
+          ],
+          "items": false
+        }
+      }
+    },
+    "capture_zone": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["min", "max", "uncontested_ticks", "score_points_per_tick"],
+      "properties": {
+        "min": { "$ref": "#/$defs/block_position" },
+        "max": { "$ref": "#/$defs/block_position" },
+        "uncontested_ticks": { "const": 200 },
+        "score_points_per_tick": { "const": 1 }
+      }
+    },
+    "outpost_blueprint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "anchors"],
+      "properties": {
+        "id": { "const": "oak-outpost-v1" },
+        "anchors": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["ember", "tide"],
+          "properties": {
+            "ember": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["position", "rotation_degrees"],
+              "properties": { "position": { "$ref": "#/$defs/block_position" }, "rotation_degrees": { "const": 0 } }
+            },
+            "tide": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["position", "rotation_degrees"],
+              "properties": { "position": { "$ref": "#/$defs/block_position" }, "rotation_degrees": { "const": 180 } }
+            }
+          }
+        }
+      }
+    },
+    "civilization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["factions", "starting_kit", "capture_zone", "blueprint"],
+      "properties": {
+        "factions": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "prefixItems": [{ "$ref": "#/$defs/ember_faction" }, { "$ref": "#/$defs/tide_faction" }],
+          "items": false
+        },
+        "starting_kit": {
+          "type": "array",
+          "minItems": 4,
+          "maxItems": 4,
+          "prefixItems": [
+            { "const": { "item": "minecraft:bread", "count": 4 } },
+            { "const": { "item": "minecraft:wooden_axe", "count": 1 } },
+            { "const": { "item": "minecraft:wooden_pickaxe", "count": 1 } },
+            { "const": { "item": "minecraft:wooden_sword", "count": 1 } }
+          ],
+          "items": false
+        },
+        "capture_zone": { "$ref": "#/$defs/capture_zone" },
+        "blueprint": { "$ref": "#/$defs/outpost_blueprint" }
+      }
+    }
+  }
+}

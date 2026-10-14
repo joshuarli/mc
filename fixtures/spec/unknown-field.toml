@@ -1,0 +1,10 @@
+schema = 1
+name = "unknown-field"
+palette = "stone"
+operations = []
+
+[dimensions]
+width = 8
+depth = 8
+min_y = 0
+max_y = 16

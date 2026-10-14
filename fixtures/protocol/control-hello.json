@@ -1,0 +1,1 @@
+{"protocol":1,"run_id":"fixture-run","sequence":"1","type":"hello","payload":{"token":"fixture-only-token-not-for-runtime","capabilities":["hunger_games_v1"]}}

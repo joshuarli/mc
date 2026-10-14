@@ -1,0 +1,47 @@
+schema = 1
+
+[minecraft]
+version = "26.1.2"
+protocol = 775
+
+[node]
+version = "26.8.2"
+
+[paper]
+version = "26.1.2"
+channel = "STABLE"
+server_build = 74
+server_file = "paper-26.1.2-74.jar"
+server_url = "https://fill-data.papermc.io/v1/objects/1d70b1dab9cf4a6de615209a536f3a45a2186240253c428213ce2188ab95e5f7/paper-26.1.2-74.jar"
+server_size_bytes = 52893229
+server_sha256 = "1d70b1dab9cf4a6de615209a536f3a45a2186240253c428213ce2188ab95e5f7"
+api_group = "io.papermc.paper"
+api_artifact = "paper-api"
+api_version = "26.1.2.build.74-stable"
+plugin_api_version = "26.1.2"
+
+[java]
+distribution = "Eclipse Temurin"
+version = "25.0.4.1"
+build = "25.0.4.1+1"
+runtime_build = "25.0.4.1+1-LTS"
+
+[java.macos_arm64]
+archive_file = "OpenJDK25U-jdk_aarch64_mac_hotspot_25.0.4.1_1.tar.gz"
+archive_root = "jdk-25.0.4.1+1"
+archive_url = "https://github.com/adoptium/temurin25-binaries/releases/download/jdk-25.0.4.1%2B1/OpenJDK25U-jdk_aarch64_mac_hotspot_25.0.4.1_1.tar.gz"
+archive_size_bytes = 136355078
+archive_sha256 = "61979887f7506a24a57439ff99adb8b3a7fc89977d9cfe3b8984f58a981b7b9d"
+
+[java.linux_x86_64]
+archive_file = "OpenJDK25U-jdk_x64_linux_hotspot_25.0.4.1_1.tar.gz"
+archive_root = "jdk-25.0.4.1+1"
+archive_url = "https://github.com/adoptium/temurin25-binaries/releases/download/jdk-25.0.4.1%2B1/OpenJDK25U-jdk_x64_linux_hotspot_25.0.4.1_1.tar.gz"
+archive_size_bytes = 141329719
+archive_sha256 = "dbb698396d478e7fa2b1e50f4103324b2a99b90569ee27c33f2261f9215cf41e"
+
+[gradle]
+version = "9.6.1"
+distribution = "https://services.gradle.org/distributions/gradle-9.6.1-bin.zip"
+distribution_sha256 = "9c0f7faeeb306cb14e4279a3e084ca6b596894089a0638e68a07c945a32c9e14"
+wrapper_jar_sha256 = "497c8c2a7e5031f6aa847f88104aa80a93532ec32ee17bdb8d1d2f67a194a9c7"

@@ -162,7 +162,7 @@ Non-goals: full survival parity for Hunger Games (building/breaking disabled equ
 ### Repository and module boundaries
 
 ```text
-arena/
+.
   arena  README.md  AGENTS.md  Cargo.toml  Cargo.lock
   rust-toolchain.toml  versions.lock.toml  .cargo/config.toml
   crates/{arena-core,arena-spec,arena-bots,arena-runner}/

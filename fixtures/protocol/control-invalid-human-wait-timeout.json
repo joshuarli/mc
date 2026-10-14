@@ -1,0 +1,1 @@
+{"protocol":1,"run_id":"fixture-run","sequence":"9","type":"outcome","payload":{"kind":"abort","reason":"human_wait_timeout","survivors":[0,2,3],"at":null}}
