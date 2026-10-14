@@ -254,32 +254,70 @@ test('travel navigation looks down between legs and melee pursuit does not', asy
   }
 
   const hole = openRivalTravel({ solid: true, standableStep: false });
+  const nudgeGoals: Array<{ readonly x: number; readonly y: number; readonly z: number }> = [];
+  const holeSetGoal = hole.pathfinder.setGoal.bind(hole.pathfinder);
+  hole.pathfinder.setGoal = (goal) => {
+    holeSetGoal(goal);
+    if (goal === null || typeof goal !== 'object') return;
+    const goalRecord = goal as { readonly x?: unknown; readonly y?: unknown; readonly z?: unknown };
+    const x = goalRecord.x;
+    const y = goalRecord.y;
+    const z = goalRecord.z;
+    if (typeof x !== 'number' || typeof y !== 'number' || typeof z !== 'number') return;
+    nudgeGoals.push({ x, y, z });
+  };
+  let walkingForward = false;
+  const holeSetControl = hole.bot.setControlState.bind(hole.bot);
+  hole.bot.setControlState = (control, state) => {
+    holeSetControl(control, state);
+    if (control === 'forward') walkingForward = state;
+  };
+  const holeClearControls = hole.bot.clearControlStates.bind(hole.bot);
+  hole.bot.clearControlStates = () => {
+    walkingForward = false;
+    holeClearControls();
+  };
+  const walkStep = 0.22;
+  hole.bot.on('physicsTick', () => {
+    if (!walkingForward) return;
+    const yaw = hole.bot.entity.yaw;
+    hole.bot.entity.position.x += -Math.sin(yaw) * walkStep;
+    hole.bot.entity.position.z += -Math.cos(yaw) * walkStep;
+  });
   try {
-    const running = hole.owner.run({ kind: 'navigate', target: blockPosition(16, 64, 0) });
-    await waitUntil(() => hole.events.includes('goal'));
-    hole.bot.emit('goal_reached', hole.pathfinder.goal as never);
-    await waitUntil(() => hole.events.filter((event) => event === 'goal').length >= 2);
-    const floorY = 64;
+    const support = hole.bot.blockAt(new TestPosition(0.5, 63.5, 0.5));
+    const feet = hole.bot.blockAt(new TestPosition(0.5, 64.5, 0.5));
+    const head = hole.bot.blockAt(new TestPosition(0.5, 65.5, 0.5));
+    const stepFeet = hole.bot.blockAt(new TestPosition(0.5, 64.5, 1.5));
+    assert.equal(support?.boundingBox, 'block');
+    assert.equal(feet?.boundingBox, 'empty');
+    assert.equal(head?.boundingBox, 'empty');
+    assert.equal(stepFeet?.name, 'air');
     const inset = 0.3;
     const nearEdgeX = 0.5;
     const nearEdgeZ = 1 - inset;
-    const holeStep = { x: 0, y: floorY, z: 1 };
-    const nextGoal = hole.pathfinder.goal;
-    assert.ok(nextGoal !== null && typeof nextGoal === 'object');
-    const goalRecord = nextGoal as { readonly x?: unknown; readonly y?: unknown; readonly z?: unknown };
-    const edgeX = goalRecord.x;
-    const edgeY = goalRecord.y;
-    const edgeZ = goalRecord.z;
-    assert.equal(typeof edgeX, 'number');
-    assert.equal(typeof edgeY, 'number');
-    assert.equal(typeof edgeZ, 'number');
-    if (typeof edgeX !== 'number' || typeof edgeY !== 'number' || typeof edgeZ !== 'number') {
-      throw new Error('missing edge goal');
+    const running = hole.owner.run({ kind: 'navigate', target: blockPosition(16, 64, 0) });
+    await waitUntil(() => hole.events.includes('goal'));
+    hole.bot.emit('goal_reached', hole.pathfinder.goal as never);
+    let reachedEdge = false;
+    for (let tick = 0; tick < 40; tick += 1) {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      hole.bot.emit('physicsTick');
+      const movedX = hole.bot.entity.position.x;
+      const movedZ = hole.bot.entity.position.z;
+      if (Math.hypot(movedX - nearEdgeX, movedZ - nearEdgeZ) <= 0.05) {
+        reachedEdge = true;
+        break;
+      }
     }
-    assert.ok(Math.abs(edgeX - nearEdgeX) < 1e-9);
-    assert.equal(edgeY, floorY);
-    assert.ok(Math.abs(edgeZ - nearEdgeZ) < 1e-9);
-    assert.ok(edgeX !== holeStep.x || edgeY !== holeStep.y || edgeZ !== holeStep.z);
+    assert.equal(reachedEdge, true);
+    const arrivedX = hole.bot.entity.position.x;
+    const arrivedZ = hole.bot.entity.position.z;
+    assert.ok(Math.hypot(arrivedX - nearEdgeX, arrivedZ - nearEdgeZ) <= 0.05);
+    assert.equal(nudgeGoals.length, 1);
+    const travelGoal = nudgeGoals[0];
+    if (travelGoal === undefined) throw new Error('missing travel goal');
+    assert.ok(travelGoal.z !== 1);
     const cancellation = hole.owner.cancel('shutdown');
     assert.deepEqual(await running, { kind: 'cancelled', reason: 'shutdown' });
     await cancellation;
@@ -1957,12 +1995,20 @@ function openRivalTravel(options: { readonly solid: boolean; readonly standableS
     entities: { 2: rival },
     players: { rival: { entity: rival, gamemode: 0 } },
     blockAt: (point: Bot['entity']['position']) => {
-      if (!options.solid || options.standableStep === false) return { name: 'air', boundingBox: 'empty', position: point };
+      const air = { name: 'air', boundingBox: 'empty' as const, position: point };
+      const stone = { name: 'stone', boundingBox: 'block' as const, position: point };
+      if (!options.solid) return air;
       const x = Math.floor(point.x);
       const y = Math.floor(point.y);
       const z = Math.floor(point.z);
-      if (x === 0 && z === 1 && (y === 64 || y === 65)) return { name: 'air', boundingBox: 'empty', position: point };
-      return { name: 'stone', boundingBox: 'block', position: point };
+      if (options.standableStep === false) {
+        if (x === 0 && z === 0 && y === 63) return stone;
+        if (x === 0 && z === 0 && (y === 64 || y === 65)) return air;
+        if (x === 0 && z === 1) return air;
+        return stone;
+      }
+      if (x === 0 && z === 1 && (y === 64 || y === 65)) return air;
+      return stone;
     },
     lookAt: async (point: Bot['entity']['position']) => {
       events.push('look');

@@ -66,6 +66,8 @@ const MAX_PATH_LEG_BLOCKS = 8;
 const TRAVEL_SIGHT_AHEAD_BLOCKS = 8;
 const TRAVEL_SIGHT_BELOW_EYE_BLOCKS = 12;
 const SIGHT_EDGE_INSET_BLOCKS = 0.3;
+const SIGHT_EDGE_TOLERANCE_BLOCKS = 0.05;
+const SIGHT_EDGE_WALK_TICKS = 8;
 const MAX_NAVIGATION_LEGS = 128;
 const MAX_PATH_THINK_MS = 1_000;
 const MAX_PATH_SLICE_PER_CLIENT_MS = 3;
@@ -877,7 +879,7 @@ export class SkillOwner {
         ? position
         : waypointToward(current, position, MAX_PATH_LEG_BLOCKS);
       const goal = stepOntoSightBlock
-        ? sightStepGoal(position)
+        ? new goals.GoalBlock(position.x, position.y, position.z)
         : arrival.kind === 'meleeReach'
         ? new goals.GoalFollow(arrival.target, PURSUIT_FOLLOW_RANGE_BLOCKS)
         : waypoint === position && arrival.kind === 'exactBlock'
@@ -903,7 +905,6 @@ export class SkillOwner {
         this.#bot.pathfinder.setGoal(goal, false);
         await Promise.race([reached, pathFailure]);
         throwIfInterrupted(signal);
-        if (stepOntoSightBlock && !isExactBlockStep(position)) rejectedSightSteps.add(navigationKey(position));
         const arrivedAfterLeg = arrival.kind === 'meleeReach'
           ? this.#inMeleeReach(arrival.target)
           : hasArrived(this.#bot.entity.position, position, arrival);
@@ -929,6 +930,20 @@ export class SkillOwner {
       if (travelLeg) {
         const sight = await this.#sweepTravelSight(position, active, signal, rejectedSightSteps);
         if (sight.kind === 'visible') return;
+        if (sight.kind === 'blocked' && !isExactBlockStep(sight.step)) {
+          rejectedSightSteps.add(navigationKey(sight.step));
+          await this.#walkToSightEdge(sight.step, active, signal);
+          const afterNudge = await this.#sweepTravelSight(travelGoal, active, signal, rejectedSightSteps);
+          if (afterNudge.kind === 'visible') return;
+          if (afterNudge.kind === 'blocked' && isExactBlockStep(afterNudge.step) && leg + 1 < MAX_NAVIGATION_LEGS) {
+            position = afterNudge.step;
+            stepOntoSightBlock = true;
+            continue;
+          }
+          position = travelGoal;
+          stepOntoSightBlock = false;
+          continue;
+        }
         if (sight.kind === 'blocked' && leg + 1 < MAX_NAVIGATION_LEGS) {
           position = sight.step;
           stepOntoSightBlock = true;
@@ -944,6 +959,26 @@ export class SkillOwner {
       if (legFault !== null) throw legFault;
     }
     throw new Error('bounded navigation loop exited unexpectedly');
+  }
+
+  async #walkToSightEdge(edge: NavigationPosition, active: ActiveSkill, signal: AbortSignal): Promise<void> {
+    const position = this.#bot.entity.position;
+    await this.#lookAt(
+      active,
+      'face the sight edge',
+      position.offset(edge.x - position.x, edge.y - position.y, edge.z - position.z),
+    );
+    if (horizontalDistance(this.#bot.entity.position, edge) <= SIGHT_EDGE_TOLERANCE_BLOCKS) return;
+    try {
+      this.#bot.setControlState('forward', true);
+      for (let tick = 0; tick < SIGHT_EDGE_WALK_TICKS; tick += 1) {
+        await waitForPhysicsTicks(this.#bot, 1, signal);
+        if (horizontalDistance(this.#bot.entity.position, edge) <= SIGHT_EDGE_TOLERANCE_BLOCKS) return;
+      }
+    } finally {
+      this.#bot.setControlState('forward', false);
+      this.#bot.clearControlStates();
+    }
   }
 
   async #engage(objective: EngageObjective, targetId: number, active: ActiveSkill): Promise<void> {
@@ -2269,30 +2304,8 @@ function travelSightPoint(bot: Bot, goal: NavigationPosition, quarterTurn: numbe
   return position.offset(aheadX, eyeHeight - TRAVEL_SIGHT_BELOW_EYE_BLOCKS, aheadZ);
 }
 
-function sightStepGoal(position: NavigationPosition): PathfinderGoal {
-  if (isExactBlockStep(position)) return new goals.GoalBlock(position.x, position.y, position.z);
-  return new SightEdgeGoal(position);
-}
-
-class SightEdgeGoal extends goals.Goal {
-  readonly x: number;
-  readonly y: number;
-  readonly z: number;
-
-  constructor(edge: NavigationPosition) {
-    super();
-    this.x = edge.x;
-    this.y = edge.y;
-    this.z = edge.z;
-  }
-
-  heuristic(node: NavigationPosition): number {
-    return Math.hypot(this.x - (node.x + 0.5), this.z - (node.z + 0.5)) + Math.abs(this.y - node.y);
-  }
-
-  isEnd(node: NavigationPosition): boolean {
-    return node.x === Math.floor(this.x) && node.y === Math.floor(this.y) && node.z === Math.floor(this.z);
-  }
+function horizontalDistance(left: NavigationPosition, right: NavigationPosition): number {
+  return Math.hypot(left.x - right.x, left.z - right.z);
 }
 
 function isExactBlockStep(position: NavigationPosition): boolean {
