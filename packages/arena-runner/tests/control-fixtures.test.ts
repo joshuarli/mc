@@ -48,3 +48,14 @@ test("control legacy prepare keeps its six bot seat contract", () => {
   assert.throws(() => decodeControlEnvelope(fixture("control-invalid-roster-v1-seven-seats.json")));
   assert.throws(() => decodeControlEnvelope(fixture("control-invalid-civilization-roster-v2.json")));
 });
+
+test("control rule modes decode with their parameters and reject inconsistent match settings", () => {
+  const frontier = decodeControlEnvelope(fixture("control-prepare-rules-frontier.json"));
+  const squads = decodeControlEnvelope(fixture("control-prepare-rules-squads.json"));
+  if (frontier.type !== "prepare" || squads.type !== "prepare") assert.fail("prepare expected");
+  assert.deepEqual("rules" in frontier.payload ? frontier.payload.rules : undefined, {
+    kind: "frontier_survival", version: 1, edit_radius_blocks: 96, max_block_edits_per_seat: 2000,
+  });
+  const squadRules = "rules" in squads.payload ? squads.payload.rules : undefined;
+  assert.equal(squadRules?.kind === "squads" ? squadRules.squads.length : 0, 2);
+});

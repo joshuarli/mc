@@ -364,6 +364,44 @@
         "roster": { "$ref": "#/$defs/bot_roster" }
       }
     },
+    "prepare_rules": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "version", "edit_radius_blocks", "max_block_edits_per_seat"],
+          "properties": {
+            "kind": { "const": "frontier_survival" },
+            "version": { "const": 1 },
+            "edit_radius_blocks": { "type": "integer", "minimum": 16, "maximum": 512 },
+            "max_block_edits_per_seat": { "type": "integer", "minimum": 1, "maximum": 100000 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "version", "squads"],
+          "properties": {
+            "kind": { "const": "squads" },
+            "version": { "const": 1 },
+            "squads": {
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 64,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["id", "seats"],
+                "properties": {
+                  "id": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{0,15}$" },
+                  "seats": { "type": "array", "minItems": 1, "maxItems": 256, "uniqueItems": true, "items": { "$ref": "#/$defs/seat" } }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
     "hunger_games_roster_v2_prepare_payload": {
       "type": "object",
       "additionalProperties": false,
@@ -374,6 +412,7 @@
         "seed": { "$ref": "#/$defs/u64" },
         "mode": { "const": "hunger_games" },
         "roster_version": { "const": 2 },
+        "rules": { "$ref": "#/$defs/prepare_rules" },
         "settings": {
           "type": "object",
           "additionalProperties": false,

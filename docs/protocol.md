@@ -131,6 +131,17 @@ roster. Civilization events and settings keep seats zero through five.
 `fixtures/protocol/control-prepare-roster-v2*.json` and the
 `control-invalid-roster-*` fixtures define the interoperable shapes.
 
+### Rule modes
+
+A roster-version-2 `prepare` may carry `rules`; its absence is the classic
+Hunger Games rule set, and `rules` is rejected without `roster_version`.
+`{kind: "frontier_survival", version: 1, edit_radius_blocks: 16-512,
+max_block_edits_per_seat: 1-100000}` requires block breaking and placing on
+with mobs and random ticks off in `settings.match`. `{kind: "squads",
+version: 1, squads: [{id, seats}]}` declares 2 to 64 uniquely named squads
+whose ascending seats partition every roster seat, and requires the classic
+block rules. The codec and the plugin both check these cross-field rules.
+
 ## Civilization control-v1
 
 Control-v1 adds the closed `civilization_v1` capability and `prepare.mode = civilization` variant. Hunger Games frames retain their existing shapes. A handshake advertising only `hunger_games_v1` rejects `civilization_state`, `faction_winner`, and draws carrying faction scores. Authentication still precedes capability checks; readiness must repeat the authenticated capability set exactly.

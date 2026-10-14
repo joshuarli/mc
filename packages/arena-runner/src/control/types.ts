@@ -57,6 +57,20 @@ export interface ExternalCompetitor {
 
 export type RosterCompetitor = BotCompetitor | ExternalCompetitor;
 
+export interface SquadDefinition {
+  readonly id: string;
+  readonly seats: readonly number[];
+}
+
+export type PrepareRules =
+  | {
+    readonly kind: "frontier_survival";
+    readonly version: 1;
+    readonly edit_radius_blocks: number;
+    readonly max_block_edits_per_seat: number;
+  }
+  | { readonly kind: "squads"; readonly version: 1; readonly squads: readonly SquadDefinition[] };
+
 export interface MatchSettings {
   readonly countdown_ticks: bigint;
   readonly grace_ticks: bigint;
@@ -166,6 +180,7 @@ export type PreparePayload = {
   readonly seed: bigint;
   readonly mode: "hunger_games";
   readonly roster_version: 2;
+  readonly rules?: PrepareRules;
   readonly settings: HungerGamesPrepareSettings;
   readonly roster: readonly RosterCompetitor[];
 };

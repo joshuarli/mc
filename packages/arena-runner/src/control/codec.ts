@@ -1,6 +1,15 @@
 import { createHash } from "node:crypto";
 
-import { EXTERNAL_USERNAME_PATTERN, LEGACY_MAX_COMPETITORS, MAX_COMPETITORS } from "@arena/spec";
+import {
+  EXTERNAL_USERNAME_PATTERN,
+  LEGACY_MAX_COMPETITORS,
+  MAX_COMPETITORS,
+  MAX_FRONTIER_EDITS_PER_SEAT,
+  MAX_FRONTIER_EDIT_RADIUS_BLOCKS,
+  MAX_SQUADS,
+  MIN_FRONTIER_EDIT_RADIUS_BLOCKS,
+  SQUAD_ID_PATTERN
+} from "@arena/spec";
 
 import {
   isWellFormedUnicode,
@@ -41,9 +50,11 @@ import type {
   MetricsPayload,
   OutcomePayload,
   PreparePayload,
+  PrepareRules,
   PublicStatePayload,
   ReadyPayload,
   RosterCompetitor,
+  SquadDefinition,
   TideFaction
 } from "./types.js";
 
@@ -368,7 +379,7 @@ function readBuildProgress(value: StrictJsonValue): BuildProgressPayload {
 
 function readPrepare(value: StrictJsonValue): PreparePayload {
   const payload = readObject(value, "payload",
-    ["map_semantic_id", "scenario_semantic_id", "seed", "mode", "settings", "roster", "roster_version"],
+    ["map_semantic_id", "scenario_semantic_id", "seed", "mode", "settings", "roster", "roster_version", "rules"],
     ["map_semantic_id", "scenario_semantic_id", "seed", "mode", "settings", "roster"]);
   const mode = readString(payload.mode, "payload.mode", 1, 64);
   if (mode !== "hunger_games" && mode !== "civilization") invalid("payload.mode", "mode is unsupported by control-v1");
@@ -382,13 +393,22 @@ function readPrepare(value: StrictJsonValue): PreparePayload {
     scenario_semantic_id: readString(payload.scenario_semantic_id, "payload.scenario_semantic_id", 64, 64, /^[0-9a-f]{64}$/),
     seed: readU64(payload.seed, "payload.seed", false)
   };
+  if (Object.hasOwn(payload, "rules") && !generalizedRoster) {
+    invalid("payload.rules", "rule modes require the generalized roster");
+  }
   if (generalizedRoster) {
+    const settings = readHungerGamesPrepareSettings(payload.settings);
+    const roster = readGeneralizedRoster(payload.roster);
+    const rules = Object.hasOwn(payload, "rules")
+      ? readPrepareRules(payload.rules, roster.length, settings)
+      : undefined;
     return {
       ...common,
       mode: "hunger_games",
       roster_version: 2,
-      settings: readHungerGamesPrepareSettings(payload.settings),
-      roster: readGeneralizedRoster(payload.roster)
+      ...(rules === undefined ? {} : { rules }),
+      settings,
+      roster
     };
   }
   const roster = readBotRoster(payload.roster);
@@ -399,6 +419,65 @@ function readPrepare(value: StrictJsonValue): PreparePayload {
     invalid("payload.roster", "civilization requires exactly six bot competitors");
   }
   return { ...common, mode, settings: readCivilizationPrepareSettings(payload.settings), roster };
+}
+
+function readPrepareRules(
+  value: StrictJsonValue | undefined,
+  competitors: number,
+  settings: HungerGamesPrepareSettings
+): PrepareRules {
+  const path = "payload.rules";
+  const header = readObject(value, path, ["kind", "version", "edit_radius_blocks", "max_block_edits_per_seat", "squads"],
+    ["kind", "version"]);
+  const kind = readString(header.kind, `${path}.kind`, 1, 32);
+  readSafeInteger(header.version, `${path}.version`, 1, 1, header, "version");
+  if (kind === "frontier_survival") {
+    readObject(value, path, ["kind", "version", "edit_radius_blocks", "max_block_edits_per_seat"],
+      ["kind", "version", "edit_radius_blocks", "max_block_edits_per_seat"]);
+    if (!settings.match.block_breaking || !settings.match.block_placing
+        || settings.match.natural_mobs || settings.match.natural_random_ticks) {
+      invalid("payload.settings.match", "frontier survival requires block editing with mobs and random ticks off");
+    }
+    return {
+      kind,
+      version: 1,
+      edit_radius_blocks: readSafeInteger(header.edit_radius_blocks, `${path}.edit_radius_blocks`,
+        MIN_FRONTIER_EDIT_RADIUS_BLOCKS, MAX_FRONTIER_EDIT_RADIUS_BLOCKS, header, "edit_radius_blocks"),
+      max_block_edits_per_seat: readSafeInteger(header.max_block_edits_per_seat, `${path}.max_block_edits_per_seat`,
+        1, MAX_FRONTIER_EDITS_PER_SEAT, header, "max_block_edits_per_seat")
+    };
+  }
+  if (kind === "squads") {
+    readObject(value, path, ["kind", "version", "squads"], ["kind", "version", "squads"]);
+    if (settings.match.block_breaking || settings.match.block_placing) {
+      invalid("payload.settings.match", "squads use the classic block rules");
+    }
+    const entries = readArray(header.squads, `${path}.squads`, 2, MAX_SQUADS);
+    const ids = new Set<string>();
+    const assigned = new Set<number>();
+    const squads = entries.map((entry, index): SquadDefinition => {
+      const entryPath = `${path}.squads[${index}]`;
+      const squad = readObject(entry, entryPath, ["id", "seats"], ["id", "seats"]);
+      const id = readString(squad.id, `${entryPath}.id`, 1, 16, SQUAD_ID_PATTERN);
+      if (ids.has(id)) invalid(`${entryPath}.id`, "squad ids must be unique");
+      ids.add(id);
+      const seatValues = readArray(squad.seats, `${entryPath}.seats`, 1, competitors);
+      let previous = -1;
+      const seats = seatValues.map((seatValue, seatIndex) => {
+        const seat = readSafeInteger(seatValue, `${entryPath}.seats[${seatIndex}]`, 0, competitors - 1, seatValues, seatIndex);
+        if (seat <= previous || assigned.has(seat)) {
+          invalid(`${entryPath}.seats[${seatIndex}]`, "squad seats must be ascending and belong to one squad");
+        }
+        previous = seat;
+        assigned.add(seat);
+        return seat;
+      });
+      return { id, seats };
+    });
+    if (assigned.size !== competitors) invalid(`${path}.squads`, "squads must assign every competitor seat");
+    return { kind, version: 1, squads };
+  }
+  return invalid(`${path}.kind`, "unknown rule mode");
 }
 
 function readHungerGamesPrepareSettings(value: StrictJsonValue): HungerGamesPrepareSettings {

@@ -49,9 +49,11 @@ export type {
   MatchSettings,
   MetricsPayload,
   OutcomePayload,
+  PrepareRules,
   PreparePayload,
   PublicStatePayload,
   ReadyPayload,
   RosterCompetitor,
+  SquadDefinition,
   TideFaction
 } from "./types.js";
