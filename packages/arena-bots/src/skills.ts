@@ -35,7 +35,7 @@ import {
 } from './civilization-skills.js';
 import { MineflayerObserver } from './observer.js';
 import { recordPathDiagnostic } from './path-diagnostics.js';
-import { leadAimPoint, observedVelocity, type Point3 } from './ballistics.js';
+import { leadAimPoint, meleeAimPoint, observedVelocity, type Point3 } from './ballistics.js';
 import { readCombatBody, readCombatSelfBody } from './combat-view.js';
 import { PICKUP_REACH_HORIZONTAL_BLOCKS, PickupReachGoal, withinPickupReach } from './pickup-reach.js';
 import { classifyEntityVisibility, isTargetablePlayer, isVisibleEntity, toBlockPosition } from './perception.js';
@@ -81,6 +81,9 @@ const FRIENDLY_FIRE_CLEARANCE_BLOCKS = 1;
 const OFFHAND_SLOT = 45;
 const ATTACK_COOLDOWN_TICKS = 13;
 const ATTACK_RESPONSE_TICKS = 10;
+const MELEE_AIM_SETTLE_ATTEMPTS = 4;
+const MELEE_BLOCKED_COOLDOWN_LIMIT = 3;
+const MELEE_VELOCITY_SAMPLES = 2;
 const DROP_SETTLED_TOLERANCE_BLOCKS = 0.25;
 const MAX_TARGET_REPLANS = 8;
 
@@ -828,11 +831,27 @@ export class SkillOwner {
       recordPathDiagnostic(this.#bot, { kind: 'navigation', active: true });
       try {
         this.#bot.pathfinder.setGoal(goal, false);
-        await Promise.race([reached, pathFailure]);
+        await Promise.resolve();
         throwIfInterrupted(signal);
-        if (arrival.kind === 'meleeReach' ? this.#inMeleeReach(arrival.target) : hasArrived(this.#bot.entity.position, position, arrival)) return;
-        if (leg === MAX_NAVIGATION_LEGS - 1) {
-          throw new SkillFault('noProgress', `navigation exceeded ${MAX_NAVIGATION_LEGS} bounded path segments`);
+        let keepFacing = true;
+        const facing = arrival.kind === 'meleeReach' && !this.#inMeleeReach(arrival.target)
+          ? this.#faceUntil(active, arrival.target.id, signal, () => keepFacing)
+          : null;
+        const facingFailure = facing?.then(
+          () => new Promise<void>(() => undefined),
+          (error: unknown) => Promise.reject(error),
+        );
+        if (facingFailure !== undefined) void facingFailure.catch(() => undefined);
+        try {
+          await Promise.race(facingFailure === undefined ? [reached, pathFailure] : [reached, pathFailure, facingFailure]);
+          throwIfInterrupted(signal);
+          if (arrival.kind === 'meleeReach' ? this.#inMeleeReach(arrival.target) : hasArrived(this.#bot.entity.position, position, arrival)) return;
+          if (leg === MAX_NAVIGATION_LEGS - 1) {
+            throw new SkillFault('noProgress', `navigation exceeded ${MAX_NAVIGATION_LEGS} bounded path segments`);
+          }
+        } finally {
+          keepFacing = false;
+          if (facing !== null) await facing.catch(() => undefined);
         }
       } finally {
         signal.removeEventListener('abort', relayAbort);
@@ -941,28 +960,79 @@ export class SkillOwner {
         return;
       }
 
-      await this.#awaitAttackCooldown(active);
-      await this.#lookAt(active, 'look at opponent', aimPoint(view.entity));
-      throwIfInterrupted(signal);
-      view = this.#engagementView(targetId, progress);
-      if (!isWithinMeleeReach(view.self, view.target)) continue;
-      await this.#lookAt(active, 'look at opponent', aimPoint(view.entity));
-      throwIfInterrupted(signal);
-      view = this.#engagementView(targetId, progress);
-      if (!isWithinMeleeReach(view.self, view.target)) continue;
-      if (!isCrosshairOnBody(view.self, view.target)) {
-        throw new SkillFault('noProgress', `aim at opponent ${targetId} did not settle`, 'aimNotReady');
-      }
-      progress.lastPassed = 'localValidation';
+      const samples: Point3[] = [];
+      await this.#awaitAttackCooldown(active, targetId, samples);
+      if (await this.#swingWhenAimed(targetId, active, progress, samples)) return;
+    }
+  }
 
+  async #swingWhenAimed(
+    targetId: number,
+    active: ActiveSkill,
+    progress: EngageProgress,
+    samples: Point3[],
+  ): Promise<boolean> {
+    const signal = active.controller.signal;
+    for (let attempt = 0; attempt < MELEE_AIM_SETTLE_ATTEMPTS; attempt += 1) {
+      throwIfInterrupted(signal);
+      let view = this.#engagementView(targetId, progress);
+      if (!isWithinMeleeReach(view.self, view.target)) return false;
+      await this.#lookAt(active, 'look at opponent', this.#aimPoint(samples, view.entity));
+      throwIfInterrupted(signal);
+      view = this.#engagementView(targetId, progress);
+      if (!isWithinMeleeReach(view.self, view.target)) return false;
+      if (!isCrosshairOnBody(view.self, view.target)) continue;
+      progress.lastPassed = 'localValidation';
       const response = waitForAttackResponse(this.#bot, targetId, signal, ATTACK_RESPONSE_TICKS);
       this.#lastSwingTick = this.#physicsTicks;
       this.#bot.attack(view.entity);
       progress.lastPassed = 'issued';
       await response;
       progress.lastPassed = 'clientResponse';
-      return;
+      return true;
     }
+    throw new SkillFault('noProgress', `aim at opponent ${targetId} did not settle`, 'aimNotReady');
+  }
+
+  async #faceUntil(
+    active: ActiveSkill,
+    targetId: number,
+    signal: AbortSignal,
+    keepFacing: () => boolean,
+  ): Promise<void> {
+    const samples: Point3[] = [];
+    while (keepFacing()) {
+      throwIfInterrupted(signal);
+      const entity = this.#bot.entities[String(targetId)];
+      if (entity === undefined || !isTargetablePlayer(this.#bot, entity)) return;
+      const tickAt = this.#physicsTicks;
+      await this.#lookAt(active, 'face opponent', this.#aimPoint(samples, entity));
+      if (!keepFacing()) return;
+      throwIfInterrupted(signal);
+      if (this.#physicsTicks === tickAt) await waitForPhysicsTicks(this.#bot, 1, signal);
+    }
+  }
+
+  #aimPoint(samples: Point3[], entity: MineflayerEntity): MineflayerEntity['position'] {
+    const feet = { x: entity.position.x, y: entity.position.y, z: entity.position.z };
+    samples.push(feet);
+    const self = this.#bot.entity;
+    const eyeHeight = (self as MineflayerEntity & { readonly eyeHeight?: number }).eyeHeight;
+    if (typeof eyeHeight !== 'number' || !Number.isFinite(eyeHeight)) {
+      throw new TypeError('Mineflayer player entity has no eye height');
+    }
+    if (typeof entity.width !== 'number' || typeof entity.height !== 'number') {
+      throw new TypeError(`entity ${entity.id} has no bounding box`);
+    }
+    const eye = { x: self.position.x, y: self.position.y + eyeHeight, z: self.position.z };
+    const aim = meleeAimPoint(
+      eye,
+      feet,
+      entity.width,
+      entity.height,
+      observedVelocity(samples.slice(-MELEE_VELOCITY_SAMPLES)),
+    );
+    return self.position.offset(aim.x - self.position.x, aim.y - self.position.y, aim.z - self.position.z);
   }
 
   #readyBow(): MineflayerItem | null {
@@ -1070,26 +1140,28 @@ export class SkillOwner {
     await response;
   }
 
-  async #awaitAttackCooldown(active: ActiveSkill): Promise<void> {
+  async #awaitAttackCooldown(active: ActiveSkill, targetId: number, samples: Point3[]): Promise<void> {
     const lastSwing = this.#lastSwingTick;
     if (lastSwing === null) return;
     const remaining = ATTACK_COOLDOWN_TICKS - (this.#physicsTicks - lastSwing);
     if (remaining <= 0) return;
     const readyAt = this.#physicsTicks + remaining;
+    const deadline = performance.now() + ACTION_TIMEOUT_MS;
     const offhand = this.#bot.inventory.slots[OFFHAND_SLOT];
     if (offhand !== null && offhand !== undefined && offhand.name === 'shield') {
       this.#bot.activateItem(true);
       active.resources.itemInUse = true;
     }
+    const blockedTicks = { count: 0 };
     try {
-      await waitForCondition(
-        this.#bot,
-        () => this.#physicsTicks >= readyAt,
-        active.controller.signal,
-        ACTION_TIMEOUT_MS,
-      );
+      while (this.#physicsTicks < readyAt) {
+        if (performance.now() >= deadline) {
+          throw new SkillFault('timedOut', 'expected client state did not arrive', 'cooldownNotReady');
+        }
+        await this.#trackDuringCooldown(active, targetId, samples, blockedTicks);
+      }
     } catch (error) {
-      if (error instanceof SkillFault) {
+      if (error instanceof SkillFault && error.failure === 'timedOut') {
         throw new SkillFault(error.failure, error.message, 'cooldownNotReady');
       }
       throw error;
@@ -1098,6 +1170,48 @@ export class SkillOwner {
         active.resources.itemInUse = false;
         if (this.#bot.usingHeldItem) this.#bot.deactivateItem();
       }
+    }
+  }
+
+  async #trackDuringCooldown(
+    active: ActiveSkill,
+    targetId: number,
+    samples: Point3[],
+    blockedTicks: { count: number },
+  ): Promise<void> {
+    const signal = active.controller.signal;
+    throwIfInterrupted(signal);
+    const entity = this.#bot.entities[String(targetId)];
+    if (entity === undefined || !isTargetablePlayer(this.#bot, entity)) {
+      throw new SkillFault(
+        'preconditionsNotMet',
+        `opponent ${targetId} is not currently targetable`,
+        'targetDespawnedOrEliminated',
+      );
+    }
+    const tickAt = this.#physicsTicks;
+    await this.#lookAt(active, 'look at opponent', this.#aimPoint(samples, entity));
+    throwIfInterrupted(signal);
+    if (this.#physicsTicks === tickAt) await waitForPhysicsTicks(this.#bot, 1, signal);
+    const visibility = classifyEntityVisibility(this.#bot, entity);
+    if (visibility === 'blocked') {
+      blockedTicks.count += 1;
+      if (blockedTicks.count > MELEE_BLOCKED_COOLDOWN_LIMIT) {
+        throw new SkillFault(
+          'preconditionsNotMet',
+          `opponent ${targetId} is not currently visible to this client`,
+          'blockedLineOfSight',
+        );
+      }
+      return;
+    }
+    blockedTicks.count = 0;
+    if (visibility !== 'visible') {
+      throw new SkillFault(
+        'preconditionsNotMet',
+        `opponent ${targetId} is not currently visible to this client`,
+        'targetNoLongerVisible',
+      );
     }
   }
 
@@ -1805,10 +1919,6 @@ async function waitForPhysicsTicks(bot: Bot, count: number, signal: AbortSignal)
     signal.addEventListener('abort', onAbort, { once: true });
     if (signal.aborted) onAbort();
   });
-}
-
-function aimPoint(entity: MineflayerEntity): MineflayerEntity['position'] {
-  return entity.position.offset(0, entity.height * 0.65, 0);
 }
 
 async function waitForAttackResponse(
