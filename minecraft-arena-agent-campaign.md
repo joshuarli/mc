@@ -1,6 +1,6 @@
 # Arena: unattended Minecraft implementation campaign
 
-**Status: campaign execution continues; the complete legal-player chain passes. P1 M1 still requires all six registered Hunger Games seeds; none is accepted.** Native loot scanning and owned look cancellation are repaired and independently verified. The fourth attempt reached ordinary death and spectator reconnect, then aborted on an incorrect acceptance alive-state waiter at match tick 5425 with successful cleanup. The waiter and native half-heart mapping corrections are independently verified; the next unchanged six-seed suite is running. Civilization preparation has 180 affected TypeScript and 52 Java cases independently covered; its Main merge and live acceptance remain M1-gated. Resource limits, canonical scenarios, and policy settings are unchanged.
+**Status: campaign execution continues; P1 M1 passes at `296c3c9`.** All six declared Hunger Games seeds passed with five winners and one draw, including ordinary loot/PvP and eliminated reconnect checks. The complete legal-player chain passes. Civilization source is now merged with 180 affected TypeScript and 52 Java cases independently covered; actual Civilization rules, six-client material chain, and normal-policy baseline are next. H1/K1/O1/Z1 remain pending. Resource limits, canonical scenarios, and policy settings are unchanged.
 
 **Goal:** one command starts a real local six-competitor Minecraft world with independently controlled headless bots, plus a small resource-producing two-faction scenario. Scripted policies need no LLM, API key, GPU, graphical bot process, or paid bot accounts. Hundreds of active players and expert-human skill remain measured future objectives.
 
@@ -359,3 +359,5 @@ Append one line per phase end: date, merged checkpoint, checks passed, parked it
 - Read contract changes, policy comparison, performance results, platform limitations, and roadmap.
 - Inspect/cherry-pick coherent commits from `campaign/arena`; parked lane branches are named in the report. Nothing awaits owner approval to finish local execution.
 - Launch prompt: **Continue `minecraft-arena-agent-campaign.md` unattended from the documented M1 block; honor owner decisions, continue independent proofs, resume M1 only when its stated evidence prerequisite changes, and never push.**
+
+- 2026-10-13 — P1 M1 accepted at `296c3c9`: all six unchanged seeds passed, five winners and one draw, with ordinary loot/PvP and eliminated reconnect. Exact baseline reports and complete TAP are committed in `tests/fixtures/hunger-six-baseline/`; independent reports match all six outcomes. Civilization source merged at `ae0aade`, with live C1/C2/M2 checks next. H1/K1/O1/Z1 remain pending; no performance, fresh-checkout, or Linux pass is claimed.
