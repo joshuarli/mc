@@ -177,6 +177,16 @@ async function assertStaleNaturalLogTarget(
 ): Promise<void> {
   const miner = civilizationClientForSeat(active, 0);
   const planner = civilizationClientForSeat(active, 1);
+  const sourceBaseY = Math.min(...active.preparedRun.scenario.map.blocks
+    .filter(({ block, position: candidate }) => block === "minecraft:oak_log"
+      && candidate.x === position.x && candidate.z === position.z)
+    .map(({ position: candidate }) => candidate.y));
+  assert.ok(Number.isSafeInteger(sourceBaseY), "the stale natural log must have a reachable base block");
+  const sourceBase = blockPosition(position.x, sourceBaseY, position.z);
+
+  // Spawn yaw faces south, while this faction's resource tree is east of spawn.
+  await navigateWithGoal(active, 1, sourceBase, { kind: "explore" }, actions, signal);
+  await navigateWithGoal(active, 0, sourceBase, { kind: "explore" }, actions, signal);
   const plannedObservation = await waitForCivilizationObservation(active, planner, signal, (observation) =>
     observation.observedResources.kind === "current"
     && observation.observedResources.value.some((resource) => resource.kind === "logBlock"
