@@ -16,6 +16,24 @@
 
 `run` requires explicit Minecraft EULA acceptance. It generates a UUID if you omit `--run-id`. Use `--reserve-external-spectator-slot` to leave one configured spectator connection open for a native client. Add `--wait-for-external-player` to wait for that client before the match starts.
 
+## Play and watch
+
+`play` substitutes one configured bot seat with one external client and waits for that exact identity before the countdown. `watch` reserves a spectator slot and waits for a native client; it never consumes a competitive seat. Both require `--accept-minecraft-eula` and bind the server to loopback.
+
+```sh
+./arena play --scenario scenarios/hunger-24.toml --username Alex_9 --accept-minecraft-eula
+./arena play --scenario scenarios/hunger-six.toml --username Alex_9 --seat 2 --accept-minecraft-eula
+./arena watch --scenario scenarios/hunger-six.toml --accept-minecraft-eula
+```
+
+`--username` is 3 to 16 ASCII letters, digits, or underscores and cannot start with `ArenaBot` or `ArenaSpec`. `--seat` defaults to 0 and must be a configured bot seat. The substitution does not add a competitor. It changes the roster and therefore the scenario identity, which is reported as `scenario_semantic_id` in the result. A schema 2 scenario stages world plan schema 3 when a seat is substituted; schema 1 scenarios cannot host an external seat.
+
+The admission wait defaults to 120 s for `play`. `--join-timeout-seconds <1-3600>` changes it for `play`, `watch`, and `run`. The wait fails before the countdown if the identity does not appear, and Ctrl-C during the wait stops and cleans up the server.
+
+Progress goes to stderr: run ID, Minecraft version, address, mode, role and seat, admission, and each match phase. The result JSON on stdout adds `role` (`competitor` with seats and offline UUIDs, `spectator`, or `none`). A failure names the run ID and the run directory under `.work/arena/runs/`.
+
+`./arena test --suite integration --case external-seat` drives the same path with an unattended Mineflayer client.
+
 `inspect --run-id` reads only stopped runs. Use the run ID from the `run` result. A run ID cannot be reused while its path exists under `.work/arena/traces/`, including a partial archive.
 
 ## Remove run data

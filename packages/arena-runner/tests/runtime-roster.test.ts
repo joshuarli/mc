@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
 import { compileScenario } from '@arena/spec';
+import { withExternalSeat } from '../src/effective-scenario.js';
 import { RunnerError } from '../src/errors.js';
 import { createPreparePayload, createRuntimeRoster } from '../src/runtime/roster.js';
 
@@ -96,4 +97,46 @@ test('civilization preparation preserves fixed border, canonical factions and pu
     { position: scenario.civilization.blueprint.anchors.tide.position, rotation_degrees: 180 });
   assert.equal(roster.competitors.length, 6);
   assert.equal('shrink_start_tick' in prepare.settings.border, false);
+});
+
+function compileHunger24Scenario() {
+  return compileScenario(
+    readFileSync(join(repositoryRoot, 'scenarios/hunger-24.toml'), 'utf8'),
+    readFileSync(join(repositoryRoot, 'maps/hunger-24.toml'), 'utf8'),
+  );
+}
+
+test('schema 3 roster builds 24 bot seats and prepares with the generalized roster', () => {
+  const scenario = compileHunger24Scenario();
+  const roster = createRuntimeRoster(scenario);
+  assert.equal(roster.competitors.length, 24);
+  assert.equal(roster.botCompetitors.length, 24);
+  assert.equal(roster.externalCompetitors.length, 0);
+  const prepare = createPreparePayload(scenario, roster.competitors);
+  assert.equal(prepare.mode, 'hunger_games');
+  assert.equal('roster_version' in prepare ? prepare.roster_version : undefined, 2);
+  assert.equal(prepare.roster.length, 24);
+});
+
+test('an external seat gets its reserved username and offline UUID in the generalized prepare roster', () => {
+  const scenario = withExternalSeat(compileHunger24Scenario(), { seat: 5, username: 'Alex_9' });
+  const roster = createRuntimeRoster(scenario);
+  assert.deepEqual(roster.externalCompetitors.map(({ seat, username }) => [seat, username]), [[5, 'Alex_9']]);
+  assert.equal(roster.botCompetitors.length, 23);
+  assert.equal(roster.botCompetitors.some((competitor) => competitor.seat === 5), false);
+  assert.equal(roster.competitorIdentities[5]!.username, 'Alex_9');
+  assert.equal(roster.competitorIdentities[5]!.offlineUuid, roster.externalCompetitors[0]!.offline_uuid);
+  assert.match(roster.externalCompetitors[0]!.offline_uuid, /^[0-9a-f]{8}-[0-9a-f]{4}-3[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  const prepare = createPreparePayload(scenario, roster.competitors);
+  assert.equal('roster_version' in prepare ? prepare.roster_version : undefined, 2);
+  assert.equal(prepare.roster[5]!.kind, 'external');
+});
+
+test('schema 2 scenarios keep the legacy bot roster unless an external seat is substituted', () => {
+  const scenario = compileHungerSixScenario(4);
+  const legacy = createPreparePayload(scenario, createRuntimeRoster(scenario).competitors);
+  assert.equal('roster_version' in legacy, false);
+  const substituted = withExternalSeat(scenario, { seat: 0, username: 'Josh' });
+  const prepare = createPreparePayload(substituted, createRuntimeRoster(substituted).competitors);
+  assert.equal('roster_version' in prepare ? prepare.roster_version : undefined, 2);
 });

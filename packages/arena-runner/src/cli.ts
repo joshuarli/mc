@@ -8,6 +8,7 @@ import { consumeRawArgv, RawArgvError, rawArgumentText } from './owned-files/raw
 import { comparisonJson, inspectJson, reconstruct, reportJson, type Evidence } from './evidence.js';
 import { canonicalJson } from './canonical.js';
 import { RunnerError } from './errors.js';
+import { withExternalSeat, type ExternalSeatRequest } from './effective-scenario.js';
 import { prepareRun, resolveScenarioResource } from './prepare.js';
 import { replayPolicyJson } from './policy-replay.js';
 import { isValidRunId } from './run-id.js';
@@ -68,7 +69,7 @@ async function dispatchCliBytes(args: readonly Buffer[]): Promise<CliResult> {
   }
   if (command === 'prepare') return await prepareCommand(rest);
   if (command === 'validate') return await validateCommand(rest);
-  if (command === 'run') return await runCommand(rest);
+  if (command === 'run' || command === 'play' || command === 'watch') return await matchCommand(command, rest);
   throw invalidInput('unknown_command');
 }
 
@@ -241,43 +242,79 @@ async function validateCommand(args: readonly Buffer[]): Promise<CliResult> {
   });
 }
 
-async function runCommand(args: readonly Buffer[]): Promise<CliResult> {
+type MatchCommand = 'run' | 'play' | 'watch';
+
+interface MatchArguments {
+  readonly scenarioArgument: Buffer;
+  readonly runId: string | undefined;
+  readonly spectatorMode: RuntimeSpectatorMode;
+  readonly waitForExternalPlayer: boolean;
+  readonly externalSeat: ExternalSeatRequest | undefined;
+  readonly joinTimeoutMs: number | undefined;
+}
+
+const MAX_JOIN_TIMEOUT_SECONDS = 3600;
+
+function parseMatchArguments(command: MatchCommand, args: readonly Buffer[]): MatchArguments {
   let scenarioArgument: Buffer | undefined;
   let runId: string | undefined;
   let acceptMinecraftEula = false;
-  let spectatorMode: RuntimeSpectatorMode = 'automated';
+  let reserveSpectatorSlot = false;
   let waitForExternalPlayer = false;
+  let username: string | undefined;
+  let seat: number | undefined;
+  let joinTimeoutMs: number | undefined;
+  const takesLegacyFlags = command === 'run';
   for (let index = 0; index < args.length;) {
     const option = argumentText(args[index]!, index + 1);
+    const hasValue = index + 1 < args.length;
     if (option === '--scenario') {
-      if (scenarioArgument !== undefined || index + 1 >= args.length) {
-        throw invalidInput('run_requires_scenario');
-      }
+      if (scenarioArgument !== undefined || !hasValue) throw invalidInput(`${command}_requires_scenario`);
       scenarioArgument = args[index + 1]!;
       index += 2;
       continue;
     }
     if (option === '--run-id') {
-      if (runId !== undefined || index + 1 >= args.length) throw invalidInput('run_invalid_run_id_option');
+      if (runId !== undefined || !hasValue) throw invalidInput(`${command}_invalid_run_id_option`);
       runId = argumentText(args[index + 1]!, index + 2);
       index += 2;
       continue;
     }
     if (option === '--accept-minecraft-eula') {
-      if (acceptMinecraftEula) throw invalidInput('run_accept_minecraft_eula_repeated');
+      if (acceptMinecraftEula) throw invalidInput(`${command}_accept_minecraft_eula_repeated`);
       acceptMinecraftEula = true;
       index += 1;
       continue;
     }
-    if (option === '--reserve-external-spectator-slot') {
-      if (spectatorMode === 'reserveExternalSlot') {
-        throw invalidInput('run_reserve_external_spectator_slot_repeated');
-      }
-      spectatorMode = 'reserveExternalSlot';
+    if (option === '--join-timeout-seconds') {
+      if (joinTimeoutMs !== undefined || !hasValue) throw invalidInput(`${command}_invalid_join_timeout`);
+      const text = argumentText(args[index + 1]!, index + 2);
+      const seconds = /^[1-9][0-9]{0,3}$/.test(text) ? Number(text) : 0;
+      if (seconds < 1 || seconds > MAX_JOIN_TIMEOUT_SECONDS) throw invalidInput(`${command}_invalid_join_timeout`);
+      joinTimeoutMs = seconds * 1000;
+      index += 2;
+      continue;
+    }
+    if (command === 'play' && option === '--username') {
+      if (username !== undefined || !hasValue) throw invalidInput('play_requires_username');
+      username = argumentText(args[index + 1]!, index + 2);
+      index += 2;
+      continue;
+    }
+    if (command === 'play' && option === '--seat') {
+      const text = hasValue ? argumentText(args[index + 1]!, index + 2) : '';
+      if (seat !== undefined || !/^(0|[1-9][0-9]{0,2})$/.test(text)) throw invalidInput('play_invalid_seat');
+      seat = Number(text);
+      index += 2;
+      continue;
+    }
+    if (takesLegacyFlags && option === '--reserve-external-spectator-slot') {
+      if (reserveSpectatorSlot) throw invalidInput('run_reserve_external_spectator_slot_repeated');
+      reserveSpectatorSlot = true;
       index += 1;
       continue;
     }
-    if (option === '--wait-for-external-player') {
+    if (takesLegacyFlags && option === '--wait-for-external-player') {
       if (waitForExternalPlayer) throw invalidInput('run_wait_for_external_player_repeated');
       waitForExternalPlayer = true;
       index += 1;
@@ -285,12 +322,29 @@ async function runCommand(args: readonly Buffer[]): Promise<CliResult> {
     }
     throw invalidInput('unexpected_argument');
   }
-  if (scenarioArgument === undefined) throw invalidInput('run_requires_scenario');
+  if (scenarioArgument === undefined) throw invalidInput(`${command}_requires_scenario`);
+  if (command === 'play' && username === undefined) throw invalidInput('play_requires_username');
   if (!acceptMinecraftEula) {
     throw new RunnerError('missing_prerequisite', 'Minecraft EULA', { kind: 'missing_eula' });
   }
-  const scenarioPath = normalizeScenarioPath(scenarioArgument);
-  runId ??= randomUUID();
+  return Object.freeze({
+    scenarioArgument,
+    runId,
+    spectatorMode: command === 'watch' || reserveSpectatorSlot ? 'reserveExternalSlot' : 'automated',
+    waitForExternalPlayer: command === 'watch' || waitForExternalPlayer,
+    externalSeat: command === 'play' ? { seat: seat ?? 0, username: username! } : undefined,
+    joinTimeoutMs,
+  });
+}
+
+function writeProgress(lines: readonly string[]): void {
+  process.stderr.write(`${lines.join('\n')}\n`);
+}
+
+async function matchCommand(command: MatchCommand, args: readonly Buffer[]): Promise<CliResult> {
+  const parsed = parseMatchArguments(command, args);
+  const scenarioPath = normalizeScenarioPath(parsed.scenarioArgument);
+  const runId = parsed.runId ?? randomUUID();
   if (!isValidRunId(runId)) {
     throw new RunnerError('invalid_input', 'run id', { kind: 'invalid_run_id' });
   }
@@ -304,8 +358,23 @@ async function runCommand(args: readonly Buffer[]): Promise<CliResult> {
     const coldStartDeadline = armRuntimeDeadline(controller, 'cold_start', COLD_START_TIMEOUT_MS);
     try {
       const inputs = await compileScenarioAndPolicy(helperPath, ownedRoot, scenarioPath, signal);
-      createRuntimeRoster(inputs.scenario, { spectatorMode });
-      const preparedRun = await prepareRun(helperPath, ownedRoot, scenarioPath, runId!, signal);
+      const effectiveScenario = parsed.externalSeat === undefined
+        ? inputs.scenario
+        : withExternalSeat(inputs.scenario, parsed.externalSeat);
+      const roster = createRuntimeRoster(effectiveScenario, { spectatorMode: parsed.spectatorMode });
+      const externalCompetitors = roster.externalCompetitors.map((competitor) => ({
+        seat: competitor.seat,
+        username: competitor.username,
+        offline_uuid: competitor.offline_uuid,
+      }));
+      const role = externalCompetitors.length > 0
+        ? { kind: 'competitor' as const, seats: externalCompetitors }
+        : parsed.spectatorMode === 'reserveExternalSlot'
+          ? { kind: 'spectator' as const }
+          : { kind: 'none' as const };
+      const preparedRun = await prepareRun(helperPath, ownedRoot, scenarioPath, runId, signal, {
+        ...(parsed.externalSeat === undefined ? {} : { externalSeat: parsed.externalSeat }),
+      });
       try {
         const Effect = await import('effect/Effect');
         const runtime = Effect.tryPromise({
@@ -317,22 +386,38 @@ async function runCommand(args: readonly Buffer[]): Promise<CliResult> {
             paperJarPath,
             pluginJarPath,
             acceptMinecraftEula: true,
-            spectatorMode,
-            ...(waitForExternalPlayer ? { waitForExternalPlayer: true as const } : {}),
+            spectatorMode: parsed.spectatorMode,
+            ...(parsed.waitForExternalPlayer ? { waitForExternalPlayer: true as const } : {}),
+            ...(parsed.joinTimeoutMs === undefined ? {} : { externalJoinTimeoutMs: parsed.joinTimeoutMs }),
             signal,
             coldStartDeadline,
             onRosterReady: (details) => {
-              process.stderr.write([
-                waitForExternalPlayer
-                  ? 'Arena server is waiting for an external player to start the match countdown.'
-                  : 'Arena server ready for graphical clients.',
+              writeProgress([
+                role.kind === 'competitor'
+                  ? 'Arena server is waiting for the reserved external player to join before the countdown.'
+                  : parsed.waitForExternalPlayer
+                    ? 'Arena server is waiting for an external player to start the match countdown.'
+                    : 'Arena server ready for graphical clients.',
+                `Run: ${runId}`,
                 `Minecraft Java Edition: ${details.minecraftVersion}`,
                 `Address: ${details.host}:${details.port}`,
-                'Role: spectator',
+                `Mode: ${effectiveScenario.mode}, ${effectiveScenario.roster.competitors} competitors`,
+                ...(role.kind === 'competitor'
+                  ? role.seats.map((entry) => `Role: competitor seat ${entry.seat}, join as ${entry.username}`)
+                  : role.kind === 'spectator' ? ['Role: spectator'] : []),
                 'Press Ctrl-C to stop the server; it also stops when the match ends.',
-                '',
-              ].join('\n'));
+              ]);
             },
+            onExternalAdmitted: (username) => {
+              const entry = externalCompetitors.find((candidate) => candidate.username === username);
+              writeProgress([entry === undefined
+                ? `Admitted external player ${username}`
+                : `Admitted ${username} on seat ${entry.seat}`]);
+            },
+            onUnexpectedPlayer: (username) => {
+              writeProgress([`Player ${username} is not on the roster and does not satisfy the wait.`]);
+            },
+            onPhase: (phase) => writeProgress([`Phase: ${phase}`]),
           }),
           catch: (cause) => cause,
         });
@@ -356,6 +441,8 @@ async function runCommand(args: readonly Buffer[]): Promise<CliResult> {
         return success({
           schema: 1,
           run_id: completed.runId,
+          scenario_semantic_id: preparedRun.scenario.semanticId,
+          role,
           created_paths: {
             run_directory: preparedRun.runDirectoryPath.toString('utf8'),
             world_plan: preparedRun.worldPlanPath.toString('utf8'),
@@ -372,7 +459,7 @@ async function runCommand(args: readonly Buffer[]): Promise<CliResult> {
           stats: inspection.stats,
         });
       } catch (error) {
-        throw includePreparedRunReference(error, runId!, preparedRun.worldPlanPath);
+        throw includePreparedRunReference(error, runId, preparedRun.runDirectoryPath);
       }
     } catch (error) {
       if (signal.reason instanceof RunnerError && error === signal.reason) throw signal.reason;
@@ -560,7 +647,9 @@ function helpJson(): object {
       'compare <left-segment> <right-segment>': 'Compare two single-segment record streams exactly.',
       'prepare --scenario <path> --run-id <id>': 'Compile a scenario and stage its world plan in a new run directory.',
       'validate --scenario <path>': 'Compile the scenario, map, and policy without staging a run.',
-      'run --scenario <path> --accept-minecraft-eula [--run-id <id>] [--reserve-external-spectator-slot] [--wait-for-external-player]': 'Run a match and report its stopped result.',
+      'run --scenario <path> --accept-minecraft-eula [--run-id <id>] [--reserve-external-spectator-slot] [--wait-for-external-player] [--join-timeout-seconds <n>]': 'Run a match and report its stopped result.',
+      'play --scenario <path> --username <name> [--seat <n>] --accept-minecraft-eula [--run-id <id>] [--join-timeout-seconds <n>]': 'Run a match in which one external client holds the reserved competitive seat (default 0).',
+      'watch --scenario <path> --accept-minecraft-eula [--run-id <id>] [--join-timeout-seconds <n>]': 'Run a match with one reserved spectator slot and wait for an external client before the countdown.',
       'replay-policy <segment>...': 'Replay recorded core policy decisions and validate correlated skill/path effect records.',
     },
     errors: {

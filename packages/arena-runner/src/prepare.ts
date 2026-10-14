@@ -12,7 +12,8 @@ import {
   OwnedFilesError,
 } from './owned-files/index.js';
 import { RunnerError } from './errors.js';
-import { encodeWorldPlan } from './world-plan.js';
+import { withExternalSeat, type ExternalSeatRequest } from './effective-scenario.js';
+import { encodeWorldPlan, encodeWorldPlanV3 } from './world-plan.js';
 
 const RUN_DIRECTORY_PREFIX = '.work/arena/runs/';
 const WORLD_PLAN_NAME = 'world-plan.json';
@@ -34,6 +35,7 @@ export async function prepareRun(
   scenarioPath: Buffer,
   runId: string,
   signal?: AbortSignal,
+  options: Readonly<{ externalSeat?: ExternalSeatRequest }> = {},
 ): Promise<PreparedRun> {
   const scenarioBytes = await readSource(helperPath, ownedRoot, scenarioPath, 'scenario input', signal);
   const scenarioSource = decodeSource(scenarioBytes, 'scenario input');
@@ -54,10 +56,11 @@ export async function prepareRun(
   } catch (error) {
     throw mapSpecError(error);
   }
+  if (options.externalSeat !== undefined) scenario = withExternalSeat(scenario, options.externalSeat);
 
   let plan: Buffer;
   try {
-    plan = encodeWorldPlan(runId, scenario.seed, scenario.map);
+    plan = encodeScenarioWorldPlan(runId, scenario);
   } catch (error) {
     if (error instanceof Error && 'kind' in error && typeof error.kind === 'string') {
       throw new RunnerError('invalid_input', 'world plan', { kind: error.kind });
@@ -128,6 +131,15 @@ export async function prepareRun(
     if (cleanupError !== undefined) throw mapPrepareCleanupError(stageError, cleanupError, published);
     throw mapPrepareOwnedFilesError(stageError, 'world plan', signal, published);
   }
+}
+
+export function encodeScenarioWorldPlan(runId: string, scenario: ScenarioIr): Buffer {
+  const generalizedRoster = scenario.schemaVersion === 3
+    || scenario.roster.seats.some(({ controller }) => controller.kind === 'external');
+  if (generalizedRoster && scenario.map.terrain === 'vanilla') {
+    return encodeWorldPlanV3(runId, scenario.seed, scenario.map, scenario.roster.seats);
+  }
+  return encodeWorldPlan(runId, scenario.seed, scenario.map);
 }
 
 async function readSource(

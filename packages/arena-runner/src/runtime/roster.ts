@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { CivilizationFactionMemberIr, CivilizationScenarioIr, ScenarioIr } from '@arena/spec';
-import type { BotCompetitor, PreparePayload } from '../control/index.js';
+import type { BotCompetitor, ExternalCompetitor, PreparePayload, RosterCompetitor } from '../control/index.js';
 import { RunnerError } from '../errors.js';
 import type { PlayerIdentity } from './observations.js';
 
@@ -12,7 +12,9 @@ export function createRuntimeRoster(
   scenario: ScenarioIr,
   options: Readonly<{ spectatorMode?: RuntimeSpectatorMode }> = {},
 ): Readonly<{
-  competitors: readonly BotCompetitor[];
+  competitors: readonly RosterCompetitor[];
+  botCompetitors: readonly BotCompetitor[];
+  externalCompetitors: readonly ExternalCompetitor[];
   competitorIdentities: readonly PlayerIdentity[];
   spectators: readonly PlayerIdentity[];
 }> {
@@ -29,18 +31,23 @@ export function createRuntimeRoster(
     });
   }
 
-  const competitors: BotCompetitor[] = [];
+  const competitors: RosterCompetitor[] = [];
+  const botCompetitors: BotCompetitor[] = [];
+  const externalCompetitors: ExternalCompetitor[] = [];
   const competitorIdentities: PlayerIdentity[] = [];
-  for (let seat = 0; seat < scenario.roster.competitors; seat += 1) {
-    const username = `ArenaBot${seat}`;
+  for (const { seat, controller } of scenario.roster.seats) {
+    const username = controller.kind === 'bot' ? `ArenaBot${seat}` : controller.username;
     const offlineUuid = minecraftOfflineUuid(username);
-    competitors.push(Object.freeze({
-      kind: 'bot',
-      seat,
-      participant_id: `seat-${seat}`,
-      username,
-      offline_uuid: offlineUuid,
-    }));
+    const common = { seat, participant_id: `seat-${seat}`, username, offline_uuid: offlineUuid };
+    if (controller.kind === 'bot') {
+      const bot: BotCompetitor = Object.freeze({ kind: 'bot', ...common });
+      competitors.push(bot);
+      botCompetitors.push(bot);
+    } else {
+      const external: ExternalCompetitor = Object.freeze({ kind: 'external', ...common });
+      competitors.push(external);
+      externalCompetitors.push(external);
+    }
     competitorIdentities.push(Object.freeze({ username, offlineUuid }));
   }
 
@@ -51,17 +58,18 @@ export function createRuntimeRoster(
   });
   return Object.freeze({
     competitors: Object.freeze(competitors),
+    botCompetitors: Object.freeze(botCompetitors),
+    externalCompetitors: Object.freeze(externalCompetitors),
     competitorIdentities: Object.freeze(competitorIdentities),
     spectators: Object.freeze(spectators),
   });
 }
 
-export function createPreparePayload(scenario: ScenarioIr, roster: readonly BotCompetitor[]): PreparePayload {
+export function createPreparePayload(scenario: ScenarioIr, roster: readonly RosterCompetitor[]): PreparePayload {
   const common = {
     map_semantic_id: scenario.map.semanticId,
     scenario_semantic_id: scenario.semanticId,
     seed: scenario.seed,
-    roster,
   };
   const match = Object.freeze({
     countdown_ticks: scenario.matchSettings.countdownTicks,
@@ -75,6 +83,7 @@ export function createPreparePayload(scenario: ScenarioIr, roster: readonly BotC
   });
   if (scenario.mode === 'civilization') return Object.freeze({
     ...common,
+    roster: botOnlyRoster(roster),
     mode: scenario.mode,
     settings: Object.freeze({
       match,
@@ -82,21 +91,27 @@ export function createPreparePayload(scenario: ScenarioIr, roster: readonly BotC
       civilization: civilizationPrepareSettings(scenario),
     }),
   });
-  return Object.freeze({
-    map_semantic_id: scenario.map.semanticId,
-    scenario_semantic_id: scenario.semanticId,
-    seed: scenario.seed,
-    mode: 'hunger_games',
-    settings: Object.freeze({
-      match,
-      border: Object.freeze({
-        initial_diameter_blocks: scenario.border.initialDiameterBlocks,
-        shrink_start_tick: scenario.border.shrinkStartTick,
-        shrink_end_tick: scenario.border.shrinkEndTick,
-        final_diameter_blocks: scenario.border.finalDiameterBlocks,
-      }),
+  const settings = Object.freeze({
+    match,
+    border: Object.freeze({
+      initial_diameter_blocks: scenario.border.initialDiameterBlocks,
+      shrink_start_tick: scenario.border.shrinkStartTick,
+      shrink_end_tick: scenario.border.shrinkEndTick,
+      final_diameter_blocks: scenario.border.finalDiameterBlocks,
     }),
-    roster,
+  });
+  if (scenario.schemaVersion === 3 || roster.some((competitor) => competitor.kind === 'external')) {
+    return Object.freeze({ ...common, mode: 'hunger_games', roster_version: 2, settings, roster });
+  }
+  return Object.freeze({ ...common, mode: 'hunger_games', settings, roster: botOnlyRoster(roster) });
+}
+
+function botOnlyRoster(roster: readonly RosterCompetitor[]): readonly BotCompetitor[] {
+  return roster.map((competitor) => {
+    if (competitor.kind !== 'bot') {
+      throw new RunnerError('invalid_input', 'scenario roster', { kind: 'external_seat_requires_roster_v2' });
+    }
+    return competitor;
   });
 }
 

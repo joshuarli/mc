@@ -1,6 +1,6 @@
 import { compilePolicy, MAX_SOURCE_BYTES, SpecError } from '@arena/spec';
 import type { OpeningStyleCycle } from '@arena/spec';
-import type { AbortReason, ControlCapability, ControlMessage, OutcomePayload } from '../control/index.js';
+import type { AbortReason, ClockPayload, ControlCapability, ControlMessage, OutcomePayload } from '../control/index.js';
 import { CONTROL_CAPABILITIES } from '../control/index.js';
 import { reconstructEventResult } from '../event-report.js';
 import { RunnerError } from '../errors.js';
@@ -35,6 +35,8 @@ import {
   RuntimeSpectatorClient,
 } from './clients.js';
 import { createPreparePayload, createRuntimeRoster, type RuntimeSpectatorMode } from './roster.js';
+import { externalSeats } from '../effective-scenario.js';
+import { assertEventSeatsInRoster } from './roster-bounds.js';
 import {
   paperArguments,
   readRuntimePluginJar,
@@ -60,12 +62,29 @@ import { startOwnedServerProcess } from './process.js';
 import type { OwnedServerProcess, ServerProcessExit } from './process.js';
 import type { OperationalFailurePrimaryV1 } from './failure-artifact.js';
 import { TextDecoder } from 'node:util';
-import { waitForExternalPlayer } from './external-player-gate.js';
+import {
+  DEFAULT_EXTERNAL_JOIN_TIMEOUT_MS,
+  waitForExternalPlayer,
+  type ExternalAdmission,
+} from './external-player-gate.js';
 
-function requiredControlCapability(mode: PreparedRun['scenario']['mode']): ControlCapability {
-  switch (mode) {
-    case 'hunger_games': return 'hunger_games_v1';
-    case 'civilization': return 'civilization_v1';
+function requiredControlCapabilities(
+  scenario: PreparedRun['scenario'],
+): readonly ControlCapability[] {
+  switch (scenario.mode) {
+    case 'hunger_games': return scenario.schemaVersion === 3 || externalSeats(scenario).length > 0
+      ? ['hunger_games_v1', 'hunger_games_roster_v2']
+      : ['hunger_games_v1'];
+    case 'civilization': return ['civilization_v1'];
+  }
+}
+
+function assertRuntimePluginCapabilities(
+  ready: Parameters<typeof assertRuntimePluginCapability>[0],
+  scenario: PreparedRun['scenario'],
+): void {
+  for (const capability of requiredControlCapabilities(scenario)) {
+    assertRuntimePluginCapability(ready, capability);
   }
 }
 const SERVER_DIRECTORY = Buffer.from('/server', 'ascii');
@@ -90,6 +109,10 @@ export interface RunPreparedRunOptions {
   readonly competitorDriver?: 'baselinePolicy' | 'evaluator';
   readonly spectatorMode?: RuntimeSpectatorMode;
   readonly waitForExternalPlayer?: true;
+  readonly externalJoinTimeoutMs?: number;
+  readonly onExternalAdmitted?: (username: string) => void;
+  readonly onUnexpectedPlayer?: (username: string) => void;
+  readonly onPhase?: (phase: ClockPayload['phase']) => void;
   readonly onPolicyActivity?: (event: PolicyActivityEvent) => void;
   readonly onRosterReady?: (details: Readonly<{
     host: typeof CLIENT_HOST;
@@ -111,8 +134,11 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
   const runSignal = controller.signal;
   const coldStartDeadline = options.coldStartDeadline
     ?? armRuntimeDeadline(controller, 'cold_start', COLD_START_TIMEOUT_MS);
+  const awaitsExternalCompetitor = externalSeats(options.preparedRun.scenario).length > 0;
+  const externalJoinTimeoutMs = options.externalJoinTimeoutMs ?? DEFAULT_EXTERNAL_JOIN_TIMEOUT_MS;
   const wallClockDeadline = armRuntimeDeadline(controller, 'wall_clock',
-    options.preparedRun.scenario.mode === 'civilization' ? 1_200_000 : 600_000);
+    (options.preparedRun.scenario.mode === 'civilization' ? 1_200_000 : 600_000)
+    + (awaitsExternalCompetitor ? externalJoinTimeoutMs : 0));
   const abortPromise = Promise.race([
     abortSignalPromise(runSignal),
     coldStartDeadline.failure,
@@ -233,7 +259,7 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
     coldStartDeadline.clear();
     await runtimeTrace.recordReady(session.ready);
     assertRuntimePluginIdentity(session.ready, pluginIdentity);
-    assertRuntimePluginCapability(session.ready, requiredControlCapability(scenario.mode));
+    assertRuntimePluginCapabilities(session.ready, scenario);
 
     const outcome = deferred<OutcomePayload>();
     void outcome.promise.catch(() => {});
@@ -251,9 +277,11 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
       policy: competitorDriver === 'baselinePolicy' ? policy : undefined,
       policySeed: scenario.seed,
       strategyIntervalTicks: scenario.bots.strategyIntervalTicks,
-      ...(scenario.mode === 'hunger_games' && scenario.schemaVersion === 2
+      ...(scenario.mode === 'hunger_games' && scenario.schemaVersion !== 1
         ? { openingStyleCycle: scenario.openingStyleCycle }
         : {}),
+      rosterSize: roster.competitors.length,
+      ...(options.onPhase === undefined ? {} : { onPhase: options.onPhase }),
       competitors: () => clients,
       ...(options.onPolicyActivity === undefined ? {} : { onPolicyActivity: options.onPolicyActivity }),
       recordPolicy: scenario.record.policyReplay,
@@ -265,8 +293,8 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
       throw new RunnerError('runtime_failure', 'prepare command', { kind: 'invalid_prepare_envelope' });
     }
     const clientOptions = { host: CLIENT_HOST, port: GAME_PORT, scenario, signal: runSignal,
-      publicRoster: roster.competitors.map((entry) => ({ seat: entry.seat, username: entry.username, offlineUuid: entry.offline_uuid })) } as const;
-    clients = roster.competitors.map((competitor) => new RuntimeCompetitorClient(
+      publicRoster: roster.botCompetitors.map((entry) => ({ seat: entry.seat, username: entry.username, offlineUuid: entry.offline_uuid })) } as const;
+    clients = roster.botCompetitors.map((competitor) => new RuntimeCompetitorClient(
       competitor.seat,
       roster.competitorIdentities[competitor.seat]!,
       clientOptions,
@@ -290,13 +318,32 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
       minecraftVersion: session.ready.payload.server.minecraft_version,
       protocolVersion: session.ready.payload.server.protocol_version,
     });
-    if (options.waitForExternalPlayer === true) {
-      const runtimeUsernames = new Set([
-        ...roster.competitors.map((competitor) => competitor.username),
-        ...roster.spectators.map((spectator) => spectator.username),
-      ]);
+    const runtimeUsernames = new Set([
+      ...roster.botCompetitors.map((competitor) => competitor.username),
+      ...roster.spectators.map((spectator) => spectator.username),
+    ]);
+    const admission: ExternalAdmission | undefined = roster.externalCompetitors.length > 0
+      ? {
+        kind: 'competitors',
+        identities: roster.externalCompetitors.map((competitor) => ({
+          username: competitor.username,
+          offlineUuid: competitor.offline_uuid,
+        })),
+        runtimeUsernames,
+      }
+      : options.waitForExternalPlayer === true ? { kind: 'spectator', runtimeUsernames } : undefined;
+    if (admission !== undefined) {
       await raceWithRunState(
-        waitForExternalPlayer([...clients, ...spectators].map((client) => client.bot), runtimeUsernames, runSignal),
+        waitForExternalPlayer({
+          observers: [...clients, ...spectators].map((client) => client.bot),
+          admission,
+          signal: runSignal,
+          ...(admission.kind === 'competitors' || options.externalJoinTimeoutMs !== undefined
+            ? { timeoutMs: externalJoinTimeoutMs }
+            : {}),
+          ...(options.onExternalAdmitted === undefined ? {} : { onAdmitted: options.onExternalAdmitted }),
+          ...(options.onUnexpectedPlayer === undefined ? {} : { onUnexpectedPlayer: options.onUnexpectedPlayer }),
+        }),
         abortPromise,
         leaseLost,
         processFailure,
@@ -456,6 +503,9 @@ class ControlCoordinator {
   readonly #traceOrder = new SerialExecutor();
   readonly #policyLoop: LivePolicyLoop | undefined;
   readonly #measurePolicyActivity: boolean;
+  readonly #rosterSize: number;
+  readonly #onPhase: ((phase: ClockPayload['phase']) => void) | undefined;
+  #phase: ClockPayload['phase'] | undefined;
   #failure: unknown;
   #pending: { readonly correlation: bigint; readonly acknowledgment: Deferred<ControlMessage> } | undefined;
   #runnerSequence: bigint;
@@ -477,6 +527,8 @@ class ControlCoordinator {
     openingStyleCycle?: OpeningStyleCycle;
     strategyIntervalTicks: bigint;
     competitors(): readonly RuntimeCompetitorClient[];
+    rosterSize: number;
+    onPhase?: (phase: ClockPayload['phase']) => void;
     recordPolicy: boolean;
     onPolicyActivity?: (event: PolicyActivityEvent) => void;
   }>) {
@@ -490,6 +542,8 @@ class ControlCoordinator {
     this.#abortPromise = options.abortPromise;
     this.#leaseLost = options.leaseLost;
     this.#competitors = options.competitors;
+    this.#rosterSize = options.rosterSize;
+    this.#onPhase = options.onPhase;
     this.#measurePolicyActivity = options.onPolicyActivity !== undefined;
     this.#runnerSequence = options.session.ready.correlation!;
     void this.#failureState.promise.catch(() => {});
@@ -601,6 +655,11 @@ class ControlCoordinator {
             return;
           }
           if (!isAuthorityEvent(message)) return;
+          assertEventSeatsInRoster(message, this.#rosterSize);
+          if (message.type === 'public_clock' && message.payload.phase !== this.#phase) {
+            this.#phase = message.payload.phase;
+            this.#onPhase?.(message.payload.phase);
+          }
           if (this.#events.length >= MAX_RETAINED_AUTHORITY_EVENTS) {
             throw new RunnerError('runtime_failure', 'control events', { kind: 'critical_event_limit_exceeded' });
           }
@@ -741,7 +800,7 @@ async function createBootstrapWorld(options: Readonly<{
       options.leaseLost,
     );
     assertRuntimePluginIdentity(session.ready, options.pluginIdentity);
-    assertRuntimePluginCapability(session.ready, requiredControlCapability(options.options.preparedRun.scenario.mode));
+    assertRuntimePluginCapabilities(session.ready, options.options.preparedRun.scenario);
     assertSuccessfulExit(await server.shutdown());
   } catch (error) {
     startupFailure = error;

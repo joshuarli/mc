@@ -179,6 +179,74 @@ test('run accepts explicit EULA option and rejects unknown options', async () =>
   }
 });
 
+async function failureKind(args: readonly string[]): Promise<string> {
+  const result = await runCli(args);
+  assert.equal(result.kind, 'failure');
+  if (result.kind !== 'failure') throw new Error('expected failure');
+  assert.equal(result.exitCode, 2);
+  return JSON.parse(result.stderr).error.source.kind as string;
+}
+
+test('play and watch parse their own options and reject the other command options', async () => {
+  const scenario = ['--scenario', 'scenarios/hunger-24.toml'];
+  assert.equal(await failureKind(['play', ...scenario, '--accept-minecraft-eula']), 'play_requires_username');
+  assert.equal(await failureKind(['play', '--username', 'Alex_9', '--accept-minecraft-eula']), 'play_requires_scenario');
+  assert.equal(await failureKind(['play', ...scenario, '--username', 'Alex_9', '--seat', '-1']), 'play_invalid_seat');
+  assert.equal(await failureKind(['play', ...scenario, '--username', 'Alex_9', '--seat', '1', '--seat', '2']), 'play_invalid_seat');
+  assert.equal(await failureKind(['play', ...scenario, '--username', 'Alex_9', '--wait-for-external-player']), 'unexpected_argument');
+  assert.equal(await failureKind(['watch', ...scenario, '--username', 'Alex_9']), 'unexpected_argument');
+  assert.equal(await failureKind(['watch', ...scenario, '--reserve-external-spectator-slot']), 'unexpected_argument');
+  assert.equal(await failureKind(['watch', ...scenario, '--accept-minecraft-eula', '--join-timeout-seconds', '0']),
+    'watch_invalid_join_timeout');
+  assert.equal(await failureKind(['play', ...scenario, '--username', 'Alex_9', '--join-timeout-seconds', '3601']),
+    'play_invalid_join_timeout');
+});
+
+test('play and watch require explicit EULA acceptance before any lookup', async () => {
+  for (const args of [
+    ['play', '--scenario', 'scenarios/hunger-24.toml', '--username', 'Alex_9'],
+    ['watch', '--scenario', 'scenarios/hunger-24.toml'],
+  ]) {
+    const result = await runCli(args);
+    assert.equal(result.kind, 'failure');
+    if (result.kind !== 'failure') return;
+    assert.equal(result.exitCode, 3);
+    assert.equal(JSON.parse(result.stderr).error.source.kind, 'missing_eula');
+  }
+});
+
+test('play validates the requested seat and identity before preparing a run', async () => {
+  const previous = process.env.ARENA_FS_HELPER;
+  const environment = ['ARENA_JAVA_HOME', 'ARENA_PAPER_JAR', 'ARENA_PLUGIN_JAR'] as const;
+  const previousEnvironment = new Map(environment.map((name) => [name, process.env[name]]));
+  process.env.ARENA_FS_HELPER = resolve(repositoryRoot, '.work/arena-fs/arena-fs');
+  for (const name of environment) process.env[name] = '/unused';
+  const runId = `play-validate-${randomUUID()}`;
+  try {
+    for (const [extra, kind] of [
+      [['--username', 'ArenaBot3'], 'reserved_external_username'],
+      [['--username', 'Alex_9', '--seat', '24'], 'external_seat_outside_roster'],
+    ] as const) {
+      const result = await runCli([
+        'play', '--scenario', 'scenarios/hunger-24.toml', ...extra,
+        '--run-id', runId, '--accept-minecraft-eula',
+      ]);
+      assert.equal(result.kind, 'failure');
+      if (result.kind !== 'failure') return;
+      assert.equal(result.exitCode, 2);
+      assert.equal(JSON.parse(result.stderr).error.source.kind, kind);
+      assert.equal(existsSync(join(repositoryRoot, '.work/arena/runs', runId)), false);
+    }
+  } finally {
+    if (previous === undefined) delete process.env.ARENA_FS_HELPER;
+    else process.env.ARENA_FS_HELPER = previous;
+    for (const [name, value] of previousEnvironment) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
+});
+
 test('run rejects an external spectator reservation at zero capacity before preparing a run', async () => {
   const runId = `no-spectator-${randomUUID()}`;
   const relativeScenarioPath = `.work/tmp/${runId}.toml`;
