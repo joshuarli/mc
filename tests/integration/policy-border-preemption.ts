@@ -135,7 +135,6 @@ function actionReceipt(events: readonly PolicyActivityEvent[], sequence: string 
     event.kind === "action" && event.seat === 0 && event.actionSequence === sequence);
 }
 
-// Strict JSON objects have null prototypes; compare every serialized field to the typed callback value.
 function assertSameJson(actual: unknown, expected: unknown): void {
   assert.deepStrictEqual(canonicalJson(actual), canonicalJson(expected));
 }

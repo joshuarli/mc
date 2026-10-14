@@ -38,7 +38,6 @@ test("match-rules freeze fixture offers an ordinary weapon", () => {
   );
 });
 
-// Observation-only clients stay at their spawns through the authoritative tick limit.
 test("fairness fixtures keep both stationary competitors inside the final border", () => {
   for (const name of ["fairness-scenario.toml", "fairness-perturbed-scenario.toml"]) {
     const scenarioPath = resolve(FIXTURE_DIRECTORY, name);

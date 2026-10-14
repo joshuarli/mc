@@ -273,7 +273,6 @@ test('garbage collection ranks only validated failures and protects cleanup fail
     const corruptArtifactPath = join(rootText, '.work/arena/runs', corruptRunId, 'operational-failure-v1.json');
     const modified = new Date(Date.UTC(2026, 0, 1, 0, 0, 5));
     await utimes(corruptArtifactPath, modified, modified);
-    // Replace valid JSON contents while preserving the native listing metadata.
     await writeFile(corruptArtifactPath, Buffer.from('{"schema":1}'));
 
     const dryRun = await collectOwnedRuns({

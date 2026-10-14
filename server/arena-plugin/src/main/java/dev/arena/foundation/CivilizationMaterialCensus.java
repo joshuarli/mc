@@ -11,7 +11,6 @@ import java.util.Set;
 import java.util.function.BiPredicate;
 import java.util.function.Consumer;
 
-/** Builds private evaluator material markers from immutable samples of actual arena state. */
 final class CivilizationMaterialCensus {
     static final String PROPERTY = "arena.civilization-evaluator";
     static final String MARKER_PREFIX = "ARENA_CIV_MATERIAL_V1|";

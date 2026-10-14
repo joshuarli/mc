@@ -24,7 +24,6 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 
-/** Defines the versioned runner-to-plugin control messages and their bounded wire encoding. */
 final class ControlProtocol {
     static final int VERSION = 1;
     static final int MAX_FRAME_BYTES = 1_048_576;

@@ -29,7 +29,6 @@ const TRACKED_INCOMING_PACKETS = new Set([
 
 interface DiagnosticRecord {
   readonly clientMs: number;
-  /** Latest received public clock; it can precede the authoritative tick that processes an outgoing swing. */
   readonly latestObservedMatchTick: number | null;
   readonly border: Readonly<{
     readonly centerX: number;
@@ -56,7 +55,6 @@ interface DuelCombatDiagnosticSession {
   close(): void;
 }
 
-/** Closes every combat observer, stages its bounded record, and preserves the original combat error. */
 export async function captureDuelCombatWindow(
   options: Readonly<{
     active: AcceptanceRunContext;
@@ -116,7 +114,6 @@ export async function captureDuelCombatWindow(
   }
 }
 
-/** Captures only a bounded combat window and owns every listener and packet wrapper it installs. */
 function createDuelCombatDiagnostics(
   options: Readonly<{
     active: AcceptanceRunContext;

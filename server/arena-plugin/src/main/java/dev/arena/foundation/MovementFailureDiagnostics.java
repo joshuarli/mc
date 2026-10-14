@@ -7,7 +7,6 @@ import java.util.Optional;
 import java.util.function.Consumer;
 import org.bukkit.Location;
 
-/** Captures a bounded sample of server-rejected competitor movement when explicitly enabled. */
 final class MovementFailureDiagnostics {
     static final int MAX_CAPTURED_EVENTS = 256;
 

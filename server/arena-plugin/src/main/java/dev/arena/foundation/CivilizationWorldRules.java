@@ -5,7 +5,6 @@ import java.util.List;
 import java.util.Objects;
 import java.util.function.Predicate;
 
-/** Keeps the civilization objectives tied to the resolved scenario coordinates and real world blocks. */
 final class CivilizationWorldRules {
     private CivilizationWorldRules() {}
 

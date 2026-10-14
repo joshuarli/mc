@@ -94,7 +94,6 @@ final class ControlSessionTest {
         try {
             assertEquals(-1, input.read(), "the plugin must close the saturated control connection");
         } catch (SocketException reset) {
-            // A reset is another observable way the failed session closes its peer socket.
         }
     }
 

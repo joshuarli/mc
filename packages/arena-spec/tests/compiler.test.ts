@@ -644,7 +644,6 @@ test("scenario_prepared_chunk_halo_matches_java_limit_at_aligned_boundaries", ()
     .replace("view_distance_chunks = 6", "view_distance_chunks = 2")
     .replace("simulation_distance_chunks = 5", "simulation_distance_chunks = 2")
     .replace("initial_diameter_blocks = 126", "initial_diameter_blocks = 945");
-  // The last blocks lie on chunk edges, and a two-chunk halo starts at chunk -2.
   const atLimit = haloMap(945, 1_969);
   assert.equal(compileScenario(scenario, atLimit).map.dimensions.width, 945);
 

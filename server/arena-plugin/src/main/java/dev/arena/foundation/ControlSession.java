@@ -15,7 +15,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
-/** Owns the one-shot loopback connection; socket I/O never runs on Paper's server thread. */
 final class ControlSession implements AutoCloseable {
     private static final int INBOUND_COMMAND_CAPACITY = 128;
     private static final int OUTBOUND_MESSAGE_CAPACITY = 256;
@@ -271,7 +270,6 @@ final class ControlSession implements AutoCloseable {
             try {
                 connection.close();
             } catch (IOException ignored) {
-                // Closing a failed connection cannot recover it; the original failure remains authoritative.
             }
         }
     }

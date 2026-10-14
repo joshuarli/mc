@@ -38,7 +38,6 @@ function competitor(seat: number, run: MineflayerArenaClient['run'], hold = fals
 }
 
 async function settle() {
-  // Drain the bounded promise chain used by one decision, effect, and checkpoint.
   for (let index = 0; index < 30; index += 1) await Promise.resolve();
 }
 

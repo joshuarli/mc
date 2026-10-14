@@ -6,7 +6,6 @@ const HALF_HORIZONTAL_FOV_RADIANS = Math.PI / 3;
 const HALF_VERTICAL_FOV_RADIANS = Math.PI / 4;
 const packageRequire = createRequire(import.meta.url);
 const mineflayerRequire = createRequire(packageRequire.resolve('mineflayer'));
-// The load check must use the same iterator as the collision raycast.
 const { RaycastIterator } = mineflayerRequire('prismarine-world').iterators as {
   readonly RaycastIterator: new (
     position: Parameters<Bot['world']['raycast']>[0],

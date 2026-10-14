@@ -145,7 +145,6 @@ test("legal-player", { timeout: 300_000 }, async (t) => {
       assert.equal(equipped.agent.kind, "current");
       assert.equal(equipped.agent.value.equipped.weapon, weapon.rating);
 
-      // Keep the target's block inside the shrinking border throughout knockback and the final attack.
       await stageOpponentForCombat(active, 1, blockPosition(40, 65, 32), signal);
       const knockback = recordKnockbackReceipt(seatOne.bot, seatZero.bot.entity.id);
       await captureDuelCombatWindow(

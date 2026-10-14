@@ -1311,7 +1311,6 @@ export class SkillOwner {
     if (this.#bot.inventory.selectedItem !== null) {
       throw new SkillFault('preconditionsNotMet', 'inventory cursor became occupied before container activation');
     }
-    // Attach handlers to both bounded operations before either can reject.
     const opening = waitForChestWindow(this.#bot, ACTION_TIMEOUT_MS);
     const activation = this.#awaitOwnedOperation(
       active,
@@ -1545,7 +1544,6 @@ export class SkillOwner {
       }
     }
     try {
-      // An unresolved inventory operation may still be applying server updates to the selected slot.
       if (this.#cleanupFailure === null
         && active.resources.quickBarSlotToRestore !== null
         && this.#bot.quickBarSlot !== active.resources.quickBarSlotToRestore) {
@@ -1648,7 +1646,6 @@ export class SkillOwner {
           if (!settlementFailures.includes(failure)) settlementFailures.push(failure);
           throw failure;
         }));
-        // One failure cannot release a second operation that is still applying effects.
         ownedOperation = Promise.allSettled(watched).then(() => { jointSettled = true; });
         ownedOperationSettled = () => jointSettled;
         try {

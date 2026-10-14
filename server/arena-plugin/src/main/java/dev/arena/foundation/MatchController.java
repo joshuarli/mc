@@ -10,7 +10,6 @@ import java.util.Optional;
 import java.util.TreeMap;
 import java.util.TreeSet;
 
-/** Owns tick-driven match phases and resolves all eliminations at one server-tick boundary. */
 final class MatchController {
     enum Phase {
         WAITING,
@@ -265,7 +264,6 @@ final class MatchController {
         }
     }
 
-    /** Advances one completed Paper server tick and resolves events observed during that tick. */
     List<ResolvedElimination> endServerTick(Collection<Elimination> eliminations) {
         if (phase == Phase.WAITING || phase == Phase.FINISHED || phase == Phase.ABORTED) {
             return List.of();

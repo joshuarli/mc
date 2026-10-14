@@ -361,12 +361,6 @@ export class MineflayerObserver {
   }
 }
 
-/**
- * Native discovery treats a missing palette as a global palette and scans every voxel,
- * including uniform air. Derive metadata only on this client's loaded search sections.
- * Native section setters replace it from the new data on every write or promotion;
- * chunk replacement and unload discard the section object with its derived metadata.
- */
 function prepareLootSearchPalettes(bot: Bot): void {
   const game = bot.game as Bot['game'] & { readonly minY: number; readonly height: number };
   const point = bot.entity.position.floored();

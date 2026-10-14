@@ -10,13 +10,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.TreeSet;
 
-/**
- * Resolves civilization territory and results at one match-tick boundary. The complete elimination batch is
- * applied first, capture occupants are restricted to remaining competitors, capture and scoring advance,
- * then elimination results take priority over the inclusive tick-limit score check.
- */
 final class CivilizationMatchController {
-    // The scenario resolver fixes these values; the server authority needs the same limits at tick resolution.
     static final int SEAT_COUNT = 6;
     static final BigInteger GRACE_TICKS = BigInteger.valueOf(2_400);
     static final BigInteger MAX_MATCH_TICK = BigInteger.valueOf(18_000);
@@ -199,7 +193,6 @@ final class CivilizationMatchController {
         return Optional.ofNullable(outcome);
     }
 
-    /** Resolves all observations for one consecutive match tick without allowing a respawned seat back in. */
     Optional<Outcome> endServerTick(
             MatchController.MatchTick at,
             Set<Integer> observedZoneOccupants,

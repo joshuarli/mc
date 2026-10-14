@@ -972,7 +972,6 @@ test('cancellation quarantines an inventory operation that never receives its up
       rating: 3,
     });
     await waitUntil(() => equipStarted);
-    // Simulate a selected-slot update received while the equip request is still pending.
     Object.assign(harness.bot, { quickBarSlot: 2 });
     const cancellation = harness.owner.cancel('shutdown');
     await assert.rejects(running, /client is quarantined/);
@@ -1619,7 +1618,6 @@ function makeHarness(
     },
   };
   const names = ['chest', 'fire', 'cobweb', 'web', 'lava', 'water', 'sand', 'gravel', 'ladder', 'vine', 'air'];
-  // These tests stop searches before node expansion, so movement setup needs only named block entries.
   const registry = {
     version: { type: 'pc', minecraftVersion: '26.1.2', '>=': () => true },
     supportFeature: () => false,

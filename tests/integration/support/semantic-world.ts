@@ -27,7 +27,6 @@ export interface ObservedPlayerItem extends ObservedItem {
   readonly slot: number;
 }
 
-/** A client-read snapshot of only the map content that has declared meaning. */
 export interface SemanticWorldObservation {
   readonly blocks: readonly ObservedBlock[];
   readonly spawns: readonly {
@@ -38,7 +37,6 @@ export interface SemanticWorldObservation {
 }
 
 export interface PlayerInventoryObservation {
-  /** Every occupied slot in the client's player inventory, in slot order. */
   readonly items: readonly ObservedPlayerItem[];
 }
 
@@ -46,11 +44,6 @@ export interface PlayerDeathStatsObservation {
   readonly deaths: number;
 }
 
-/**
- * Case-owned adapters over ordinary Mineflayer clients. `readContainer` must
- * open the real container and close its window before it settles; `readSpawn`
- * must report the position received by that seat's client.
- */
 export interface SemanticWorldReader {
   waitForMapChunks(map: MapIr, signal: AbortSignal): Promise<void>;
   readBlock(position: BlockPosition): ObservedBlock | null;
@@ -61,7 +54,6 @@ export interface SemanticWorldReader {
   readContainer(position: BlockPosition, signal: AbortSignal): Promise<ObservedContainer>;
 }
 
-/** Reads one client's loaded map blocks and chest windows in spec order. */
 export async function captureSemanticWorld(
   map: MapIr,
   reader: SemanticWorldReader,
@@ -96,10 +88,6 @@ export async function captureSemanticWorld(
   };
 }
 
-/**
- * Compares client-observed blocks and every chest slot with the compiled map.
- * The caller must query positions in the order supplied by the compiled map.
- */
 export function assertSemanticWorldMatchesMap(
   map: MapIr,
   observed: SemanticWorldObservation,
@@ -138,10 +126,6 @@ export function assertSemanticWorldMatchesMap(
   );
 }
 
-/**
- * Reset is correct only when the independently observed world state is exact.
- * Inventory slot order and all observed values are part of this comparison.
- */
 export function assertResetWorldMatchesFirst(
   first: SemanticWorldObservation,
   reset: SemanticWorldObservation,
@@ -149,12 +133,10 @@ export function assertResetWorldMatchesFirst(
   assert.deepStrictEqual(reset, first, "reset must reproduce the exact semantic world observation");
 }
 
-/** A fresh reset must not restore any item collected in the earlier run. */
 export function assertPlayerInventoryEmpty(observed: PlayerInventoryObservation): void {
   assert.deepStrictEqual(observed.items, [], "a reset player must not retain items from the earlier run");
 }
 
-/** A reset proves the death counter was cleared only after the prior run recorded a death. */
 export function assertPlayerDeathWasRecorded(observed: PlayerDeathStatsObservation): void {
   assert.ok(
     Number.isSafeInteger(observed.deaths) && observed.deaths > 0,
@@ -162,7 +144,6 @@ export function assertPlayerDeathWasRecorded(observed: PlayerDeathStatsObservati
   );
 }
 
-/** Player statistics are part of the reset; a completed fresh run must start with zero deaths. */
 export function assertPlayerDeathStatsReset(observed: PlayerDeathStatsObservation): void {
   assert.equal(observed.deaths, 0, "a reset player must start with zero recorded deaths");
 }

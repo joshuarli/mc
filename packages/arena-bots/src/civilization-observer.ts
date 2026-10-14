@@ -247,7 +247,6 @@ export class MineflayerCivilizationObserver {
     opponents: Knowledge<readonly VisibleOpponent[]>,
   ): Knowledge<readonly VisibleOpponent[]> {
     if (opponents.kind === 'unknown') return unknownKnowledge();
-    // Unknown identities cannot be assigned to an opposing faction safely.
     const filtered = opponents.value.filter((opponent) => this.isRosteredOpponent(opponent.id));
     return opponents.kind === 'current'
       ? currentKnowledge(filtered)
