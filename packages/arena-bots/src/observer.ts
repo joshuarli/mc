@@ -271,9 +271,8 @@ export class MineflayerObserver {
     }
     const loot: LootOpportunity[] = [];
     for (const entity of Object.values(this.#bot.entities)) {
-      if (entity.type !== 'object' || !isVisibleEntity(this.#bot, entity)) continue;
       const item = entity.getDroppedItem();
-      if (item === null) continue;
+      if (item === null || !isVisibleEntity(this.#bot, entity)) continue;
       const known = classifyItem(this.#bot, item);
       if (known === null) continue;
       loot.push(visibleDrop(

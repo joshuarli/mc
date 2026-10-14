@@ -309,7 +309,6 @@ export class MineflayerCivilizationObserver {
     let count = 0;
     for (const entity of Object.values(this.#bot.entities)) {
       if (count >= MAX_LOCAL_DROP_CANDIDATES) break;
-      if (entity.type !== 'object') continue;
       const item = entity.getDroppedItem();
       const material = item === null ? null : materialItem(item);
       if (material === null || !isVisibleEntity(this.#bot, entity)) continue;

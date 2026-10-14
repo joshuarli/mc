@@ -65,11 +65,11 @@ test("civilization-rules", { timeout: TEST_TIMEOUT_MS }, async (t) => {
         scenario.civilization.captureZone.max);
       await assertClientSkillCancellation(active, 2, captureTarget, actions, signal);
 
+      await prepareCivilizationFactionMaterials(active, 0, layout.ember, actions, signal);
       const stalePosition = layout.ember.naturalOakLogSources[5];
       assert.ok(stalePosition, "Ember base must expose an unused source for the stale-target check");
       await assertStaleNaturalLogTarget(active, stalePosition, actions, signal);
 
-      await prepareCivilizationFactionMaterials(active, 0, layout.ember, actions, signal);
       const home = scenario.map.spawns.find(({ seat }) => seat === 0);
       assert.ok(home, "Ember gatherer must have its configured home spawn");
       await navigateWithGoal(active, 0, home.position, { kind: "explore" }, actions, signal);
@@ -185,10 +185,11 @@ async function assertStaleNaturalLogTarget(
   assert.ok(Number.isSafeInteger(sourceBaseY), "the stale natural log must have a reachable base block");
   const sourceBase = blockPosition(position.x, sourceBaseY, position.z);
 
-  // Spawn yaw faces south, while this faction's resource tree is east of spawn.
   await navigateWithGoal(active, 1, sourceBase, { kind: "explore" }, actions, signal);
   await navigateWithGoal(active, 0, sourceBase, { kind: "explore" }, actions, signal);
-  const plannedObservation = await waitForCivilizationObservation(active, planner, signal, (observation) =>
+  const plannedObservation = await waitForCivilizationObservation(active, planner, signal,
+    `seat 1 to observe shared natural oak log ${position.x},${position.y},${position.z}`,
+    (observation) =>
     observation.observedResources.kind === "current"
     && observation.observedResources.value.some((resource) => resource.kind === "logBlock"
       && samePosition(resource.position, position)));
@@ -218,7 +219,9 @@ async function assertStaleNaturalLogTarget(
     assertSucceeded(mined, "the first client must mine the shared natural oak log");
 
     try {
-      await waitForCivilizationObservation(active, planner, signal, (observation) =>
+      await waitForCivilizationObservation(active, planner, signal,
+        `seat 1 to observe removal of shared natural oak log ${position.x},${position.y},${position.z}`,
+        (observation) =>
         observation.observedResources.kind === "current"
         && !observation.observedResources.value.some((resource) => resource.kind === "logBlock"
           && samePosition(resource.position, position)));
@@ -274,7 +277,7 @@ async function waitForPlacedOutpostObservation(
   layout: CivilizationFactionActionLayout,
   signal: AbortSignal,
 ): Promise<void> {
-  await waitForCivilizationObservation(active, client, signal, (observation) => {
+  await waitForCivilizationObservation(active, client, signal, "builder to observe all placed outpost cells", (observation) => {
     if (observation.observedResources.kind !== "current") return false;
     const placed = new Set(observation.observedResources.value
       .filter((resource) => resource.kind === "outpostCell" && resource.state === "oak_planks")

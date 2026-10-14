@@ -163,8 +163,8 @@ test('team reports reject stale, future, malformed, over-rate, and over-capacity
 
 test('civilization observations exclude rostered teammates and retain rostered enemies', () => {
   const bot = makeBot(true);
-  const teammate = { id: 2, type: 'player', position: vector(0, 64, -2), height: 1.8 };
-  const enemy = { id: 3, type: 'player', position: vector(1, 64, -2), height: 1.8 };
+  const teammate = { id: 2, type: 'player', position: vector(0, 64, -2), height: 1.8, getDroppedItem: () => null };
+  const enemy = { id: 3, type: 'player', position: vector(1, 64, -2), height: 1.8, getDroppedItem: () => null };
   const roster = publicRoster();
   Object.assign(bot, {
     entity: {
@@ -207,6 +207,39 @@ test('civilization observations exclude rostered teammates and retain rostered e
     assert.equal(observation.base.opponents.kind, 'current');
     if (observation.base.opponents.kind !== 'current') return;
     assert.deepEqual(observation.base.opponents.value.map((opponent) => opponent.id), [3]);
+  } finally {
+    observer.close();
+    base.close();
+  }
+});
+
+test('civilization observations include item drops reported as other entities', () => {
+  const bot = makeBot(true);
+  const droppedLog = {
+    id: 4,
+    type: 'other',
+    name: 'item',
+    position: vector(0, 64, -2),
+    height: 0.25,
+    getDroppedItem: () => ({ name: 'oak_log', type: 10, metadata: 0, count: 1, slot: 0, stackSize: 64 }),
+  };
+  Object.assign(bot, {
+    entity: { id: 1, position: vector(0, 64, 0), yaw: 0, pitch: 0, eyeHeight: 1.62, height: 1.8 },
+    entities: { 4: droppedLog },
+    registry: pinnedRegistry,
+    findBlocks: () => [],
+  });
+  const base = new MineflayerObserver(bot as unknown as Bot);
+  const observer = new MineflayerCivilizationObserver(bot as unknown as Bot, context(), publicRoster());
+  bot.emit('spawn');
+
+  try {
+    const observation = observer.observe(1, base.observe(1));
+    assert.equal(observation.observedResources.kind, 'current');
+    if (observation.observedResources.kind !== 'current') return;
+    assert.deepEqual(observation.observedResources.value.filter(({ kind }) => kind === 'materialDrop'), [{
+      kind: 'materialDrop', entityId: 4, position: { x: 0, y: 64, z: -2 }, item: 'oak_log',
+    }]);
   } finally {
     observer.close();
     base.close();

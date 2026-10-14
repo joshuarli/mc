@@ -37,7 +37,7 @@ const PINNED_PATHFINDER_VERSION = '2.4.5';
 const PATH_TIMEOUT_MS = 20_000;
 const ACTION_TIMEOUT_MS = 5_000;
 const INVENTORY_TRANSFER_TIMEOUT_MS = 15_000;
-const PICKUP_RANGE_BLOCKS = 1.25;
+const PICKUP_RANGE_BLOCKS = 0.9;
 const APPROACH_RANGE_BLOCKS = 3;
 const MAX_TARGET_REPLANS = 8;
 
@@ -65,6 +65,13 @@ interface WindowTransferReceipt {
   dispose(): void;
 }
 
+interface DropCollectionReceipt {
+  readonly promise: Promise<void>;
+  readonly collected: boolean;
+  arm(): void;
+  dispose(): void;
+}
+
 interface ActiveSkill {
   readonly controller: AbortController;
   readonly resources: SkillResources;
@@ -76,6 +83,7 @@ interface ActiveSkill {
 type NavigationArrival =
   | { readonly kind: 'withinRange'; readonly range: number }
   | { readonly kind: 'exactBlock' };
+type NavigationPosition = Readonly<{ x: number; y: number; z: number }>;
 
 interface SkillResources {
   navigationActive: boolean;
@@ -1087,16 +1095,26 @@ export class SkillOwner {
     await this.#navigate(position, { kind: 'withinRange', range }, active);
   }
 
+  async #navigateToDrop(position: MineflayerEntity['position'], active: ActiveSkill, signal: AbortSignal): Promise<void> {
+    await this.#navigate(position, { kind: 'withinRange', range: PICKUP_RANGE_BLOCKS }, active, signal);
+  }
+
   async #navigateToBlock(position: BlockPosition, active: ActiveSkill): Promise<void> {
     await this.#navigate(position, { kind: 'exactBlock' }, active);
   }
 
-  async #navigate(position: BlockPosition, arrival: NavigationArrival, active: ActiveSkill): Promise<void> {
+  async #navigate(
+    position: NavigationPosition,
+    arrival: NavigationArrival,
+    active: ActiveSkill,
+    signal: AbortSignal = active.controller.signal,
+  ): Promise<void> {
     const deadline = performance.now() + PATH_TIMEOUT_MS;
     for (let leg = 0; leg < MAX_NAVIGATION_LEGS; leg += 1) {
-      throwIfInterrupted(active.controller.signal);
+      throwIfInterrupted(signal);
       const border = this.#observer.currentBorder();
-      if (border.kind !== 'current' || isOutsideBorder(border.value, position)) {
+      const borderPosition = blockPosition(Math.floor(position.x), Math.floor(position.y), Math.floor(position.z));
+      if (border.kind !== 'current' || isOutsideBorder(border.value, borderPosition)) {
         throw new SkillFault('preconditionsNotMet', 'navigation requires a current border and an in-border target');
       }
 
@@ -1120,8 +1138,8 @@ export class SkillOwner {
         );
       const stopWaits = new AbortController();
       const relayAbort = () => stopWaits.abort();
-      const endSearchOwner = this.#pathSearchRegistration.beginNavigation(active.controller.signal, deadline);
-      active.controller.signal.addEventListener('abort', relayAbort, { once: true });
+      const endSearchOwner = this.#pathSearchRegistration.beginNavigation(signal, deadline);
+      signal.addEventListener('abort', relayAbort, { once: true });
       const reached = waitForGoal(this.#bot, goal, stopWaits.signal, remainingMs);
       const pathFailure = waitForPathFailure(this.#bot, stopWaits.signal, remainingMs);
       active.resources.navigationActive = true;
@@ -1129,14 +1147,14 @@ export class SkillOwner {
       try {
         this.#bot.pathfinder.setGoal(goal, false);
         await Promise.race([reached, pathFailure]);
-        throwIfInterrupted(active.controller.signal);
+        throwIfInterrupted(signal);
         if (hasArrived(this.#bot.entity.position, position, arrival)) return;
         if (leg === MAX_NAVIGATION_LEGS - 1) {
           throw new SkillFault('noProgress', `navigation exceeded ${MAX_NAVIGATION_LEGS} bounded path segments`);
         }
       } finally {
-        active.controller.signal.removeEventListener('abort', relayAbort);
-        const completion: PathSearchCompletion = active.controller.signal.aborted
+        signal.removeEventListener('abort', relayAbort);
+        const completion: PathSearchCompletion = signal.aborted
           ? 'cancelled'
           : performance.now() >= deadline ? 'timedOut' : 'released';
         endSearchOwner(completion);
@@ -1192,21 +1210,61 @@ export class SkillOwner {
   }
 
   async #collectDrop(entityIdValue: number, active: ActiveSkill): Promise<void> {
-    for (let attempt = 0; attempt < MAX_TARGET_REPLANS; attempt += 1) {
-      throwIfInterrupted(active.controller.signal);
-      const drop = this.#visibleDrop(entityIdValue);
-      if (distance(this.#bot.entity.position, drop.position) <= PICKUP_RANGE_BLOCKS) break;
-      await this.#navigateTo(toBlockPosition(drop.position), 1, active);
-      if (attempt === MAX_TARGET_REPLANS - 1) {
-        throw new SkillFault('noProgress', `drop ${entityIdValue} remained outside pickup reach`);
+    const receipt = waitForDropCollection(this.#bot, entityIdValue, active.controller.signal, ACTION_TIMEOUT_MS);
+    const currentDrop = (initial: boolean): MineflayerEntity | null => {
+      if (receipt.collected) return null;
+      try {
+        return initial ? this.#visibleDrop(entityIdValue) : this.#presentDrop(entityIdValue);
+      } catch (error) {
+        if (receipt.collected) return null;
+        throw error;
       }
+    };
+    try {
+      for (let attempt = 0; attempt < MAX_TARGET_REPLANS; attempt += 1) {
+        throwIfInterrupted(active.controller.signal);
+        const drop = currentDrop(attempt === 0);
+        if (drop === null) return;
+        if (distance(this.#bot.entity.position, drop.position) <= PICKUP_RANGE_BLOCKS) break;
+        const approach = new AbortController();
+        const stopApproachOnSkillCancellation = () => approach.abort();
+        active.controller.signal.addEventListener('abort', stopApproachOnSkillCancellation, { once: true });
+        const navigation = this.#navigateToDrop(drop.position, active, approach.signal).then(
+          () => ({ kind: 'arrived' as const }),
+          (error: unknown) => ({ kind: 'failed' as const, error }),
+        );
+        try {
+          const result = await Promise.race([
+            navigation,
+            receipt.promise.then(() => ({ kind: 'collected' as const })),
+          ]);
+          if (result.kind === 'collected') {
+            approach.abort();
+            const settledNavigation = await navigation;
+            if (active.controller.signal.aborted) throw new SkillInterrupted();
+            if (settledNavigation.kind === 'failed' && !(settledNavigation.error instanceof SkillInterrupted)) {
+              throw settledNavigation.error;
+            }
+            return;
+          }
+          if (result.kind === 'failed') {
+            if (receipt.collected && !active.controller.signal.aborted) return;
+            throw result.error;
+          }
+        } finally {
+          active.controller.signal.removeEventListener('abort', stopApproachOnSkillCancellation);
+        }
+        if (attempt === MAX_TARGET_REPLANS - 1) {
+          throw new SkillFault('noProgress', `drop ${entityIdValue} remained outside pickup reach`);
+        }
+      }
+      if (currentDrop(false) === null) return;
+      if (receipt.collected) return;
+      receipt.arm();
+      await receipt.promise;
+    } finally {
+      receipt.dispose();
     }
-    const drop = this.#visibleDrop(entityIdValue);
-    await this.#lookAt(active, 'look at dropped item', drop.position.offset(0, 0.15, 0));
-    throwIfInterrupted(active.controller.signal);
-    this.#visibleDrop(entityIdValue);
-    const confirmation = waitForDropCollection(this.#bot, entityIdValue, active.controller.signal, ACTION_TIMEOUT_MS);
-    await confirmation;
   }
 
   async #openContainer(position: BlockPosition, active: ActiveSkill): Promise<void> {
@@ -1430,12 +1488,17 @@ export class SkillOwner {
   }
 
   #visibleDrop(entityIdValue: number): MineflayerEntity {
-    const entity = this.#bot.entities[String(entityIdValue)];
-    if (entity === undefined || entity.type !== 'object' || entity.getDroppedItem() === null) {
-      throw new SkillFault('preconditionsNotMet', `drop ${entityIdValue} is not currently present`);
-    }
+    const entity = this.#presentDrop(entityIdValue);
     if (!isVisibleEntity(this.#bot, entity)) {
       throw new SkillFault('preconditionsNotMet', `drop ${entityIdValue} is not currently visible to this client`);
+    }
+    return entity;
+  }
+
+  #presentDrop(entityIdValue: number): MineflayerEntity {
+    const entity = this.#bot.entities[String(entityIdValue)];
+    if (entity === undefined || entity.getDroppedItem() === null) {
+      throw new SkillFault('preconditionsNotMet', `drop ${entityIdValue} is not currently present`);
     }
     return entity;
   }
@@ -1767,30 +1830,55 @@ async function waitForAttackConfirmation(
   });
 }
 
-async function waitForDropCollection(
+function waitForDropCollection(
   bot: Bot,
   targetId: number,
   signal: AbortSignal,
   timeoutMs: number,
-): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    const timeout = setTimeout(() => finish(new SkillFault('timedOut', `drop ${targetId} was not collected`)), timeoutMs);
-    const onAbort = () => finish(new SkillInterrupted());
-    const onCollect: BotEvents['playerCollect'] = (collector, collected) => {
-      if (collector.id !== bot.entity.id || collected.id !== targetId) return;
-      finish();
-    };
-    const finish = (error?: Error) => {
-      clearTimeout(timeout);
-      bot.removeListener('playerCollect', onCollect);
-      signal.removeEventListener('abort', onAbort);
-      if (error === undefined) resolve();
-      else reject(error);
-    };
-    bot.on('playerCollect', onCollect);
-    signal.addEventListener('abort', onAbort, { once: true });
-    if (signal.aborted) onAbort();
+): DropCollectionReceipt {
+  let armed = false;
+  let settled = false;
+  let collected = false;
+  let timeout: NodeJS.Timeout | null = null;
+  let resolvePromise!: () => void;
+  let rejectPromise!: (error: unknown) => void;
+  const promise = new Promise<void>((resolve, reject) => {
+    resolvePromise = resolve;
+    rejectPromise = reject;
   });
+  const onAbort = () => finish(new SkillInterrupted());
+  const onCollect: BotEvents['playerCollect'] = (collector, itemEntity) => {
+    if (collector.id !== bot.entity.id || itemEntity.id !== targetId) return;
+    collected = true;
+    finish();
+  };
+  const cleanup = () => {
+    if (timeout !== null) clearTimeout(timeout);
+    bot.removeListener('playerCollect', onCollect);
+    signal.removeEventListener('abort', onAbort);
+  };
+  const finish = (error?: unknown) => {
+    if (settled) return;
+    settled = true;
+    cleanup();
+    if (error === undefined) resolvePromise();
+    else rejectPromise(error);
+  };
+
+  bot.on('playerCollect', onCollect);
+
+  return {
+    promise,
+    get collected() { return collected; },
+    arm: () => {
+      if (settled || armed) return;
+      armed = true;
+      timeout = setTimeout(() => finish(new SkillFault('timedOut', `drop ${targetId} was not collected`)), timeoutMs);
+      signal.addEventListener('abort', onAbort, { once: true });
+      if (signal.aborted) onAbort();
+    },
+    dispose: () => finish(),
+  };
 }
 
 function waitForChestWindow(bot: Bot, timeoutMs: number): Promise<MineflayerChest> {
@@ -2068,20 +2156,20 @@ function distance(first: { readonly x: number; readonly y: number; readonly z: n
 
 function hasArrived(
   current: { readonly x: number; readonly y: number; readonly z: number },
-  target: BlockPosition,
+  target: NavigationPosition,
   arrival: NavigationArrival,
 ): boolean {
   if (arrival.kind === 'withinRange') return distance(current, target) <= arrival.range;
-  return Math.floor(current.x) === target.x
-    && Math.floor(current.y) === target.y
-    && Math.floor(current.z) === target.z;
+  return Math.floor(current.x) === Math.floor(target.x)
+    && Math.floor(current.y) === Math.floor(target.y)
+    && Math.floor(current.z) === Math.floor(target.z);
 }
 
 function waypointToward(
   current: { readonly x: number; readonly y: number; readonly z: number },
-  target: BlockPosition,
+  target: NavigationPosition,
   distanceBlocks: number,
-): BlockPosition {
+): NavigationPosition {
   const distanceToTarget = distance(current, target);
   if (distanceToTarget <= distanceBlocks) return target;
   const fraction = distanceBlocks / distanceToTarget;

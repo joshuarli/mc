@@ -1031,6 +1031,7 @@ test('attack waits for tick-driven non-forced look before launching', async () =
     type: 'player',
     position: targetPosition,
     height: 1.8,
+    getDroppedItem: () => null,
   } as Bot['entity'];
   const targetBlock = {
     name: 'stone',

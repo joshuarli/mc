@@ -10,10 +10,12 @@ import type {
   Intent,
   SkillOutcome,
 } from "@arena/core";
-import { civilizationOutpostCells, entityId } from "@arena/core";
+import { blockPosition, civilizationOutpostCells, entityId } from "@arena/core";
 import type { CivilizationScenarioIr } from "@arena/spec";
 import type { MineflayerCivilizationClient } from "@arena/bots";
 import type { PathDiagnosticRecord } from "@arena/bots";
+import { isVisibleEntity } from "../../packages/arena-bots/src/perception.js";
+import { hasLocalVoxelRayToTarget, isInsidePerceptionCone } from "../../packages/arena-bots/src/visibility.js";
 import { readOwnedFile, MAX_OWNED_READ_BYTES } from "../../packages/arena-runner/src/owned-files/index.js";
 import { runPreparedRun, type RunPreparedRunOptions } from "../../packages/arena-runner/src/runtime/run.js";
 import { paperArguments, validateJavaTempDirectory } from "../../packages/arena-runner/src/runtime/server.js";
@@ -281,7 +283,14 @@ export async function prepareCivilizationFactionMaterials(
   assert.equal(materialCount(observation, "oak_log"), 0, `seat ${gathererSeat} must begin without natural logs`);
 
   for (const [index, position] of layout.naturalOakLogSources.slice(0, 5).entries()) {
-    observation = await waitForCivilizationObservation(active, gatherer, signal, (current) =>
+    const navigationIntent = { kind: "navigate" as const, target: position };
+    const navigated = await recordCivilizationAction(actions, gathererSeat,
+      { kind: "gatherMaterial", item: "oak_log", target: position }, navigationIntent,
+      () => runArenaSkill(gatherer, navigationIntent, signal));
+    assertSucceeded(navigated,
+      `seat ${gathererSeat} must navigate to natural oak log ${positionText(position)}`);
+    observation = await waitForCivilizationObservation(active, gatherer, signal,
+      `seat ${gathererSeat} to observe natural oak log ${positionText(position)}`, (current) =>
       current.observedResources.kind === "current"
       && current.observedResources.value.some((resource) => resource.kind === "logBlock"
         && samePosition(resource.position, position)));
@@ -296,13 +305,31 @@ export async function prepareCivilizationFactionMaterials(
       () => runCivilizationSkill(gatherer, mineIntent, signal));
     assertSucceeded(mined, `seat ${gathererSeat} must mine natural oak log ${positionText(position)}`);
 
-    const drop = await waitForCivilizationDrop(active, gatherer, position, signal);
+    const drop = await waitForCivilizationDrop(active, gathererSeat, gatherer, position, signal);
     const collectIntent = { kind: "dropCollect" as const, entityId: entityId(drop.entityId) };
+    const bot = active.competitors.find((candidate) => candidate.seat === gathererSeat)?.bot;
+    assert.ok(bot, `civilization runtime must contain seat ${gathererSeat}`);
     const collected = await recordCivilizationAction(actions, gathererSeat,
       { kind: "gatherMaterial", item: "oak_log", target: position }, collectIntent,
       () => runArenaSkill(gatherer, collectIntent, signal));
-    assertSucceeded(collected, `seat ${gathererSeat} must collect the observed oak log drop`);
+    if (collected.kind !== "succeeded") {
+      const entity = bot.entities[String(drop.entityId)];
+      const item = entity?.getDroppedItem() ?? null;
+      throw new Error(`seat ${gathererSeat} failed to collect the observed oak log drop; ${JSON.stringify({
+        outcome: collected,
+        entityId: drop.entityId,
+        entityPresent: entity !== undefined,
+        entityType: entity?.type ?? null,
+        entityName: entity?.name ?? null,
+        droppedItem: item === null ? null : { name: item.name, count: item.count },
+        visible: entity === undefined ? null : isVisibleEntity(bot, entity),
+        playerPosition: [bot.entity.position.x, bot.entity.position.y, bot.entity.position.z],
+        entityPosition: entity === undefined ? null : [entity.position.x, entity.position.y, entity.position.z],
+        inventory: bot.inventory.items().map((stack) => ({ name: stack.name, count: stack.count })),
+      })}`);
+    }
     observation = await waitForCivilizationObservation(active, gatherer, signal,
+      `seat ${gathererSeat} to collect oak log ${index + 1}`,
       (current) => current.ownMaterials.kind === "current"
         && materialCount(current, "oak_log") === index + 1);
   }
@@ -315,6 +342,7 @@ export async function prepareCivilizationFactionMaterials(
     () => runCivilizationSkill(gatherer, craftIntent, signal));
   assertSucceeded(crafted, `seat ${gathererSeat} must craft the ordinary sixteen-plank recipe`);
   observation = await waitForCivilizationObservation(active, gatherer, signal,
+    `seat ${gathererSeat} to observe crafted planks`,
     (current) => current.ownMaterials.kind === "current"
       && materialCount(current, "oak_planks") === 16 && materialCount(current, "oak_log") === 1);
 
@@ -359,6 +387,7 @@ export async function withdrawCivilizationOutpostMaterials(
     withdrawIntent, () => runCivilizationSkill(builder, withdrawIntent, signal));
   assertSucceeded(withdrawn, `seat ${builderSeat} must withdraw fifteen planks from its faction chest`);
   await waitForCivilizationObservation(active, builder, signal,
+    `seat ${builderSeat} to observe withdrawn outpost planks`,
     (current) => current.ownMaterials.kind === "current" && materialCount(current, "oak_planks") === 15);
 }
 
@@ -387,14 +416,60 @@ export async function placeCivilizationFactionOutpost(
 
 export async function waitForCivilizationDrop(
   active: AcceptanceRunContext,
+  seat: number,
   client: MineflayerCivilizationClient,
   source: Readonly<{ x: number; y: number; z: number }>,
   signal: AbortSignal,
 ): Promise<Readonly<{ entityId: number }>> {
-  const observation = await waitForCivilizationObservation(active, client, signal, (current) =>
-    current.observedResources.kind === "current"
-    && current.observedResources.value.some((resource) => resource.kind === "materialDrop"
-      && resource.item === "oak_log" && squaredDistance(resource.position, source) <= 4));
+  const competitor = active.competitors.find((candidate) => candidate.seat === seat);
+  assert.ok(competitor, `civilization runtime must contain seat ${seat}`);
+  const position = competitor.bot.entity.position;
+  await competitor.bot.lookAt(position.offset(
+    source.x + 0.5 - position.x,
+    source.y + 0.125 - position.y,
+    source.z + 0.5 - position.z,
+  ), true);
+  let observation: CivilizationObservation;
+  try {
+    observation = await waitForCivilizationObservation(active, client, signal,
+      `oak log drop near ${positionText(source)}`, (current) =>
+      current.observedResources.kind === "current"
+      && current.observedResources.value.some((resource) => resource.kind === "materialDrop"
+        && resource.item === "oak_log" && squaredDistance(resource.position, source) <= 4));
+  } catch (error) {
+    const bot = competitor.bot;
+    const viewer = bot.entity as typeof bot.entity & { readonly eyeHeight?: number };
+    const nearbyEntities = Object.values(bot.entities)
+      .filter((entity) => squaredDistance(blockPosition(
+        Math.floor(entity.position.x), Math.floor(entity.position.y), Math.floor(entity.position.z),
+      ), source) <= 64n)
+      .map((entity) => {
+        const item = entity.getDroppedItem();
+        return {
+        id: entity.id,
+        type: entity.type,
+        name: entity.name,
+        position: [entity.position.x, entity.position.y, entity.position.z],
+        droppedItem: item === null ? null : { name: item.name, count: item.count },
+        inViewCone: item === null ? null : isInsidePerceptionCone({
+          position: viewer.position,
+          eyeHeight: viewer.eyeHeight ?? Number.NaN,
+          yaw: viewer.yaw,
+          pitch: viewer.pitch,
+        }, { position: entity.position, height: entity.height }),
+        localRay: item === null ? null : hasLocalVoxelRayToTarget(bot, {
+          blockPosition: entity.position,
+          rayTarget: entity.position.offset(0, entity.height / 2, 0),
+        }),
+      };
+    });
+    throw new Error(`oak log drop near ${positionText(source)} was not visible; ${JSON.stringify({
+      player: [viewer.position.x, viewer.position.y, viewer.position.z],
+      yaw: viewer.yaw,
+      pitch: viewer.pitch,
+      nearbyEntities,
+    })}`, { cause: error });
+  }
   if (observation.observedResources.kind !== "current") throw new Error("oak log drop observation became unavailable");
   const drop = observation.observedResources.value
     .filter((resource) => resource.kind === "materialDrop" && resource.item === "oak_log"
@@ -469,7 +544,8 @@ export async function eliminateCivilizationWithSkillAttacks(
   victim.bot.on("health", onHealth);
   victim.bot.on("entityHurt", onHurt);
   try {
-    const initial = await waitForCivilizationObservation(active, client, signal, (observation) =>
+    const initial = await waitForCivilizationObservation(active, client, signal,
+      `attacker seat ${attackerSeat} initial agent state`, (observation) =>
       observation.base.agent.kind === "current");
     if (initial.base.agent.kind !== "current") throw new Error("attacker agent observation is not current");
     const weapon = initial.base.agent.value.upgrades.find(({ equipmentSlot }) => equipmentSlot === "weapon");
@@ -486,7 +562,9 @@ export async function eliminateCivilizationWithSkillAttacks(
     for (let attempt = 0; attempt < MAX_ATTACKS; attempt += 1) {
       signal.throwIfAborted();
       if (hasDeathElimination(active, victimSeat)) break;
-      const observation = await waitForCivilizationObservation(active, client, signal, (current) => {
+      const observation = await waitForCivilizationObservation(active, client, signal,
+        `attacker seat ${attackerSeat} to observe victim seat ${victimSeat} before attack ${attempt + 1}`,
+        (current) => {
         const entity = attacker.bot.players[victim.identity.username]?.entity;
         return entity !== undefined && current.base.opponents.kind === "current"
           && current.base.opponents.value.some(({ id }) => id === entity.id);
@@ -529,6 +607,7 @@ export async function waitForCivilizationObservation(
   active: AcceptanceRunContext,
   client: MineflayerCivilizationClient,
   signal: AbortSignal,
+  purpose: string,
   ready: (observation: CivilizationObservation) => boolean,
 ): Promise<CivilizationObservation> {
   const deadline = Date.now() + OPPONENT_TIMEOUT_MS;
@@ -538,7 +617,7 @@ export async function waitForCivilizationObservation(
     if (ready(observation)) return observation;
     await delay(50, undefined, { signal });
   }
-  throw new Error(`civilization client observation did not become ready within ${OPPONENT_TIMEOUT_MS} ms`);
+  throw new Error(`civilization client observation for ${purpose} did not become ready within ${OPPONENT_TIMEOUT_MS} ms`);
 }
 
 async function waitForCivilizationDeath(

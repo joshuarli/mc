@@ -105,6 +105,7 @@ test('observer quantization preserves every integer policy health threshold', ()
       type: 'player',
       position: new Vec3(8, 1, 10),
       height: 1.8,
+      getDroppedItem: () => null,
     }) as unknown as Bot['entity'];
     Object.assign(client.bot.entities, { 2: opponent });
     Object.assign(client.bot.players, { Rival: { entity: opponent, gamemode: 0 } });
@@ -141,6 +142,28 @@ test('observer quantization preserves every integer policy health threshold', ()
         );
       }
     }
+  } finally {
+    client.observer.close();
+  }
+});
+
+test('observer includes item drops reported as other entities', () => {
+  const client = clientWorld();
+  const droppedApple = Object.assign(new EventEmitter(), {
+    id: 3,
+    type: 'other',
+    name: 'item',
+    position: new Vec3(8, 1, 6),
+    height: 0.25,
+    getDroppedItem: () => ({ name: 'apple', type: 1, metadata: 0, count: 1, slot: 0, stackSize: 64 }),
+  }) as unknown as Bot['entity'];
+  Object.assign(client.bot.entities, { 3: droppedApple });
+
+  try {
+    assert.deepEqual(client.observer.observe(0).loot, {
+      kind: 'current',
+      value: [{ kind: 'visibleDrop', entityId: 3, position: { x: 8, y: 1, z: 6 }, item: { kind: 'food' } }],
+    });
   } finally {
     client.observer.close();
   }
