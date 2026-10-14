@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { performance } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
 import { test } from "node:test";
+import type { BotEvents } from "mineflayer";
 
 import { PathDiagnosticRing } from "@arena/bots";
 import { blockPosition, type BlockPosition } from "@arena/core";
@@ -194,21 +195,57 @@ async function assertStaleNaturalLogTarget(
   assert.equal(plannedObservation.observedResources.kind, "current");
   if (plannedObservation.observedResources.kind !== "current") throw new Error("planned log observation is unavailable");
 
-  const mineIntent = { kind: "mineBlock" as const, position, expectedBlock: "oak_log" as const };
-  const mined = await recordCivilizationAction(actions, 0,
-    { kind: "gatherMaterial", item: "oak_log", target: position }, mineIntent,
-    () => runCivilizationSkill(miner, mineIntent, signal));
-  assertSucceeded(mined, "the first client must mine the shared natural oak log");
+  const plannerCompetitor = active.competitors.find(({ seat }) => seat === 1);
+  assert.ok(plannerCompetitor, "the stale-plan client must be in the live roster");
+  const plannerBot = plannerCompetitor.bot;
+  let singleBlockChangePackets = 0;
+  let multiBlockChangePackets = 0;
+  let targetBlockUpdates = 0;
+  const onSingleBlockChange = (): void => { singleBlockChangePackets += 1; };
+  const onMultiBlockChange = (): void => { multiBlockChangePackets += 1; };
+  const onBlockUpdate: BotEvents["blockUpdate"] = (_oldBlock, newBlock) => {
+    if (samePosition(newBlock.position, position)) targetBlockUpdates += 1;
+  };
+  plannerBot._client.on("block_change", onSingleBlockChange);
+  plannerBot._client.on("multi_block_change", onMultiBlockChange);
+  plannerBot.on("blockUpdate", onBlockUpdate);
 
-  await waitForCivilizationObservation(active, planner, signal, (observation) =>
-    observation.observedResources.kind === "current"
-    && !observation.observedResources.value.some((resource) => resource.kind === "logBlock"
-      && samePosition(resource.position, position)));
-  const stale = await recordCivilizationAction(actions, 1,
-    { kind: "gatherMaterial", item: "oak_log", target: position }, mineIntent,
-    () => runCivilizationSkill(planner, mineIntent, signal));
-  assert.deepStrictEqual(stale, { kind: "failed", cause: "preconditionsNotMet" },
-    "a previously observed log target must fail once the server removes it");
+  const mineIntent = { kind: "mineBlock" as const, position, expectedBlock: "oak_log" as const };
+  try {
+    const mined = await recordCivilizationAction(actions, 0,
+      { kind: "gatherMaterial", item: "oak_log", target: position }, mineIntent,
+      () => runCivilizationSkill(miner, mineIntent, signal));
+    assertSucceeded(mined, "the first client must mine the shared natural oak log");
+
+    try {
+      await waitForCivilizationObservation(active, planner, signal, (observation) =>
+        observation.observedResources.kind === "current"
+        && !observation.observedResources.value.some((resource) => resource.kind === "logBlock"
+          && samePosition(resource.position, position)));
+    } catch (error) {
+      const oakLogId = plannerBot.registry.blocksByName.oak_log?.id;
+      const targetStillLoaded = oakLogId !== undefined && plannerBot.findBlocks({
+        matching: oakLogId,
+        maxDistance: 40,
+        count: 64,
+      }).some((candidate) => samePosition(candidate, position));
+      throw new Error(
+        `seat 1 did not observe the mined log removal; single_block_change_packets=${singleBlockChangePackets}; `
+        + `multi_block_change_packets=${multiBlockChangePackets}; target_block_updates=${targetBlockUpdates}; `
+        + `target_still_loaded=${targetStillLoaded}`,
+        { cause: error },
+      );
+    }
+    const stale = await recordCivilizationAction(actions, 1,
+      { kind: "gatherMaterial", item: "oak_log", target: position }, mineIntent,
+      () => runCivilizationSkill(planner, mineIntent, signal));
+    assert.deepStrictEqual(stale, { kind: "failed", cause: "preconditionsNotMet" },
+      "a previously observed log target must fail once the server removes it");
+  } finally {
+    plannerBot._client.removeListener("block_change", onSingleBlockChange);
+    plannerBot._client.removeListener("multi_block_change", onMultiBlockChange);
+    plannerBot.removeListener("blockUpdate", onBlockUpdate);
+  }
 }
 
 async function assertContendedMaterialWithdrawal(
