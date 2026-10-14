@@ -131,7 +131,7 @@ export function decideV5(
   const decision: Decision = Object.freeze({
     goal,
     intent: override.intent,
-    memory: policyMemory({ ...base.memory, lastGoal: goal }),
+    memory: policyMemory({ ...base.memory, lastGoal: override.keepLastGoal === true ? memory.lastGoal : goal }),
   });
   return explain(decision, override.reason, base.goal.kind, facts, base.memory);
 }
@@ -163,6 +163,7 @@ interface Override {
   readonly goal: Goal;
   readonly intent: Intent;
   readonly reason: DecisionReason;
+  readonly keepLastGoal?: true;
 }
 
 function chooseOverride(
@@ -207,9 +208,10 @@ function chooseOverride(
   const resumed = resumableCache(priorMemory, base.memory, facts);
   if (resumed !== null) {
     return {
-      goal: Object.freeze({ kind: 'loot', target: Object.freeze({ kind: 'container', position: resumed }) }),
+      goal: Object.freeze({ kind: 'explore' }),
       intent: { kind: 'navigate', target: resumed },
       reason: 'cacheResumedOutOfSight',
+      keepLastGoal: true,
     };
   }
 
@@ -248,7 +250,8 @@ function resumableCache(prior: PolicyMemory, current: PolicyMemory, facts: Facts
   const position = last.target.position;
   if (facts.caches.some((cache) => sameBlock(cache.position, position))) return null;
   if (current.failedTargets.some((failed) => (
-    failed.kind === 'loot' && failed.target.kind === 'container' && sameBlock(failed.target.position, position)
+    (failed.kind === 'loot' && failed.target.kind === 'container' && sameBlock(failed.target.position, position))
+    || (failed.kind === 'explore' && sameBlock(failed.target, position))
   ))) return null;
   if (manhattanDistance(facts.agent.position, position) <= CACHE_INTERACTION_BLOCKS) return null;
   if (isOutsideBorder(facts.border, position)) return null;

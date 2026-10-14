@@ -18,6 +18,7 @@ import {
   observationSequence,
   openingPolicyState,
   policyMemory,
+  createPolicyFeedback,
   rehydratePolicyReplayInput,
   RandomStream,
   seatId,
@@ -108,9 +109,13 @@ test('a cache that left the field of view is still pursued until reached', () =>
   const observation = situation({ at: [425, 70, 600] });
   const memory = lootMemory([437, 70, 600]);
   const { decision, explanation } = improved.explain(observation, memory, stream());
-  equal(decision.goal.kind, 'loot');
+  equal(decision.goal.kind, 'explore');
   deepStrictEqual(decision.intent, { kind: 'navigate', target: pos([437, 70, 600]) });
+  deepStrictEqual(decision.memory.lastGoal, memory.lastGoal);
   equal(explanation.reason, 'cacheResumedOutOfSight');
+  for (const outcome of [{ kind: 'failed', cause: 'noProgress' }, { kind: 'succeeded' }] as const) {
+    ok(createPolicyFeedback({ initiatingObservation: observation, goal: decision.goal, intent: decision.intent, outcome }) !== null);
+  }
   const baselineDecision = baseline.decide(observation, memory, stream());
   notDeepStrictEqual(baselineDecision.goal.kind, 'loot');
 });
@@ -218,4 +223,35 @@ test('a melee engagement keeps one attack intent across the reach boundary so kn
   deepStrictEqual(a.decision.intent, { kind: 'attack', target: 5 });
   deepStrictEqual(b.decision.intent, a.decision.intent);
   equal(b.explanation.reason, 'steadyMeleeEngagement');
+});
+
+test('every improved decision on every recorded live input yields a legal feedback target', () => {
+  const files = [
+    'live-inputs-v5.json',
+    'live-resume-inputs-v5.json',
+  ];
+  let checked = 0;
+  for (const file of files) {
+    const recorded = JSON.parse(readFileSync(resolve(process.cwd(), 'fixtures/policy-curriculum', file), 'utf8')) as
+      Record<string, { input: unknown }>;
+    for (const [name, { input }] of Object.entries(recorded)) {
+      const restored = rehydratePolicyReplayInput(input);
+      if (restored.schema !== 'policy-input-v4' || restored.opening === null) throw new Error('unexpected fixture shape');
+      const explained = improved.explainOpening(
+        restored.observation, restored.memory, restored.random, restored.feedback,
+        { style: restored.opening.style, state: restored.opening.state },
+      );
+      for (const outcome of [{ kind: 'failed', cause: 'noProgress' }, { kind: 'succeeded' }] as const) {
+        createPolicyFeedback({
+          initiatingObservation: restored.observation,
+          goal: explained.decision.goal,
+          intent: explained.decision.intent,
+          outcome,
+        });
+      }
+      checked += 1;
+      ok(name.length > 0);
+    }
+  }
+  equal(checked, 6);
 });
