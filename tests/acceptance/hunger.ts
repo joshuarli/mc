@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { test } from "node:test";
+import { test, type TestContext } from "node:test";
 
+import { mapBounded, parseConcurrency } from "../../packages/arena-runner/src/bounded.js";
 import { runCli } from "../../packages/arena-runner/src/cli.js";
 import { readOwnedFile, stageOwnedFile } from "../../packages/arena-runner/src/owned-files/index.js";
 import { parseSegment, MAX_TRACE_SEGMENT_BYTES } from "../../packages/arena-runner/src/trace.js";
@@ -28,15 +29,31 @@ const SCENARIOS = SELECTED_SEEDS === undefined
   ? ALL_SCENARIOS
   : ALL_SCENARIOS.filter(({ seed }) => SELECTED_SEEDS.includes(seed));
 
+const CONCURRENCY = parseConcurrency(process.env.ARENA_HUNGER_CONCURRENCY ?? "1");
+if (CONCURRENCY === undefined) throw new Error("ARENA_HUNGER_CONCURRENCY must be an integer from 1 to 4");
+
 const DEATH_TIMEOUT_MS = 420_000;
 const ELIMINATION_TIMEOUT_MS = 10_000;
 const HUNGER_REPORT_FILENAME = "hunger-acceptance-v1.json";
 const HUNGER_REPORT_MAX_BYTES = 256 * 1024;
 
 test("hunger-six", { timeout: 2_700_000 }, async (t) => {
-  let hasWinnerWithTwoPvpEngagements = false;
+  const winners = await mapBounded(SCENARIOS, CONCURRENCY, (scenario, index) => runSeed(t, scenario, index), t.signal);
+  const hasWinnerWithTwoPvpEngagements = winners.some(Boolean);
 
-  for (const [index, scenario] of SCENARIOS.entries()) {
+  assert.ok(
+    SELECTED_SEEDS !== undefined || hasWinnerWithTwoPvpEngagements,
+    "at least one seeded run must have one survivor and two distinct ordinary PvP engagements",
+  );
+});
+
+async function runSeed(
+  t: TestContext,
+  scenario: (typeof ALL_SCENARIOS)[number],
+  index: number,
+): Promise<boolean> {
+  let hasWinnerWithTwoPvpEngagements = false;
+  {
     let gameplayEvidence: HungerGameplayEvidence | undefined;
     let measurementEvidence: HungerRunMeasurementEvidence | undefined;
     const measurements = createHungerRunMeasurements([0, 1, 2, 3, 4, 5]);
@@ -155,12 +172,8 @@ test("hunger-six", { timeout: 2_700_000 }, async (t) => {
     await archiveHungerAcceptanceReport(acceptanceReport, run.runId);
     t.diagnostic(JSON.stringify(hungerTapSummary(acceptanceReport)));
   }
-
-  assert.ok(
-    SELECTED_SEEDS !== undefined || hasWinnerWithTwoPvpEngagements,
-    "at least one seeded run must have one survivor and two distinct ordinary PvP engagements",
-  );
-});
+  return hasWinnerWithTwoPvpEngagements;
+}
 
 function prepareSixBotRoster(active: AcceptanceRunContext): void {
   assert.equal(active.prepare.type, "prepare");
