@@ -135,6 +135,31 @@ final class NaturalWorldSetupTest {
     }
 
     @Test
+    void searchPrefersASpawnAwayFromACliffEdgeButKeepsAnEdgeWhenNothingElseFits() {
+        NaturalMapPlan plan = searchPlan(List.of(spawn(0, 100, 100)), List.of(loot(120, 100)));
+        TestWorld cliff = new TestWorld();
+        cliff.surfaceByColumn.put(columnKey(100, 99), 58);
+        cliff.surfaceByColumn.put(columnKey(99, 99), 58);
+        cliff.surfaceByColumn.put(columnKey(101, 99), 58);
+
+        NaturalWorldSetup.PreparedWorld prepared = NaturalWorldSetup.prepare(plan, cliff, 2, TEST_MATERIALS);
+
+        assertFalse(prepared.spawns().getFirst().position().equals(new MapPlan.Position(100, 65, 100)));
+        assertFalse(NaturalWorldSetup.cliffEdge(cliff, prepared.spawns().getFirst().position()));
+        assertTrue(NaturalWorldSetup.cliffEdge(cliff, new MapPlan.Position(100, 65, 100)));
+
+        TestWorld edgeEverywhere = new TestWorld();
+        for (int x = 90; x <= 110; x++) {
+            for (int z = 90; z <= 110; z++) {
+                if (x % 2 == 0) {
+                    edgeEverywhere.surfaceByColumn.put(columnKey(x, z), 62);
+                }
+            }
+        }
+        assertEquals(1, NaturalWorldSetup.prepare(plan, edgeEverywhere, 2, TEST_MATERIALS).spawns().size());
+    }
+
+    @Test
     void searchCandidatesAreBoundedAndOrderedDeterministically() {
         List<NaturalMapPlan.SurfaceColumn> candidates = NaturalWorldSetup.searchCandidates(
                 new NaturalMapPlan.SurfaceColumn(0, 0), new WorldPlan.Footprint(1024, 1024),

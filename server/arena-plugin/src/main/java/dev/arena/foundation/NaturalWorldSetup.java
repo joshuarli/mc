@@ -17,9 +17,9 @@ final class NaturalWorldSetup {
     static final String DECLARED_COLUMN_RECIPE = "declared-columns-v1";
     static final int SEARCH_RING_RADIUS_BLOCKS = 8;
     static final int SEARCH_MAX_CANDIDATES_PER_SEAT = 128;
-    static final String BOUNDED_SEARCH_RECIPE = "spawn-search-v2;ring-radius=" + SEARCH_RING_RADIUS_BLOCKS
+    static final String BOUNDED_SEARCH_RECIPE = "spawn-search-v3;ring-radius=" + SEARCH_RING_RADIUS_BLOCKS
             + ";max-candidates=" + SEARCH_MAX_CANDIDATES_PER_SEAT
-            + ";order=declared,chebyshev-ring,center-distance,x-then-z";
+            + ";order=declared,chebyshev-ring,center-distance,x-then-z;preference=no-cliff-edge";
     private static final Set<Material> HAZARDS = Set.of(
             Material.LAVA, Material.FIRE, Material.SOUL_FIRE, Material.MAGMA_BLOCK, Material.CACTUS,
             Material.CAMPFIRE, Material.SOUL_CAMPFIRE, Material.SWEET_BERRY_BUSH, Material.WITHER_ROSE,
@@ -192,6 +192,7 @@ final class NaturalWorldSetup {
         for (NaturalMapPlan.SurfaceSpawnPoint spawn : plan.spawns()) {
             Map<String, Integer> rejections = new LinkedHashMap<>();
             MapPlan.SpawnPoint found = null;
+            MapPlan.SpawnPoint cliffFallback = null;
             List<NaturalMapPlan.SurfaceColumn> candidates = searchCandidates(spawn.column(), plan.footprint(), plan.borderCenter());
             for (NaturalMapPlan.SurfaceColumn candidate : candidates) {
                 String rejection = cacheColumns.contains(candidate) ? "cache-column" : null;
@@ -216,10 +217,21 @@ final class NaturalWorldSetup {
                     }
                 }
                 if (rejection == null) {
-                    found = new MapPlan.SpawnPoint(spawn.seat(), feet);
-                    break;
+                    MapPlan.SpawnPoint accepted = new MapPlan.SpawnPoint(spawn.seat(), feet);
+                    if (!cliffEdge(world, feet)) {
+                        found = accepted;
+                        break;
+                    }
+                    if (cliffFallback == null) {
+                        cliffFallback = accepted;
+                    }
+                    rejections.merge("cliff-edge", 1, Integer::sum);
+                    continue;
                 }
                 rejections.merge(rejection, 1, Integer::sum);
+            }
+            if (found == null) {
+                found = cliffFallback;
             }
             if (found == null) {
                 failures.add("seat " + spawn.seat() + " declared at (" + spawn.column().x() + "," + spawn.column().z()
@@ -233,6 +245,22 @@ final class NaturalWorldSetup {
                     + " for world seed " + plan.worldSeed() + ": " + String.join("; ", failures));
         }
         return chosen;
+    }
+
+    static boolean cliffEdge(SurfaceAccess world, MapPlan.Position feet) {
+        for (int dx = -1; dx <= 1; dx++) {
+            for (int dz = -1; dz <= 1; dz++) {
+                if (dx == 0 && dz == 0) {
+                    continue;
+                }
+                boolean near = !world.blockAt(new MapPlan.Position(feet.x() + dx, feet.y() - 1, feet.z() + dz)).passable()
+                        || !world.blockAt(new MapPlan.Position(feet.x() + dx, feet.y() - 2, feet.z() + dz)).passable();
+                if (!near) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     static String spawnRejection(
