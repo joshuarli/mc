@@ -247,6 +247,30 @@ test('three blocked ticks during the attack cooldown still allow the next swing'
   }
 });
 
+test('a perception-cone miss during the attack cooldown still allows the next swing', async () => {
+  const home = { x: 0.5, y: 1, z: -2 };
+  const aside = { x: 6, y: 1, z: 0.5 };
+  const arena = createCombatArena({
+    self: { x: 0.5, y: 1, z: 0.5 },
+    opponents: [{ id: 2, ...home }],
+    lookLatencyTicks: 2,
+  });
+  try {
+    const first = await arena.runIntent(attackIntent);
+    assert.equal(first.outcome.kind, 'succeeded');
+    const started = arena.tickCount();
+    const second = await arena.runIntent(attackIntent, () => {
+      const elapsed = arena.tickCount() - started;
+      arena.setOpponent(2, elapsed < 3 ? aside : home);
+    });
+    assert.equal(second.outcome.kind, 'succeeded');
+    assert.equal(arena.attacks.length, 2);
+    assert.ok(arena.attacks.every((swing) => swing.damaged));
+  } finally {
+    await arena.close();
+  }
+});
+
 test('a fourth consecutive blocked tick during the attack cooldown is a line-of-sight miss', async () => {
   const arena = createCombatArena({
     self: { x: 0.5, y: 1, z: 0.5 },

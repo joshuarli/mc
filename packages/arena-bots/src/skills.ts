@@ -1206,13 +1206,6 @@ export class SkillOwner {
       return;
     }
     blockedTicks.count = 0;
-    if (visibility !== 'visible') {
-      throw new SkillFault(
-        'preconditionsNotMet',
-        `opponent ${targetId} is not currently visible to this client`,
-        'targetNoLongerVisible',
-      );
-    }
   }
 
   #engagementView(targetId: number, progress: EngageProgress): EngagementView {
