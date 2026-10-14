@@ -113,7 +113,7 @@ test('report reconstructs a winner and counts only resolved elimination causes',
 
 test('report accepts a same-tick zero-survivor draw and retains the emitted causes', () => {
   const result = reconstructEventResult(runId, prepare(), [
-    state(3n, 4n, [0, 1]),
+    state(3n, 3n, [0, 1]),
     elimination(4n, 4n, [
       { seat: 0, cause: 'death' },
       { seat: 1, cause: 'disconnect' },
