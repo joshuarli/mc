@@ -646,14 +646,17 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
             world.setGameRule(GameRule.RANDOM_TICK_SPEED, settings.naturalRandomTicks() ? 3 : 0);
             world.setGameRule(GameRule.NATURAL_REGENERATION, ControlProtocol.naturalRegeneration(prepare.rules()));
             WorldBorder worldBorder = world.getWorldBorder();
-            WorldPlan.Footprint dimensions = generationPlan.footprint();
             if (generationPlan instanceof NaturalMapPlan naturalPlan) {
                 NaturalMapPlan.BorderCenter center = resolvedBorderCenter != null
                         ? resolvedBorderCenter
                         : naturalPlan.borderCenter();
                 worldBorder.setCenter(center.x(), center.z());
+            } else if (generationPlan instanceof MapPlan planned) {
+                MapPlan.BorderCenter center = planned.borderCenter();
+                worldBorder.setCenter(center.x(), center.z());
             } else {
-                worldBorder.setCenter(dimensions.width() / 2.0, dimensions.depth() / 2.0);
+                throw new CommandFailure(ControlProtocol.ErrorCode.INVALID_WORLD,
+                        "the staged arena world has no border center");
             }
             worldBorder.setSize(prepare.initialBorderDiameterBlocks());
         } catch (IllegalArgumentException invalidWorldSetting) {

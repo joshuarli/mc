@@ -76,7 +76,8 @@ with both competitors alive is still a draw. Schema 3 keeps the arena on the nat
 superflat world; the declared spawns mirror across the border center.
 Schema 4 is the planned-uhc exception: the same kit and the same
 natural-regeneration rule, carried on the roster-version-2 prepare, on a
-small planned footprint encoded as world-plan schema 1. Last-survivor outcomes are unchanged.
+small planned footprint encoded as world-plan schema 1. The world border
+center is the floored mean of the spawn columns. Last-survivor outcomes are unchanged.
 
 A checkpointed match resumes in a new runtime epoch. The plugin loads the
 complete record at startup and skips the loot-chest placement and world-spawn

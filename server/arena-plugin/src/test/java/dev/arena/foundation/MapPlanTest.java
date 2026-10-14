@@ -32,6 +32,26 @@ final class MapPlanTest {
     }
 
     @Test
+    void borderCenterIsTheFlooredMeanSpawnColumn() {
+        List<BlockPlacement> blocks = List.of(
+                new BlockPlacement(new Position(0, 64, 0), "minecraft:stone"),
+                new BlockPlacement(new Position(3, 64, 0), "minecraft:stone"),
+                new BlockPlacement(new Position(4, 64, 0), "minecraft:stone"),
+                new BlockPlacement(new Position(6, 64, 0), "minecraft:stone"),
+                new BlockPlacement(new Position(6, 65, 0), "minecraft:chest"));
+        List<LootContainer> chest = List.of(new LootContainer(new Position(6, 65, 0), List.of("minecraft:bread")));
+        MapPlan evenMean = plan(dimensions(), blocks, List.of(
+                new SpawnPoint(0, new Position(0, 65, 0)),
+                new SpawnPoint(1, new Position(4, 65, 0))), chest);
+        assertEquals(new MapPlan.BorderCenter(2, 0), evenMean.borderCenter());
+
+        MapPlan oddMean = plan(dimensions(), blocks, List.of(
+                new SpawnPoint(0, new Position(0, 65, 0)),
+                new SpawnPoint(1, new Position(3, 65, 0))), chest);
+        assertEquals(new MapPlan.BorderCenter(1, 0), oddMean.borderCenter());
+    }
+
+    @Test
     void chunkConversionUsesFloorDivisionAndNonnegativeLocalCoordinates() {
         assertEquals(-2, MapPlan.chunkCoordinate(-17));
         assertEquals(-1, MapPlan.chunkCoordinate(-16));

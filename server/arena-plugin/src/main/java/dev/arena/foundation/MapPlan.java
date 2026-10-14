@@ -152,6 +152,23 @@ final class MapPlan extends WorldPlan {
         return spawns;
     }
 
+    BorderCenter borderCenter() {
+        if (spawns.isEmpty()) {
+            throw new IllegalArgumentException("planned map border center requires a spawn");
+        }
+        long sumX = 0;
+        long sumZ = 0;
+        for (SpawnPoint spawn : spawns) {
+            sumX += spawn.position().x();
+            sumZ += spawn.position().z();
+        }
+        return new BorderCenter(
+                (int) Math.floorDiv(sumX, spawns.size()),
+                (int) Math.floorDiv(sumZ, spawns.size()));
+    }
+
+    record BorderCenter(int x, int z) {}
+
     List<LootContainer> lootContainers() {
         return lootContainers;
     }
