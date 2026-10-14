@@ -17,20 +17,13 @@
     "noImplicitOverride": true,
     "noFallthroughCasesInSwitch": true,
     "esModuleInterop": true,
-    "types": ["node"],
-    "typeRoots": [".work/arena/npm-workspace/node_modules/@types"],
-    "baseUrl": ".",
-    "paths": {
-      "@arena/core": ["packages/arena-core/src/index.ts"],
-      "@arena/spec": ["packages/arena-spec/src/index.ts"],
-      "@arena/bots": ["packages/arena-bots/src/index.ts"],
-      "@arena/runner": ["packages/arena-runner/src/index.ts"],
-      "mineflayer": [".work/arena/npm-workspace/node_modules/mineflayer/index.d.ts"],
-      "mineflayer-pathfinder": [".work/arena/npm-workspace/node_modules/mineflayer-pathfinder/index.d.ts"],
-      "toml-eslint-parser": [".work/arena/npm-workspace/node_modules/toml-eslint-parser/lib/index.d.mts"]
-    }
+    "types": [
+      "node"
+    ]
   },
-  "files": [],
+  "exclude": [
+    ".work"
+  ],
   "include": [],
-  "exclude": [".work"]
+  "files": []
 }

@@ -32,11 +32,9 @@ export TMPDIR="$root/.work/tmp"
 export ARENA_JAVA_TMPDIR="$TMPDIR"
 download_tmp=
 jdk_stage=
-node_stage=
 cleanup_work_files() {
     [ -z "$download_tmp" ] || rm -f -- "$download_tmp"
     [ -z "$jdk_stage" ] || rm -rf -- "$jdk_stage"
-    [ -z "$node_stage" ] || rm -rf -- "$node_stage"
 }
 trap cleanup_work_files EXIT
 
@@ -86,157 +84,32 @@ locked_section_number() {
     printf '%s\n' "$value"
 }
 
-verify_node() {
-    node=$1
-    version=$2
-    npm_version=$3
-    [ -x "$node/bin/node" ] || fail "pinned Node executable is unavailable: $node/bin/node"
-    actual_node=$("$node/bin/node" --version) || fail "pinned Node does not start"
-    [ "$actual_node" = "v$version" ] || fail "Node version mismatch: expected v$version, got $actual_node"
-    actual_npm=$(PATH="$node/bin:$PATH" "$node/bin/npm" --version) || fail "pinned npm does not start"
-    [ "$actual_npm" = "$npm_version" ] || fail "npm version mismatch: expected $npm_version, got $actual_npm"
-}
-
 prepare_node() {
     node_version=$(locked_section_value node version)
-    npm_version=$(locked_section_value node npm_version)
-    case "$(uname -s):$(uname -m)" in
-        Darwin:arm64) platform=macos_arm64 ;;
-        Linux:x86_64) platform=linux_x86_64 ;;
-        *) fail "locked Node supports macOS arm64 and Linux x86_64" ;;
-    esac
-
-    archive_file=$(locked_section_value "node.$platform" archive_file)
-    archive_root=$(locked_section_value "node.$platform" archive_root)
-    archive_url=$(locked_section_value "node.$platform" archive_url)
-    archive_size=$(locked_section_number "node.$platform" archive_size_bytes)
-    archive_sha=$(locked_section_value "node.$platform" archive_sha256)
-    case "$archive_file" in
-        /*|*/*|*".."*) fail "unsafe Node archive filename in versions.lock.toml" ;;
-    esac
-    case "$archive_root" in
-        /*|*/*|*".."*) fail "unsafe Node archive root in versions.lock.toml" ;;
-    esac
-    case "$archive_url" in
-        "https://nodejs.org/dist/v$node_version/"*) ;;
-        *) fail "Node URL is not under its official pinned release directory" ;;
-    esac
-
-    download_root="$root/.work/arena/downloads"
-    ensure_work_directory "$download_root"
-    archive_path="$download_root/$archive_file"
-    [ ! -L "$archive_path" ] || fail "locked Node archive path must not be a symlink"
-    if [ -e "$archive_path" ] && [ ! -f "$archive_path" ]; then
-        fail "locked Node archive path must be a regular file"
-    fi
-    if [ ! -f "$archive_path" ]; then
-        download_tmp=$(mktemp "$download_root/.node.XXXXXXXX") || fail "create Node download staging file"
-        curl --fail --location --proto '=https' --tlsv1.2 \
-            --output "$download_tmp" "$archive_url" || fail "download locked Node archive"
-        actual_size=$(wc -c < "$download_tmp" | awk '{ print $1 }')
-        [ "$actual_size" = "$archive_size" ] || fail "Node archive size mismatch: expected $archive_size bytes, got $actual_size"
-        actual_sha=$(sha256_file "$download_tmp")
-        [ "$actual_sha" = "$archive_sha" ] || fail "Node archive SHA-256 mismatch: expected $archive_sha, got $actual_sha"
-        mv "$download_tmp" "$archive_path" || fail "install verified Node archive"
-        download_tmp=
-    fi
-    actual_size=$(wc -c < "$archive_path" | awk '{ print $1 }')
-    [ "$actual_size" = "$archive_size" ] || fail "cached Node size mismatch: expected $archive_size bytes, got $actual_size"
-    actual_sha=$(sha256_file "$archive_path")
-    [ "$actual_sha" = "$archive_sha" ] || fail "cached Node SHA-256 mismatch: expected $archive_sha, got $actual_sha"
-
-    toolchains="$root/.work/arena/toolchains"
-    ensure_work_directory "$toolchains"
-    toolchain_root="$toolchains/$archive_root"
-    if [ ! -e "$toolchain_root" ]; then
-        node_stage=$(mktemp -d "$toolchains/.node.XXXXXXXX") || fail "create Node extraction directory"
-        entries="$node_stage/archive.entries"
-        tar -tf "$archive_path" > "$entries" || fail "list locked Node archive contents"
-        while IFS= read -r entry; do
-            entry_path=${entry%/}
-            case "$entry_path" in
-                "$archive_root"|"$archive_root"/*) ;;
-                *) fail "Node archive entry escaped its locked root: $entry" ;;
-            esac
-            case "/$entry_path/" in
-                *"/../"*|*"/./"*|*"//"*) fail "unsafe path in Node archive: $entry" ;;
-            esac
-        done < "$entries"
-        tar -xf "$archive_path" -C "$node_stage" || fail "extract locked Node archive"
-        staged_root="$node_stage/$archive_root"
-        verify_node "$staged_root" "$node_version" "$npm_version"
-        [ ! -L "$toolchain_root" ] || fail "project-local Node path must not be a symlink"
-        mv -n "$staged_root" "$toolchain_root" || fail "install verified project-local Node"
-        [ -d "$toolchain_root" ] && [ ! -L "$toolchain_root" ] || fail "project-local Node was not installed"
-        rm -rf -- "$node_stage"
-        node_stage=
-    elif [ ! -d "$toolchain_root" ] || [ -L "$toolchain_root" ]; then
-        fail "project-local Node path must be a real directory"
-    fi
-    verify_node "$toolchain_root" "$node_version" "$npm_version"
-    NODE_HOME="$toolchain_root"
+    NODE_EXECUTABLE=$(command -v node) || fail "Node.js $node_version is not installed"
+    actual_node=$("$NODE_EXECUTABLE" --version) || fail "Node.js does not start"
+    [ "$actual_node" = "v$node_version" ] || fail "Node.js version mismatch: expected v$node_version, got $actual_node"
+    export NODE_EXECUTABLE
+    NODE_HOME=$(dirname "$NODE_EXECUTABLE")
     export NODE_HOME
-    export PATH="$NODE_HOME/bin:$PATH"
-}
-
-prepare_npm_workspace() {
-    npm_workspace="$root/.work/arena/npm-workspace"
-    ensure_work_directory "$npm_workspace"
-    ensure_work_directory "$npm_workspace/packages"
-
-    for file in package.json package-lock.json tsconfig.json; do
-        [ -f "$root/$file" ] || fail "required workspace file is missing: $root/$file"
-        cp "$root/$file" "$npm_workspace/$file"
-    done
-
-    for name in arena-core arena-spec arena-bots arena-runner; do
-        link="$npm_workspace/packages/$name"
-        if [ -L "$link" ]; then
-            [ "$(readlink "$link")" = "../../../../packages/$name" ] || fail "workspace package link has an unexpected target: $link"
-        elif [ -e "$link" ]; then
-            fail "workspace package path already exists and is not a symlink: $link"
-        else
-            ln -s "../../../../packages/$name" "$link" || fail "link workspace package $name"
-        fi
-    done
-
-    for name in scripts tests; do
-        link="$npm_workspace/$name"
-        if [ -L "$link" ]; then
-            [ "$(readlink "$link")" = "../../../$name" ] || fail "workspace support link has an unexpected target: $link"
-        elif [ -e "$link" ]; then
-            fail "workspace support path already exists and is not a symlink: $link"
-        else
-            ln -s "../../../$name" "$link" || fail "link workspace support directory $name"
-        fi
-    done
-}
-
-install_npm_workspace() {
-    prepare_npm_workspace
-    npm_workspace="$root/.work/arena/npm-workspace"
-    npm_cache="$root/.work/arena/npm-cache"
-    ensure_work_directory "$npm_cache"
-    (cd "$npm_workspace" && npm ci --cache "$npm_cache" --ignore-scripts --no-audit --no-fund)
+    export PATH="$NODE_HOME:$PATH"
 }
 
 ensure_workspace_dependencies() {
-    npm_workspace="$root/.work/arena/npm-workspace"
-    [ -x "$npm_workspace/node_modules/typescript/bin/tsc" ] || fail "pinned npm workspace is not installed; run ./arena bootstrap"
+    [ -x "$root/node_modules/.bin/tsc" ] || fail "pnpm dependencies are not installed; run pnpm install --frozen-lockfile"
 }
 
 build_typescript() {
     target=$1
     ensure_workspace_dependencies
-    npm_workspace="$root/.work/arena/npm-workspace"
-    PATH="$npm_workspace/node_modules/.bin:$PATH" \
-        "$NODE_HOME/bin/node" "$root/scripts/typescript-build.mjs" "$target"
+    PATH="$root/node_modules/.bin:$PATH" \
+        "$NODE_EXECUTABLE" "$root/scripts/typescript-build.mjs" "$target"
 }
 
 run_named_tests() {
     suite=$1
     test_name=$2
-    "$NODE_HOME/bin/node" "$root/scripts/run-named-tests.mjs" "$suite" "$test_name"
+    "$NODE_EXECUTABLE" "$root/scripts/run-named-tests.mjs" "$suite" "$test_name"
 }
 
 prepare_jdk() {
@@ -436,7 +309,7 @@ usage() {
 usage:
   ./arena bootstrap
   ./arena build [--package core|spec|bots|control|owned-files|runtime|runner|all]
-  ./arena check <compatibility|build-script>
+  ./arena check <compatibility|build-script|lint>
   ./arena test --suite <core|spec|bots|owned-files|runtime|runner|protocol|integration|acceptance|java> --case <name>
   ./arena <report|inspect|compare|prepare|validate|doctor|run|replay-policy|gc> <arguments...>
 EOF
@@ -445,9 +318,9 @@ EOF
 bootstrap() {
     [ "$#" -eq 0 ] || fail "bootstrap accepts no arguments"
     prepare_node
-    install_npm_workspace
-    printf '%s\n' "Node $(locked_section_value node version) and npm $(locked_section_value node npm_version) are installed under .work/arena/toolchains." \
-        "The locked TypeScript workspace is installed under .work/arena/npm-workspace."
+    ensure_workspace_dependencies
+    printf '%s\n' "Node.js $(locked_section_value node version) is available." \
+        "The pnpm workspace dependencies are installed."
 }
 
 build_command() {
@@ -485,13 +358,13 @@ launch_runner() {
         [ -f "$runtime_plugin_jar" ] && [ ! -L "$runtime_plugin_jar" ] || fail "locked Paper plugin JAR is unavailable: $runtime_plugin_jar"
         (cd "$root" && ARENA_FS_HELPER="$fs_helper" ARENA_JAVA_HOME="$runtime_java_home" \
             ARENA_JAVA_TMPDIR="$root/.work/tmp" ARENA_PAPER_JAR="$runtime_paper_jar" ARENA_PLUGIN_JAR="$runtime_plugin_jar" \
-            "$fs_helper" launch-node "$NODE_HOME/bin/node" "$cli" "$cli_command" "$@")
+            "$fs_helper" launch-node "$NODE_EXECUTABLE" "$cli" "$cli_command" "$@")
     else
         (
             cd "$root"
             unset ARENA_JAVA_HOME ARENA_JAVA_TMPDIR ARENA_PAPER_JAR ARENA_PLUGIN_JAR
             ARENA_FS_HELPER="$fs_helper" \
-                "$fs_helper" launch-node "$NODE_HOME/bin/node" "$cli" "$cli_command" "$@"
+                "$fs_helper" launch-node "$NODE_EXECUTABLE" "$cli" "$cli_command" "$@"
         )
     fi
 }
@@ -506,10 +379,14 @@ build_fs_helper() {
 }
 
 check_command() {
-    [ "$#" -eq 1 ] || fail "usage: ./arena check <compatibility|build-script>"
+    [ "$#" -eq 1 ] || fail "usage: ./arena check <compatibility|build-script|lint>"
     prepare_node
     case "$1" in
-        compatibility) "$NODE_HOME/bin/node" "$root/scripts/check-compatibility-doc.mjs" ;;
+        compatibility) "$NODE_EXECUTABLE" "$root/scripts/check-compatibility-doc.mjs" ;;
+        lint)
+            [ -x "$root/node_modules/.bin/oxlint" ] || fail "Oxlint is unavailable; run pnpm install --frozen-lockfile"
+            "$root/node_modules/.bin/oxlint" --type-aware --quiet "$root/packages" "$root/tests"
+            ;;
         build-script)
             run_named_tests tooling "typescript build rejects an unknown target"
             run_named_tests tooling "named test runner dispatches suite files and rejects unknown cases"

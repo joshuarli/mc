@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { createRequire } from "node:module";
-import { resolve } from "node:path";
 import { test } from "node:test";
 import type { Bot } from "mineflayer";
 
@@ -128,9 +127,9 @@ test("duel combat diagnostics tolerate Mineflayer clearing a destroyed player's 
     _client: EventEmitter & { username: string };
   };
   const require = createRequire(import.meta.url);
-  const modules = resolve(process.cwd(), ".work/arena/npm-workspace/node_modules");
-  const injectEntities = require(resolve(modules, "mineflayer/lib/plugins/entities.js")) as (bot: unknown) => void;
-  const minecraftData = require(resolve(modules, "minecraft-data")) as (version: string) => unknown;
+  const mineflayer = createRequire(require.resolve("mineflayer"));
+  const injectEntities = mineflayer("./lib/plugins/entities.js") as (bot: unknown) => void;
+  const minecraftData = mineflayer("minecraft-data") as (version: string) => unknown;
   runtimeAttacker.version = "1.21.11";
   runtimeAttacker.registry = minecraftData(runtimeAttacker.version);
   runtimeAttacker.supportFeature = (feature) => feature === "doublePosition";

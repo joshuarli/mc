@@ -40,7 +40,6 @@ const BORDER_EVENTS = [
   'end',
 ] as const;
 
-/** Keeps only border state received by this client's ordinary Minecraft connection. */
 export class ClientWorldBorder {
   readonly #client: PacketEventSource;
   readonly #clock: Clock;
@@ -54,10 +53,10 @@ export class ClientWorldBorder {
     this.#client = client;
     this.#clock = clock;
     this.#listeners = new Map([
-      ['initialize_world_border', (packet) => this.#initialize(packet)],
-      ['world_border_center', (packet) => this.#setCenter(packet)],
-      ['world_border_lerp_size', (packet) => this.#lerpSize(packet)],
-      ['world_border_size', (packet) => this.#setSize(packet)],
+      ['initialize_world_border', (packet: BorderPacket) => this.#initialize(packet)],
+      ['world_border_center', (packet: BorderPacket) => this.#setCenter(packet)],
+      ['world_border_lerp_size', (packet: BorderPacket) => this.#lerpSize(packet)],
+      ['world_border_size', (packet: BorderPacket) => this.#setSize(packet)],
       ['login', () => this.#clear()],
       ['respawn', () => this.#clear()],
       ['end', () => this.#clear()],

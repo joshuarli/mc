@@ -45,30 +45,52 @@ function packageVersion(manifest, name, field) {
   return version;
 }
 
+function hasLockedPackage(name, version) {
+  const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const escapedVersion = version.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp("^  ['\"]?" + escapedName + "@" + escapedVersion + "(?:\\([^:\\n]*\\))?:['\"]?$", "m").test(lockfile);
+}
+
 const rootManifest = readJson("package.json");
-const lockfile = readJson("package-lock.json");
+const lockfile = readFileSync(join(root, "pnpm-lock.yaml"), "utf8");
 const botsManifest = readJson("packages/arena-bots/package.json");
+const runnerManifest = readJson("packages/arena-runner/package.json");
 const docs = readFileSync(join(root, "docs/compatibility.md"), "utf8");
 const minecraftVersion = lockedValue("minecraft", "version");
 const minecraftProtocol = lockedValue("minecraft", "protocol");
 const nodeVersion = lockedValue("node", "version");
-const npmVersion = lockedValue("node", "npm_version");
 const typescriptVersion = packageVersion(rootManifest, "typescript", "devDependencies");
+const oxlintVersion = packageVersion(rootManifest, "oxlint", "devDependencies");
+const tsgolintVersion = packageVersion(rootManifest, "oxlint-tsgolint", "devDependencies");
+const effectVersion = packageVersion(rootManifest, "effect", "devDependencies");
+const runtimeEffectVersion = packageVersion(runnerManifest, "effect", "dependencies");
 const mineflayerVersion = packageVersion(botsManifest, "mineflayer", "dependencies");
 const pathfinderVersion = packageVersion(botsManifest, "mineflayer-pathfinder", "dependencies");
-const protocolPackageVersion = lockfile.packages["node_modules/minecraft-protocol"]?.version;
+const protocolMatch = /^  minecraft-protocol@([^:]+):$/m.exec(lockfile);
+const protocolPackageVersion = protocolMatch?.[1];
+const pnpmVersion = typeof rootManifest.packageManager === "string"
+  ? /^pnpm@([0-9]+\.[0-9]+\.[0-9]+)$/.exec(rootManifest.packageManager)?.[1]
+  : undefined;
 
-if (lockfile.packages["node_modules/typescript"]?.version !== typescriptVersion) {
-  fail("package-lock.json does not resolve the pinned TypeScript version");
+if (pnpmVersion === undefined) fail("package.json must pin an exact pnpm version in packageManager");
+
+if (!hasLockedPackage("typescript", typescriptVersion)) {
+  fail("pnpm-lock.yaml does not resolve the pinned TypeScript version");
 }
-if (lockfile.packages["node_modules/mineflayer"]?.version !== mineflayerVersion) {
-  fail("package-lock.json does not resolve the pinned Mineflayer version");
+if (!hasLockedPackage("oxlint", oxlintVersion) || !hasLockedPackage("oxlint-tsgolint", tsgolintVersion)) {
+  fail("pnpm-lock.yaml does not resolve the pinned Oxlint and tsgolint versions");
 }
-if (lockfile.packages["node_modules/mineflayer-pathfinder"]?.version !== pathfinderVersion) {
-  fail("package-lock.json does not resolve the pinned mineflayer-pathfinder version");
+if (runtimeEffectVersion !== effectVersion || !hasLockedPackage("effect", effectVersion)) {
+  fail("runner and root must resolve the same pinned Effect version");
+}
+if (!hasLockedPackage("mineflayer", mineflayerVersion)) {
+  fail("pnpm-lock.yaml does not resolve the pinned Mineflayer version");
+}
+if (!hasLockedPackage("mineflayer-pathfinder", pathfinderVersion)) {
+  fail("pnpm-lock.yaml does not resolve the pinned mineflayer-pathfinder version");
 }
 if (typeof protocolPackageVersion !== "string") {
-  fail("package-lock.json does not resolve minecraft-protocol");
+  fail("pnpm-lock.yaml does not resolve minecraft-protocol");
 }
 
 const javaVersion = lockedValue("java", "distribution") + " JDK " + lockedValue("java", "build") + "; runtime build " + code + lockedValue("java", "runtime_build") + code;
@@ -80,8 +102,11 @@ const minecraftMinor = minecraftVersion.split(".").slice(0, 2).join(".");
 const paperChannel = lockedValue("paper", "channel").toLowerCase().replace(/^./, (letter) => letter.toUpperCase());
 const rows = [
   "| Minecraft | " + minecraftVersion + ", protocol " + minecraftProtocol + " |",
-  "| Node.js and npm | Node.js " + nodeVersion + ", npm " + npmVersion + " |",
+  "| Node.js | " + nodeVersion + " |",
+  "| pnpm | " + pnpmVersion + " |",
   "| TypeScript | " + typescriptVersion + " |",
+  "| Oxlint and tsgolint | " + oxlintVersion + " and " + tsgolintVersion + " |",
+  "| Effect | " + effectVersion + " |",
   "| Mineflayer | " + mineflayerVersion + " with mineflayer-pathfinder " + pathfinderVersion + "; its published version list includes Minecraft " + minecraftMinor + " |",
   "| Paper server | " + paperChannel + " " + paperVersion + " build " + lockedValue("paper", "server_build") + ", " + code + lockedValue("paper", "server_file") + code + " |",
   "| Paper API | " + code + lockedValue("paper", "api_group") + ":" + lockedValue("paper", "api_artifact") + ":" + lockedValue("paper", "api_version") + code + ", plugin API version " + code + lockedValue("paper", "plugin_api_version") + code + " |",

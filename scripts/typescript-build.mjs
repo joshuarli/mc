@@ -66,7 +66,7 @@ function packageDependencies(name) {
 function stagePackageAliases() {
   const buildRoot = join(root, ".work", "build");
   const nodeModules = join(buildRoot, "node_modules");
-  const workspaceModules = join(root, ".work", "arena", "npm-workspace", "node_modules");
+  const workspaceModules = join(root, "node_modules");
   ensureDirectory(join(buildRoot, "packages"));
   ensureDirectory(nodeModules);
 

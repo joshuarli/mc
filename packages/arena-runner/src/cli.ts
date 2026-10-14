@@ -30,42 +30,46 @@ export async function runCli(args: readonly string[]): Promise<CliResult> {
 
 async function runCliBytes(args: readonly Buffer[]): Promise<CliResult> {
   try {
-    const command = args.length === 0 ? undefined : argumentText(args[0]!, 0);
-    const rest = args.slice(1);
-    if (command === undefined) throw invalidInput('missing_command');
-    if (command === 'help' || command === '--help') {
-      if (rest.length !== 0) throw invalidInput('unexpected_argument');
-      return success(helpJson());
-    }
-    if (command === 'doctor') {
-      if (rest.length !== 0) throw invalidInput('unexpected_argument');
-      return success(doctorJson());
-    }
-    if (command === 'gc') return await garbageCollectCommand(rest);
-    if (command === 'inspect' && rest.length > 0 && argumentText(rest[0]!, 1) === '--run-id') {
-      return await inspectRunCommand(rest);
-    }
-    if (command === 'inspect' || command === 'report') {
-      const evidence = await loadEvidence(rest);
-      return success(command === 'inspect' ? inspectJson(evidence) : reportJson(evidence));
-    }
-    if (command === 'replay-policy') {
-      const evidence = await loadEvidence(rest);
-      return success(replayPolicyJson(evidence));
-    }
-    if (command === 'compare') {
-      if (rest.length !== 2) throw invalidInput('compare_requires_two_trace_sets');
-      const left = await loadSingleSegment(rest[0]!, 1);
-      const right = await loadSingleSegment(rest[1]!, 2);
-      return success(comparisonJson(left, right));
-    }
-    if (command === 'prepare') return await prepareCommand(rest);
-    if (command === 'validate') return await validateCommand(rest);
-    if (command === 'run') return await runCommand(rest);
-    throw invalidInput('unknown_command');
+    return await dispatchCliBytes(args);
   } catch (error) {
     return failure(error);
   }
+}
+
+async function dispatchCliBytes(args: readonly Buffer[]): Promise<CliResult> {
+  const command = args.length === 0 ? undefined : argumentText(args[0]!, 0);
+  const rest = args.slice(1);
+  if (command === undefined) throw invalidInput('missing_command');
+  if (command === 'help' || command === '--help') {
+    if (rest.length !== 0) throw invalidInput('unexpected_argument');
+    return success(helpJson());
+  }
+  if (command === 'doctor') {
+    if (rest.length !== 0) throw invalidInput('unexpected_argument');
+    return success(doctorJson());
+  }
+  if (command === 'gc') return await garbageCollectCommand(rest);
+  if (command === 'inspect' && rest.length > 0 && argumentText(rest[0]!, 1) === '--run-id') {
+    return await inspectRunCommand(rest);
+  }
+  if (command === 'inspect' || command === 'report') {
+    const evidence = await loadEvidence(rest);
+    return success(command === 'inspect' ? inspectJson(evidence) : reportJson(evidence));
+  }
+  if (command === 'replay-policy') {
+    const evidence = await loadEvidence(rest);
+    return success(replayPolicyJson(evidence));
+  }
+  if (command === 'compare') {
+    if (rest.length !== 2) throw invalidInput('compare_requires_two_trace_sets');
+    const left = await loadSingleSegment(rest[0]!, 1);
+    const right = await loadSingleSegment(rest[1]!, 2);
+    return success(comparisonJson(left, right));
+  }
+  if (command === 'prepare') return await prepareCommand(rest);
+  if (command === 'validate') return await validateCommand(rest);
+  if (command === 'run') return await runCommand(rest);
+  throw invalidInput('unknown_command');
 }
 
 function failure(error: unknown): CliResult {
@@ -303,31 +307,41 @@ async function runCommand(args: readonly Buffer[]): Promise<CliResult> {
       createRuntimeRoster(inputs.scenario, { spectatorMode });
       const preparedRun = await prepareRun(helperPath, ownedRoot, scenarioPath, runId!, signal);
       try {
-        const completed = await runPreparedRun({
-          preparedRun,
-          helperPath,
-          ownedRoot,
-          javaExecutable: resolve(javaHome, 'bin', 'java'),
-          paperJarPath,
-          pluginJarPath,
-          acceptMinecraftEula: true,
-          spectatorMode,
-          ...(waitForExternalPlayer ? { waitForExternalPlayer: true as const } : {}),
-          signal,
-          coldStartDeadline,
-          onRosterReady: (details) => {
-            process.stderr.write([
-              waitForExternalPlayer
-                ? 'Arena server is waiting for an external player to start the match countdown.'
-                : 'Arena server ready for graphical clients.',
-              `Minecraft Java Edition: ${details.minecraftVersion}`,
-              `Address: ${details.host}:${details.port}`,
-              'Role: spectator',
-              'Press Ctrl-C to stop the server; it also stops when the match ends.',
-              '',
-            ].join('\n'));
-          },
+        const Effect = await import('effect/Effect');
+        const runtime = Effect.tryPromise({
+          try: () => runPreparedRun({
+            preparedRun,
+            helperPath,
+            ownedRoot,
+            javaExecutable: resolve(javaHome, 'bin', 'java'),
+            paperJarPath,
+            pluginJarPath,
+            acceptMinecraftEula: true,
+            spectatorMode,
+            ...(waitForExternalPlayer ? { waitForExternalPlayer: true as const } : {}),
+            signal,
+            coldStartDeadline,
+            onRosterReady: (details) => {
+              process.stderr.write([
+                waitForExternalPlayer
+                  ? 'Arena server is waiting for an external player to start the match countdown.'
+                  : 'Arena server ready for graphical clients.',
+                `Minecraft Java Edition: ${details.minecraftVersion}`,
+                `Address: ${details.host}:${details.port}`,
+                'Role: spectator',
+                'Press Ctrl-C to stop the server; it also stops when the match ends.',
+                '',
+              ].join('\n'));
+            },
+          }),
+          catch: (cause) => cause,
         });
+        const result = await Effect.runPromise(Effect.match(runtime, {
+          onFailure: (cause) => ({ kind: 'failure' as const, cause }),
+          onSuccess: (completed) => ({ kind: 'success' as const, completed }),
+        }));
+        if (result.kind === 'failure') throw result.cause;
+        const completed = result.completed;
         if (completed.outcome.kind === 'abort') {
           const finalTrace = completed.trace.segments.at(-1);
           throw new RunnerError('runtime_failure', 'completed run', {
