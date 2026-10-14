@@ -512,6 +512,21 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
                     "prepare does not identify the staged arena map");
         }
         requireRosterMatchesPlan(prepare);
+        if (generationPlan instanceof NaturalMapPlan natural
+                && natural.schemaVersion() == NaturalMapPlan.SCHEMA_VERSION_GENERALIZED_ROSTER
+                && prepare.settings() instanceof ControlProtocol.HungerGamesPrepareSettings) {
+            NaturalMapPlan.BorderCenter center = natural.borderCenter();
+            double radius = prepare.initialBorderDiameterBlocks() / 2.0;
+            for (MapPlan.SpawnPoint spawn : resolvedSpawns) {
+                double dx = spawn.position().x() + 0.5 - center.x();
+                double dz = spawn.position().z() + 0.5 - center.z();
+                if (dx * dx + dz * dz > radius * radius) {
+                    throw new CommandFailure(ControlProtocol.ErrorCode.INVALID_WORLD,
+                            "searched spawn for seat " + spawn.seat() + " at " + spawn.position()
+                                    + " lies outside the initial border");
+                }
+            }
+        }
         if (prepare.roster().size() > resolvedSpawns.size()) {
             throw new CommandFailure(ControlProtocol.ErrorCode.INVALID_WORLD,
                     "the staged map has no spawn point for every configured seat");

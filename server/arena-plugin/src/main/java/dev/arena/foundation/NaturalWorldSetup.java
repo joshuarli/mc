@@ -17,8 +17,9 @@ final class NaturalWorldSetup {
     static final String DECLARED_COLUMN_RECIPE = "declared-columns-v1";
     static final int SEARCH_RING_RADIUS_BLOCKS = 8;
     static final int SEARCH_MAX_CANDIDATES_PER_SEAT = 128;
-    static final String BOUNDED_SEARCH_RECIPE = "spawn-search-v1;ring-radius=" + SEARCH_RING_RADIUS_BLOCKS
-            + ";max-candidates=" + SEARCH_MAX_CANDIDATES_PER_SEAT + ";order=declared,chebyshev-ring,x-then-z";
+    static final String BOUNDED_SEARCH_RECIPE = "spawn-search-v2;ring-radius=" + SEARCH_RING_RADIUS_BLOCKS
+            + ";max-candidates=" + SEARCH_MAX_CANDIDATES_PER_SEAT
+            + ";order=declared,chebyshev-ring,center-distance,x-then-z";
     private static final Set<Material> HAZARDS = Set.of(
             Material.LAVA, Material.FIRE, Material.SOUL_FIRE, Material.MAGMA_BLOCK, Material.CACTUS,
             Material.CAMPFIRE, Material.SOUL_CAMPFIRE, Material.SWEET_BERRY_BUSH, Material.WITHER_ROSE,
@@ -142,21 +143,37 @@ final class NaturalWorldSetup {
 
     static List<NaturalMapPlan.SurfaceColumn> searchCandidates(
             NaturalMapPlan.SurfaceColumn declared,
-            WorldPlan.Footprint footprint) {
+            WorldPlan.Footprint footprint,
+            NaturalMapPlan.BorderCenter center) {
         List<NaturalMapPlan.SurfaceColumn> candidates = new ArrayList<>();
         candidates.add(declared);
         for (int ring = 1; ring <= SEARCH_RING_RADIUS_BLOCKS
                 && candidates.size() < SEARCH_MAX_CANDIDATES_PER_SEAT; ring++) {
-            for (int dx = -ring; dx <= ring && candidates.size() < SEARCH_MAX_CANDIDATES_PER_SEAT; dx++) {
-                for (int dz = -ring; dz <= ring && candidates.size() < SEARCH_MAX_CANDIDATES_PER_SEAT; dz++) {
+            List<NaturalMapPlan.SurfaceColumn> ringColumns = new ArrayList<>();
+            for (int dx = -ring; dx <= ring; dx++) {
+                for (int dz = -ring; dz <= ring; dz++) {
                     if (Math.max(Math.abs(dx), Math.abs(dz)) != ring) {
                         continue;
                     }
                     long x = (long) declared.x() + dx;
                     long z = (long) declared.z() + dz;
-                    if (footprint.contains((int) x, (int) z) && x >= 0 && z >= 0) {
-                        candidates.add(new NaturalMapPlan.SurfaceColumn((int) x, (int) z));
+                    if (x >= 0 && z >= 0 && x <= Integer.MAX_VALUE && z <= Integer.MAX_VALUE
+                            && footprint.contains((int) x, (int) z)) {
+                        ringColumns.add(new NaturalMapPlan.SurfaceColumn((int) x, (int) z));
                     }
+                }
+            }
+            ringColumns.sort(java.util.Comparator
+                    .comparingLong((NaturalMapPlan.SurfaceColumn column) -> {
+                        long cx = (long) column.x() - center.x();
+                        long cz = (long) column.z() - center.z();
+                        return cx * cx + cz * cz;
+                    })
+                    .thenComparingInt(NaturalMapPlan.SurfaceColumn::x)
+                    .thenComparingInt(NaturalMapPlan.SurfaceColumn::z));
+            for (NaturalMapPlan.SurfaceColumn column : ringColumns) {
+                if (candidates.size() < SEARCH_MAX_CANDIDATES_PER_SEAT) {
+                    candidates.add(column);
                 }
             }
         }
@@ -175,7 +192,7 @@ final class NaturalWorldSetup {
         for (NaturalMapPlan.SurfaceSpawnPoint spawn : plan.spawns()) {
             Map<String, Integer> rejections = new LinkedHashMap<>();
             MapPlan.SpawnPoint found = null;
-            List<NaturalMapPlan.SurfaceColumn> candidates = searchCandidates(spawn.column(), plan.footprint());
+            List<NaturalMapPlan.SurfaceColumn> candidates = searchCandidates(spawn.column(), plan.footprint(), plan.borderCenter());
             for (NaturalMapPlan.SurfaceColumn candidate : candidates) {
                 String rejection = cacheColumns.contains(candidate) ? "cache-column" : null;
                 MapPlan.Position feet = null;

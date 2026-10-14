@@ -67,7 +67,7 @@ final class NaturalWorldSetupTest {
 
         NaturalWorldSetup.PreparedWorld prepared = NaturalWorldSetup.prepare(plan, world, 2, TEST_MATERIALS);
 
-        assertEquals(List.of(new MapPlan.SpawnPoint(0, new MapPlan.Position(99, 65, 99))), prepared.spawns());
+        assertEquals(List.of(new MapPlan.SpawnPoint(0, new MapPlan.Position(99, 65, 100))), prepared.spawns());
         assertEquals(NaturalWorldSetup.BOUNDED_SEARCH_RECIPE, prepared.spawnRecipe());
         TestWorld repeat = new TestWorld();
         repeat.waterColumns.add(columnKey(100, 100));
@@ -101,7 +101,7 @@ final class NaturalWorldSetupTest {
         NaturalMapPlan plan = searchPlan(List.of(spawn(0, 100, 100)), List.of(loot(120, 100)));
         TestWorld hazard = new TestWorld();
         hazard.hazardPositions.add(new MapPlan.Position(101, 65, 100));
-        assertEquals(new MapPlan.Position(99, 65, 99),
+        assertEquals(new MapPlan.Position(99, 65, 100),
                 NaturalWorldSetup.prepare(plan, hazard, 2, TEST_MATERIALS).spawns().getFirst().position());
 
         TestWorld boxed = new TestWorld();
@@ -112,13 +112,37 @@ final class NaturalWorldSetupTest {
     }
 
     @Test
+    void hungerSixShapedDeclaredColumnsResolveThroughTheSearchButStayStrictInLegacyPlans() {
+        List<NaturalMapPlan.SurfaceSpawnPoint> spawns = List.of(
+                spawn(0, 425, 620), spawn(1, 425, 557), spawn(2, 484, 598),
+                spawn(3, 380, 588), spawn(4, 471, 650), spawn(5, 380, 649));
+        List<NaturalMapPlan.SurfaceLootContainer> loot = List.of(loot(437, 600));
+        TestWorld water = new TestWorld();
+        water.waterColumns.add(columnKey(380, 588));
+        water.waterColumns.add(columnKey(380, 649));
+        water.blockedPositions.add(new MapPlan.Position(425, 66, 557));
+
+        NaturalWorldSetup.PreparedWorld prepared =
+                NaturalWorldSetup.prepare(searchPlan(spawns, loot), water, 2, TEST_MATERIALS);
+
+        assertEquals(6, prepared.spawns().size());
+        assertTrue(prepared.spawns().stream().noneMatch(spawn -> spawn.position().equals(new MapPlan.Position(380, 65, 588))));
+        assertEquals(new MapPlan.Position(425, 65, 620), prepared.spawns().getFirst().position());
+        TestWorld legacyWorld = new TestWorld();
+        legacyWorld.waterColumns.add(columnKey(380, 588));
+        assertThrows(IllegalStateException.class,
+                () -> NaturalWorldSetup.prepare(plan(spawns, loot), legacyWorld, 2, TEST_MATERIALS));
+    }
+
+    @Test
     void searchCandidatesAreBoundedAndOrderedDeterministically() {
         List<NaturalMapPlan.SurfaceColumn> candidates = NaturalWorldSetup.searchCandidates(
-                new NaturalMapPlan.SurfaceColumn(0, 0), new WorldPlan.Footprint(1024, 1024));
+                new NaturalMapPlan.SurfaceColumn(0, 0), new WorldPlan.Footprint(1024, 1024),
+                new NaturalMapPlan.BorderCenter(512, 512));
 
         assertEquals(new NaturalMapPlan.SurfaceColumn(0, 0), candidates.getFirst());
         assertEquals(new NaturalMapPlan.SurfaceColumn(0, 0), candidates.get(0));
-        assertEquals(new NaturalMapPlan.SurfaceColumn(0, 1), candidates.get(1));
+        assertEquals(new NaturalMapPlan.SurfaceColumn(1, 1), candidates.get(1));
         assertTrue(candidates.size() <= NaturalWorldSetup.SEARCH_MAX_CANDIDATES_PER_SEAT);
         assertTrue(candidates.stream().allMatch(column -> column.x() >= 0 && column.z() >= 0));
     }
