@@ -469,19 +469,20 @@ test("chest_inventory_limit_matches_cross_language_contracts", () => {
     ({ properties }) => properties.kind.const === "loot_container",
   )?.properties.inventory;
   const worldPlanDefinitions = worldPlanSchema.$defs as {
-    loot_container: { properties: { inventory: { minItems?: number; maxItems?: number } } };
+    inventory: { minItems?: number; maxItems?: number };
+    planned_loot_container: { properties: { inventory: { $ref: string } } };
+    natural_loot_container: { properties: { inventory: { $ref: string } } };
   };
   assert.deepEqual(
     { minItems: mapInventory?.minItems, maxItems: mapInventory?.maxItems },
     { minItems: 1, maxItems: 27 },
   );
   assert.deepEqual(
-    {
-      minItems: worldPlanDefinitions.loot_container.properties.inventory.minItems,
-      maxItems: worldPlanDefinitions.loot_container.properties.inventory.maxItems,
-    },
+    { minItems: worldPlanDefinitions.inventory.minItems, maxItems: worldPlanDefinitions.inventory.maxItems },
     { minItems: 1, maxItems: 27 },
   );
+  assert.equal(worldPlanDefinitions.planned_loot_container.properties.inventory.$ref, "#/$defs/inventory");
+  assert.equal(worldPlanDefinitions.natural_loot_container.properties.inventory.$ref, "#/$defs/inventory");
   assert.ok(readRepoFile("docs/scenarios.md").includes("Loot lists contain 1–27 items"));
 });
 
