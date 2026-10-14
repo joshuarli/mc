@@ -9,6 +9,7 @@ import { PathDiagnosticRing } from '../src/index.js';
 import { MineflayerObserver } from '../src/observer.js';
 import { isVisibleEntity } from '../src/perception.js';
 import { SkillOwner } from '../src/skills.js';
+import { isInsidePerceptionCone } from '../src/visibility.js';
 
 const { goals, Movements } = createRequire(import.meta.url)('mineflayer-pathfinder') as typeof import('mineflayer-pathfinder');
 const AStar = createRequire(import.meta.url)('mineflayer-pathfinder/lib/astar') as {
@@ -223,6 +224,48 @@ test('travel navigation looks down between legs and melee pursuit does not', asy
   } finally {
     await seen.owner.close();
     seen.observer.close();
+  }
+
+  const blocked = openRivalTravel({ solid: true });
+  try {
+    assert.equal(isVisibleEntity(blocked.bot, blocked.rival), false);
+    const running = blocked.owner.run({ kind: 'navigate', target: blockPosition(16, 64, 0) });
+    await waitUntil(() => blocked.events.includes('goal'));
+    blocked.bot.emit('goal_reached', blocked.pathfinder.goal as never);
+    await waitUntil(() => blocked.events.filter((event) => event === 'goal').length >= 2);
+    assert.deepEqual(blocked.events, ['goal', 'look', 'look', 'look', 'look', 'goal']);
+    const sideLook = blocked.insideCone[1];
+    const sideVisible = blocked.visibleAfterLook[1];
+    if (sideLook === undefined || sideVisible === undefined) throw new Error('missing blocked travel look');
+    assert.equal(sideLook, true);
+    assert.equal(sideVisible, false);
+    assert.equal(isVisibleEntity(blocked.bot, blocked.rival), false);
+    const nextGoal = blocked.pathfinder.goal;
+    assert.ok(nextGoal instanceof goals.GoalBlock);
+    assert.equal(nextGoal.x, 0);
+    assert.equal(nextGoal.y, 64);
+    assert.equal(nextGoal.z, 1);
+    const cancellation = blocked.owner.cancel('shutdown');
+    assert.deepEqual(await running, { kind: 'cancelled', reason: 'shutdown' });
+    await cancellation;
+  } finally {
+    await blocked.owner.close();
+    blocked.observer.close();
+  }
+
+  const trapped = openRivalTravel({ solid: false });
+  try {
+    const running = trapped.owner.run({ kind: 'navigate', target: blockPosition(16, 64, 0) });
+    await waitUntil(() => trapped.events.includes('goal'));
+    trapped.bot.emit('path_update', { status: 'noPath' } as never);
+    assert.deepEqual(await running, { kind: 'succeeded' });
+    assert.deepEqual(trapped.events, ['goal', 'look', 'look']);
+    assert.deepEqual(trapped.visibleAfterLook, [false, true]);
+    assert.equal(trapped.events.filter((event) => event === 'goal').length, 1);
+    assert.equal(isVisibleEntity(trapped.bot, trapped.rival), true);
+  } finally {
+    await trapped.owner.close();
+    trapped.observer.close();
   }
 
   const melee = makeHarness();
@@ -1794,6 +1837,69 @@ function prepareEating(name = 'bread', food = 10) {
     finishConsume: () => finishConsume(),
     isSettled: () => settled,
   };
+}
+
+function openRivalTravel(options: { readonly solid: boolean }) {
+  const eyeHeight = 1.62;
+  const harness = makeHarness();
+  const events: string[] = [];
+  const insideCone: boolean[] = [];
+  const visibleAfterLook: boolean[] = [];
+  const setGoal = harness.pathfinder.setGoal;
+  harness.pathfinder.setGoal = (goal) => {
+    setGoal(goal);
+    if (goal !== null) events.push('goal');
+  };
+  const rivalHeight = 1.8;
+  const rivalFeetY = 64 + eyeHeight - 20 - rivalHeight / 2;
+  const rivalPosition = new TestPosition(0, rivalFeetY, 6);
+  const rival = {
+    id: 2,
+    type: 'player',
+    position: rivalPosition,
+    velocity: new TestPosition(0, 0, 0),
+    yaw: 0,
+    pitch: 0,
+    width: 0.6,
+    height: rivalHeight,
+    getDroppedItem: () => null,
+  } as Bot['entity'];
+  const solid = {
+    name: 'stone',
+    position: new TestPosition(0, 64, 1),
+  } as NonNullable<ReturnType<Bot['blockAt']>>;
+  Object.assign(harness.bot, {
+    entity: {
+      id: 1,
+      position: new TestPosition(0, 64, 0),
+      eyeHeight,
+      yaw: Math.atan2(-1, 0),
+      pitch: 0,
+      width: 0.6,
+      height: 1.8,
+    },
+    entities: { 2: rival },
+    players: { rival: { entity: rival, gamemode: 0 } },
+    blockAt: () => options.solid ? solid : { name: 'air' },
+    lookAt: async (point: Bot['entity']['position']) => {
+      events.push('look');
+      const eye = harness.bot.entity.position.offset(0, eyeHeight, 0);
+      const delta = point.minus(eye);
+      harness.bot.entity.yaw = Math.atan2(-delta.x, -delta.z);
+      harness.bot.entity.pitch = Math.atan2(delta.y, Math.hypot(delta.x, delta.z));
+      insideCone.push(isInsidePerceptionCone({
+        position: harness.bot.entity.position,
+        eyeHeight,
+        yaw: harness.bot.entity.yaw,
+        pitch: harness.bot.entity.pitch,
+      }, rival));
+      visibleAfterLook.push(isVisibleEntity(harness.bot, rival));
+    },
+  });
+  if (options.solid) {
+    harness.bot.world.raycast = (() => solid) as unknown as Bot['world']['raycast'];
+  }
+  return { ...harness, events, insideCone, visibleAfterLook, rival };
 }
 
 function makeHarness(

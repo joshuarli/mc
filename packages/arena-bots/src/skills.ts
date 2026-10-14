@@ -787,13 +787,36 @@ export class SkillOwner {
     return isWithinMeleeReach(readCombatSelfBody(this.#bot.entity), readCombatBody(target));
   }
 
-  #playerInPerceptionCone(): boolean {
-    const selfId = this.#bot.entity.id;
-    for (const entity of Object.values(this.#bot.entities)) {
-      if (entity.id === selfId || !isTargetablePlayer(this.#bot, entity)) continue;
-      if (isVisibleEntity(this.#bot, entity)) return true;
+  async #sweepTravelSight(
+    goal: NavigationPosition,
+    active: ActiveSkill,
+    signal: AbortSignal,
+  ): Promise<{ readonly kind: 'visible' } | { readonly kind: 'blocked'; readonly step: BlockPosition } | { readonly kind: 'clear' }> {
+    let blockedStep: BlockPosition | null = null;
+    for (let quarterTurn = 0; quarterTurn < 4; quarterTurn += 1) {
+      throwIfInterrupted(signal);
+      await this.#lookAt(active, 'look down the path', travelSightPoint(this.#bot, goal, quarterTurn));
+      const sight = this.#travelSight();
+      if (sight.kind === 'visible') return sight;
+      if (sight.kind === 'blocked' && blockedStep === null) blockedStep = sight.step;
     }
-    return false;
+    if (blockedStep === null) return { kind: 'clear' };
+    return { kind: 'blocked', step: blockedStep };
+  }
+
+  #travelSight(): { readonly kind: 'visible' } | { readonly kind: 'blocked'; readonly step: BlockPosition } | { readonly kind: 'clear' } {
+    const selfId = this.#bot.entity.id;
+    let blockedStep: BlockPosition | null = null;
+    for (const entity of Object.values(this.#bot.entities)) {
+      if (entity === undefined || entity.id === selfId || !isTargetablePlayer(this.#bot, entity)) continue;
+      const visibility = classifyEntityVisibility(this.#bot, entity);
+      if (visibility === 'visible') return { kind: 'visible' };
+      if (visibility !== 'blocked' || blockedStep !== null) continue;
+      const step = horizontalStepToward(this.#bot.entity.position, toBlockPosition(entity.position));
+      if (step !== null) blockedStep = step;
+    }
+    if (blockedStep === null) return { kind: 'clear' };
+    return { kind: 'blocked', step: blockedStep };
   }
 
   async #navigate(
@@ -803,6 +826,8 @@ export class SkillOwner {
     signal: AbortSignal = active.controller.signal,
   ): Promise<void> {
     const deadline = performance.now() + (arrival.kind === 'meleeReach' ? PURSUIT_LEG_MS : PATH_TIMEOUT_MS);
+    const travelLeg = arrival.kind === 'withinRange' || arrival.kind === 'exactBlock';
+    let stepOntoSightBlock = false;
     for (let leg = 0; leg < MAX_NAVIGATION_LEGS; leg += 1) {
       throwIfInterrupted(signal);
       const border = this.#observer.currentBorder();
@@ -813,7 +838,8 @@ export class SkillOwner {
 
       const current = this.#bot.entity.position;
       const remainingDistance = distance(current, position);
-      if (arrival.kind === 'meleeReach' ? this.#inMeleeReach(arrival.target) : hasArrived(current, position, arrival)) return;
+      const arrived = arrival.kind === 'meleeReach' ? this.#inMeleeReach(arrival.target) : hasArrived(current, position, arrival);
+      if (arrived && !stepOntoSightBlock) return;
       const remainingMs = deadline - performance.now();
       if (remainingMs <= 0) throw new SkillFault('timedOut', 'bounded navigation exceeded its deadline');
 
@@ -823,7 +849,9 @@ export class SkillOwner {
       const waypoint = remainingDistance <= MAX_PATH_LEG_BLOCKS + finalLegAllowance
         ? position
         : waypointToward(current, position, MAX_PATH_LEG_BLOCKS);
-      const goal = arrival.kind === 'meleeReach'
+      const goal = stepOntoSightBlock
+        ? new goals.GoalBlock(position.x, position.y, position.z)
+        : arrival.kind === 'meleeReach'
         ? new goals.GoalFollow(arrival.target, PURSUIT_FOLLOW_RANGE_BLOCKS)
         : waypoint === position && arrival.kind === 'exactBlock'
         ? new goals.GoalBlock(waypoint.x, waypoint.y, waypoint.z)
@@ -843,14 +871,21 @@ export class SkillOwner {
       const pathFailure = waitForPathFailure(this.#bot, stopWaits.signal, remainingMs);
       active.resources.navigationActive = true;
       recordPathDiagnostic(this.#bot, { kind: 'navigation', active: true });
+      let legFault: SkillFault | null = null;
       try {
         this.#bot.pathfinder.setGoal(goal, false);
         await Promise.race([reached, pathFailure]);
         throwIfInterrupted(signal);
-        if (arrival.kind === 'meleeReach' ? this.#inMeleeReach(arrival.target) : hasArrived(this.#bot.entity.position, position, arrival)) return;
+        const arrivedAfterLeg = arrival.kind === 'meleeReach'
+          ? this.#inMeleeReach(arrival.target)
+          : hasArrived(this.#bot.entity.position, position, arrival);
+        if (arrivedAfterLeg && !stepOntoSightBlock) return;
         if (leg === MAX_NAVIGATION_LEGS - 1) {
           throw new SkillFault('noProgress', `navigation exceeded ${MAX_NAVIGATION_LEGS} bounded path segments`);
         }
+      } catch (error) {
+        if (!travelLeg || !(error instanceof SkillFault) || error.failure !== 'noProgress') throw error;
+        legFault = error;
       } finally {
         signal.removeEventListener('abort', relayAbort);
         const completion: PathSearchCompletion = signal.aborted
@@ -862,13 +897,17 @@ export class SkillOwner {
         active.resources.navigationActive = false;
         recordPathDiagnostic(this.#bot, { kind: 'navigation', active: false });
       }
-      if (arrival.kind === 'withinRange' || arrival.kind === 'exactBlock') {
-        for (let quarterTurn = 0; quarterTurn < 4; quarterTurn += 1) {
-          throwIfInterrupted(signal);
-          await this.#lookAt(active, 'look down the path', travelSightPoint(this.#bot, position, quarterTurn));
-          if (this.#playerInPerceptionCone()) return;
+      if (travelLeg) {
+        const sight = await this.#sweepTravelSight(position, active, signal);
+        if (sight.kind === 'visible') return;
+        if (sight.kind === 'blocked' && leg + 1 < MAX_NAVIGATION_LEGS) {
+          position = sight.step;
+          stepOntoSightBlock = true;
+          continue;
         }
       }
+      stepOntoSightBlock = false;
+      if (legFault !== null) throw legFault;
     }
     throw new Error('bounded navigation loop exited unexpectedly');
   }
@@ -2194,6 +2233,21 @@ function travelSightPoint(bot: Bot, goal: NavigationPosition, quarterTurn: numbe
     aheadX = rotatedX;
   }
   return position.offset(aheadX, eyeHeight - TRAVEL_SIGHT_BELOW_EYE_BLOCKS, aheadZ);
+}
+
+function horizontalStepToward(
+  current: { readonly x: number; readonly y: number; readonly z: number },
+  playerBlock: BlockPosition,
+): BlockPosition | null {
+  const dx = playerBlock.x + 0.5 - current.x;
+  const dz = playerBlock.z + 0.5 - current.z;
+  const horizontal = Math.hypot(dx, dz);
+  if (horizontal === 0) return null;
+  const x = Math.round(current.x + dx / horizontal);
+  const y = Math.floor(current.y);
+  const z = Math.round(current.z + dz / horizontal);
+  if (x === Math.floor(current.x) && z === Math.floor(current.z)) return null;
+  return blockPosition(x, y, z);
 }
 
 function waypointToward(
