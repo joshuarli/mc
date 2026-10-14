@@ -8,6 +8,7 @@ import {
   RandomStream,
   seatId,
   type ActionFunnelRecord,
+  type ClientDiagnosticRecord,
   type AgentObservation,
   type Decision,
   type PolicyFeedbackBatch,
@@ -47,6 +48,7 @@ export interface CombatArenaOptions {
   readonly self: ArenaPoint & { readonly yaw?: number };
   readonly opponents: readonly ArenaOpponent[];
   readonly health?: number;
+  readonly border?: { readonly x: number; readonly z: number; readonly diameter: number };
 }
 
 export interface AttackRecord {
@@ -67,6 +69,7 @@ export interface CombatArena {
   readonly attacks: AttackRecord[];
   readonly goals: ArenaPoint[];
   readonly funnel: ActionFunnelRecord[];
+  readonly diagnostics: ClientDiagnosticRecord[];
   readonly self: { x: number; y: number; z: number; yaw: number; pitch: number };
   readonly opponents: Map<number, { x: number; y: number; z: number; health: number; entity: Bot['entity'] }>;
   tickCount(): number;
@@ -95,6 +98,7 @@ export function createCombatArena(options: CombatArenaOptions): CombatArena {
   const attacks: AttackRecord[] = [];
   const goals: ArenaPoint[] = [];
   const funnel: ActionFunnelRecord[] = [];
+  const diagnostics: ClientDiagnosticRecord[] = [];
   let ticks = 0;
   let lastDamageTick = -1_000;
   let moving = false;
@@ -241,11 +245,18 @@ export function createCombatArena(options: CombatArenaOptions): CombatArena {
   for (const spec of options.opponents) addOpponent(spec);
   syncSelf();
 
-  const client = createMineflayerArenaClient(bot, { funnel: (record) => funnel.push(record) });
+  const client = createMineflayerArenaClient(bot, { funnel: (record) => funnel.push(record), diagnostic: (record) => diagnostics.push(record) });
   bot.emit('spawn');
   bot.emit('health');
   bot._client.emit('window_items', { windowId: 0 });
-  bot._client.emit('initialize_world_border', { x: 0, z: 0, oldDiameter: 400, newDiameter: 400, speed: 0 });
+  const border = options.border ?? { x: 0, z: 0, diameter: 400 };
+  bot._client.emit('initialize_world_border', {
+    x: border.x,
+    z: border.z,
+    oldDiameter: border.diameter,
+    newDiameter: border.diameter,
+    speed: 0,
+  });
 
   const random = DeterministicRandom.forStream(1n, RandomStream.search(seatId(0)));
   const params = PolicyParams.baseline();
@@ -257,6 +268,7 @@ export function createCombatArena(options: CombatArenaOptions): CombatArena {
     attacks,
     goals,
     funnel,
+    diagnostics,
     self,
     opponents,
     tickCount: () => ticks,

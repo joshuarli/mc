@@ -1,6 +1,7 @@
 import { performance } from 'node:perf_hooks';
 import {
   currentKnowledge,
+  type BorderUnknownReason,
   unknownKnowledge,
   worldBorder,
   type Knowledge,
@@ -87,6 +88,14 @@ export class ClientWorldBorder {
       return unknownKnowledge();
     }
     return currentKnowledge(worldBorder(centerX, centerZ, radiusBlocks));
+  }
+
+  unknownReason(): BorderUnknownReason | null {
+    if (this.#centerX === null || this.#centerZ === null || this.#diameter === null) return 'noPacketReceived';
+    if (!Number.isSafeInteger(this.#centerX) || !Number.isSafeInteger(this.#centerZ)) return 'fractionalCenter';
+    const radiusBlocks = Math.floor(this.#currentDiameter() / 2);
+    if (!Number.isSafeInteger(radiusBlocks) || radiusBlocks <= 0) return 'invalidRadius';
+    return null;
   }
 
   close(): void {

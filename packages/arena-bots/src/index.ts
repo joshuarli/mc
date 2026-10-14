@@ -1,5 +1,6 @@
 import type {
   ActionFunnelSink,
+  ClientDiagnosticSink,
   AgentObservation,
   SkillCancellation,
   SkillOutcome,
@@ -41,13 +42,14 @@ export interface MineflayerArenaClient {
 
 export interface MineflayerArenaClientOptions {
   readonly funnel?: ActionFunnelSink;
+  readonly diagnostic?: ClientDiagnosticSink;
 }
 
 /** Connects one Mineflayer client's received state to the arena observation and skill contracts. */
 export function createMineflayerArenaClient(bot: Bot, options: MineflayerArenaClientOptions = {}): MineflayerArenaClient {
   bindPlayerCollisionDimensions(bot);
   bindEntityActionStringMapperFeature(bot);
-  const observer = new MineflayerObserver(bot);
+  const observer = new MineflayerObserver(bot, undefined, options.diagnostic ?? null);
   let disposeVelocityUnits = (): void => undefined;
   let skills: SkillOwner;
   try {

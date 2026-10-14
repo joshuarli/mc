@@ -14,6 +14,16 @@ export {
 export type { BlockPosition, CheckedPositionOffset, WorldBorder } from './geometry.js';
 
 export {
+  BORDER_UNKNOWN_DIAGNOSTIC_THRESHOLD,
+  BORDER_UNKNOWN_REASONS,
+} from './diagnostics.js';
+export type {
+  BorderUnknownReason,
+  ClientDiagnosticRecord,
+  ClientDiagnosticSink,
+} from './diagnostics.js';
+
+export {
   ACTION_FUNNEL_MISS_REASONS,
   ACTION_FUNNEL_STAGES,
   nextActionFunnelStage,

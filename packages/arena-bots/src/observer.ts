@@ -2,6 +2,7 @@ import { performance } from 'node:perf_hooks';
 import { createRequire } from 'node:module';
 import {
   agentObservation,
+  BORDER_UNKNOWN_DIAGNOSTIC_THRESHOLD,
   agentState,
   blockPosition,
   currentKnowledge,
@@ -19,6 +20,7 @@ import {
   type AgentObservation,
   type AgentState,
   type BlockPosition,
+  type ClientDiagnosticSink,
   type Knowledge,
   type LootOpportunity,
   type Tick,
@@ -71,6 +73,8 @@ export class MineflayerObserver {
   readonly #onEnd: () => void;
   readonly #onBlockUpdate: (oldBlock: MineflayerBlock | null, newBlock: MineflayerBlock) => void;
   readonly #onEntityHurt: (entity?: MineflayerEntity, source?: MineflayerEntity) => void;
+  readonly #diagnostics: ClientDiagnosticSink | null;
+  #unknownBorderObservations = 0;
   #sequence = 0;
   #lastTick: Tick | null = null;
   #spawned = false;
@@ -82,8 +86,13 @@ export class MineflayerObserver {
   #lastLoot: Sample<readonly LootOpportunity[]> | null = null;
   #lastDamage: { readonly entityId: number; readonly at: number } | null = null;
 
-  constructor(bot: Bot, clock: () => number = () => performance.now()) {
+  constructor(
+    bot: Bot,
+    clock: () => number = () => performance.now(),
+    diagnostics: ClientDiagnosticSink | null = null,
+  ) {
     this.#bot = bot;
+    this.#diagnostics = diagnostics;
     this.#clock = clock;
     this.#client = bot._client;
     this.#border = new ClientWorldBorder(bot._client, clock);
@@ -132,6 +141,7 @@ export class MineflayerObserver {
 
     const agent = this.#agentKnowledge(currentTick);
     const border = this.#border.snapshot();
+    this.#trackBorderKnowledge(border);
     const complete = this.#hasCompletePerceptionRange();
     const opponents = complete ? this.#opponentKnowledge(currentTick) : this.#stale(this.#lastOpponents, currentTick);
     const loot = complete ? this.#lootKnowledge(currentTick) : this.#stale(this.#lastLoot, currentTick);
@@ -144,6 +154,20 @@ export class MineflayerObserver {
       opponents,
       loot,
     });
+  }
+
+  #trackBorderKnowledge(border: Knowledge<WorldBorder>): void {
+    if (border.kind !== 'unknown' || !this.#spawned) {
+      this.#unknownBorderObservations = 0;
+      return;
+    }
+    this.#unknownBorderObservations += 1;
+    const count = this.#unknownBorderObservations;
+    if (count <= BORDER_UNKNOWN_DIAGNOSTIC_THRESHOLD
+      || (count - 1) % BORDER_UNKNOWN_DIAGNOSTIC_THRESHOLD !== 0) return;
+    const reason = this.#border.unknownReason();
+    if (reason === null) return;
+    this.#diagnostics?.({ kind: 'borderUnknown', reason, consecutiveObservations: count });
   }
 
   isContainerOpened(position: BlockPosition): boolean {
