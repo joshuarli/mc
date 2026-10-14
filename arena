@@ -313,6 +313,7 @@ usage:
   ./arena test --suite <core|spec|bots|owned-files|runtime|runner|protocol|integration|acceptance|java> --case <name>
   ./arena <report|inspect|compare|prepare|validate|doctor|run|replay-policy|gc> <arguments...>
   ./arena play --scenario <path> --username <name> [--seat <n>] --accept-minecraft-eula [--join-timeout-seconds <n>]
+  ./arena explain --run-id <id> --seat <n>
   ./arena watch --scenario <path> --accept-minecraft-eula [--join-timeout-seconds <n>]
 EOF
 }
@@ -542,7 +543,7 @@ case "$command" in
     build) build_command "$@" ;;
     check) check_command "$@" ;;
     test) test_command "$@" ;;
-    report|inspect|compare|prepare|validate|doctor|run|play|watch|replay-policy|gc)
+    report|inspect|compare|prepare|validate|doctor|run|play|watch|explain|replay-policy|gc)
         launch_runner "$command" "$@"
         ;;
     help|-h|--help)

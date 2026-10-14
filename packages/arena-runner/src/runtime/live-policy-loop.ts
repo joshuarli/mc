@@ -9,10 +9,13 @@ import { mapRuntimeFailure } from './failures.js';
 import { decideRuntimeOpeningPolicy, decideRuntimePolicy, isStrategyDecisionTick } from './policy-decision.js';
 import { PolicyCompetitorGate } from './policy-gate.js';
 import type { RuntimeCompetitorClient } from './clients.js';
+import type { ActionFunnelCollector } from './funnel.js';
+import { makeActionFunnelTraceRecord } from '../funnel-record.js';
 
 type PolicyCompetitor = Pick<RuntimeCompetitorClient, 'seat' | 'gameplay' | 'bot'>;
 type GameplayDecision = Decision | CivilizationDecision;
-type PolicyTrace = Pick<RuntimeTraceBuilder, 'recordPolicyDecision' | 'recordPolicyEffect' | 'checkpoint'>;
+type PolicyTrace = Pick<RuntimeTraceBuilder, 'recordPolicyDecision' | 'recordPolicyEffect' | 'checkpoint'>
+  & Partial<Pick<RuntimeTraceBuilder, 'recordActionFunnel'>>;
 const ACTION_CLEANUP_TIMEOUT_MS = 5_000;
 
 export type PolicyActivityEvent =
@@ -50,6 +53,7 @@ export class LivePolicyLoop {
   readonly #competitors: () => readonly PolicyCompetitor[];
   readonly #fail: (error: unknown) => void;
   readonly #onActivity: ((event: PolicyActivityEvent) => void) | undefined;
+  readonly #funnel: ActionFunnelCollector | undefined;
   readonly #memories = new Map<number, PolicyMemory>();
   readonly #openingStates = new Map<number, OpeningPolicyState>();
   readonly #feedback = new Map<number, PolicyFeedbackBatch>();
@@ -78,6 +82,7 @@ export class LivePolicyLoop {
     competitors(): readonly PolicyCompetitor[];
     fail(error: unknown): void;
     onActivity?: (event: PolicyActivityEvent) => void;
+    funnel?: ActionFunnelCollector;
   }>) {
     this.#trace = options.trace;
     this.#params = options.params;
@@ -88,6 +93,7 @@ export class LivePolicyLoop {
     this.#competitors = options.competitors;
     this.#fail = options.fail;
     this.#onActivity = options.onActivity;
+    this.#funnel = options.funnel;
   }
 
   onTick(tick: number, tickReceivedAtNs?: bigint): void {
@@ -160,6 +166,15 @@ export class LivePolicyLoop {
     const sequence = ++this.#sequence;
     const previous = this.#actions.get(seat);
     const disposition = Object.freeze(this.#disposition(previous, decision, tick, sequence));
+    this.#funnel?.note(seat, {
+      kind: 'decision',
+      tick,
+      sequence: sequence.toString(),
+      disposition: disposition.kind === 'defer' ? `defer:${disposition.reason}` : disposition.kind,
+      goal: decision.goal.kind,
+      intent: decision.intent.kind,
+      border: step.observation.border.kind,
+    });
     let recorded = Promise.resolve();
     if (this.#recordPolicy) {
       let record: ReturnType<typeof makePolicyReplayRecord> | ReturnType<typeof makeOpeningPolicyReplayRecord>
@@ -258,6 +273,7 @@ export class LivePolicyLoop {
     let decisionRecorded = false;
     let effectRecorded = false;
     let deliveringActivity = false;
+    let targetSeat: number | null = null;
     try {
       await recorded;
       decisionRecorded = true;
@@ -275,6 +291,8 @@ export class LivePolicyLoop {
         action.startedAtTick = this.#lastTick;
         if (this.#onActivity !== undefined) action.startedAtNs = process.hrtime.bigint();
         capture = this.#recordPolicy ? capturePathUpdates(action.competitor.bot) : undefined;
+        this.#funnel?.discard(action.competitor.seat);
+        targetSeat = this.#targetSeat(action);
         const gameplay = action.competitor.gameplay;
         outcome = gameplay.mode === 'civilization' && isCivilizationIntent(action.decision.intent)
           ? await gameplay.client.runCivilization(action.decision.intent)
@@ -304,6 +322,24 @@ export class LivePolicyLoop {
         const pending = this.#feedback.get(seat) ?? [];
         this.#feedback.set(seat, policyFeedbackBatch([...pending, feedback]));
       }
+      const funnelRecord = this.#funnel?.take(seat) ?? null;
+      if (this.#funnel !== undefined && this.#recordPolicy && this.#trace.recordActionFunnel !== undefined) {
+        const target = actionTarget(action.decision.intent);
+        const tickAtStart = action.startedAtTick;
+        this.#funnel.note(seat, { kind: 'action', tick: tickAtStart, action_sequence: action.sequence.toString(),
+          intent: action.decision.intent.kind, skill: outcome.kind, funnel: funnelRecord });
+        await this.#trace.recordActionFunnel(makeActionFunnelTraceRecord({
+          seat,
+          actionSequence: action.sequence.toString(),
+          tick: tickAtStart,
+          intent: action.decision.intent.kind,
+          targetEntity: target,
+          targetSeat,
+          border: action.initiatingObservation.border.kind,
+          skill: outcome.kind,
+          funnel: funnelRecord,
+        }));
+      }
       if (this.#recordPolicy) await this.#trace.recordPolicyEffect(action.competitor.gameplay.mode === 'civilization'
         ? makeCivilizationPolicyEffectRecord(action.sequence, outcome, pathUpdates) : makePolicyEffectRecord(action.sequence, outcome, pathUpdates));
       effectRecorded = true;
@@ -325,6 +361,12 @@ export class LivePolicyLoop {
       action.state = 'settled';
       if (this.#actions.get(action.competitor.seat) === action) this.#actions.delete(action.competitor.seat);
     }
+  }
+
+  #targetSeat(action: OwnedAction): number | null {
+    const target = actionTarget(action.decision.intent);
+    if (target === null || this.#funnel === undefined) return null;
+    return this.#funnel.seatForUsername(action.competitor.bot.entities[target]?.username);
   }
 
   #cancel(action: OwnedAction, reason: SkillCancellation): Promise<void> {
@@ -372,6 +414,10 @@ export class LivePolicyLoop {
     const action = this.#actions.get(seat);
     if (action !== undefined) this.#ownTask(this.#cancel(action, 'agentEliminated'));
   }
+}
+
+function actionTarget(intent: GameplayDecision['intent']): number | null {
+  return intent.kind === 'approach' || intent.kind === 'attack' ? Number(intent.target) : null;
 }
 
 function goalPriority(decision: GameplayDecision): number {

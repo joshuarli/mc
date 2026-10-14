@@ -12,7 +12,8 @@ import { withExternalSeat, type ExternalSeatRequest } from './effective-scenario
 import { prepareRun, resolveScenarioResource } from './prepare.js';
 import { replayPolicyJson } from './policy-replay.js';
 import { isValidRunId } from './run-id.js';
-import { inspectStoppedRun } from './runtime/inspect.js';
+import { inspectStoppedRun, readStoppedRunEvidence } from './runtime/inspect.js';
+import { explainSeatJson } from './funnel-report.js';
 import { collectOwnedRuns, type RunGarbageCollectionMode } from './runtime/gc.js';
 import { runPreparedRun } from './runtime/run.js';
 import { createRuntimeRoster, type RuntimeSpectatorMode } from './runtime/roster.js';
@@ -67,6 +68,7 @@ async function dispatchCliBytes(args: readonly Buffer[]): Promise<CliResult> {
     const right = await loadSingleSegment(rest[1]!, 2);
     return success(comparisonJson(left, right));
   }
+  if (command === 'explain') return await explainCommand(rest);
   if (command === 'prepare') return await prepareCommand(rest);
   if (command === 'validate') return await validateCommand(rest);
   if (command === 'run' || command === 'play' || command === 'watch') return await matchCommand(command, rest);
@@ -175,6 +177,19 @@ async function inspectRunCommand(args: readonly Buffer[]): Promise<CliResult> {
     runId,
   });
   return success(inspection);
+}
+
+async function explainCommand(args: readonly Buffer[]): Promise<CliResult> {
+  if (args.length !== 4 || argumentText(args[0]!, 1) !== '--run-id' || argumentText(args[2]!, 3) !== '--seat') {
+    throw invalidInput('explain_requires_run_id_and_seat');
+  }
+  const runId = argumentText(args[1]!, 2);
+  if (!isValidRunId(runId)) throw new RunnerError('invalid_input', 'run id', { kind: 'invalid_run_id' });
+  const seatText = argumentText(args[3]!, 4);
+  if (!/^(0|[1-9][0-9]{0,2})$/.test(seatText) || Number(seatText) > 255) throw invalidInput('explain_invalid_seat');
+  const helperPath = configuredAbsolutePath('ARENA_FS_HELPER', 'filesystem helper');
+  const evidence = await readStoppedRunEvidence({ helperPath, ownedRoot: Buffer.from(process.cwd(), 'utf8'), runId });
+  return success(explainSeatJson(evidence, Number(seatText)));
 }
 
 async function garbageCollectCommand(args: readonly Buffer[]): Promise<CliResult> {
@@ -645,6 +660,7 @@ function helpJson(): object {
       'inspect --run-id <id>': 'Reconstruct a stopped run result and read its player statistics.',
       'report <segment>...': 'Reconstruct the terminal result from prepared-roster and authoritative event records.',
       'compare <left-segment> <right-segment>': 'Compare two single-segment record streams exactly.',
+      'explain --run-id <id> --seat <n>': 'Tie one seat\'s recorded decisions to permitted evidence, skill outcomes, funnel stages, and authoritative effects.',
       'prepare --scenario <path> --run-id <id>': 'Compile a scenario and stage its world plan in a new run directory.',
       'validate --scenario <path>': 'Compile the scenario, map, and policy without staging a run.',
       'run --scenario <path> --accept-minecraft-eula [--run-id <id>] [--reserve-external-spectator-slot] [--wait-for-external-player] [--join-timeout-seconds <n>]': 'Run a match and report its stopped result.',

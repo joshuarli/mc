@@ -87,6 +87,41 @@ export async function inspectStoppedRun(options: Readonly<{
   }
 }
 
+export async function readStoppedRunEvidence(options: Readonly<{
+  helperPath: string;
+  ownedRoot: Buffer;
+  runId: string;
+}>): Promise<Evidence> {
+  if (!isValidRunId(options.runId)) {
+    throw new RunnerError('invalid_input', 'run id', { kind: 'invalid_run_id' });
+  }
+  if (!isAbsolute(options.helperPath)) {
+    throw new RunnerError('invalid_input', 'filesystem helper', { kind: 'helper_path_not_absolute' });
+  }
+  const runDirectoryPath = Buffer.from(`${RUN_DIRECTORY_PREFIX}${options.runId}`, 'utf8');
+  let lease: Awaited<ReturnType<typeof acquireOwnedRunLease>>;
+  try {
+    lease = await acquireOwnedRunLease({
+      helperPath: options.helperPath,
+      ownedRoot: options.ownedRoot,
+      relativePath: runDirectoryPath,
+    });
+  } catch (error) {
+    if (error instanceof OwnedFilesError && error.category === 'not_found'
+        && error.operation === 'hold-run-lease') {
+      return (await readRunEvidence(
+        options.helperPath, options.ownedRoot, archiveDirectoryPath(options.runId), options.runId,
+      )).evidence;
+    }
+    throw mapRunLeaseError(error);
+  }
+  try {
+    return (await readRunEvidence(options.helperPath, options.ownedRoot, runDirectoryPath, options.runId)).evidence;
+  } finally {
+    await lease.release();
+  }
+}
+
 async function inspectCompletedArchive(
   options: Readonly<{ helperPath: string; ownedRoot: Buffer; runId: string }>,
   archiveDirectoryPath: Buffer,

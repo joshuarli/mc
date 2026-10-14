@@ -12,9 +12,11 @@ import type { PreparedRun } from '../prepare.js';
 import {
   MAX_EVIDENCE_BYTES,
   MAX_TRACE_SEGMENT_BYTES,
+  FUNNEL_TRACE_SCHEMA_VERSION,
   TRACE_SCHEMA_VERSION,
   type TraceRecord,
 } from '../trace.js';
+import { ACTION_FUNNEL_RECORD_SCHEMA, type ActionFunnelTraceRecordV1 } from '../funnel-record.js';
 import { isAuthenticatedControlMessage, type RunnerCommandEnvelope } from './session.js';
 import {
   OPERATIONAL_FAILURE_SCHEMA_VERSION,
@@ -51,6 +53,7 @@ export interface RuntimeTraceOptions {
   readonly helperPath: string;
   readonly ownedRoot: Buffer;
   readonly preparedRun: Pick<PreparedRun, 'runId' | 'runDirectoryPath'>;
+  readonly actionFunnel?: boolean;
 }
 
 export class RuntimeTraceBuilder {
@@ -58,6 +61,8 @@ export class RuntimeTraceBuilder {
   readonly #helperPath: string;
   readonly #ownedRoot: Buffer;
   readonly #runDirectoryPath: Buffer;
+  readonly #schemaVersion: number;
+  readonly #funnelActions = new Set<string>();
   readonly #segments: RuntimeTraceSegment[] = [];
   readonly #records: TraceRecord[] = [];
   readonly #policyDecisionSequences = new Set<string>();
@@ -94,6 +99,29 @@ export class RuntimeTraceBuilder {
     this.#helperPath = options.helperPath;
     this.#ownedRoot = Buffer.from(options.ownedRoot);
     this.#runDirectoryPath = Buffer.from(options.preparedRun.runDirectoryPath);
+    this.#schemaVersion = options.actionFunnel === true ? FUNNEL_TRACE_SCHEMA_VERSION : TRACE_SCHEMA_VERSION;
+  }
+
+  recordActionFunnel(record: ActionFunnelTraceRecordV1): Promise<void> {
+    return this.#enqueue(async () => {
+      this.#assertMutable();
+      if (this.#schemaVersion !== FUNNEL_TRACE_SCHEMA_VERSION) {
+        throw new RunnerError('runtime_failure', 'run trace', { kind: 'action_funnel_not_enabled' });
+      }
+      if (!this.#hasReady || !this.#hasPrepare) {
+        throw new RunnerError('runtime_failure', 'run trace', { kind: 'action_funnel_out_of_order' });
+      }
+      if (record.schema !== ACTION_FUNNEL_RECORD_SCHEMA
+          || !this.#policyDecisionSequences.has(record.action_sequence)
+          || this.#policyActionSeats.get(record.action_sequence) !== record.seat) {
+        throw new RunnerError('runtime_failure', 'run trace', { kind: 'unmatched_action_funnel' });
+      }
+      if (this.#funnelActions.has(record.action_sequence)) {
+        throw new RunnerError('runtime_failure', 'run trace', { kind: 'duplicate_action_funnel' });
+      }
+      await this.#append(toTraceRecord(undefined, record));
+      this.#funnelActions.add(record.action_sequence);
+    });
   }
 
   recordReady(ready: Extract<ControlMessage, { readonly type: 'ready' }>): Promise<void> {
@@ -399,7 +427,7 @@ export class RuntimeTraceBuilder {
     const firstSequence = this.#totalRecordCount - this.#records.length + 1;
     const lastSequence = this.#totalRecordCount + (extraRecordBytes === 0 ? 0 : 1);
     const envelopeBytes = Buffer.byteLength(canonicalJson({
-      schema: TRACE_SCHEMA_VERSION,
+      schema: this.#schemaVersion,
       run_id: this.#runId,
       first_sequence: String(firstSequence),
       last_sequence: String(lastSequence),
@@ -423,7 +451,7 @@ export class RuntimeTraceBuilder {
     const firstSequence = this.#totalRecordCount - this.#records.length + 1;
     const lastSequence = this.#totalRecordCount;
     const segment = {
-      schema: TRACE_SCHEMA_VERSION,
+      schema: this.#schemaVersion,
       run_id: this.#runId,
       first_sequence: String(firstSequence),
       last_sequence: String(lastSequence),

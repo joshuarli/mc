@@ -69,7 +69,7 @@ test('reads historical trace-v2 and current trace-v3 while keeping v2 policy rec
   const invalidHistorical = canonicalJson({ schema: 2, run_id: 'legacy', first_sequence: '1', last_sequence: '1',
     records, sha256: sha256Json(records), trailer: { complete: true } });
   assert.throws(() => parseSegment(invalidHistorical), rejectsEvidence('unsupported_policy_schema'));
-  const unsupported = canonicalJson({ schema: 4, run_id: 'future', first_sequence: '1', last_sequence: '1',
+  const unsupported = canonicalJson({ schema: 5, run_id: 'future', first_sequence: '1', last_sequence: '1',
     records: [{ a: 1 }], sha256: sha256Json([{ a: 1 }]), trailer: { complete: true } });
   assert.throws(() => parseSegment(unsupported), rejectsEvidence('unsupported_schema'));
 });

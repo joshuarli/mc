@@ -36,6 +36,7 @@ import {
 } from './clients.js';
 import { createPreparePayload, createRuntimeRoster, type RuntimeSpectatorMode } from './roster.js';
 import { externalSeats } from '../effective-scenario.js';
+import { ActionFunnelCollector, flushDiagnosticRings } from './funnel.js';
 import { assertEventSeatsInRoster } from './roster-bounds.js';
 import {
   paperArguments,
@@ -153,6 +154,7 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
   let serverProcess: OwnedServerProcess | undefined;
   let trace: RuntimeTraceBuilder | undefined;
   let coordinator: ControlCoordinator | undefined;
+  let funnel: ActionFunnelCollector | undefined;
   let clients: readonly RuntimeCompetitorClient[] = [];
   let spectators: readonly RuntimeSpectatorClient[] = [];
   let evaluatorAbort: AbortController | undefined;
@@ -173,6 +175,8 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
     }
     const javaTmpDir = validateJavaTempDirectory(options.ownedRoot);
     const policy = await loadPolicy(options, runSignal);
+    const recordsActionFunnel = scenario.mode === 'hunger_games' && scenario.record.policyReplay
+      && competitorDriver === 'baselinePolicy';
     const serverInputs: RuntimeServerInputs = { ...options, javaTmpDir, signal: runSignal };
     const pluginIdentity = await readRuntimePluginIdentity(serverInputs);
     const pluginBytes = await readRuntimePluginJar(serverInputs);
@@ -203,8 +207,12 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
       helperPath: options.helperPath,
       ownedRoot: options.ownedRoot,
       preparedRun: options.preparedRun,
+      actionFunnel: recordsActionFunnel,
     });
     trace = runtimeTrace;
+    if (recordsActionFunnel) {
+      funnel = new ActionFunnelCollector(new Map(roster.competitors.map((entry) => [entry.username, entry.seat])));
+    }
     const serverPath = Buffer.concat([options.preparedRun.runDirectoryPath, SERVER_DIRECTORY]);
     await createOwnedDirectory({
       helperPath: options.helperPath,
@@ -285,6 +293,7 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
       competitors: () => clients,
       ...(options.onPolicyActivity === undefined ? {} : { onPolicyActivity: options.onPolicyActivity }),
       recordPolicy: scenario.record.policyReplay,
+      ...(funnel === undefined ? {} : { funnel }),
     });
     coordinator.startPump();
 
@@ -297,7 +306,7 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
     clients = roster.botCompetitors.map((competitor) => new RuntimeCompetitorClient(
       competitor.seat,
       roster.competitorIdentities[competitor.seat]!,
-      clientOptions,
+      funnel === undefined ? clientOptions : { ...clientOptions, funnel: funnel.sink(competitor.seat) },
     ));
     spectators = roster.spectators.map((identity) => new RuntimeSpectatorClient(identity));
     await raceWithRunState(
@@ -469,6 +478,10 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
       clients,
       spectators,
       coordinator,
+      funnel,
+      helperPath: options.helperPath,
+      ownedRoot: options.ownedRoot,
+      runDirectoryPath: options.preparedRun.runDirectoryPath,
       hasOutcome: matchOutcomeReceived || coordinator?.outcomeReceived === true,
       started: startAttempted,
       commandPending,
@@ -527,6 +540,7 @@ class ControlCoordinator {
     openingStyleCycle?: OpeningStyleCycle;
     strategyIntervalTicks: bigint;
     competitors(): readonly RuntimeCompetitorClient[];
+    funnel?: ActionFunnelCollector;
     rosterSize: number;
     onPhase?: (phase: ClockPayload['phase']) => void;
     recordPolicy: boolean;
@@ -555,6 +569,7 @@ class ControlCoordinator {
         ...(options.openingStyleCycle === undefined ? {} : { openingStyleCycle: options.openingStyleCycle }),
         strategyIntervalTicks: options.strategyIntervalTicks,
         recordPolicy: options.recordPolicy,
+        ...(options.funnel === undefined ? {} : { funnel: options.funnel }),
         competitors: options.competitors,
         fail: (error) => this.#fail(error),
         ...(options.onPolicyActivity === undefined ? {} : { onActivity: options.onPolicyActivity }),
@@ -865,6 +880,10 @@ async function cleanupOwnedRun(options: Readonly<{
   clients: readonly RuntimeCompetitorClient[];
   spectators: readonly RuntimeSpectatorClient[];
   coordinator: ControlCoordinator | undefined;
+  funnel: ActionFunnelCollector | undefined;
+  helperPath: string;
+  ownedRoot: Buffer;
+  runDirectoryPath: Buffer;
   hasOutcome: boolean;
   started: boolean;
   commandPending: boolean;
@@ -924,6 +943,18 @@ async function cleanupOwnedRun(options: Readonly<{
   if (options.evaluatorTask !== undefined) {
     try { await withTimeout(options.evaluatorTask, EVALUATOR_JOIN_TIMEOUT_MS, 'evaluator_did_not_stop'); }
     catch (error) { failure ??= cleanupErrorUnlessPrimary(error, options.primaryFailure); }
+  }
+  if (options.funnel !== undefined) {
+    try {
+      await flushDiagnosticRings({
+        collector: options.funnel,
+        helperPath: options.helperPath,
+        ownedRoot: options.ownedRoot,
+        runDirectoryPath: options.runDirectoryPath,
+      });
+    } catch (error) {
+      failure ??= cleanupErrorUnlessPrimary(error, options.primaryFailure);
+    }
   }
   if (processReaped && options.trace !== undefined) {
     try {

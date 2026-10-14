@@ -22,6 +22,8 @@ import {
   type PolicyReplayInputV1,
   DeterministicRandom,
   emptyEquipment,
+  entityId,
+  stoppedActionFunnelRecord,
   emptyPolicyMemory,
   emptyCivilizationPolicyMemory,
   normalizePolicyReplayInput,
@@ -44,6 +46,8 @@ import { RunnerError } from '../src/errors.js';
 import { createRunDirectory, readOwnedFile } from '../src/owned-files/index.js';
 import { makeCivilizationPolicyReplayRecord, makeCivilizationPolicyEffectRecord, normalizeCivilizationPolicyReplayInput, makePolicyEffectRecord, replayPolicyJson } from '../src/policy-replay.js';
 import { parseSegment } from '../src/trace.js';
+import { ActionFunnelCollector } from '../src/runtime/funnel.js';
+import { makeActionFunnelTraceRecord, readActionFunnelTraceRecord } from '../src/funnel-record.js';
 import { failureArtifactPath, parseOperationalFailureArtifact, readOperationalFailureArtifact } from '../src/runtime/failure-artifact.js';
 import { RuntimeTraceBuilder } from '../src/runtime/trace.js';
 import {
@@ -439,7 +443,50 @@ test('live runtime persists exact decision watermarks with a pending effect and 
   assert.deepEqual(failures, []);
 });
 
-async function createTrace(t: TestContext, runDirectoryPath = Buffer.from('run', 'ascii')): Promise<Readonly<{
+test('live policy loop records one action funnel record with client funnel, target seat, and border knowledge', async (t) => {
+  const { session, client } = await authenticatedSession(t);
+  const { trace, ownedRoot } = await createTrace(t, Buffer.from('run', 'ascii'), true);
+  const messages = await beginOneSeatRun(trace, session, client, 1);
+  const collector = new ActionFunnelCollector(new Map([['ArenaBot0', 0], ['Rival_1', 1]]));
+  const sink = collector.sink(0);
+  const bot = Object.assign(new EventEmitter(), { health: 20, game: { gameMode: 'survival' },
+    entities: { 7: { username: 'Rival_1' } } }) as unknown as Bot;
+  const policyClient: MineflayerArenaClient = {
+    observe: (value) => agentObservation({
+      tick: tick(value), sequence: observationSequence(value + 1),
+      agent: currentKnowledge(agentState({ position: blockPosition(99, 64, 0), healthHalfHearts: 40, hungerPoints: 20,
+        foodStacks: [], equipped: emptyEquipment(), upgrades: [] })),
+      border: currentKnowledge(worldBorder(0, 0, 100)), opponents: currentKnowledge([]), loot: unknownKnowledge(),
+    }),
+    run: async () => {
+      sink(stoppedActionFunnelRecord({ action: 'attack', target: entityId(7), lastPassed: 'issued', reason: 'serverRejection' }));
+      return { kind: 'succeeded' as const };
+    },
+    cancel: async () => {},
+    close: async () => {},
+  };
+  const failures: unknown[] = [];
+  const loop = new LivePolicyLoop({ trace, params: PolicyParams.baseline(), seed: 1n, strategyIntervalTicks: 1n,
+    recordPolicy: true, funnel: collector, fail: (error) => failures.push(error),
+    competitors: () => [{ seat: 0, bot, gameplay: { mode: 'hunger_games' as const, client: policyClient } }] });
+  loop.onTick(0);
+  for (let turn = 0; turn < 20; turn += 1) await new Promise((resolve) => setImmediate(resolve));
+  loop.stopLaunching();
+  await endOneSeatRun(trace, session, client, messages, 7n, [0]);
+  await loop.stopAndJoin();
+  const finalized = await trace.finalize();
+  const segment = parseSegment(await readOwnedFile({ helperPath, ownedRoot,
+    relativePath: finalized.segments[0]!.relativePath, maxBytes: finalized.segments[0]!.byteLength }));
+  const records = segment.records.filter((record) => record.schema === 'action-funnel-v1')
+    .map((record, index) => readActionFunnelTraceRecord(record, index + 1));
+  assert.equal(records.length, 1);
+  assert.equal(records[0]!.border, 'current');
+  assert.equal(records[0]!.funnel?.kind, 'stopped');
+  assert.equal(JSON.stringify(collector.snapshot()).includes('"kind":"decision"'), true);
+  assert.deepEqual(failures, []);
+});
+
+async function createTrace(t: TestContext, runDirectoryPath = Buffer.from('run', 'ascii'), actionFunnel = false): Promise<Readonly<{
   trace: RuntimeTraceBuilder;
   ownedRoot: Buffer;
 }>> {
@@ -451,6 +498,7 @@ async function createTrace(t: TestContext, runDirectoryPath = Buffer.from('run',
       helperPath,
       ownedRoot,
       preparedRun: { runId: RUN_ID, runDirectoryPath },
+      ...(actionFunnel ? { actionFunnel } : {}),
     }),
     ownedRoot,
   });
@@ -461,6 +509,55 @@ async function readTestRootForTrace(t: TestContext): Promise<Buffer> {
   t.after(async () => await rm(root, { recursive: true, force: true }));
   return Buffer.from(root, 'utf8');
 }
+
+test('runtime trace stages schema-4 action funnel records only for a matched started action', async (t) => {
+  const { session, client } = await authenticatedSession(t);
+  const { trace, ownedRoot } = await createTrace(t, Buffer.from('run', 'ascii'), true);
+  const messages = await beginOneSeatRun(trace, session, client);
+  const base = policyDecisionRecord(1n);
+  const decision = { ...base, schema: 'policy-replay-v2' as const, disposition: { kind: 'start' as const, action_sequence: '1' } };
+  await trace.recordPolicyDecision(decision as never);
+  const funnel = makeActionFunnelTraceRecord({
+    seat: 0, actionSequence: '1', tick: 12, intent: 'attack', targetEntity: 7, targetSeat: 1, border: 'current',
+    skill: 'failed', funnel: stoppedActionFunnelRecord({
+      action: 'attack', target: entityId(7), lastPassed: 'localValidation', reason: 'cooldownNotReady',
+    }),
+  });
+  await trace.recordActionFunnel(funnel);
+  await trace.recordPolicyEffect(makePolicyEffectRecord(1n, { kind: 'succeeded' }, []));
+  await endOneSeatRun(trace, session, client, messages);
+  const finalized = await trace.finalize();
+  const bytes = await readOwnedFile({
+    helperPath, ownedRoot, relativePath: finalized.segments[0]!.relativePath, maxBytes: finalized.segments[0]!.byteLength,
+  });
+  const segment = parseSegment(bytes);
+  assert.equal(segment.schema, 4);
+  assert.equal(readActionFunnelTraceRecord(segment.records.find((record) => record.schema === 'action-funnel-v1')!, 1).funnel?.kind, 'stopped');
+});
+
+test('runtime trace refuses unmatched and duplicate action funnel records', async (t) => {
+  for (const [kind, sequence, repeat] of [['unmatched_action_funnel', '9', false], ['duplicate_action_funnel', '1', true]] as const) {
+    const { session, client } = await authenticatedSession(t);
+    const { trace } = await createTrace(t, Buffer.from('run', 'ascii'), true);
+    await beginOneSeatRun(trace, session, client);
+    const decision = { ...policyDecisionRecord(1n), schema: 'policy-replay-v2' as const,
+      disposition: { kind: 'start' as const, action_sequence: '1' } };
+    await trace.recordPolicyDecision(decision as never);
+    const record = makeActionFunnelTraceRecord({ seat: 0, actionSequence: sequence, tick: 1, intent: 'attack', targetEntity: null,
+      targetSeat: null, border: 'unknown', skill: 'succeeded', funnel: null });
+    if (repeat) await trace.recordActionFunnel(record);
+    await assert.rejects(trace.recordActionFunnel(record), (error: unknown) =>
+      error instanceof RunnerError && error.source.kind === kind);
+  }
+});
+
+test('runtime trace without action funnel stays schema 3 and refuses funnel records', async (t) => {
+  const { session, client } = await authenticatedSession(t);
+  const { trace } = await createTrace(t);
+  await beginOneSeatRun(trace, session, client);
+  await assert.rejects(trace.recordActionFunnel({} as never), (error: unknown) =>
+    error instanceof RunnerError && error.source.kind === 'action_funnel_not_enabled');
+});
 
 async function authenticatedSession(t: TestContext, capabilities: readonly ControlCapability[] = CAPABILITIES): Promise<Readonly<{
   session: ControlSession;

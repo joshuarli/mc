@@ -36,6 +36,10 @@ Progress goes to stderr: run ID, Minecraft version, address, mode, role and seat
 
 `inspect --run-id` reads only stopped runs. Use the run ID from the `run` result. A run ID cannot be reused while its path exists under `.work/arena/traces/`, including a partial archive.
 
+## Explain a seat
+
+`./arena explain --run-id <id> --seat <n>` prints one seat's recorded decisions, skill outcomes, action-funnel stages, and authoritative effects for a stopped run. It needs a schema 4 trace for funnel and effect fields and states only what the trace records. See [determinism](determinism.md).
+
 ## Remove run data
 
 Use `gc --dry-run` to review selected run directories. Use `gc --apply` to archive eligible evidence and remove selected directories. The command does not select unrelated runs for removal.

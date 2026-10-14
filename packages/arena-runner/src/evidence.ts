@@ -1,6 +1,7 @@
 import { canonicalJson } from './canonical.js';
 import { ControlCodecError, decodeControlEnvelope } from './control/index.js';
 import type { ControlMessage, PreparePayload } from './control/types.js';
+import { actionFunnelReport } from './funnel-report.js';
 import { reconstructEventResult, type EventDerivedResult } from './event-report.js';
 import { MAX_EVIDENCE_BYTES, TraceError, type TraceRecord, type TraceSegment } from './trace.js';
 
@@ -79,7 +80,9 @@ export function inspectJson(evidence: Evidence): object {
 
 export function reportJson(evidence: Evidence): object {
   const { report } = reconstructRunEvidence(evidence);
+  const funnel = actionFunnelReport(evidence);
   return {
+    ...(funnel === undefined ? {} : { action_funnel: funnel }),
     schema: 1,
     run_id: evidence.run_id,
     sequence_range: { first: evidence.first_sequence, last: evidence.last_sequence },
@@ -105,7 +108,7 @@ export function reconstructRunEvidence(evidence: Evidence): ReconstructedRunEvid
   for (const [index, record] of evidence.records.entries()) {
     const recordNumber = index + 1;
     if (record.schema === 'policy-replay-v1' || record.schema === 'policy-replay-v2' || record.schema === 'policy-replay-v3' || record.schema === 'policy-effect-v1' || record.schema === 'civilization-policy-replay-v1'
-        || record.schema === 'civilization-policy-effect-v1') continue;
+        || record.schema === 'civilization-policy-effect-v1' || record.schema === 'action-funnel-v1') continue;
     const direction = record.direction;
     if (direction !== 'runner' && direction !== 'plugin') {
       throw eventRecordFailure('invalid_event_direction', recordNumber);
