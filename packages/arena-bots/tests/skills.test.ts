@@ -110,6 +110,7 @@ test('travel navigation looks down between legs and melee pursuit does not', asy
   const looks: Array<{ x: number; y: number; z: number }> = [];
   const setGoal = harness.pathfinder.setGoal;
   harness.pathfinder.setGoal = (goal) => {
+    if (goal !== null) assert.equal(harness.pathfinder.movements.maxDropDown, 4);
     setGoal(goal);
     if (goal !== null) events.push('goal');
   };
@@ -382,6 +383,77 @@ test('travel navigation looks down between legs and melee pursuit does not', asy
     trapped.observer.close();
   }
 
+  const landingY = 44;
+  const rivalDistance = 5;
+  const descent = openRivalTravel({ solid: true, standableStep: false });
+  descent.rival.position.y = landingY;
+  descent.rival.position.z = rivalDistance;
+  const solidFloorY = landingY - 1;
+  descent.bot.blockAt = ((point: Bot['entity']['position']) => {
+    const x = Math.floor(point.x);
+    const y = Math.floor(point.y);
+    const z = Math.floor(point.z);
+    const air = { name: 'air', boundingBox: 'empty' as const, position: point };
+    const stone = { name: 'stone', boundingBox: 'block' as const, position: point };
+    if (x === 0 && z === 0 && y === 63) return stone;
+    if (x === 0 && z === 0 && (y === 64 || y === 65)) return air;
+    if (x === 0 && z === 1 && y === solidFloorY) return stone;
+    if (x === 0 && z === 1) return air;
+    return stone;
+  }) as Bot['blockAt'];
+  const descentGoals: Array<{
+    readonly x: number;
+    readonly y: number;
+    readonly z: number;
+    readonly maxDropDown: number;
+    readonly goal: unknown;
+  }> = [];
+  const descentSetGoal = descent.pathfinder.setGoal.bind(descent.pathfinder);
+  descent.pathfinder.setGoal = (goal) => {
+    const maxDropDown = descent.pathfinder.movements.maxDropDown;
+    descentSetGoal(goal);
+    if (goal === null || typeof goal !== 'object') return;
+    const goalRecord = goal as { readonly x?: unknown; readonly y?: unknown; readonly z?: unknown };
+    const x = goalRecord.x;
+    const y = goalRecord.y;
+    const z = goalRecord.z;
+    if (typeof x !== 'number' || typeof y !== 'number' || typeof z !== 'number') return;
+    descentGoals.push({ x, y, z, maxDropDown, goal });
+  };
+  try {
+    const running = descent.owner.run({ kind: 'navigate', target: blockPosition(16, 64, 0) });
+    await waitUntil(() => descentGoals.length >= 1);
+    descent.bot.emit('goal_reached', descent.pathfinder.goal as never);
+    await waitUntil(() => descentGoals.length >= 2);
+    descent.bot.emit('path_update', { status: 'noPath' } as never);
+    await waitUntil(() => descentGoals.length >= 3);
+    const ordinaryGoal = descentGoals[0];
+    const dropGoal = descentGoals[1];
+    const continuedGoal = descentGoals[2];
+    if (ordinaryGoal === undefined || dropGoal === undefined || continuedGoal === undefined) {
+      throw new Error('missing drop travel goal');
+    }
+    assert.equal(ordinaryGoal.maxDropDown, 4);
+    assert.ok(dropGoal.goal instanceof goals.GoalBlock);
+    assert.equal(dropGoal.x, 0);
+    assert.equal(dropGoal.y, landingY);
+    assert.equal(dropGoal.z, 1);
+    assert.ok(dropGoal.maxDropDown >= 20);
+    assert.ok(dropGoal.maxDropDown <= 24);
+    assert.equal(descent.pathfinder.movements.maxDropDown, 4);
+    assert.equal(continuedGoal.maxDropDown, 4);
+    assert.equal(continuedGoal.x, ordinaryGoal.x);
+    assert.equal(continuedGoal.y, ordinaryGoal.y);
+    assert.equal(continuedGoal.z, ordinaryGoal.z);
+    assert.equal(descentGoals.filter((goal) => goal.y === landingY).length, 1);
+    const cancellation = descent.owner.cancel('shutdown');
+    assert.deepEqual(await running, { kind: 'cancelled', reason: 'shutdown' });
+    await cancellation;
+  } finally {
+    await descent.owner.close();
+    descent.observer.close();
+  }
+
   const melee = makeHarness();
   const meleeGoals: unknown[] = [];
   let meleeLooks = 0;
@@ -426,6 +498,7 @@ test('travel navigation looks down between legs and melee pursuit does not', asy
     melee.bot.emit('goal_reached', melee.pathfinder.goal as never);
     await waitUntil(() => meleeGoals.length >= 2);
     assert.equal(meleeLooks, 0);
+    assert.equal(melee.pathfinder.movements.maxDropDown, 4);
     const cancellation = melee.owner.cancel('shutdown');
     assert.deepEqual(await running, { kind: 'cancelled', reason: 'shutdown' });
     await cancellation;
@@ -2042,10 +2115,13 @@ function makeHarness(
   let controlsCleared = 0;
   const pathfinder = {
     goal: null as unknown,
+    movements: { maxDropDown: 4 } as { maxDropDown: number },
     thinkTimeout: 0,
     tickTimeout: 0,
     searchRadius: -1,
-    setMovements: (_movements: unknown) => undefined,
+    setMovements: (movements: { maxDropDown: number }) => {
+      pathfinder.movements = movements;
+    },
     setGoal: (goal: unknown) => {
       pathfinder.goal = goal;
       if (goal !== null && !moving) {

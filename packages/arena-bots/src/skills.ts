@@ -68,6 +68,7 @@ const TRAVEL_SIGHT_BELOW_EYE_BLOCKS = 12;
 const SIGHT_EDGE_INSET_BLOCKS = 0.3;
 const SIGHT_EDGE_TOLERANCE_BLOCKS = 0.05;
 const SIGHT_EDGE_WALK_TICKS = 8;
+const MAX_BLOCKED_DROP_DOWN = 24;
 const MAX_NAVIGATION_LEGS = 128;
 const MAX_PATH_THINK_MS = 1_000;
 const MAX_PATH_SLICE_PER_CLIENT_MS = 3;
@@ -138,6 +139,12 @@ type NavigationArrival =
   | { readonly kind: 'pickupReach' }
   | { readonly kind: 'meleeReach'; readonly target: Bot['entity'] };
 type NavigationPosition = Readonly<{ x: number; y: number; z: number }>;
+type TravelSight =
+  | { readonly kind: 'visible' }
+  | { readonly kind: 'blocked'; readonly step: NavigationPosition; readonly drop: boolean }
+  | { readonly kind: 'exhausted' }
+  | { readonly kind: 'clear' };
+type SightStep = { readonly step: NavigationPosition; readonly drop: boolean };
 
 
 interface AStarContext {
@@ -795,27 +802,25 @@ export class SkillOwner {
     active: ActiveSkill,
     signal: AbortSignal,
     rejectedSightSteps: ReadonlySet<string>,
-  ): Promise<{ readonly kind: 'visible' } | { readonly kind: 'blocked'; readonly step: NavigationPosition } | { readonly kind: 'exhausted' } | { readonly kind: 'clear' }> {
-    let blockedStep: NavigationPosition | null = null;
+  ): Promise<TravelSight> {
+    let blockedStep: SightStep | null = null;
     let exhausted = false;
     for (let quarterTurn = 0; quarterTurn < 4; quarterTurn += 1) {
       throwIfInterrupted(signal);
       await this.#lookAt(active, 'look down the path', travelSightPoint(this.#bot, goal, quarterTurn));
       const sight = this.#travelSight(rejectedSightSteps);
       if (sight.kind === 'visible') return sight;
-      if (sight.kind === 'blocked' && blockedStep === null) blockedStep = sight.step;
+      if (sight.kind === 'blocked' && blockedStep === null) blockedStep = sight;
       if (sight.kind === 'exhausted') exhausted = true;
     }
-    if (blockedStep !== null) return { kind: 'blocked', step: blockedStep };
+    if (blockedStep !== null) return { kind: 'blocked', step: blockedStep.step, drop: blockedStep.drop };
     if (exhausted) return { kind: 'exhausted' };
     return { kind: 'clear' };
   }
 
-  #travelSight(
-    rejectedSightSteps: ReadonlySet<string>,
-  ): { readonly kind: 'visible' } | { readonly kind: 'blocked'; readonly step: NavigationPosition } | { readonly kind: 'exhausted' } | { readonly kind: 'clear' } {
+  #travelSight(rejectedSightSteps: ReadonlySet<string>): TravelSight {
     const selfId = this.#bot.entity.id;
-    let blockedStep: NavigationPosition | null = null;
+    let blockedStep: SightStep | null = null;
     let sawBlockedPlayer = false;
     let repeatedFailure = false;
     for (const entity of Object.values(this.#bot.entities)) {
@@ -826,24 +831,26 @@ export class SkillOwner {
       sawBlockedPlayer = true;
       const step = this.#blockedSightStep(entity);
       if (step === null) continue;
-      if (rejectedSightSteps.has(navigationKey(step))) {
+      if (rejectedSightSteps.has(navigationKey(step.step))) {
         repeatedFailure = true;
         continue;
       }
       if (blockedStep === null) blockedStep = step;
     }
-    if (blockedStep !== null) return { kind: 'blocked', step: blockedStep };
+    if (blockedStep !== null) return { kind: 'blocked', step: blockedStep.step, drop: blockedStep.drop };
     if (sawBlockedPlayer && repeatedFailure) return { kind: 'exhausted' };
     return { kind: 'clear' };
   }
 
-  #blockedSightStep(entity: MineflayerEntity): NavigationPosition | null {
+  #blockedSightStep(entity: MineflayerEntity): SightStep | null {
     const current = this.#bot.entity.position;
     const playerBlock = toBlockPosition(entity.position);
     const step = horizontalStepToward(current, playerBlock);
     if (step === null) return null;
-    if (isStandableAtFloor(this.#bot, step)) return step;
-    return edgeOfCurrentBlock(current, playerBlock);
+    if (isStandableAtFloor(this.#bot, step)) return { step, drop: false };
+    const landing = columnDropLanding(this.#bot, step, playerBlock);
+    if (landing !== null) return { step: landing, drop: true };
+    return { step: edgeOfCurrentBlock(current, playerBlock), drop: false };
   }
 
   async #navigate(
@@ -857,6 +864,7 @@ export class SkillOwner {
     const travelGoal = position;
     const rejectedSightSteps = new Set<string>();
     let stepOntoSightBlock = false;
+    let dropTowardSight = false;
     for (let leg = 0; leg < MAX_NAVIGATION_LEGS; leg += 1) {
       throwIfInterrupted(signal);
       const border = this.#observer.currentBorder();
@@ -866,6 +874,8 @@ export class SkillOwner {
       }
 
       const current = this.#bot.entity.position;
+      const dropping = dropTowardSight;
+      dropTowardSight = false;
       const remainingDistance = distance(current, position);
       const arrived = arrival.kind === 'meleeReach' ? this.#inMeleeReach(arrival.target) : hasArrived(current, position, arrival);
       if (arrived && !stepOntoSightBlock) return;
@@ -901,7 +911,12 @@ export class SkillOwner {
       active.resources.navigationActive = true;
       recordPathDiagnostic(this.#bot, { kind: 'navigation', active: true });
       let legFault: SkillFault | null = null;
+      const movements = dropping ? this.#bot.pathfinder.movements : null;
+      const previousDropDown = movements === null ? null : movements.maxDropDown;
       try {
+        if (movements !== null && previousDropDown !== null) {
+          movements.maxDropDown = maxDropDownToSolid(current.y, position.y, previousDropDown);
+        }
         this.#bot.pathfinder.setGoal(goal, false);
         await Promise.race([reached, pathFailure]);
         throwIfInterrupted(signal);
@@ -917,6 +932,7 @@ export class SkillOwner {
         legFault = error;
         if (stepOntoSightBlock) rejectedSightSteps.add(navigationKey(position));
       } finally {
+        if (movements !== null && previousDropDown !== null) movements.maxDropDown = previousDropDown;
         signal.removeEventListener('abort', relayAbort);
         const completion: PathSearchCompletion = signal.aborted
           ? 'cancelled'
@@ -938,6 +954,7 @@ export class SkillOwner {
           if (afterNudge.kind === 'blocked' && isExactBlockStep(afterNudge.step) && leg + 1 < MAX_NAVIGATION_LEGS) {
             position = afterNudge.step;
             stepOntoSightBlock = true;
+            dropTowardSight = afterNudge.drop;
             continue;
           }
           position = travelGoal;
@@ -947,6 +964,7 @@ export class SkillOwner {
         if (sight.kind === 'blocked' && leg + 1 < MAX_NAVIGATION_LEGS) {
           position = sight.step;
           stepOntoSightBlock = true;
+          dropTowardSight = sight.drop;
           continue;
         }
         if (sight.kind === 'exhausted' && stepOntoSightBlock) {
@@ -2314,6 +2332,29 @@ function isExactBlockStep(position: NavigationPosition): boolean {
 
 function navigationKey(position: NavigationPosition): string {
   return `${position.x.toFixed(4)},${position.y.toFixed(4)},${position.z.toFixed(4)}`;
+}
+
+function columnDropLanding(bot: Bot, step: BlockPosition, playerBlock: BlockPosition): BlockPosition | null {
+  if (playerBlock.y >= step.y) return null;
+  const feet = blockAtColumn(bot, step.x, step.y, step.z);
+  const head = blockAtColumn(bot, step.x, step.y + 1, step.z);
+  if (feet === null || head === null || feet.boundingBox !== 'empty' || head.boundingBox !== 'empty') return null;
+  const ground = blockAtColumn(bot, step.x, step.y - 1, step.z);
+  if (ground !== null && ground.boundingBox === 'block') return null;
+  const playerFloor = blockPosition(step.x, playerBlock.y, step.z);
+  if (isStandableAtFloor(bot, playerFloor)) return playerFloor;
+  const lowest = step.y - MAX_BLOCKED_DROP_DOWN;
+  for (let y = step.y - 1; y >= lowest; y -= 1) {
+    const candidate = blockPosition(step.x, y, step.z);
+    if (isStandableAtFloor(bot, candidate)) return candidate;
+  }
+  return null;
+}
+
+function maxDropDownToSolid(fromY: number, landingY: number, installed: number): number {
+  const solidY = landingY - 1;
+  const needed = Math.floor(fromY) - solidY;
+  return Math.min(MAX_BLOCKED_DROP_DOWN, Math.max(installed, needed));
 }
 
 function isStandableAtFloor(bot: Bot, step: BlockPosition): boolean {
