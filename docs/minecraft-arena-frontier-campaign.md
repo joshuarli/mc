@@ -1,6 +1,6 @@
 # Arena Frontier: from a six-bot experiment to competitive worlds
 
-**Status:** winding down. Written against `master` at `f479b16` (2026-10-14). It supersedes the earlier agent campaign plans, which G0 deleted.
+**Status:** paused 2026-10-14 (bot-quality sprint in progress; see Handoff). Written against `master` at `f479b16` (2026-10-14). It supersedes the earlier agent campaign plans, which G0 deleted.
 
 ## Priority override (2026-10-14, owner)
 
@@ -17,50 +17,38 @@ Bot quality is the top immediate priority; every other item waits unless it unbl
 
 Quality gates fixed now: all six seeds terminate; at least 75% of seats loot a chest; at least 40% of eliminations are PvP; self-inflicted attack rejections under 5% of issued attacks in live matches; no seat idle for more than 600 ticks without a recorded waiting reason; candidate beats `baseline@1` per the league rule.
 
-## Handoff (paused 2026-10-14)
+## Handoff (paused 2026-10-14, second pause)
 
-**Resume.** Prompt: `Execute docs/minecraft-arena-frontier-campaign.md from the Handoff "Not started" list on branch campaign/frontier; finish every deliverable; never push.` First command: `git switch campaign/frontier && ./arena build --package all`. No lane worktrees exist; recreate them under `.work/wt/frontier-<lane>` with `git worktree add .work/wt/frontier-<lane> -b campaign/frontier-<lane> campaign/frontier`, then `pnpm install --frozen-lockfile --offline --store-dir <repo>/.work/arena/pnpm-store` and `git checkout pnpm-lock.yaml` (pnpm adds `@pnpm/exe` there; never commit it). Clone `.work/arena/{toolchains,downloads,gradle}` into a lane that runs live cases with `cp -cR`.
+**Resume.** Prompt: `Execute docs/minecraft-arena-frontier-campaign.md: continue the bot-quality sprint (Priority override) from the Handoff "Not started" list on branch campaign/frontier; finish every deliverable; never push.` First commands: `git switch campaign/frontier && ./arena build --package all`. No lane worktrees exist; recreate under `.work/wt/frontier-<lane>` with `git worktree add .work/wt/frontier-<lane> -b campaign/frontier-<lane> campaign/frontier`, then `pnpm install --frozen-lockfile --offline --store-dir <repo>/.work/arena/pnpm-store` and `git checkout pnpm-lock.yaml` (pnpm adds `@pnpm/exe`; never commit it). Lanes that run live need `.work/arena/{toolchains,downloads,gradle}` cloned with `cp -cR`.
 
-**State.** Branch `campaign/frontier` (tip `55514ba` plus this handoff commit); `master` is untouched at `f479b16` plus the user's `f` commit. Merged: G0 (Node lock 26.11.1, docs and AGENTS invariant), G1 (nine baseline reds), G2 (live baseline), S1 (scenario 3, world plan 3, roster v2 wire, 256 seats), S2 (exact seat binding), S3/S3a (spawn search, rule modes `[rules]`, hunger-12/24, integer border center), S4 (`withExternalSeat`), S5 (`damage_events_v1`), S6 (candidate profiles), S7 (hunger-six on schema 3), S8 (duplicate login deny), S9 (`tick_metrics_v1`), S10 (spawn resolution at prepare, wider search, `tests/acceptance/spawn-setup.ts`), K1 plugin (checkpoint/resume), M0–M3, M2 (bow, shield, eating guard), M3a (border diagnostic), L1a (candidate registry), R1/R1b/R1c (play, watch, exact admission, `external-seat`), R2 (trace 4, funnel, `explain`), R3 (worker cohorts), L1 (league), K1 runner (`save`/`resume`), B1 (`bench` harness), C0 partial (navigation arrival, pickup reach, collect-while-falling, canopy-free acceptance layout), M4 partial (`curriculum-melee`, `curriculum-ranged`).
+**State.** Branch `campaign/frontier` at the commit that contains this handoff; `master` untouched. Everything from the first pause (see Decision and Campaign logs) plus this sprint is merged: runner wiring of per-seat candidates, `baseline@1` frozen with `improved` (policy-v5) and `decisionDiff`/`explain` introspection, `./arena quality` (ephemeral ports, `--concurrency 1-4`, per-seat quality table, reason histograms, gates), `decision-diff`, seat timelines in `explain`, S8b duplicate-login fix, S9 tick metrics, S10/S11/S13 spawn and cache search with reachability and whole-formation translation (`world-search-v6`), `steadyMeleeEngagement`, observed-support travel targets, feedback-contract fix, combat-arena latency options for tests.
 
-**Known red on the branch.**
-- `integration civilization-rules` fails at the sixteen-plank craft (`{failed, timedOut}` about 5 s): mineflayer `bot.craft` sends iteration 2+ clicks before the server acknowledges the first, so stale state IDs resync and the local model drifts. Fix belongs in `craftCivilizationMaterial` (`civilization-skills.ts`): one iteration per owned operation, wait for result slot and consumed log count. `civilization-six` and `civilization-baseline` were never run.
-- `acceptance hunger-six`: seeds 481516 and 481517 pass live; 481518 failed before the S10 widening; 481519–481521 never ran; no clean six-seed pass on the final plugin.
-- Unverified live: S8 (`external-seat` row 4), S9 (metrics), hunger-12/24 end to end, `--workers 2`, `./arena league` smoke, frontier rule-mode edit probes, `curriculum-survival` (written, never run).
-- Offline suite 607/607, `./arena check lint` clean, Java unit green, live `stack` and `legal-player` pass at the tip.
+**Quality evidence so far (live, `./arena quality`, hunger-six, concurrency 2).**
+- Baseline 4 seeds (481516..481519): all terminate; seats looting 0.58; PvP eliminations 0.53; self-inflicted attack rejections 0.63 per issued attack; longest unexplained idle 2,236 ticks.
+- `improved` on seats 0/2/4 vs baseline on 1/3/5 (3 of 4 seeds, before S13): 481519 improved won decisively (damage out 40/8.6/87 vs 2.6/0/5; chests 3–6 vs 1–3); 481517 worse (three improved seats died in melee at ticks 827–1,102); 481518 mixed (improved seat 0 looted 4 chests and killed a baseline seat; two improved seats were pit-trapped by spawn placement, since fixed by S13); 481516 match killed by a window synchronization failure.
+- No promotion verdict: league never run live; mean over those matches about 0.5.
 
-**Open lanes.** None. All lane branches were merged by cherry-pick and deleted; no unmerged work remains.
+**Known red / open defects.**
+- Melee still ineffective in dynamic fights: `aimNotReady` clusters at 2.9–3.0 blocks eye-to-body (`isCrosshairOnBody` entry-distance test stricter than the reach check, single aim at 0.65 height with no lead), `targetNoLongerVisible` at the cone edge, and the skill never turns toward its intent target. Plan with numbers is in the `engage` lane report: rewrite the strike phase of `#pursueAndStrike` per physics tick with `meleeAimPoint` lead from observed velocity, bounded aim-settle retries, tolerate up to 3 `blocked` ticks only while the cooldown refills, add `EngagementSummary` to funnel records (runner must map it in `makeActionFunnelTraceRecord`), test `engage-dynamic.test.ts` (orbit r=2.4, 0.25 blocks per tick, 1 tick look latency and observation lag, knockback 0.6).
+- A single client window desync kills a whole match (`Mineflayer operation "synchronize window after withdrawing bread" did not settle; this client is quarantined`, seed 481516): quarantine should eliminate/disable that seat and keep the match valid, or retry the sync, not fail the run.
+- v5 travel/probe still produces little distance in some seats (idle 3,000+ ticks); orbit/probe loops need re-measurement after the observed-support fix and S13.
+- `civilization-rules` fails at the sixteen-plank craft (mineflayer `bot.craft` clicks before server ack; fix in `craftCivilizationMaterial`); `civilization-six`/`baseline` never ran.
+- `external-seat` row 1 (surrogate loots/damages/wins) fails with a bare AssertionError; the other 7 rows pass. `curriculum-survival` never ran; calibration constants not measured.
+- S12 seed matrix incomplete: hunger-six resolves at 481516..481521; `hunger-12` at 481516/481518 failed before the ranked-translation commit (not rerun); hunger-24, development 500001..500012 and held-out 600001..600024 never probed.
 
-**Retained worktrees.** None.
+**Open lanes.** None; all lane branches merged by cherry-pick and deleted. **Retained worktrees.** None.
 
 **Not started (in order).**
-1. C0 craft fix, then `civilization-rules`, `civilization-six`, `civilization-baseline`.
-2. Live verification at the tip, serialized under the lock: `external-seat`, `curriculum-survival` (fix what it reveals), `hunger-six` six seeds, the S10 setup table (`ARENA_SETUP_SCENARIOS`/`ARENA_SETUP_SEEDS`), `hunger-12`/`hunger-24`, a `--workers 2` run, a league smoke.
-3. Runner: consume `tick_metrics_v1`; plugin: attribute arrow damage to the shooter in `ARENA_DAMAGE`; calibrate cooldown, bow draw, arrow speed and gravity, reach, shield reduction and record them in `docs/policies.md`.
-4. C1 (finite technology chain, renewable food, jobs and claims, hauling, ledger), C2, C3, C4, C5, then H-SRV, H-MECH, H-RUN, H-CIV, O1, L2, Z1 (the `acceptance`, `hunger-12/24`, `frontier-*` acceptance cases are still unwritten).
-5. Refresh `docs/acceptance-report.md` with the results above.
+1. Q-engage: implement the planned strike-phase rewrite and rerun `curriculum-melee` live, then `./arena quality --scenario scenarios/hunger-six.toml --seeds 481516,481517,481518,481519 --candidate improved --concurrency 2 --accept-minecraft-eula` and compare with baseline (self-inflicted rejection share must drop below 0.05).
+2. Client-quarantine resilience (above), `trapped` label in seat quality, export `baselineExplanation` from core, wire `EngagementSummary`.
+3. Rerun the improved-vs-baseline comparison on all six seeds and the S12 matrix; then the league on development seeds 500001..500012 (promotion needs mean ≥ 0.65 and lower bound > 0.5; held-out 600001..600024 is unconsumed), then Q2 tuning with the candidate search helper.
+4. Then the earlier backlog: C0 craft fix and C1–C5, hardening, bench matrix (O1), Z1.
 
-**Operational notes.** Live acceptance cases bind port 25565: run one at a time, wrap in `until mkdir .work/live.lock 2>/dev/null; do sleep 10; done; <cmd>; rmdir .work/live.lock`, and wait for the port to be free. `./arena build --package all` does not build the `arena-fs` helper; `make -C native/arena-fs build` does. The eleven unregistered `.work/wt/*` directories from before the campaign are untouched.
+**Operational notes.** Quality and league runs use ephemeral ports; acceptance `hunger-six`, lifecycle, faults and external-seat still bind 25565: serialize them with `until mkdir .work/live.lock 2>/dev/null; do sleep 10; done; <cmd>; rmdir .work/live.lock` and wait for the port. `./arena build --package all` does not build the `arena-fs` helper (`make -C native/arena-fs build`). Quality runs print Paper logs only to stderr.
 
-**Owner decisions owed.** None blocking. Logged calls to review: rule modes are a `[rules]` table in scenario 3 rather than new `mode` values; squads outcome stays last-survivor by seat; held-out seed set `600001..600024` is not yet consumed; `hunger-six` moved to scenario schema 3.
+**Owner decisions owed.** None blocking. Logged calls to review: `[rules]` table in scenario 3; squads outcome last-survivor by seat; `hunger-six` on scenario schema 3; v5 ships as candidate `improved`, baseline stays frozen until a league verdict.
 
-**Verified at pause.** Worktrees pruned and none registered besides the main checkout; no campaign process or live lock; no unmerged campaign branches; the doc and handoff are committed; `.work/` is ignored through `.git/info/exclude`.
-
-
-**Goal.** The owner opens an ordinary Minecraft client and plays against capable, fair opponents in a large Hunger Games match, or joins a faction whose economy, construction, reconnaissance and military decisions continue without them. Headless, scripted, no LLM, no paid inference, no GPU, no public listener.
-
-**Deliverables**
-
-1. **D1 Hunger 24.** Natural 1024 × 1024 seeded terrain, 24 competitors, all-bot or one external human plus 23 bots, competent movement, equipment, survival, melee and bows.
-2. **D2 Human admission.** `play` and `watch`. One exact-identity external competitor on loopback, same rules as a bot.
-3. **D3 Mechanics.** A measured action funnel, fractional combat geometry, an engage skill, and a live mechanics curriculum.
-4. **D4 Frontier War.** A real resource economy, functional construction, squads, typed treaties, human faction orders. Two factions of 6, four of 8, four of 16.
-5. **D5 Persistence.** Clean checkpoint and resume of a faction session.
-6. **D6 Skill laboratory.** Seed manifests, frozen-opponent league, bounded CPU-only tuning, a default-policy decision.
-7. **D7 Capacity laboratory.** Worker cohorts, a workload matrix to 256 competitors, measured qualifying capacity per workload.
-8. **D8 Delivery.** Fresh-checkout build, README walkthrough, one acceptance report that separates implemented, verified, certified and open.
-
----
+**Verified at pause.** No worktrees besides the main checkout, no unmerged campaign branches, no campaign process or live lock, working tree clean, offline suite 631/631, lint clean, Java unit green, build clean on the final tip. Not re-run after the final merges: live `stack`/`legal-player`.
 
 ## 1. Charter
 
@@ -459,6 +447,7 @@ Do not spend a research phase rediscovering launchers, server replacements, bot 
 - 2026-10-14 P0 end: G0 and G1 merged, G2 baseline recorded (legal-player pass; civilization-rules and hunger-six red).
 - 2026-10-14 P1 partial: S1–S10, M0–M3a, L1a, R1–R3, L1, K1, B1 merged; C0 and M4 parked partial (craft defect, survival case unrun).
 - 2026-10-14 paused: campaign wound down at owner request; see Handoff.
+- 2026-10-14 quality sprint: Q0 baseline, Q-loop, policy-v5/improved, S11/S13 spawn fixes merged; melee engage rewrite planned not implemented; second pause at owner request.
 
 ## 13. For the owner afterwards
 
