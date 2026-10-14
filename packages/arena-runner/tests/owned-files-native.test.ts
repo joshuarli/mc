@@ -111,7 +111,7 @@ test('lists owned runs in ASCII order without modifying the run tree', async () 
   });
 });
 
-test('creates at most ten immediate owned runs under concurrent creation', async () => {
+test('creates concurrent immediate owned runs beyond ten without a run-count limit', async () => {
   await withOwnedRoot(async (root) => {
     for (let index = 0; index < 9; index++) {
       await createRunDirectory({
@@ -133,13 +133,8 @@ test('creates at most ten immediate owned runs under concurrent creation', async
       }),
     ]);
 
-    assert.equal(results.filter((result) => result.status === 'fulfilled').length, 1);
-    const failure = results.find((result) => result.status === 'rejected');
-    assert.equal(failure?.status, 'rejected');
-    if (failure?.status !== 'rejected') throw new Error('one concurrent creation must fail at capacity');
-    assert.equal(failure.reason instanceof OwnedFilesError, true);
-    assert.equal((failure.reason as OwnedFilesError).category, 'too_large');
-    assert.equal((await listOwnedRuns({ helperPath, ownedRoot: root })).length, 10);
+    assert.deepEqual(results.map((result) => result.status), ['fulfilled', 'fulfilled']);
+    assert.equal((await listOwnedRuns({ helperPath, ownedRoot: root })).length, 11);
   });
 });
 
