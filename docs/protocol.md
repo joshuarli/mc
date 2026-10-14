@@ -142,6 +142,31 @@ version: 1, squads: [{id, seats}]}` declares 2 to 64 uniquely named squads
 whose ascending seats partition every roster seat, and requires the classic
 block rules. The codec and the plugin both check these cross-field rules.
 
+## Damage events
+
+The closed `damage_events_v1` capability gates the evaluator-only `damage`
+event. The runner opts in per match with `damage_events: true` on a
+roster-version-2 `prepare`; without it the plugin emits none. The envelope
+`protocol` stays 1.
+
+`damage` is `{at, entries}` with a match tick and 1 to 2,048 entries. Each
+entry is `{victim, attacker, cause, amount, attacker_is_competitor}`: the
+victim seat, the attacking competitor's seat or `null` for environment and
+non-competitor sources, the cause category (`melee`, `projectile`, `border`,
+`fall`, `fire`, `starvation`, `other`), the summed final damage in half
+hearts, and a flag that is true exactly when `attacker` is a seat. An
+attacker seat is valid only for `melee`, `projectile`, or `other`.
+
+The plugin sends at most one `damage` message per match tick, before that
+tick's `elimination`, covering only living competitors in `grace` or
+`active`. Entries are aggregated per victim, attacker, and cause and ordered
+by victim, attacker, cause. A victim has at most 8 entries per tick; when it
+has more, the first 7 stay individual and the rest fold into one
+`attacker: null`, `cause: other` entry that keeps the total amount. That bounds
+a 256-seat tick to 2,048 entries, about 190 KiB, under the frame limit. Like
+eliminations the event is critical: the runner must not drop or coalesce it.
+`damage` is evaluator data and must never be copied into a policy input.
+
 ## Checkpoint and resume
 
 The closed `checkpoint_v1` capability gates three additions; the envelope

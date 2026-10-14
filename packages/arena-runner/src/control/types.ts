@@ -1,4 +1,4 @@
-export const CONTROL_CAPABILITIES = Object.freeze(["hunger_games_v1", "civilization_v1", "hunger_games_roster_v2", "checkpoint_v1"] as const);
+export const CONTROL_CAPABILITIES = Object.freeze(["hunger_games_v1", "civilization_v1", "hunger_games_roster_v2", "checkpoint_v1", "damage_events_v1"] as const);
 export type ControlCapability = typeof CONTROL_CAPABILITIES[number];
 export type FactionId = "ember" | "tide";
 export type CivilizationRole = "gatherer_crafter" | "builder" | "defender_scout";
@@ -56,6 +56,21 @@ export interface ExternalCompetitor {
 }
 
 export type RosterCompetitor = BotCompetitor | ExternalCompetitor;
+
+export type DamageCause = "melee" | "projectile" | "border" | "fall" | "fire" | "starvation" | "other";
+
+export interface DamageEntry {
+  readonly victim: number;
+  readonly attacker: number | null;
+  readonly cause: DamageCause;
+  readonly amount: number;
+  readonly attacker_is_competitor: boolean;
+}
+
+export interface DamagePayload {
+  readonly at: AuthoritativeTick;
+  readonly entries: readonly DamageEntry[];
+}
 
 export interface ResumeReference {
   readonly checkpoint_digest: string;
@@ -200,6 +215,7 @@ export type PreparePayload = {
   readonly roster_version: 2;
   readonly rules?: PrepareRules;
   readonly resume?: ResumeReference;
+  readonly damage_events?: true;
   readonly settings: HungerGamesPrepareSettings;
   readonly roster: readonly RosterCompetitor[];
 };
@@ -306,6 +322,7 @@ export type ControlMessage =
   | (ControlEnvelopeFields & { readonly type: "build_progress"; readonly payload: BuildProgressPayload })
   | (ControlEnvelopeFields & { readonly type: "prepare"; readonly payload: PreparePayload })
   | (ControlEnvelopeFields & { readonly type: "start"; readonly payload: Record<string, never> })
+  | (ControlEnvelopeFields & { readonly type: "damage"; readonly payload: DamagePayload })
   | (ControlEnvelopeFields & { readonly type: "checkpoint"; readonly payload: CheckpointCommandPayload })
   | (ControlEnvelopeFields & { readonly type: "checkpoint_written"; readonly payload: CheckpointWrittenPayload })
   | (ControlEnvelopeFields & { readonly type: "abort"; readonly payload: { readonly reason: AbortReason } })

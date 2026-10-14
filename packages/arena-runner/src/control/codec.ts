@@ -39,6 +39,9 @@ import type {
   CivilizationStatePayload,
   ControlCapability,
   ControlErrorCode,
+  DamageCause,
+  DamageEntry,
+  DamagePayload,
   ControlMessage,
   EmberFaction,
   FactionId,
@@ -232,6 +235,11 @@ export class ControlReceiver {
       throw new ControlCodecError("unsupported_capability", "plugin sent a checkpoint event without advertising checkpoint_v1");
     }
 
+    if (this.handshake === "complete" && message.type === "damage"
+        && !this.helloCapabilities.includes("damage_events_v1")) {
+      throw new ControlCodecError("unsupported_capability", "plugin sent a damage event without advertising damage_events_v1");
+    }
+
     if (this.handshake === "complete" && requiresCivilizationCapability(message)
         && !this.helloCapabilities.includes("civilization_v1")) {
       throw new ControlCodecError("unsupported_capability", "plugin sent a civilization event without advertising civilization_v1");
@@ -271,7 +279,7 @@ function isPluginEvent(message: ControlMessage): boolean {
   return message.type === "heartbeat" || message.type === "build_progress" || message.type === "public_clock"
     || message.type === "public_state" || message.type === "elimination" || message.type === "outcome"
     || message.type === "civilization_state" || message.type === "metrics" || message.type === "ack"
-    || message.type === "checkpoint_written"
+    || message.type === "checkpoint_written" || message.type === "damage"
     || message.type === "error";
 }
 
@@ -316,6 +324,8 @@ function readEnvelope(value: StrictJsonValue): ControlMessage {
       return { ...fields, type, payload: readPrepare(payload) };
     case "start":
       return { ...fields, type, payload: readEmpty(payload, "payload") };
+    case "damage":
+      return { ...fields, type, payload: readDamage(payload) };
     case "checkpoint":
       return { ...fields, type, payload: readCheckpointCommand(payload) };
     case "checkpoint_written":
@@ -397,7 +407,7 @@ function readBuildProgress(value: StrictJsonValue): BuildProgressPayload {
 
 function readPrepare(value: StrictJsonValue): PreparePayload {
   const payload = readObject(value, "payload",
-    ["map_semantic_id", "scenario_semantic_id", "seed", "mode", "settings", "roster", "roster_version", "rules", "resume"],
+    ["map_semantic_id", "scenario_semantic_id", "seed", "mode", "settings", "roster", "roster_version", "rules", "resume", "damage_events"],
     ["map_semantic_id", "scenario_semantic_id", "seed", "mode", "settings", "roster"]);
   const mode = readString(payload.mode, "payload.mode", 1, 64);
   if (mode !== "hunger_games" && mode !== "civilization") invalid("payload.mode", "mode is unsupported by control-v1");
@@ -414,6 +424,9 @@ function readPrepare(value: StrictJsonValue): PreparePayload {
   if (Object.hasOwn(payload, "rules") && !generalizedRoster) {
     invalid("payload.rules", "rule modes require the generalized roster");
   }
+  if (Object.hasOwn(payload, "damage_events") && !generalizedRoster) {
+    invalid("payload.damage_events", "damage events require the generalized roster");
+  }
   if (Object.hasOwn(payload, "resume") && !generalizedRoster) {
     invalid("payload.resume", "resume requires the generalized roster");
   }
@@ -429,6 +442,9 @@ function readPrepare(value: StrictJsonValue): PreparePayload {
       roster_version: 2,
       ...(rules === undefined ? {} : { rules }),
       ...(Object.hasOwn(payload, "resume") ? { resume: readResumeReference(payload.resume) } : {}),
+      ...(Object.hasOwn(payload, "damage_events") && readBoolean(payload.damage_events, "payload.damage_events")
+        ? { damage_events: true as const }
+        : {}),
       settings,
       roster
     };
@@ -450,6 +466,35 @@ function readResumeReference(value: StrictJsonValue | undefined): ResumeReferenc
     checkpoint_digest: readString(reference.checkpoint_digest, `${path}.checkpoint_digest`, 64, 64, /^[0-9a-f]{64}$/),
     epoch: readSafeInteger(reference.epoch, `${path}.epoch`, 1, MAX_EPOCH, reference, "epoch")
   };
+}
+
+const DAMAGE_CAUSES = new Set<DamageCause>(["melee", "projectile", "border", "fall", "fire", "starvation", "other"]);
+const MAX_DAMAGE_ENTRIES_PER_TICK = MAX_COMPETITORS * 8;
+
+function readDamage(value: StrictJsonValue): DamagePayload {
+  const payload = readObject(value, "payload", ["at", "entries"], ["at", "entries"]);
+  const entries = readArray(payload.entries, "payload.entries", 1, MAX_DAMAGE_ENTRIES_PER_TICK).map((entry, index): DamageEntry => {
+    const path = `payload.entries[${index}]`;
+    const keys = ["victim", "attacker", "cause", "amount", "attacker_is_competitor"];
+    const item = readObject(entry, path, keys, keys);
+    const victim = readSafeInteger(item.victim, `${path}.victim`, 0, MAX_SEAT, item, "victim");
+    const attacker = item.attacker === null
+      ? null
+      : readSafeInteger(item.attacker, `${path}.attacker`, 0, MAX_SEAT, item, "attacker");
+    const cause = readString(item.cause, `${path}.cause`, 1, 16) as DamageCause;
+    if (!DAMAGE_CAUSES.has(cause)) invalid(`${path}.cause`, "unknown damage cause");
+    const amount = readFiniteNumber(item.amount, `${path}.amount`);
+    if (amount <= 0) invalid(`${path}.amount`, "damage amount must be positive");
+    const competitor = readBoolean(item.attacker_is_competitor, `${path}.attacker_is_competitor`);
+    if (competitor !== (attacker !== null)) {
+      invalid(`${path}.attacker_is_competitor`, "a competitor attacker is exactly an attacker with a seat");
+    }
+    if (attacker !== null && cause !== "melee" && cause !== "projectile" && cause !== "other") {
+      invalid(`${path}.attacker`, "an attacker seat applies to melee, projectile, or other damage");
+    }
+    return { victim, attacker, cause, amount, attacker_is_competitor: competitor };
+  });
+  return { at: readTick(payload.at, "payload.at"), entries };
 }
 
 function readCheckpointCommand(value: StrictJsonValue): CheckpointCommandPayload {

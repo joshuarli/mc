@@ -83,3 +83,14 @@ test("control checkpoint fixtures reject incomplete, tampered, and inconsistent 
     assert.throws(() => decodeCheckpoint(readFileSync(join(checkpointDirectory, name))), name);
   }
 });
+
+test("control damage events carry attribution and reject inconsistent entries", () => {
+  const message = decodeControlEnvelope(fixture("control-damage.json"));
+  if (message.type !== "damage") assert.fail("damage expected");
+  assert.equal(message.payload.entries.length, 4);
+  assert.deepEqual(message.payload.entries[1], {
+    victim: 1, attacker: null, cause: "border", amount: 1, attacker_is_competitor: false,
+  });
+  const prepare = decodeControlEnvelope(fixture("control-prepare-damage-events.json"));
+  assert.equal(prepare.type === "prepare" && "damage_events" in prepare.payload ? prepare.payload.damage_events : false, true);
+});
