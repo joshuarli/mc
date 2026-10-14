@@ -1,6 +1,6 @@
 # Arena Frontier: from a six-bot experiment to competitive worlds
 
-**Status:** stopped 2026-10-14 at the owner's request. Integration branch `campaign/frontier` at `185bae7`. The live order is Steering order below. The one-leg drop (`7e93161`) is merged offline and was not live-checked. The owner stopped that duel before a match result. That run has no score. Next work, when resumed, is S0, then S1. S3 may run beside them only as a pure `arena-core` module that does not edit `skills.ts`. Seed 260114 stays a navigation and perception red. Its 0.75 score is a match outcome and is excluded from combat-skill qualification. Do not grind that seed with more look or path patches. Written against `master` at `f479b16` (2026-10-14). This document supersedes the earlier agent campaign plans, which G0 deleted.
+**Status:** stopped 2026-10-14 at the owner's request. Integration branch `campaign/frontier`, at the commit that contains this status. The live order is Steering order below. The one-leg drop (`7e93161`) is merged offline and was not live-checked. The owner stopped that duel before a match result. That run has no score. Next work, when resumed, is S0, then S1. S3 may run beside them only as a pure `arena-core` module that does not edit `skills.ts`. Seed 260114 stays a navigation and perception red. Its 0.75 score is a match outcome and is excluded from combat-skill qualification. Do not grind that seed with more look or path patches. Written against `master` at `f479b16` (2026-10-14). This document supersedes the earlier agent campaign plans, which G0 deleted.
 
 ## Steering order (2026-10-14, owner)
 
@@ -86,7 +86,7 @@ These item definitions were the 2026-10-14 quality sprint. Steering order now de
 | **Q-trapped** (RUN) | `trapped` classification (zero displacement with failed navigation each cycle) in seat quality, kept out of the unexplained-idle gate but counted and listed. |
 | **Q2** | Candidate tuning on development seeds 500001..500012 with the existing search helper; one held-out evaluation of 600001..600024 per frozen candidate set; promote only at mean ≥ 0.65 and lower bound > 0.5. |
 
-**UHC-style 1v1 duel training (owner, 2026-10-14, top priority after Q-engage).** PvP skill has a lot of nuanced strategy; the bots must become strong duelists, and 1v1 UHC-style duels are the training and evaluation ground. "Training" here is the campaign's CPU-only loop: scripted policy families with bounded tunable parameters, searched and evaluated on a duel ladder against a fixed opponent pool. No LLM, neural network, GPU or paid inference.
+**UHC-style 1v1 duel training (owner, 2026-10-14, item definitions; sequence superseded).** PvP skill has a lot of nuanced strategy; the bots must become strong duelists, and 1v1 UHC-style duels are the training and evaluation ground. "Training" here is the campaign's CPU-only loop: scripted policy families with bounded tunable parameters, searched and evaluated on a duel ladder against a fixed opponent pool. No LLM, neural network, GPU or paid inference.
 
 | Item | Delivers and proof |
 |---|---|
@@ -100,7 +100,7 @@ Honest scope: "UHC-style" means the ruleset and strategy mix (no natural regener
 
 **Introspectability requirement (owner, 2026-10-14).** Bot quality work needs maximum introspectability and reporting. Every live match and league run must leave enough evidence to answer, per seat and per tick range, what the bot perceived (own observations only), which goal and intent it chose and why (scored alternatives and the rejecting condition), whether the skill was admitted, deferred or replaced, what the client did, and what the server confirmed. Concretely: (1) per-seat decision timelines in the trace (goal, intent, disposition, reason codes, wait reasons, border-known state, nearest known cache and opponent distances); (2) the action funnel with typed miss reasons for every action; (3) `./arena explain` and `./arena report` render a seat timeline and a match summary (loot, movement, idle spans, engagements, damage, deaths with causes); (4) a league and quality report with denominators, per-seat and per-seed tables, failures kept, and a candidate-versus-baseline diff of decisions on identical observations; (5) bounded diagnostic rings that flush on failure and optional verbose capture for a chosen seat/seed; (6) no hidden evaluator state may leak into policy inputs while doing any of this. A quality item is not done until its effect is visible in these reports.
 
-Duel gates fixed now: self-inflicted attack rejections under 5% of issued attacks in duels; no unexplained idle span over 100 ticks in a duel; promoted candidate meets the D-train threshold; duel results are reproducible from the manifest and seeds.
+Duel gates fixed now: self-inflicted attack rejections under 5% of issued attacks in duels; no unexplained idle span over 100 ticks in a duel; promoted candidate meets the D-train threshold; duel results are reproducible from the manifest and seeds. S0 may publish a versioned denominator beside this gate and must keep the old report. A zero-contact score does not meet the D-train threshold.
 
 Quality gates fixed now are the Hunger-24 gates row in Decisions plus: self-inflicted attack rejections under 5% of issued attacks in live matches, and a candidate must beat `baseline@1` per the league rule.
 
@@ -151,7 +151,7 @@ Q-engage, D-rules, D-pool, D-ladder, and the eat, retreat, and bow slices of D-s
 
 **Owner decisions owed.** None blocking. Logged calls to review: `[rules]` table in scenario 3; squads outcome last-survivor by seat; `hunger-six` on scenario schema 3; v5 ships as candidate `improved`, baseline stays frozen until a league verdict.
 
-**Verified at this stop.** Branch `campaign/frontier` at `185bae7`. One worktree, the main checkout. No live lock. The drop duel was stopped before a match result. The 631 and 644 suite counts in the log are earlier tips, not a count of `185bae7`. Not re-run on this tip: the full compiled suite, lint, and live `stack` / `legal-player`.
+**Verified at this stop.** Branch `campaign/frontier`, at the commit that contains this handoff. One worktree, the main checkout. No live lock. The drop duel was stopped before a match result. The 631 and 644 suite counts in the log are earlier tips. Not re-run on this tip: the full compiled suite, lint, and live `stack` / `legal-player`.
 
 ## 1. Charter
 
@@ -277,7 +277,7 @@ The executor has this document and the repo. On a resume it runs from Steering o
 
 ## 4. Sequence
 
-Steering order (S0 through S9) precedes every item below that is not marked merged in Item status. The Priority override sequence no longer sets the order. Items are capabilities a lane delivers end to end. A lane takes several in a go. Prerequisites that cross workstreams are written on the item.
+Steering order S0 through S9 runs before any unfinished section 4 item. A section 4 id in Item status is not a steering id, even when the numbers match. The Priority override sequence no longer sets the order. Items are capabilities a lane delivers end to end. A lane takes several in a go. Prerequisites that cross workstreams are written on the item.
 
 ### Workstreams and ownership
 
@@ -605,9 +605,9 @@ Do not spend a research phase rediscovering launchers, server replacements, bot 
 
 ## 13. For the owner afterwards
 
-While the campaign is open, resume from the Handoff prompt. The launch line below is for a finished campaign.
+While the campaign is open, resume from the Handoff prompt. After it finishes, read the reports below. Do not start again from G0.
 
 - Read `docs/acceptance-report.md`, the league report, the capacity summaries and the list of parked items in the campaign log.
 - Cherry-pick from `campaign/frontier`; nothing is pushed.
 - Review the `AGENTS.md` invariant rewrite and the Node lock bump first; they are the two contract edits that outlive the campaign.
-- Launch prompt: `Execute minecraft-arena-frontier-campaign.md from item G0 on the current checkout; finish every deliverable; never push.`
+- The open-campaign resume prompt is in the Handoff. G0 is already merged.
