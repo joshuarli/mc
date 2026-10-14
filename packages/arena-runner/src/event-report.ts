@@ -3,7 +3,7 @@ import { TraceError } from './trace.js';
 
 export interface EventDerivedResult {
   readonly outcome: Readonly<Record<string, unknown>>;
-  readonly outcome_status: 'reconstructed_from_authoritative_events';
+  readonly outcome_status: 'reconstructed_from_authoritative_events' | 'checkpointed_without_outcome';
   readonly statistics: {
     readonly competitor_count: number;
     readonly elimination_count: number;
@@ -17,8 +17,10 @@ export function reconstructEventResult(
   runId: string,
   prepare: PreparePayload,
   events: readonly ControlMessage[],
+  preEliminated: readonly number[] = [],
 ): EventDerivedResult {
   const alive = new Set(prepare.roster.map((competitor) => competitor.seat));
+  for (const seat of preEliminated) alive.delete(seat);
   const initialSeats = [...alive].sort(compareNumber);
   let deaths = 0;
   let disconnects = 0;

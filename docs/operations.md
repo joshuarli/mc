@@ -40,6 +40,12 @@ Progress goes to stderr: run ID, Minecraft version, address, mode, role and seat
 
 `./arena explain --run-id <id> --seat <n>` prints one seat's recorded decisions, skill outcomes, action-funnel stages, and authoritative effects for a stopped run. It needs a schema 4 trace for funnel and effect fields and states only what the trace records. See [determinism](determinism.md).
 
+## Save and resume
+
+`./arena save --run-id <id> [--checkpoint-id <id>]` checkpoints a running generalized-roster Hunger match (schema 3 scenario, or a schema 2 scenario with `play`; civilization is excluded). The run's process settles bot skills, sends `checkpoint` with its epoch, waits for `checkpoint_written`, stops Paper cleanly, copies the stopped world and the plugin's record under `.work/arena/checkpoints/<id>/`, verifies the record digest and length, and publishes `manifest.json` last. A missing manifest means an incomplete checkpoint. `save` returns after the run's process writes `save-result.json` in the run directory; a failed save names its reason and the original run keeps going unless the failure came after the barrier. The saved run has no outcome; `report` names it `checkpointed_without_outcome`.
+
+`./arena resume --checkpoint <id> --accept-minecraft-eula [--run-id <id>]` verifies the manifest, record and bot state, recompiles the saved scenario (refusing a changed scenario identity), restores the world copy, starts Paper with `-Darena.resume-checkpoint`, sends the saved `prepare` with `resume: {checkpoint_digest, epoch: saved epoch + 1}`, reconnects every living seat with its saved identity (an external seat must rejoin within the usual wait), restores each bot's policy memory, PRNG and opening state by seat, and starts. Observations stay unknown until re-observed, and pending skill feedback is not carried over. Eliminated seats stay out of play.
+
 ## League
 
 `./arena league --manifest evaluation/league-v1.toml --accept-minecraft-eula` runs candidate policies against frozen opponents on hunger-six and prints a paired report. A league unit is one natural match: three candidate seats against three opponent seats, played twice per world seed with the seat parity swapped. A match scores 1 for a last survivor on the candidate side, 0.5 for a draw, 0 otherwise.

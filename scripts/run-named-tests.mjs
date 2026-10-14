@@ -40,7 +40,8 @@ const integrationCases = new Map([
   ["fairness", "fairness.js"],
   ["civilization-six", "civilization-six.js"],
   ["civilization-rules", "civilization-rules.js"],
-  ["external-seat", "external-seat.js"]
+  ["external-seat", "external-seat.js"],
+  ["checkpoint-resume", "checkpoint-resume.js"]
 ]);
 const acceptanceCases = new Map([
   ["hunger-six", "hunger.js"],

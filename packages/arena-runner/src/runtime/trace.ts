@@ -379,6 +379,28 @@ export class RuntimeTraceBuilder {
     });
   }
 
+  finalizeCheckpointed(): Promise<RuntimeTraceResult> {
+    if (this.#finalized !== undefined) return Promise.resolve(copyTraceResult(this.#finalized));
+    return this.#enqueue(async () => {
+      this.#assertMutable();
+      if (!this.#hasReady || !this.#hasPrepare || !this.#hasStart) {
+        throw new RunnerError('runtime_failure', 'run trace', { kind: 'checkpoint_before_start' });
+      }
+      if (this.#hasOutcome) {
+        throw new RunnerError('runtime_failure', 'run trace', { kind: 'checkpoint_after_outcome' });
+      }
+      if (this.#pendingPolicyEffectSequences.size > 0) {
+        throw new RunnerError('runtime_failure', 'run trace', { kind: 'policy_skill_result_pending' });
+      }
+      await this.#stagePendingSegment('complete');
+      this.#finalized = Object.freeze({
+        segments: Object.freeze(this.#segments.map(copySegment)),
+        totalByteLength: this.#stagedByteLength,
+      });
+      return copyTraceResult(this.#finalized);
+    });
+  }
+
   persistFailurePartial(
     primary: OperationalFailurePrimaryV1,
     cleanup: OperationalFailureCleanupV1,

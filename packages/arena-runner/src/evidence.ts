@@ -100,17 +100,23 @@ export function reconstructRunEvidence(evidence: Evidence): ReconstructedRunEvid
   let outcomeSeen = false;
   let startSeen = false;
   let abortSeen = false;
-  let pendingRunnerCommand: { readonly type: 'prepare' | 'start' | 'abort'; readonly sequence: bigint } | undefined;
+  let pendingRunnerCommand: { readonly type: 'prepare' | 'start' | 'abort' | 'checkpoint'; readonly sequence: bigint } | undefined;
+  let checkpointCommandSeen = false;
+  let checkpointWrittenSeen = false;
   let lastAcknowledgedRunnerSequence = 0n;
   const lastSequence = new Map<'runner' | 'plugin', bigint>();
   const events: ControlMessage[] = [];
+
+  const resumeNote = evidence.records.find((record) => record.schema === 'resume-v1');
+  const preEliminated = Array.isArray(resumeNote?.eliminated_seats)
+    ? (resumeNote.eliminated_seats as number[]) : [];
 
   for (const [index, record] of evidence.records.entries()) {
     const recordNumber = index + 1;
     if (record.schema === 'policy-replay-v1' || record.schema === 'policy-replay-v2' || record.schema === 'policy-replay-v3' || record.schema === 'policy-replay-v4' || record.schema === 'policy-effect-v1' || record.schema === 'civilization-policy-replay-v1'
         || record.schema === 'civilization-policy-effect-v1' || record.schema === 'action-funnel-v1'
         || record.schema === 'worker-topology-v1' || record.schema === 'worker-loss-v1'
-        || record.schema === 'client-diagnostic-v1' || record.schema === 'seat-policy-v1') continue;
+        || record.schema === 'client-diagnostic-v1' || record.schema === 'seat-policy-v1' || record.schema === 'resume-v1') continue;
     const direction = record.direction;
     if (direction !== 'runner' && direction !== 'plugin') {
       throw eventRecordFailure('invalid_event_direction', recordNumber);
@@ -169,6 +175,14 @@ export function reconstructRunEvidence(evidence: Evidence): ReconstructedRunEvid
         pendingRunnerCommand = { type: message.type, sequence: message.sequence };
         continue;
       }
+      if (message.type === 'checkpoint') {
+        if (prepare === undefined || !startSeen || checkpointCommandSeen || abortSeen || outcomeSeen) {
+          throw eventRecordFailure('unexpected_runner_event', recordNumber);
+        }
+        checkpointCommandSeen = true;
+        pendingRunnerCommand = { type: message.type, sequence: message.sequence };
+        continue;
+      }
       if (message.type === 'abort') {
         if (prepare === undefined || abortSeen || outcomeSeen) {
           throw eventRecordFailure('unexpected_runner_event', recordNumber);
@@ -196,6 +210,11 @@ export function reconstructRunEvidence(evidence: Evidence): ReconstructedRunEvid
     if (message.type === 'error') throw eventRecordFailure('plugin_reported_error', recordNumber);
     if (message.type === 'heartbeat' || message.type === 'metrics') continue;
     if (prepare === undefined) throw eventRecordFailure('prepare_context_missing', recordNumber);
+    if (message.type === 'checkpoint_written') {
+      if (!checkpointCommandSeen || checkpointWrittenSeen) throw eventRecordFailure('unexpected_checkpoint_written', recordNumber);
+      checkpointWrittenSeen = true;
+      continue;
+    }
     if (message.type === 'damage') {
       if (!startSeen) throw eventRecordFailure('event_before_start', recordNumber);
       continue;
@@ -203,7 +222,7 @@ export function reconstructRunEvidence(evidence: Evidence): ReconstructedRunEvid
     const authoritativeEvent = message.type === 'public_clock' || message.type === 'public_state'
       || message.type === 'elimination' || message.type === 'civilization_state' || message.type === 'outcome';
     if (authoritativeEvent && pendingRunnerCommand !== undefined) {
-      const inFlightBeforeAbort = pendingRunnerCommand.type === 'abort'
+      const inFlightBeforeAbort = (pendingRunnerCommand.type === 'abort' || pendingRunnerCommand.type === 'checkpoint')
         && (message.type === 'public_state' || message.type === 'civilization_state' || message.type === 'elimination'
           || (message.type === 'public_clock' && message.payload.phase !== 'aborted' && message.payload.phase !== 'finished'));
       if (!inFlightBeforeAbort) throw eventRecordFailure('event_before_command_acknowledgment', recordNumber);
@@ -225,14 +244,44 @@ export function reconstructRunEvidence(evidence: Evidence): ReconstructedRunEvid
   if (!readySeen) throw eventRecordFailure('readiness_missing');
   if (prepare === undefined) throw eventRecordFailure('prepare_context_missing');
   if (pendingRunnerCommand !== undefined) throw eventRecordFailure('unacknowledged_runner_command');
+  if (!outcomeSeen && checkpointWrittenSeen) {
+    return { report: checkpointedResult(prepare, events), players: prepare.roster.map((competitor) => ({
+      username: competitor.username, offlineUuid: competitor.offline_uuid })) };
+  }
   if (!outcomeSeen) throw eventRecordFailure('missing_terminal_outcome');
-  const report = reconstructEventResult(evidence.run_id, prepare, events);
+  const report = reconstructEventResult(evidence.run_id, prepare, events, preEliminated);
   return {
     report,
     players: prepare.roster.map((competitor) => ({
       username: competitor.username,
       offlineUuid: competitor.offline_uuid,
     })),
+  };
+}
+
+function checkpointedResult(prepare: PreparePayload, events: readonly ControlMessage[]): ReconstructedRunEvidence['report'] {
+  const alive = new Set(prepare.roster.map((competitor) => competitor.seat));
+  let deaths = 0;
+  let disconnects = 0;
+  for (const event of events) {
+    if (event.type !== 'elimination') continue;
+    for (const elimination of event.payload.eliminations) {
+      if (alive.delete(elimination.seat)) {
+        if (elimination.cause === 'death') deaths += 1;
+        else disconnects += 1;
+      }
+    }
+  }
+  return {
+    outcome: { kind: 'checkpointed' },
+    outcome_status: 'checkpointed_without_outcome',
+    statistics: {
+      competitor_count: prepare.roster.length,
+      elimination_count: deaths + disconnects,
+      death_count: deaths,
+      disconnect_count: disconnects,
+      survivor_seats: [...alive].sort((left, right) => left - right),
+    },
   };
 }
 

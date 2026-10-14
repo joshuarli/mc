@@ -39,6 +39,13 @@ import { externalSeats } from '../effective-scenario.js';
 import { ActionFunnelCollector, flushDiagnosticRings } from './funnel.js';
 import { launchWorkerProcess, WorkerCohort, type WorkerLauncher } from '../workers/cohort.js';
 import { parseWorkerCount } from '../workers/assignment.js';
+import { persistCheckpoint, type LoadedCheckpoint } from '../checkpoint/persist.js';
+import { publishSaveResult, readSaveRequest } from '../checkpoint/save-request.js';
+import type { ExternalSeatRequest } from '../effective-scenario.js';
+import type { CheckpointWrittenPayload } from '../control/types.js';
+import type { SeatPolicyState } from './live-policy-loop.js';
+import { cloneOwnedTree, MAX_OWNED_TREE_BYTES, MAX_OWNED_TREE_FILES } from '../owned-files/index.js';
+import { resolve as resolvePath } from 'node:path';
 import { compileCandidate, type CandidateId, type CompiledCandidate } from '@arena/core';
 import { assertEventSeatsInRoster } from './roster-bounds.js';
 import {
@@ -86,8 +93,12 @@ function requiredControlCapabilities(
 function assertRuntimePluginCapabilities(
   ready: Parameters<typeof assertRuntimePluginCapability>[0],
   scenario: PreparedRun['scenario'],
+  resume = false,
 ): void {
-  for (const capability of requiredControlCapabilities(scenario)) {
+  const required = resume
+    ? [...new Set([...requiredControlCapabilities(scenario), 'hunger_games_roster_v2' as const, 'checkpoint_v1' as const])]
+    : requiredControlCapabilities(scenario);
+  for (const capability of required) {
     assertRuntimePluginCapability(ready, capability);
   }
 }
@@ -115,6 +126,9 @@ export interface RunPreparedRunOptions {
   readonly waitForExternalPlayer?: true;
   readonly externalJoinTimeoutMs?: number;
   readonly workers?: number;
+  readonly checkpointing?: true;
+  readonly checkpointScenario?: Readonly<{ externalSeat: ExternalSeatRequest | null }>;
+  readonly resume?: LoadedCheckpoint;
   readonly seatCandidates?: ReadonlyMap<number, Readonly<{ id: CandidateId; params?: Readonly<Record<string, number>> }>>;
   readonly workerLauncher?: WorkerLauncher;
   readonly onExternalAdmitted?: (username: string) => void;
@@ -207,10 +221,33 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
     if (workerCount > 1 && !recordsActionFunnel) {
       throw new RunnerError('invalid_input', 'worker count', { kind: 'workers_require_policy_replay_recording' });
     }
-    const serverInputs: RuntimeServerInputs = { ...options, javaTmpDir, signal: runSignal };
+    const resume = options.resume;
+    if (resume !== undefined && (scenario.mode !== 'hunger_games' || roster.botCompetitors.length + roster.externalCompetitors.length
+        !== resume.record.prepare.roster.length)) {
+      throw new RunnerError('invalid_input', 'resume', { kind: 'resume_roster_mismatch' });
+    }
+    if (resume !== undefined && resume.record.prepare.roster.some((entry, index) =>
+        entry.username !== roster.competitors[index]?.username || entry.kind !== roster.competitors[index]?.kind)) {
+      throw new RunnerError('invalid_input', 'resume', { kind: 'resume_roster_mismatch' });
+    }
+    const livingSeats = new Set(resume === undefined
+      ? roster.competitors.map((entry) => entry.seat)
+      : resume.record.seats.filter((entry) => entry.alive).map((entry) => entry.seat));
+    const epoch = resume === undefined ? 0 : resume.record.epoch + 1;
+    const serverInputs: RuntimeServerInputs = {
+      ...options, javaTmpDir, signal: runSignal,
+      ...(resume === undefined ? {} : {
+        resumeCheckpointPath: resolvePath(options.ownedRoot.toString('utf8'), resume.recordPath.toString('utf8')),
+      }),
+    };
     const pluginIdentity = await readRuntimePluginIdentity(serverInputs);
     const pluginBytes = await readRuntimePluginJar(serverInputs);
-    const basePreparePayload = createPreparePayload(scenario, roster.competitors);
+    const basePreparePayload = resume === undefined
+      ? createPreparePayload(scenario, roster.competitors)
+      : Object.freeze({
+        ...resume.record.prepare,
+        resume: Object.freeze({ checkpoint_digest: resume.manifest.record.digest, epoch }),
+      });
 
     lease = await acquireOwnedRunLease({
       helperPath: options.helperPath,
@@ -261,7 +298,17 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
       relativePath: serverPath,
       signal: runSignal,
     });
-    await clonePristineWorld({
+    if (resume !== undefined) {
+      await cloneOwnedTree({
+        helperPath: options.helperPath,
+        ownedRoot: options.ownedRoot,
+        sourceRelativePath: resume.worldPath,
+        destinationRelativePath: Buffer.concat([serverPath, Buffer.from('/world', 'ascii')]),
+        maxFiles: MAX_OWNED_TREE_FILES,
+        maxBytes: MAX_OWNED_TREE_BYTES,
+        signal: runSignal,
+      });
+    } else await clonePristineWorld({
       helperPath: options.helperPath,
       ownedRoot: options.ownedRoot,
       preparedRun: options.preparedRun,
@@ -308,9 +355,9 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
     coldStartDeadline.clear();
     await runtimeTrace.recordReady(session.ready);
     assertRuntimePluginIdentity(session.ready, pluginIdentity);
-    assertRuntimePluginCapabilities(session.ready, scenario);
+    assertRuntimePluginCapabilities(session.ready, scenario, options.resume !== undefined);
 
-    const preparePayload = session.ready.payload.capabilities.includes('damage_events_v1')
+    const preparePayload = resume === undefined && session.ready.payload.capabilities.includes('damage_events_v1')
       && 'roster_version' in basePreparePayload && basePreparePayload.roster_version === 2
       ? Object.freeze({ ...basePreparePayload, damage_events: true as const })
       : basePreparePayload;
@@ -372,6 +419,16 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
     if (prepareEnvelope.type !== 'prepare') {
       throw new RunnerError('runtime_failure', 'prepare command', { kind: 'invalid_prepare_envelope' });
     }
+    if (resume !== undefined && recordsActionFunnel) {
+      await runtimeTrace.recordRunNote({
+        schema: 'resume-v1',
+        checkpoint_id: resume.manifest.checkpoint_id,
+        digest: resume.manifest.record.digest,
+        epoch,
+        match_tick: resume.manifest.match_tick,
+        eliminated_seats: resume.record.seats.filter((entry) => !entry.alive).map((entry) => entry.seat),
+      });
+    }
     if (seatCandidates.size > 0) {
       if (!recordsActionFunnel) {
         throw new RunnerError('invalid_input', 'seat candidate', { kind: 'candidates_require_policy_replay_recording' });
@@ -386,7 +443,7 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
     }
     const clientOptions = { host: CLIENT_HOST, port: GAME_PORT, scenario, signal: runSignal,
       publicRoster: roster.botCompetitors.map((entry) => ({ seat: entry.seat, username: entry.username, offlineUuid: entry.offline_uuid })) } as const;
-    clients = (cohort !== undefined ? [] : roster.botCompetitors).map((competitor) => new RuntimeCompetitorClient(
+    clients = (cohort !== undefined ? [] : roster.botCompetitors.filter((entry) => livingSeats.has(entry.seat))).map((competitor) => new RuntimeCompetitorClient(
       competitor.seat,
       roster.competitorIdentities[competitor.seat]!,
       funnel === undefined ? clientOptions : {
@@ -417,10 +474,11 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
       ...roster.botCompetitors.map((competitor) => competitor.username),
       ...roster.spectators.map((spectator) => spectator.username),
     ]);
-    const admission: ExternalAdmission | undefined = roster.externalCompetitors.length > 0
+    const awaitedExternals = roster.externalCompetitors.filter((entry) => livingSeats.has(entry.seat));
+    const admission: ExternalAdmission | undefined = awaitedExternals.length > 0
       ? {
         kind: 'competitors',
-        identities: roster.externalCompetitors.map((competitor) => ({
+        identities: awaitedExternals.map((competitor) => ({
           username: competitor.username,
           offlineUuid: competitor.offline_uuid,
         })),
@@ -483,11 +541,62 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
     });
 
     let finalOutcome: OutcomePayload;
+    let savedCheckpoint: SaveCapture | undefined;
+    const saveCaptured = deferred<SaveCapture>();
+    void saveCaptured.promise.catch(() => {});
+    let saveTimer: ReturnType<typeof setInterval> | undefined;
+    if (options.checkpointing === true && options.evaluate === undefined && resumeCapable(scenario)
+        && session.ready.payload.capabilities.includes('checkpoint_v1')) {
+      const files = {
+        helperPath: options.helperPath, ownedRoot: options.ownedRoot, runDirectoryPath: options.preparedRun.runDirectoryPath,
+      };
+      let handling = false;
+      saveTimer = setInterval(() => {
+        if (handling || !startAttempted || coordinator!.outcomeReceived) return;
+        handling = true;
+        void (async () => {
+          let checkpointId: string | undefined;
+          try {
+            checkpointId = await readSaveRequest(files);
+            if (checkpointId === undefined) { handling = false; return; }
+            const phase = coordinator!.phase;
+            if (phase !== 'grace' && phase !== 'active') {
+              throw new RunnerError('invalid_input', 'checkpoint', { kind: 'checkpoint_requires_grace_or_active' });
+            }
+            coordinator!.stopPolicyLaunching();
+            const botState = coordinator!.exportPolicyState();
+            await coordinator!.stopPolicyTasks();
+            await coordinator!.send({ type: 'checkpoint', payload: { checkpoint_id: checkpointId, epoch } });
+            const written = await raceWithRunState(
+              withTimeout(coordinator!.checkpointWritten, 30_000, 'checkpoint_written_timeout', 'checkpoint'),
+              abortPromise, leaseLost, processFailure, coordinator!.failure,
+            );
+            saveCaptured.resolve({ checkpointId, written, botState });
+          } catch (error) {
+            clearInterval(saveTimer);
+            if (checkpointId !== undefined) {
+              const failure = mapRuntimeFailure(error);
+              await publishSaveResult(files, {
+                schema: 1, status: 'failed', checkpoint_id: checkpointId, run_id: options.preparedRun.runId,
+                reason: failure.source.kind,
+              }).catch(() => undefined);
+            }
+          }
+        })();
+      }, 500);
+    }
     if (options.evaluate === undefined) {
       await start();
-      finalOutcome = await raceWithRunState(
-        outcome.promise, abortPromise, leaseLost, processFailure, coordinator.failure,
+      const finished = await raceWithRunState(
+        Promise.race([
+          outcome.promise.then((value) => ({ kind: 'outcome' as const, value })),
+          saveCaptured.promise.then((value) => ({ kind: 'checkpoint' as const, value })),
+        ]),
+        abortPromise, leaseLost, processFailure, coordinator.failure,
       );
+      clearInterval(saveTimer);
+      if (finished.kind === 'checkpoint') savedCheckpoint = finished.value;
+      finalOutcome = finished.kind === 'outcome' ? finished.value : { kind: 'abort', reason: 'operator', survivors: [], at: null };
     } else {
       evaluatorAbort = new AbortController();
       evaluatorTask = Promise.resolve(options.evaluate(context, evaluatorAbort.signal)).then(() => undefined);
@@ -515,6 +624,69 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
         abort: evaluatorAbort,
         timeoutMs: EVALUATOR_JOIN_TIMEOUT_MS,
         failures: [abortPromise, leaseLost, processFailure, coordinator.failure],
+      });
+    }
+
+    if (savedCheckpoint !== undefined) {
+      const files = {
+        helperPath: options.helperPath, ownedRoot: options.ownedRoot, runDirectoryPath: options.preparedRun.runDirectoryPath,
+      };
+      coordinator.markCheckpointed();
+      await coordinator.stopPolicyTasks();
+      await closeClients(clients, spectators);
+      const exit = await serverProcess.shutdown();
+      assertSuccessfulExit(exit);
+      await session.close();
+      await listener.close();
+      await coordinator.join();
+      const checkpointTrace = await runtimeTrace.finalizeCheckpointed();
+      let manifest;
+      try {
+        manifest = await persistCheckpoint({
+          helperPath: options.helperPath,
+          ownedRoot: options.ownedRoot,
+          runDirectoryPath: options.preparedRun.runDirectoryPath,
+          runId: options.preparedRun.runId,
+          checkpointId: savedCheckpoint.checkpointId,
+          epoch,
+          written: savedCheckpoint.written,
+          botState: { schema: 1, seats: [...savedCheckpoint.botState.entries()].sort(([a], [b]) => a - b)
+            .map(([seat, state]) => ({ seat, ...state })) },
+          scenario: {
+            path: options.preparedRun.scenarioPath.toString('utf8'),
+            semantic_id: scenario.semanticId,
+            external_seat: options.checkpointScenario?.externalSeat ?? null,
+          },
+          signal: runSignal,
+        });
+      } catch (error) {
+        await publishSaveResult(files, {
+          schema: 1, status: 'failed', checkpoint_id: savedCheckpoint.checkpointId,
+          run_id: options.preparedRun.runId, reason: mapRuntimeFailure(error).source.kind,
+        }).catch(() => undefined);
+        throw error;
+      }
+      await publishSaveResult(files, {
+        schema: 1, status: 'saved', checkpoint_id: manifest.checkpoint_id, run_id: manifest.run_id,
+        epoch: manifest.epoch, match_tick: manifest.match_tick, digest: manifest.record.digest,
+        directory: `.work/arena/checkpoints/${manifest.checkpoint_id}`,
+      });
+      const aliveState = completedEvents.findLast((event) => event.type === 'public_state');
+      await lease.release();
+      releaseLease = true;
+      return Object.freeze({
+        runId: options.preparedRun.runId,
+        ready: session.ready,
+        events: Object.freeze([...completedEvents]),
+        outcome: Object.freeze({
+          kind: 'abort' as const, reason: 'operator' as const,
+          survivors: aliveState?.type === 'public_state' ? aliveState.payload.alive_seats : [], at: null,
+        }),
+        trace: checkpointTrace,
+        competitors: roster.competitorIdentities,
+        spectators: roster.spectators,
+        stats: [],
+        checkpoint: manifest,
       });
     }
 
@@ -613,6 +785,8 @@ class ControlCoordinator {
   #phase: ClockPayload['phase'] | undefined;
   #cohort: WorkerCohort | undefined;
   #cohortStopped = false;
+  #checkpointed = false;
+  readonly #checkpointWritten = deferred<CheckpointWrittenPayload>();
   #lastMatchTick: number | null = null;
   #failure: unknown;
   #pending: { readonly correlation: bigint; readonly acknowledgment: Deferred<ControlMessage> } | undefined;
@@ -637,6 +811,7 @@ class ControlCoordinator {
     competitors(): readonly RuntimeCompetitorClient[];
     funnel?: ActionFunnelCollector;
     candidates?: ReadonlyMap<number, CompiledCandidate>;
+    restore?: ReadonlyMap<number, SeatPolicyState>;
     rosterSize: number;
     onPhase?: (phase: ClockPayload['phase']) => void;
     recordPolicy: boolean;
@@ -667,6 +842,7 @@ class ControlCoordinator {
         recordPolicy: options.recordPolicy,
         ...(options.funnel === undefined ? {} : { funnel: options.funnel }),
         ...(options.candidates === undefined ? {} : { candidates: options.candidates }),
+        ...(options.restore === undefined ? {} : { restore: options.restore }),
         competitors: options.competitors,
         fail: (error) => this.#fail(error),
         ...(options.onPolicyActivity === undefined ? {} : { onActivity: options.onPolicyActivity }),
@@ -676,6 +852,22 @@ class ControlCoordinator {
 
   get failure(): Promise<never> {
     return this.#failureState.promise;
+  }
+
+  get phase(): ClockPayload['phase'] | undefined {
+    return this.#phase;
+  }
+
+  get checkpointWritten(): Promise<CheckpointWrittenPayload> {
+    return this.#checkpointWritten.promise;
+  }
+
+  markCheckpointed(): void {
+    this.#checkpointed = true;
+  }
+
+  exportPolicyState(): ReadonlyMap<number, SeatPolicyState> {
+    return this.#policyLoop?.exportState() ?? new Map();
   }
 
   get lastMatchTick(): number | null {
@@ -783,6 +975,10 @@ class ControlCoordinator {
             pending.acknowledgment.resolve(message);
             return;
           }
+          if (message.type === 'checkpoint_written') {
+            this.#checkpointWritten.resolve(message.payload);
+            return;
+          }
           if (!isAuthorityEvent(message)) return;
           assertEventSeatsInRoster(message, this.#rosterSize);
           if (message.type === 'public_clock' && message.payload.phase !== this.#phase) {
@@ -815,7 +1011,9 @@ class ControlCoordinator {
           }
         }
       }
-      if (!this.#outcomeReceived) throw new RunnerError('runtime_failure', 'control session', { kind: 'outcome_missing' });
+      if (!this.#outcomeReceived && !this.#checkpointed) {
+        throw new RunnerError('runtime_failure', 'control session', { kind: 'outcome_missing' });
+      }
     } catch (error) {
       this.#pending?.acknowledgment.reject(error);
       this.#pending = undefined;
@@ -1231,4 +1429,34 @@ function assertSuccessfulExit(exit: ServerProcessExit): void {
 function traceFailureKind(error: unknown): string {
   if (error instanceof Error && 'kind' in error && typeof error.kind === 'string') return error.kind;
   return 'invalid_authoritative_events';
+}
+
+interface SaveCapture {
+  readonly checkpointId: string;
+  readonly written: CheckpointWrittenPayload;
+  readonly botState: ReadonlyMap<number, SeatPolicyState>;
+}
+
+function resumeCapable(scenario: PreparedRun['scenario']): boolean {
+  return scenario.mode === 'hunger_games' && (scenario.schemaVersion === 3
+    || scenario.roster.seats.some(({ controller }) => controller.kind === 'external'));
+}
+
+function restoredPolicyState(botState: unknown): ReadonlyMap<number, SeatPolicyState> {
+  const states = new Map<number, SeatPolicyState>();
+  const value = botState as { schema?: unknown; seats?: unknown };
+  if (value.schema !== 1 || !Array.isArray(value.seats)) {
+    throw new RunnerError('corrupt_evidence', 'checkpoint', { kind: 'invalid_bot_state' });
+  }
+  for (const entry of value.seats as Array<{ seat?: unknown; memory?: unknown; rng_state?: unknown; opening_state?: unknown }>) {
+    if (typeof entry.seat !== 'number' || typeof entry.rng_state !== 'string' || !/^[0-9]{1,20}$/.test(entry.rng_state)) {
+      throw new RunnerError('corrupt_evidence', 'checkpoint', { kind: 'invalid_bot_state' });
+    }
+    states.set(entry.seat, Object.freeze({
+      memory: entry.memory,
+      rng_state: entry.rng_state,
+      opening_state: (entry.opening_state ?? null) as SeatPolicyState['opening_state'],
+    }));
+  }
+  return states;
 }

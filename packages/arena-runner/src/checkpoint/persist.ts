@@ -5,6 +5,7 @@ import { RunnerError } from '../errors.js';
 import {
   cloneOwnedTree,
   createOwnedDirectory,
+  MAX_OWNED_READ_BYTES,
   MAX_OWNED_TREE_BYTES,
   MAX_OWNED_TREE_FILES,
   OwnedFilesError,
@@ -18,8 +19,8 @@ import {
   type CheckpointManifest,
 } from './manifest.js';
 
-const MAX_RECORD_FILE_BYTES = 33 * 1024 * 1024;
-const MAX_BOT_STATE_BYTES = 16 * 1024 * 1024;
+const MAX_RECORD_FILE_BYTES = MAX_OWNED_READ_BYTES;
+const MAX_BOT_STATE_BYTES = MAX_OWNED_READ_BYTES;
 const PLUGIN_CHECKPOINT_DIRECTORY = 'server/plugins/ArenaFoundation/checkpoints';
 
 export interface PersistCheckpointOptions {

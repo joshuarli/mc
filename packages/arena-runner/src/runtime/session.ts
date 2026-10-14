@@ -19,9 +19,10 @@ const MAX_U64 = (1n << 64n) - 1n;
 export type RunnerCommand =
   | { readonly type: 'prepare'; readonly payload: PreparePayload }
   | { readonly type: 'start'; readonly payload: Record<string, never> }
-  | { readonly type: 'abort'; readonly payload: { readonly reason: AbortReason } };
+  | { readonly type: 'abort'; readonly payload: { readonly reason: AbortReason } }
+  | { readonly type: 'checkpoint'; readonly payload: { readonly checkpoint_id: string; readonly epoch: number } };
 
-export type RunnerCommandEnvelope = Extract<ControlMessage, { readonly type: 'prepare' | 'start' | 'abort' }>;
+export type RunnerCommandEnvelope = Extract<ControlMessage, { readonly type: 'prepare' | 'start' | 'abort' | 'checkpoint' }>;
 
 const authenticatedMessages = new WeakSet<object>();
 
@@ -316,13 +317,15 @@ class AuthenticatedControlSession implements ControlSession {
       ? { ...envelope, type: 'prepare', payload: command.payload }
       : command.type === 'start'
         ? { ...envelope, type: 'start', payload: command.payload }
-        : { ...envelope, type: 'abort', payload: command.payload };
+        : command.type === 'abort'
+          ? { ...envelope, type: 'abort', payload: command.payload }
+          : { ...envelope, type: 'checkpoint', payload: command.payload };
     let message: RunnerCommandEnvelope;
     let frame: Uint8Array;
     try {
       frame = encodeControlFrame(commandEnvelope);
       const decoded = decodeControlFrame(frame);
-      if (decoded.type !== 'prepare' && decoded.type !== 'start' && decoded.type !== 'abort') {
+      if (decoded.type !== 'prepare' && decoded.type !== 'start' && decoded.type !== 'abort' && decoded.type !== 'checkpoint') {
         throw new ControlSessionError('control_protocol');
       }
       message = decoded;

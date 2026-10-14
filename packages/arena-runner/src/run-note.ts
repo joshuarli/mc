@@ -15,6 +15,7 @@ export type RunNoteRecord =
     tick: number | null;
   }>
   | SeatPolicyNote
+  | ResumeNote
   | Readonly<{
     schema: 'client-diagnostic-v1';
     seat: number;
@@ -34,6 +35,15 @@ export interface SeatPolicyNote {
   readonly params: Readonly<Record<string, number>>;
 }
 
+export interface ResumeNote {
+  readonly schema: 'resume-v1';
+  readonly checkpoint_id: string;
+  readonly digest: string;
+  readonly epoch: number;
+  readonly match_tick: string;
+  readonly eliminated_seats: readonly number[];
+}
+
 export const RUN_NOTE_SCHEMAS: readonly string[] = [
-  'worker-topology-v1', 'worker-loss-v1', 'client-diagnostic-v1', 'seat-policy-v1',
+  'worker-topology-v1', 'worker-loss-v1', 'client-diagnostic-v1', 'seat-policy-v1', 'resume-v1',
 ];

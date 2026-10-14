@@ -18,6 +18,7 @@ export interface RuntimeServerInputs {
   readonly paperJarPath: string;
   readonly pluginJarPath: string;
   readonly javaTmpDir: string;
+  readonly resumeCheckpointPath?: string;
   readonly signal?: AbortSignal;
 }
 
@@ -114,6 +115,7 @@ export function paperArguments(
     `-Darena.control-port=${controlPort}`,
     `-Darena.run-id=${runId}`,
     `-Darena.generation-plan=${generationPlanAbsolutePath(options.ownedRoot, options.preparedRun)}`,
+    ...(options.resumeCheckpointPath === undefined ? [] : [`-Darena.resume-checkpoint=${options.resumeCheckpointPath}`]),
     '-jar',
     options.paperJarPath,
     '--nogui',

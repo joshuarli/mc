@@ -10,6 +10,8 @@ import { canonicalJson } from './canonical.js';
 import { RunnerError } from './errors.js';
 import { parseWorkerCount } from './workers/assignment.js';
 import { compileCandidateProfile } from '@arena/spec';
+import { loadCheckpoint } from './checkpoint/persist.js';
+import { readSaveResult, requestSave } from './checkpoint/save-request.js';
 import { runLeague } from './league/harness.js';
 import { LiveMatchRunner } from './league/live-runner.js';
 import { parseLeagueManifest, parseSeedManifest, profileSpec, resolveLeagueManifest, type CandidateSpec } from './league/manifest.js';
@@ -78,7 +80,8 @@ async function dispatchCliBytes(args: readonly Buffer[]): Promise<CliResult> {
   if (command === 'league') return await leagueCommand(rest);
   if (command === 'prepare') return await prepareCommand(rest);
   if (command === 'validate') return await validateCommand(rest);
-  if (command === 'run' || command === 'play' || command === 'watch') return await matchCommand(command, rest);
+  if (command === 'run' || command === 'play' || command === 'watch' || command === 'resume') return await matchCommand(command, rest);
+  if (command === 'save') return await saveCommand(rest);
   throw invalidInput('unknown_command');
 }
 
@@ -184,6 +187,49 @@ async function inspectRunCommand(args: readonly Buffer[]): Promise<CliResult> {
     runId,
   });
   return success(inspection);
+}
+
+async function saveCommand(args: readonly Buffer[]): Promise<CliResult> {
+  let runId: string | undefined;
+  let checkpointId: string | undefined;
+  for (let index = 0; index < args.length; index += 2) {
+    const option = argumentText(args[index]!, index + 1);
+    if (index + 1 >= args.length) throw invalidInput('save_requires_run_id');
+    const value = argumentText(args[index + 1]!, index + 2);
+    if (option === '--run-id' && runId === undefined) runId = value;
+    else if (option === '--checkpoint-id' && checkpointId === undefined) checkpointId = value;
+    else throw invalidInput('unexpected_argument');
+  }
+  if (runId === undefined) throw invalidInput('save_requires_run_id');
+  if (!isValidRunId(runId)) throw new RunnerError('invalid_input', 'run id', { kind: 'invalid_run_id' });
+  const id = checkpointId ?? `${runId.slice(0, 58)}-cp`;
+  const helperPath = configuredAbsolutePath('ARENA_FS_HELPER', 'filesystem helper');
+  const files = {
+    helperPath,
+    ownedRoot: Buffer.from(process.cwd(), 'utf8'),
+    runDirectoryPath: Buffer.from(`.work/arena/runs/${runId}`, 'utf8'),
+  };
+  return await withProcessAbortSignal(async (signal) => {
+    await requestSave(files, id);
+    writeProgress([`Save requested for run ${runId} as checkpoint ${id}`]);
+    const deadline = Date.now() + 180_000;
+    while (Date.now() < deadline) {
+      signal.throwIfAborted();
+      const result = await readSaveResult(files);
+      if (result !== undefined) {
+        if (result.status === 'failed') {
+          throw new RunnerError('runtime_failure', 'checkpoint save', {
+            kind: 'save_failed', reason: result.reason, run_id: runId, relative_artifact: files.runDirectoryPath.toString('utf8'),
+          });
+        }
+        return success(result);
+      }
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, 500));
+    }
+    throw new RunnerError('runtime_failure', 'checkpoint save', {
+      kind: 'save_timeout', run_id: runId, relative_artifact: files.runDirectoryPath.toString('utf8'),
+    });
+  });
 }
 
 async function leagueCommand(args: readonly Buffer[]): Promise<CliResult> {
@@ -331,10 +377,11 @@ async function validateCommand(args: readonly Buffer[]): Promise<CliResult> {
   });
 }
 
-type MatchCommand = 'run' | 'play' | 'watch';
+type MatchCommand = 'run' | 'play' | 'watch' | 'resume';
 
 interface MatchArguments {
-  readonly scenarioArgument: Buffer;
+  readonly scenarioArgument: Buffer | undefined;
+  readonly checkpoint: string | undefined;
   readonly runId: string | undefined;
   readonly spectatorMode: RuntimeSpectatorMode;
   readonly waitForExternalPlayer: boolean;
@@ -355,11 +402,18 @@ function parseMatchArguments(command: MatchCommand, args: readonly Buffer[]): Ma
   let seat: number | undefined;
   let joinTimeoutMs: number | undefined;
   let workers: number | undefined;
+  let checkpoint: string | undefined;
   const takesLegacyFlags = command === 'run';
   for (let index = 0; index < args.length;) {
     const option = argumentText(args[index]!, index + 1);
     const hasValue = index + 1 < args.length;
-    if (option === '--scenario') {
+    if (command === 'resume' && option === '--checkpoint') {
+      if (checkpoint !== undefined || !hasValue) throw invalidInput('resume_requires_checkpoint');
+      checkpoint = argumentText(args[index + 1]!, index + 2);
+      index += 2;
+      continue;
+    }
+    if (command !== 'resume' && option === '--scenario') {
       if (scenarioArgument !== undefined || !hasValue) throw invalidInput(`${command}_requires_scenario`);
       scenarioArgument = args[index + 1]!;
       index += 2;
@@ -420,13 +474,16 @@ function parseMatchArguments(command: MatchCommand, args: readonly Buffer[]): Ma
     }
     throw invalidInput('unexpected_argument');
   }
-  if (scenarioArgument === undefined) throw invalidInput(`${command}_requires_scenario`);
+  if (command === 'resume' ? checkpoint === undefined : scenarioArgument === undefined) {
+    throw invalidInput(command === 'resume' ? 'resume_requires_checkpoint' : `${command}_requires_scenario`);
+  }
   if (command === 'play' && username === undefined) throw invalidInput('play_requires_username');
   if (!acceptMinecraftEula) {
     throw new RunnerError('missing_prerequisite', 'Minecraft EULA', { kind: 'missing_eula' });
   }
   return Object.freeze({
     scenarioArgument,
+    checkpoint,
     runId,
     spectatorMode: command === 'watch' || reserveSpectatorSlot ? 'reserveExternalSlot' : 'automated',
     waitForExternalPlayer: command === 'watch' || waitForExternalPlayer,
@@ -442,7 +499,6 @@ function writeProgress(lines: readonly string[]): void {
 
 async function matchCommand(command: MatchCommand, args: readonly Buffer[]): Promise<CliResult> {
   const parsed = parseMatchArguments(command, args);
-  const scenarioPath = normalizeScenarioPath(parsed.scenarioArgument);
   const runId = parsed.runId ?? randomUUID();
   if (!isValidRunId(runId)) {
     throw new RunnerError('invalid_input', 'run id', { kind: 'invalid_run_id' });
@@ -456,10 +512,20 @@ async function matchCommand(command: MatchCommand, args: readonly Buffer[]): Pro
   return await withProcessAbortSignal(async (signal, controller) => {
     const coldStartDeadline = armRuntimeDeadline(controller, 'cold_start', COLD_START_TIMEOUT_MS);
     try {
+      const resumed = parsed.checkpoint === undefined ? undefined
+        : await loadCheckpoint({ helperPath, ownedRoot, checkpointId: parsed.checkpoint, signal });
+      const scenarioPath = resumed === undefined
+        ? normalizeScenarioPath(parsed.scenarioArgument!)
+        : Buffer.from(resumed.manifest.scenario.path, 'utf8');
+      const externalSeat = resumed === undefined ? parsed.externalSeat
+        : resumed.manifest.scenario.external_seat ?? undefined;
       const inputs = await compileScenarioAndPolicy(helperPath, ownedRoot, scenarioPath, signal);
-      const effectiveScenario = parsed.externalSeat === undefined
+      const effectiveScenario = externalSeat === undefined
         ? inputs.scenario
-        : withExternalSeat(inputs.scenario, parsed.externalSeat);
+        : withExternalSeat(inputs.scenario, externalSeat);
+      if (resumed !== undefined && effectiveScenario.semanticId !== resumed.manifest.scenario.semantic_id) {
+        throw new RunnerError('invalid_input', 'checkpoint', { kind: 'scenario_changed_since_checkpoint' });
+      }
       const roster = createRuntimeRoster(effectiveScenario, { spectatorMode: parsed.spectatorMode });
       const externalCompetitors = roster.externalCompetitors.map((competitor) => ({
         seat: competitor.seat,
@@ -472,7 +538,7 @@ async function matchCommand(command: MatchCommand, args: readonly Buffer[]): Pro
           ? { kind: 'spectator' as const }
           : { kind: 'none' as const };
       const preparedRun = await prepareRun(helperPath, ownedRoot, scenarioPath, runId, signal, {
-        ...(parsed.externalSeat === undefined ? {} : { externalSeat: parsed.externalSeat }),
+        ...(externalSeat === undefined ? {} : { externalSeat }),
       });
       try {
         const Effect = await import('effect/Effect');
@@ -489,6 +555,9 @@ async function matchCommand(command: MatchCommand, args: readonly Buffer[]): Pro
             ...(parsed.waitForExternalPlayer ? { waitForExternalPlayer: true as const } : {}),
             ...(parsed.joinTimeoutMs === undefined ? {} : { externalJoinTimeoutMs: parsed.joinTimeoutMs }),
             workers: parsed.workers,
+            checkpointing: true as const,
+            checkpointScenario: { externalSeat: externalSeat ?? null },
+            ...(resumed === undefined ? {} : { resume: resumed }),
             signal,
             coldStartDeadline,
             onRosterReady: (details) => {
@@ -527,6 +596,19 @@ async function matchCommand(command: MatchCommand, args: readonly Buffer[]): Pro
         }));
         if (result.kind === 'failure') throw result.cause;
         const completed = result.completed;
+        if (completed.checkpoint !== undefined) {
+          return success({
+            schema: 1,
+            run_id: completed.runId,
+            checkpointed: {
+              checkpoint_id: completed.checkpoint.checkpoint_id,
+              epoch: completed.checkpoint.epoch,
+              match_tick: completed.checkpoint.match_tick,
+              digest: completed.checkpoint.record.digest,
+              directory: `.work/arena/checkpoints/${completed.checkpoint.checkpoint_id}`,
+            },
+          });
+        }
         if (completed.outcome.kind === 'abort') {
           const finalTrace = completed.trace.segments.at(-1);
           throw new RunnerError('runtime_failure', 'completed run', {
@@ -752,6 +834,8 @@ function helpJson(): object {
       'report <segment>...': 'Reconstruct the terminal result from prepared-roster and authoritative event records.',
       'compare <left-segment> <right-segment>': 'Compare two single-segment record streams exactly.',
       'explain --run-id <id> --seat <n>': 'Tie one seat\'s recorded decisions to permitted evidence, skill outcomes, funnel stages, and authoritative effects.',
+      'save --run-id <id> [--checkpoint-id <id>]': 'Checkpoint a running generalized-roster Hunger match, stop it, and publish the checkpoint.',
+      'resume --checkpoint <id> --accept-minecraft-eula [--run-id <id>] [--join-timeout-seconds <n>]': 'Resume a saved match in a new run at the next epoch.',
       'league --manifest <path> --accept-minecraft-eula': 'Run or resume a league of candidate policies against frozen opponents and report the paired analysis.',
       'prepare --scenario <path> --run-id <id>': 'Compile a scenario and stage its world plan in a new run directory.',
       'validate --scenario <path>': 'Compile the scenario, map, and policy without staging a run.',
