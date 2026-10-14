@@ -10,6 +10,8 @@ export {
 } from "./codec.js";
 export { parseStrictJson, StrictJsonError } from "./strict-json.js";
 export { CONTROL_CAPABILITIES } from "./types.js";
+export { CheckpointDecodeError, decodeCheckpoint, encodeCheckpointBody } from "./checkpoint.js";
+export type { CheckpointRecord, CheckpointSeat, CheckpointLivingState, CheckpointExtension } from "./checkpoint.js";
 export type { ControlCodecErrorCode } from "./codec.js";
 export type { StrictJsonErrorCode, StrictJsonValue } from "./strict-json.js";
 export type {
@@ -19,6 +21,8 @@ export type {
   BlockPosition,
   BuildProgressPayload,
   CaptureZone,
+  CheckpointCommandPayload,
+  CheckpointWrittenPayload,
   ClockPayload,
   BotCompetitor,
   CivilizationBlueprint,
@@ -53,6 +57,7 @@ export type {
   PreparePayload,
   PublicStatePayload,
   ReadyPayload,
+  ResumeReference,
   RosterCompetitor,
   SquadDefinition,
   TideFaction

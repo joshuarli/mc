@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
-import { decodeControlEnvelope, encodeControlEnvelope } from "../src/control/index.js";
+import { decodeCheckpoint, decodeControlEnvelope, encodeControlEnvelope } from "../src/control/index.js";
 import type { HungerGamesV2PreparePayload } from "../src/control/index.js";
 
 const fixtureDirectory = join(process.cwd(), "fixtures", "protocol");
@@ -58,4 +58,28 @@ test("control rule modes decode with their parameters and reject inconsistent ma
   });
   const squadRules = "rules" in squads.payload ? squads.payload.rules : undefined;
   assert.equal(squadRules?.kind === "squads" ? squadRules.squads.length : 0, 2);
+});
+
+const checkpointDirectory = join(process.cwd(), "fixtures", "checkpoint");
+
+test("control checkpoint fixtures decode the saved match with dead seats and the opaque extension", () => {
+  const plain = decodeCheckpoint(readFileSync(join(checkpointDirectory, "checkpoint-v1.ckpt")));
+  assert.equal(plain.record.match_tick, 520n);
+  assert.deepEqual(plain.record.eliminations.map(({ seat, cause }) => [seat, cause]), [[2, "death"], [5, "disconnect"]]);
+  assert.equal(plain.record.seats.filter(({ alive }) => alive).length, 6);
+  assert.equal(plain.record.seats[2]?.state, undefined);
+  assert.equal(plain.record.extension, null);
+  assert.equal(plain.digest.length, 64);
+
+  const extended = decodeCheckpoint(readFileSync(join(checkpointDirectory, "checkpoint-v1-extension.ckpt")));
+  assert.equal(extended.record.extension?.version, 3);
+  assert.equal(Buffer.from(extended.record.extension?.payload ?? "", "base64").toString("utf8"), "faction-state");
+});
+
+test("control checkpoint fixtures reject incomplete, tampered, and inconsistent records", () => {
+  const invalid = readdirSync(checkpointDirectory).filter((name) => name.startsWith("checkpoint-invalid-"));
+  assert.equal(invalid.length, 7);
+  for (const name of invalid) {
+    assert.throws(() => decodeCheckpoint(readFileSync(join(checkpointDirectory, name))), name);
+  }
 });

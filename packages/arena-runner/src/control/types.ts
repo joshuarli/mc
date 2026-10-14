@@ -1,4 +1,4 @@
-export const CONTROL_CAPABILITIES = Object.freeze(["hunger_games_v1", "civilization_v1", "hunger_games_roster_v2"] as const);
+export const CONTROL_CAPABILITIES = Object.freeze(["hunger_games_v1", "civilization_v1", "hunger_games_roster_v2", "checkpoint_v1"] as const);
 export type ControlCapability = typeof CONTROL_CAPABILITIES[number];
 export type FactionId = "ember" | "tide";
 export type CivilizationRole = "gatherer_crafter" | "builder" | "defender_scout";
@@ -56,6 +56,24 @@ export interface ExternalCompetitor {
 }
 
 export type RosterCompetitor = BotCompetitor | ExternalCompetitor;
+
+export interface ResumeReference {
+  readonly checkpoint_digest: string;
+  readonly epoch: number;
+}
+
+export interface CheckpointCommandPayload {
+  readonly checkpoint_id: string;
+  readonly epoch: number;
+}
+
+export interface CheckpointWrittenPayload {
+  readonly checkpoint_id: string;
+  readonly epoch: number;
+  readonly match_tick: bigint;
+  readonly digest: string;
+  readonly byte_length: number;
+}
 
 export interface SquadDefinition {
   readonly id: string;
@@ -181,6 +199,7 @@ export type PreparePayload = {
   readonly mode: "hunger_games";
   readonly roster_version: 2;
   readonly rules?: PrepareRules;
+  readonly resume?: ResumeReference;
   readonly settings: HungerGamesPrepareSettings;
   readonly roster: readonly RosterCompetitor[];
 };
@@ -287,6 +306,8 @@ export type ControlMessage =
   | (ControlEnvelopeFields & { readonly type: "build_progress"; readonly payload: BuildProgressPayload })
   | (ControlEnvelopeFields & { readonly type: "prepare"; readonly payload: PreparePayload })
   | (ControlEnvelopeFields & { readonly type: "start"; readonly payload: Record<string, never> })
+  | (ControlEnvelopeFields & { readonly type: "checkpoint"; readonly payload: CheckpointCommandPayload })
+  | (ControlEnvelopeFields & { readonly type: "checkpoint_written"; readonly payload: CheckpointWrittenPayload })
   | (ControlEnvelopeFields & { readonly type: "abort"; readonly payload: { readonly reason: AbortReason } })
   | (ControlEnvelopeFields & { readonly type: "public_clock"; readonly payload: ClockPayload })
   | (ControlEnvelopeFields & { readonly type: "public_state"; readonly payload: PublicStatePayload })

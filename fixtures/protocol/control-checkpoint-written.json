@@ -1,0 +1,1 @@
+{"protocol":1,"run_id":"fixture-run","sequence":"12","type":"checkpoint_written","payload":{"checkpoint_id":"ckpt-1","epoch":0,"match_tick":"520","digest":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","byte_length":4096}}

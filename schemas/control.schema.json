@@ -10,7 +10,7 @@
     "run_id": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$", "not": { "pattern": "[\\r\\n\\u2028\\u2029]" } },
     "sequence": { "$ref": "#/$defs/positive_u64" },
     "correlation": { "$ref": "#/$defs/positive_u64" },
-    "type": { "enum": ["hello", "ready", "heartbeat", "build_progress", "prepare", "start", "abort", "public_clock", "public_state", "elimination", "civilization_state", "outcome", "metrics", "ack", "error"] },
+    "type": { "enum": ["hello", "ready", "heartbeat", "build_progress", "prepare", "start", "abort", "public_clock", "public_state", "elimination", "civilization_state", "outcome", "metrics", "ack", "error", "checkpoint", "checkpoint_written"] },
     "payload": { "type": "object" }
   },
   "allOf": [
@@ -34,7 +34,9 @@
         { "properties": { "type": { "const": "outcome" }, "payload": { "$ref": "#/$defs/outcome_payload" } }, "required": ["type", "payload"] },
         { "properties": { "type": { "const": "metrics" }, "payload": { "$ref": "#/$defs/metrics_payload" } }, "required": ["type", "payload"] },
         { "properties": { "type": { "const": "ack" }, "payload": { "$ref": "#/$defs/empty_payload" } }, "required": ["type", "payload"] },
-        { "properties": { "type": { "const": "error" }, "payload": { "$ref": "#/$defs/error_payload" } }, "required": ["type", "payload"] }
+        { "properties": { "type": { "const": "error" }, "payload": { "$ref": "#/$defs/error_payload" } }, "required": ["type", "payload"] },
+        { "properties": { "type": { "const": "checkpoint" }, "payload": { "$ref": "#/$defs/checkpoint_payload" } }, "required": ["type", "payload"] },
+        { "properties": { "type": { "const": "checkpoint_written" }, "payload": { "$ref": "#/$defs/checkpoint_written_payload" } }, "required": ["type", "payload"] }
       ]
     }
   ],
@@ -51,7 +53,7 @@
         { "not": { "const": "0" } }
       ]
     },
-    "capability": { "enum": ["hunger_games_v1", "civilization_v1", "hunger_games_roster_v2"] },
+    "capability": { "enum": ["hunger_games_v1", "civilization_v1", "hunger_games_roster_v2", "checkpoint_v1"] },
     "abort_reason": { "enum": ["operator", "lease_lost", "invalid_world", "protocol_error", "runtime_timeout"] },
     "tick": {
       "type": "object",
@@ -79,13 +81,34 @@
       "uniqueItems": true
     },
     "empty_payload": { "type": "object", "additionalProperties": false },
+    "checkpoint_payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["checkpoint_id", "epoch"],
+      "properties": {
+        "checkpoint_id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$" },
+        "epoch": { "type": "integer", "minimum": 0, "maximum": 1000000 }
+      }
+    },
+    "checkpoint_written_payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["checkpoint_id", "epoch", "match_tick", "digest", "byte_length"],
+      "properties": {
+        "checkpoint_id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$" },
+        "epoch": { "type": "integer", "minimum": 0, "maximum": 1000000 },
+        "match_tick": { "$ref": "#/$defs/u64" },
+        "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "byte_length": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 }
+      }
+    },
     "hello_payload": {
       "type": "object",
       "additionalProperties": false,
       "required": ["token", "capabilities"],
       "properties": {
         "token": { "type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[A-Za-z0-9_-]+$", "not": { "pattern": "[\\r\\n\\u2028\\u2029]" } },
-        "capabilities": { "type": "array", "minItems": 1, "maxItems": 3, "uniqueItems": true, "items": { "$ref": "#/$defs/capability" } }
+        "capabilities": { "type": "array", "minItems": 1, "maxItems": 4, "uniqueItems": true, "items": { "$ref": "#/$defs/capability" } }
       }
     },
     "ready_payload": {
@@ -113,7 +136,7 @@
             "version": { "type": "string", "minLength": 1, "maxLength": 128 }
           }
         },
-        "capabilities": { "type": "array", "minItems": 1, "maxItems": 3, "uniqueItems": true, "items": { "$ref": "#/$defs/capability" } }
+        "capabilities": { "type": "array", "minItems": 1, "maxItems": 4, "uniqueItems": true, "items": { "$ref": "#/$defs/capability" } }
       }
     },
     "build_progress_payload": {
@@ -413,6 +436,15 @@
         "mode": { "const": "hunger_games" },
         "roster_version": { "const": 2 },
         "rules": { "$ref": "#/$defs/prepare_rules" },
+        "resume": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["checkpoint_digest", "epoch"],
+          "properties": {
+            "checkpoint_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            "epoch": { "type": "integer", "minimum": 1, "maximum": 1000000 }
+          }
+        },
         "settings": {
           "type": "object",
           "additionalProperties": false,

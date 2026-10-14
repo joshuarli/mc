@@ -142,6 +142,45 @@ version: 1, squads: [{id, seats}]}` declares 2 to 64 uniquely named squads
 whose ascending seats partition every roster seat, and requires the classic
 block rules. The codec and the plugin both check these cross-field rules.
 
+## Checkpoint and resume
+
+The closed `checkpoint_v1` capability gates three additions; the envelope
+`protocol` stays 1.
+
+- `checkpoint` (runner to plugin) is `{checkpoint_id, epoch}`. The plugin
+  accepts it once, for a prepared generalized-roster Hunger Games match in
+  `grace` or `active`, and only when `epoch` equals its runtime epoch;
+  anything else is rejected with `invalid_state`. After the acknowledgment
+  the plugin resolves the current tick's eliminations, then stops advancing
+  the match: no clock, public-state, elimination, or outcome event is
+  produced after the barrier tick. Heartbeats continue.
+- `checkpoint_written` (plugin to runner) is `{checkpoint_id, epoch,
+  match_tick, digest, byte_length}`. `digest` is the SHA-256 of the record
+  body and `match_tick` is the barrier tick that the resumed match will run
+  next. A failed write is reported as an `error` correlated to the
+  `checkpoint` sequence and leaves no complete record. The runner then stops
+  Paper; there is no live pause.
+- A roster-version-2 `prepare` may carry `resume: {checkpoint_digest, epoch}`.
+  It is valid only when the server was started with `-Darena.resume-checkpoint`
+  naming a complete record, the digest matches that record, `epoch` is the
+  record's epoch plus one, and the rest of the payload equals the saved
+  prepare. A server started with a checkpoint accepts only a resume prepare.
+  `start` then resumes the clock once every living seat has rejoined.
+
+The checkpoint file is one canonical JSON body followed by a newline and the
+trailer `#arena-checkpoint-complete v1 sha256=<hex> bytes=<n>`. It is written
+to `<name>.partial`, forced to disk, and renamed atomically, so a missing,
+truncated, or mismatched trailer is an explicitly incomplete record. The
+strict reader rejects unknown fields, other schema versions, seats whose
+identity or liveness disagrees with the roster and eliminations, and fewer
+than two living seats. The body holds the schema, ids, epoch, world identity,
+the original prepare (roster, rules, match and border settings), match tick,
+border diameter, eliminations with cause and tick, every seat's identity and
+liveness, saved position, health, hunger, saturation, selected slot and
+inventory for living seats, and an opaque versioned `extension` slot for
+faction or job state. Fixtures are under `fixtures/checkpoint/` and
+`fixtures/protocol/control-*checkpoint*` and `control-*resume*`.
+
 ## Civilization control-v1
 
 Control-v1 adds the closed `civilization_v1` capability and `prepare.mode = civilization` variant. Hunger Games frames retain their existing shapes. A handshake advertising only `hunger_games_v1` rejects `civilization_state`, `faction_winner`, and draws carrying faction scores. Authentication still precedes capability checks; readiness must repeat the authenticated capability set exactly.

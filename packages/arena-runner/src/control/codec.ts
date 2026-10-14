@@ -25,6 +25,8 @@ import type {
   BlockPosition,
   BorderSettings,
   BuildProgressPayload,
+  CheckpointCommandPayload,
+  CheckpointWrittenPayload,
   ClockPayload,
   BotCompetitor,
   CaptureZone,
@@ -52,6 +54,7 @@ import type {
   PreparePayload,
   PrepareRules,
   PublicStatePayload,
+  ResumeReference,
   ReadyPayload,
   RosterCompetitor,
   SquadDefinition,
@@ -62,6 +65,7 @@ export const MAX_CONTROL_FRAME_BYTES = 1_048_576;
 
 const CIVILIZATION_SEAT_COUNT = 6;
 const MAX_SEAT = MAX_COMPETITORS - 1;
+const MAX_EPOCH = 1_000_000;
 const RESERVED_RUNNER_USERNAME = /^arena(?:bot|spec)/i;
 
 const MAX_U64 = 18_446_744_073_709_551_615n;
@@ -223,6 +227,11 @@ export class ControlReceiver {
       throw new ControlCodecError("invalid_handshake", "plugin sent a runner-only command or repeated handshake event");
     }
 
+    if (this.handshake === "complete" && message.type === "checkpoint_written"
+        && !this.helloCapabilities.includes("checkpoint_v1")) {
+      throw new ControlCodecError("unsupported_capability", "plugin sent a checkpoint event without advertising checkpoint_v1");
+    }
+
     if (this.handshake === "complete" && requiresCivilizationCapability(message)
         && !this.helloCapabilities.includes("civilization_v1")) {
       throw new ControlCodecError("unsupported_capability", "plugin sent a civilization event without advertising civilization_v1");
@@ -262,6 +271,7 @@ function isPluginEvent(message: ControlMessage): boolean {
   return message.type === "heartbeat" || message.type === "build_progress" || message.type === "public_clock"
     || message.type === "public_state" || message.type === "elimination" || message.type === "outcome"
     || message.type === "civilization_state" || message.type === "metrics" || message.type === "ack"
+    || message.type === "checkpoint_written"
     || message.type === "error";
 }
 
@@ -270,6 +280,10 @@ function requiresCivilizationCapability(message: ControlMessage): boolean {
   if (message.type !== "outcome") return false;
   return message.payload.kind === "faction_winner"
     || (message.payload.kind === "draw" && "scores" in message.payload);
+}
+
+export function readPreparePayload(value: StrictJsonValue): PreparePayload {
+  return readPrepare(value);
 }
 
 function readEnvelope(value: StrictJsonValue): ControlMessage {
@@ -302,6 +316,10 @@ function readEnvelope(value: StrictJsonValue): ControlMessage {
       return { ...fields, type, payload: readPrepare(payload) };
     case "start":
       return { ...fields, type, payload: readEmpty(payload, "payload") };
+    case "checkpoint":
+      return { ...fields, type, payload: readCheckpointCommand(payload) };
+    case "checkpoint_written":
+      return { ...fields, type, payload: readCheckpointWritten(payload) };
     case "abort":
       return { ...fields, type, payload: readAbort(payload) };
     case "public_clock":
@@ -379,7 +397,7 @@ function readBuildProgress(value: StrictJsonValue): BuildProgressPayload {
 
 function readPrepare(value: StrictJsonValue): PreparePayload {
   const payload = readObject(value, "payload",
-    ["map_semantic_id", "scenario_semantic_id", "seed", "mode", "settings", "roster", "roster_version", "rules"],
+    ["map_semantic_id", "scenario_semantic_id", "seed", "mode", "settings", "roster", "roster_version", "rules", "resume"],
     ["map_semantic_id", "scenario_semantic_id", "seed", "mode", "settings", "roster"]);
   const mode = readString(payload.mode, "payload.mode", 1, 64);
   if (mode !== "hunger_games" && mode !== "civilization") invalid("payload.mode", "mode is unsupported by control-v1");
@@ -396,6 +414,9 @@ function readPrepare(value: StrictJsonValue): PreparePayload {
   if (Object.hasOwn(payload, "rules") && !generalizedRoster) {
     invalid("payload.rules", "rule modes require the generalized roster");
   }
+  if (Object.hasOwn(payload, "resume") && !generalizedRoster) {
+    invalid("payload.resume", "resume requires the generalized roster");
+  }
   if (generalizedRoster) {
     const settings = readHungerGamesPrepareSettings(payload.settings);
     const roster = readGeneralizedRoster(payload.roster);
@@ -407,6 +428,7 @@ function readPrepare(value: StrictJsonValue): PreparePayload {
       mode: "hunger_games",
       roster_version: 2,
       ...(rules === undefined ? {} : { rules }),
+      ...(Object.hasOwn(payload, "resume") ? { resume: readResumeReference(payload.resume) } : {}),
       settings,
       roster
     };
@@ -419,6 +441,35 @@ function readPrepare(value: StrictJsonValue): PreparePayload {
     invalid("payload.roster", "civilization requires exactly six bot competitors");
   }
   return { ...common, mode, settings: readCivilizationPrepareSettings(payload.settings), roster };
+}
+
+function readResumeReference(value: StrictJsonValue | undefined): ResumeReference {
+  const path = "payload.resume";
+  const reference = readObject(value, path, ["checkpoint_digest", "epoch"], ["checkpoint_digest", "epoch"]);
+  return {
+    checkpoint_digest: readString(reference.checkpoint_digest, `${path}.checkpoint_digest`, 64, 64, /^[0-9a-f]{64}$/),
+    epoch: readSafeInteger(reference.epoch, `${path}.epoch`, 1, MAX_EPOCH, reference, "epoch")
+  };
+}
+
+function readCheckpointCommand(value: StrictJsonValue): CheckpointCommandPayload {
+  const payload = readObject(value, "payload", ["checkpoint_id", "epoch"], ["checkpoint_id", "epoch"]);
+  return {
+    checkpoint_id: readString(payload.checkpoint_id, "payload.checkpoint_id", 1, 64, RUN_ID),
+    epoch: readSafeInteger(payload.epoch, "payload.epoch", 0, MAX_EPOCH, payload, "epoch")
+  };
+}
+
+function readCheckpointWritten(value: StrictJsonValue): CheckpointWrittenPayload {
+  const keys = ["checkpoint_id", "epoch", "match_tick", "digest", "byte_length"];
+  const payload = readObject(value, "payload", keys, keys);
+  return {
+    checkpoint_id: readString(payload.checkpoint_id, "payload.checkpoint_id", 1, 64, RUN_ID),
+    epoch: readSafeInteger(payload.epoch, "payload.epoch", 0, MAX_EPOCH, payload, "epoch"),
+    match_tick: readU64(payload.match_tick, "payload.match_tick", false),
+    digest: readString(payload.digest, "payload.digest", 64, 64, /^[0-9a-f]{64}$/),
+    byte_length: readSafeInteger(payload.byte_length, "payload.byte_length", 1, Number.MAX_SAFE_INTEGER, payload, "byte_length")
+  };
 }
 
 function readPrepareRules(
@@ -1007,7 +1058,7 @@ function readEmpty(value: StrictJsonValue, path: string): Record<string, never> 
   return {};
 }
 
-function readObject<const Keys extends readonly string[]>(
+export function readObject<const Keys extends readonly string[]>(
   value: StrictJsonValue | undefined,
   path: string,
   allowed: readonly string[],
@@ -1024,14 +1075,14 @@ function readObject<const Keys extends readonly string[]>(
   return object as RequiredObject<Keys>;
 }
 
-function readArray(value: StrictJsonValue | undefined, path: string, minLength: number, maxLength: number): readonly StrictJsonValue[] {
+export function readArray(value: StrictJsonValue | undefined, path: string, minLength: number, maxLength: number): readonly StrictJsonValue[] {
   if (!Array.isArray(value) || value.length < minLength || value.length > maxLength) {
     invalid(path, `must be an array with ${minLength} to ${maxLength} entries`);
   }
   return value;
 }
 
-function readString(
+export function readString(
   value: StrictJsonValue | undefined,
   path: string,
   minLength: number,
@@ -1044,12 +1095,12 @@ function readString(
   return value;
 }
 
-function readBoolean(value: StrictJsonValue | undefined, path: string): boolean {
+export function readBoolean(value: StrictJsonValue | undefined, path: string): boolean {
   if (typeof value !== "boolean") invalid(path, "must be a boolean");
   return value;
 }
 
-function readSafeInteger(
+export function readSafeInteger(
   value: StrictJsonValue | undefined,
   path: string,
   min = 0,
@@ -1077,12 +1128,12 @@ function isIntegerNumberToken(token: string): boolean {
   return new RegExp(`0{${decimalPlaces}}$`).test(digits);
 }
 
-function readFiniteNumber(value: StrictJsonValue | undefined, path: string): number {
+export function readFiniteNumber(value: StrictJsonValue | undefined, path: string): number {
   if (typeof value !== "number" || !Number.isFinite(value)) invalid(path, "must be a finite number");
   return value;
 }
 
-function readU64(value: StrictJsonValue | undefined, path: string, positive: boolean): bigint {
+export function readU64(value: StrictJsonValue | undefined, path: string, positive: boolean): bigint {
   if (typeof value !== "string" || value.length > 20
       || !matchesPattern(value, positive ? POSITIVE_U64_DECIMAL : U64_DECIMAL)) {
     invalid(path, positive ? "must be a positive canonical u64 decimal string" : "must be a canonical u64 decimal string");
@@ -1171,6 +1222,6 @@ function isStrictJsonObject(value: StrictJsonValue): value is StrictJsonObject {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function invalid(path: string, message: string): never {
+export function invalid(path: string, message: string): never {
   throw new ControlCodecError("invalid_message", message, path);
 }
