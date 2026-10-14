@@ -399,6 +399,7 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
       ...(options.onPolicyActivity === undefined ? {} : { onPolicyActivity: options.onPolicyActivity }),
       recordPolicy: scenario.record.policyReplay,
       ...(funnel === undefined ? {} : { funnel }),
+      ...(seatCandidates.size === 0 ? {} : { candidates: seatCandidates }),
     });
     if (workerCount > 1) {
       cohort = new WorkerCohort({
