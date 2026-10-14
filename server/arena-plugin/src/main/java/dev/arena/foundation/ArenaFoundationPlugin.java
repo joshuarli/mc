@@ -1673,6 +1673,23 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
         }
     }
 
+    @EventHandler(priority = EventPriority.LOWEST)
+    public void onAsyncPreLogin(org.bukkit.event.player.AsyncPlayerPreLoginEvent event) {
+        if (startupMode != StartupMode.PLAN) {
+            return;
+        }
+        List<LoginGuard.OnlineIdentity> online = new ArrayList<>();
+        for (Player player : Bukkit.getOnlinePlayers()) {
+            online.add(new LoginGuard.OnlineIdentity(player.getName(), player.getUniqueId()));
+        }
+        Optional<String> denial = LoginGuard.denial(online, event.getName(), event.getUniqueId());
+        if (denial.isPresent()) {
+            getLogger().info("ARENA_REJECT|" + event.getName() + "|" + denial.get());
+            event.disallow(org.bukkit.event.player.AsyncPlayerPreLoginEvent.Result.KICK_OTHER,
+                    net.kyori.adventure.text.Component.text(denial.get()));
+        }
+    }
+
     @EventHandler(priority = EventPriority.HIGH)
     public void onJoin(PlayerJoinEvent event) {
         getLogger().info("ARENA_JOIN|" + event.getPlayer().getName());
