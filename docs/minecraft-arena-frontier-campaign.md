@@ -1,6 +1,19 @@
 # Arena Frontier: from a six-bot experiment to competitive worlds
 
-**Status:** paused 2026-10-14. Written against `master` at `f479b16` (2026-10-14). It supersedes the earlier agent campaign plans, which G0 deleted.
+**Status:** active 2026-10-14, bot-quality sprint is the top priority (see Priority override). Written against `master` at `f479b16` (2026-10-14). It supersedes the earlier agent campaign plans, which G0 deleted.
+
+## Priority override (2026-10-14, owner)
+
+Bot quality is the top immediate priority; every other item waits unless it unblocks a Q item. Quality is judged by live full-match numbers and the league, never by offline tests alone.
+
+| Item | Delivers and proof |
+|---|---|
+| **Q0** | Live measurement of the tip: `acceptance hunger-six` on 481516..481521 plus per-seat quality table (loot, distance, idle ticks, attacks issued/rejected from the funnel, damage dealt/taken, death causes and ticks, PvP share). Recorded in `docs/acceptance-report.md`. |
+| **Q-loop** | Quality loop speed: league and acceptance matches run on ephemeral game ports with up to 3 concurrent matches (10 CPUs, 32 GiB), one world template per seed; a development league of 12 seeds finishes in under 30 minutes. |
+| **Q1** | Policy and skill defects found from Q0 traces (idle seats, stalls, stuck spawns, no-loot seats, rejected attacks) fixed with failing regressions first. The frozen baseline is copied once as `baseline@1` before any change; improvements ship as a new implementation id compared against it. |
+| **Q2** | Candidate tuning on development seeds 500001..500012 with the existing search helper; one held-out evaluation of 600001..600024 per frozen candidate set; promote only at mean ≥ 0.65 and lower bound > 0.5. |
+
+Quality gates fixed now: all six seeds terminate; at least 75% of seats loot a chest; at least 40% of eliminations are PvP; self-inflicted attack rejections under 5% of issued attacks in live matches; no seat idle for more than 600 ticks without a recorded waiting reason; candidate beats `baseline@1` per the league rule.
 
 ## Handoff (paused 2026-10-14)
 
