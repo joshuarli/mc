@@ -2,24 +2,43 @@ import { performance } from 'node:perf_hooks';
 import { createRequire } from 'node:module';
 import {
   blockPosition,
-  OUTPOST_LOGS_REQUIRED,
-  OUTPOST_PLANKS_REQUIRED,
   isOutsideBorder,
   type BlockPosition,
   type CivIntent,
   type EquipmentSlot,
   type SkillCancellation,
-  type SkillFailure,
   type SkillOutcome,
 } from '@arena/core';
 import type { Bot, BotEvents } from 'mineflayer';
 import type { PartiallyComputedPath } from 'mineflayer-pathfinder';
 import { classifyItem, mineflayerEquipmentDestination } from './items.js';
 import { MineflayerCivilizationObserver } from './civilization-observer.js';
+import {
+  craftCivilizationMaterial,
+  mineCivilizationBlock,
+  placeCivilizationBlock,
+  transferContainerMaterial,
+  type CivilizationSkillHost,
+} from './civilization-skills.js';
 import { MineflayerObserver } from './observer.js';
 import { recordPathDiagnostic } from './path-diagnostics.js';
-import { isTargetablePlayer, isVisibleEntity, isVisiblePosition, toBlockPosition } from './perception.js';
+import { isTargetablePlayer, isVisibleEntity, toBlockPosition } from './perception.js';
 import type { ArenaSkillIntent } from './skill-intent.js';
+import {
+  ACTION_TIMEOUT_MS,
+  SkillFault,
+  SkillInterrupted,
+  distance,
+  errorMessage,
+  throwIfInterrupted,
+  waitForChestWindow,
+  waitForCondition,
+  type ActiveSkill,
+  type MineflayerChest,
+  type MineflayerEntity,
+  type MineflayerItem,
+  type MineflayerWindow,
+} from './skill-support.js';
 import { hasLocalVoxelLineOfSight } from './visibility.js';
 
 const { Movements, goals, pathfinder } = createRequire(import.meta.url)('mineflayer-pathfinder') as typeof import('mineflayer-pathfinder');
@@ -34,17 +53,10 @@ const MAX_PATH_SLICE_PER_CLIENT_MS = 3;
 const MAX_WORKER_PATH_SLICE_MS = 10;
 const PINNED_PATHFINDER_VERSION = '2.4.5';
 const PATH_TIMEOUT_MS = 20_000;
-const ACTION_TIMEOUT_MS = 5_000;
-const INVENTORY_TRANSFER_TIMEOUT_MS = 15_000;
 const PICKUP_RANGE_BLOCKS = 0.9;
 const APPROACH_RANGE_BLOCKS = 3;
 const MAX_TARGET_REPLANS = 8;
 
-type MineflayerItem = NonNullable<Bot['inventory']['slots'][number]>;
-type MineflayerWindow = NonNullable<Bot['currentWindow']>;
-type MineflayerChest = Awaited<ReturnType<Bot['openContainer']>>;
-type MineflayerBlock = NonNullable<ReturnType<Bot['blockAt']>>;
-type MineflayerEntity = Bot['entity'];
 type BoundedPathfinder = Bot['pathfinder'] & { searchRadius: number };
 type PathfinderGoal = import('mineflayer-pathfinder').goals.Goal;
 type SkillIntent = ArenaSkillIntent | CivIntent;
@@ -71,26 +83,11 @@ interface DropCollectionReceipt {
   dispose(): void;
 }
 
-interface ActiveSkill {
-  readonly controller: AbortController;
-  readonly resources: SkillResources;
-  cancellation: SkillCancellation | null;
-  promise: Promise<SkillOutcome>;
-}
-
 type NavigationArrival =
   | { readonly kind: 'withinRange'; readonly range: number }
   | { readonly kind: 'exactBlock' };
 type NavigationPosition = Readonly<{ x: number; y: number; z: number }>;
 
-interface SkillResources {
-  navigationActive: boolean;
-  digging: { readonly settlement: Promise<void>; stopRequested: boolean } | null;
-  eating: boolean;
-  inventoryTouched: boolean;
-  window: MineflayerChest | null;
-  quickBarSlotToRestore: number | null;
-}
 
 interface AStarContext {
   readonly movements: InstanceType<typeof Movements>;
@@ -140,23 +137,6 @@ function snapshotPathResult(result: PartiallyComputedPath): PartiallyComputedPat
     },
   ));
   return { ...result, path };
-}
-
-class SkillFault extends Error {
-  readonly failure: SkillFailure;
-
-  constructor(cause: SkillFailure, message: string) {
-    super(message);
-    this.name = 'SkillFault';
-    this.failure = cause;
-  }
-}
-
-class SkillInterrupted extends Error {
-  constructor() {
-    super('skill was cancelled');
-    this.name = 'SkillInterrupted';
-  }
 }
 
 /**
@@ -671,16 +651,16 @@ export class SkillOwner {
     throwIfInterrupted(signal);
     switch (intent.kind) {
       case 'mineBlock':
-        await this.#mineBlock(intent, active);
+        await mineCivilizationBlock(this.#civilizationHost(), intent, active);
         return;
       case 'craft':
-        await this.#craftCivilizationMaterial(intent, active);
+        await craftCivilizationMaterial(this.#civilizationHost(), intent, active);
         return;
       case 'containerTransfer':
-        await this.#transferContainerMaterial(intent, active);
+        await transferContainerMaterial(this.#civilizationHost(), intent, active);
         return;
       case 'placeBlock':
-        await this.#placeCivilizationBlock(intent, active);
+        await placeCivilizationBlock(this.#civilizationHost(), intent, active);
         return;
       case 'hold':
         return;
@@ -713,379 +693,19 @@ export class SkillOwner {
     }
   }
 
-  async #mineBlock(intent: Extract<CivIntent, { readonly kind: 'mineBlock' }>, active: ActiveSkill): Promise<void> {
-    this.#requireSynchronizedCivilizationInventory();
-    this.#requireInsideBorder(intent.position);
-    await this.#navigateTo(intent.position, 4, active);
-    throwIfInterrupted(active.controller.signal);
-    const block = this.#localBlock(intent.position);
-    if (block === null || block.name !== intent.expectedBlock) {
-      throw new SkillFault('preconditionsNotMet', `block at ${positionText(intent.position)} is not the expected oak log`);
-    }
-    if (distance(this.#bot.entity.position, block.position.offset(0.5, 0.5, 0.5)) > 4.5
-      || !isVisiblePosition(this.#bot, block.position, 1)
-      || !this.#bot.canDigBlock(block)) {
-      throw new SkillFault('preconditionsNotMet', `oak log at ${positionText(intent.position)} is not locally reachable`);
-    }
-
-    try {
-      await this.#awaitOwnedOperation(
-        active,
-        `dig oak log at ${positionText(intent.position)}`,
-        () => {
-          const operation = this.#bot.dig(block, true);
-          const digging = {
-            settlement: Promise.resolve(operation).then(() => undefined, () => undefined),
-            stopRequested: false,
-          };
-          active.resources.digging = digging;
-          void digging.settlement.then(() => {
-            if (active.resources.digging === digging) active.resources.digging = null;
-          });
-          return operation;
-        },
-      );
-    } catch (error) {
-      if (active.cancellation !== null) throw new SkillInterrupted();
-      if (error instanceof SkillInterrupted || error instanceof SkillFault) throw error;
-      throw new SkillFault('serverRejected', errorMessage(error));
-    }
-    if (active.cancellation !== null) throw new SkillInterrupted();
-    throwIfInterrupted(active.controller.signal);
-    await waitForCondition(
-      this.#bot,
-      () => {
-        const changed = this.#localBlock(intent.position);
-        return changed !== null && changed.name !== intent.expectedBlock;
-      },
-      active.controller.signal,
-      ACTION_TIMEOUT_MS,
-    );
-    const changed = this.#localBlock(intent.position);
-    if (changed === null || changed.name === intent.expectedBlock) {
-      throw new SkillFault('noProgress', `oak log at ${positionText(intent.position)} was not observed removed`);
-    }
-  }
-
-  async #craftCivilizationMaterial(
-    intent: Extract<CivIntent, { readonly kind: 'craft' }>,
-    active: ActiveSkill,
-  ): Promise<void> {
-    this.#requireSynchronizedCivilizationInventory();
-    const planksPerOakLog = OUTPOST_PLANKS_REQUIRED / OUTPOST_LOGS_REQUIRED;
-    if (intent.table !== null
-      || !Number.isSafeInteger(intent.resultCount)
-      || intent.resultCount < planksPerOakLog
-      || intent.resultCount > OUTPOST_PLANKS_REQUIRED
-      || intent.resultCount % planksPerOakLog !== 0) {
-      throw new SkillFault(
-        'preconditionsNotMet',
-        `outpost crafting requires whole multiples of ${planksPerOakLog} oak planks, up to ${OUTPOST_PLANKS_REQUIRED}, in hand crafting`,
-      );
-    }
-    const resultCount = intent.resultCount;
-    const craftCount = resultCount / planksPerOakLog;
-    const logType = this.#bot.registry.itemsByName.oak_log;
-    const plankType = this.#bot.registry.itemsByName.oak_planks;
-    if (logType === undefined || plankType === undefined) {
-      throw new Error('Mineflayer registry lacks the required oak log or plank item');
-    }
-    const recipe = this.#bot.recipesFor(plankType.id, null, resultCount, null)
-      .find((candidate) => candidate.result.id === plankType.id
-        && candidate.result.count === planksPerOakLog
-        && candidate.delta.reduce((count, entry) => count + (entry.id === logType.id ? entry.count : 0), 0) === -1
-        && candidate.delta.reduce((count, entry) => count + (entry.id === plankType.id ? entry.count : 0), 0) === planksPerOakLog
-        && candidate.delta.every((entry) => entry.id === logType.id || entry.id === plankType.id));
-    if (recipe === undefined) {
-      throw new SkillFault('preconditionsNotMet', 'no legal one-log to four-plank oak recipe is available in this client inventory');
-    }
-    const logsBefore = countInventoryItemByName(this.#bot, 'oak_log');
-    const planksBefore = countInventoryItemByName(this.#bot, 'oak_planks');
-    if (logsBefore < craftCount) {
-      throw new SkillFault('preconditionsNotMet', `crafting ${resultCount} oak planks requires ${craftCount} available oak logs`);
-    }
-    try {
-      await this.#awaitInventoryOperation(
-        active,
-        'craft oak planks',
-        () => this.#bot.craft(recipe, craftCount),
-        ACTION_TIMEOUT_MS,
-      );
-    } catch (error) {
-      if (error instanceof SkillInterrupted || error instanceof SkillFault) throw error;
-      throw new SkillFault('serverRejected', errorMessage(error));
-    }
-    throwIfInterrupted(active.controller.signal);
-    await waitForCondition(
-      this.#bot,
-      () => countInventoryItemByName(this.#bot, 'oak_log') === logsBefore - craftCount
-        && countInventoryItemByName(this.#bot, 'oak_planks') === planksBefore + resultCount,
-      active.controller.signal,
-      ACTION_TIMEOUT_MS,
-    );
-    if (countInventoryItemByName(this.#bot, 'oak_log') !== logsBefore - craftCount
-      || countInventoryItemByName(this.#bot, 'oak_planks') !== planksBefore + resultCount) {
-      throw new SkillFault('noProgress', `the client did not observe consuming ${craftCount} oak logs for ${resultCount} oak planks`);
-    }
-  }
-
-  async #transferContainerMaterial(
-    intent: Extract<CivIntent, { readonly kind: 'containerTransfer' }>,
-    active: ActiveSkill,
-  ): Promise<void> {
-    this.#requireSynchronizedCivilizationInventory();
-    this.#requireInsideBorder(intent.position);
-    if (this.#bot.inventory.selectedItem !== null) {
-      throw new SkillFault('preconditionsNotMet', 'inventory cursor is occupied before a container transfer');
-    }
-    await this.#navigateTo(intent.position, 3, active);
-    const window = await this.#openCivilizationContainer(intent.position, active);
-    const source = findTransferStack(window, intent.item, intent.direction);
-    if (source === null) {
-      throw new SkillFault('preconditionsNotMet', `no observed ${intent.item} stack is available for transfer`);
-    }
-    const destinationSlots = intent.direction === 'deposit'
-      ? window.slots.slice(0, window.inventoryStart)
-      : window.slots.slice(window.inventoryStart, window.inventoryEnd);
-    if (availableStackCapacity(destinationSlots, source.item) < intent.count) {
-      throw new SkillFault('preconditionsNotMet', `container transfer destination lacks room for ${intent.count} ${intent.item}`);
-    }
-
-    const inventoryBefore = countInventoryItemByName(this.#bot, intent.item);
-    const containerBefore = countWindowItemByName(window, intent.item);
-    const totalAvailable = intent.direction === 'deposit' ? inventoryBefore : containerBefore;
-    if (totalAvailable < intent.count) {
-      throw new SkillFault('preconditionsNotMet', `container transfer has only ${totalAvailable} observed ${intent.item}`);
-    }
-
-    let remaining = intent.count;
-    const deadline = performance.now() + INVENTORY_TRANSFER_TIMEOUT_MS;
-    while (remaining > 0) {
-      throwIfInterrupted(active.controller.signal);
-      if (this.#bot.currentWindow !== window) {
-        throw new SkillFault('serverRejected', 'container window closed during the requested transfer');
-      }
-      const nextSource = findTransferStack(window, intent.item, intent.direction);
-      if (nextSource === null) {
-        throw new SkillFault('noProgress', `no synchronized ${intent.item} stack remains during transfer`);
-      }
-      // Prismarine can reuse the source Item as the selected cursor, mutating its count after a click.
-      const sourceCount = nextSource.item.count;
-      const destination = findTransferDestination(window, intent.direction, nextSource.item);
-      if (destination === null || destination.capacity <= 0) {
-        throw new SkillFault('preconditionsNotMet', `container transfer destination has no room for ${intent.item}`);
-      }
-      const amount = Math.min(remaining, sourceCount, destination.capacity);
-      const operationTimeout = transferOperationTimeout(deadline);
-      try {
-        if (amount === sourceCount) {
-          await this.#awaitInventoryOperation(
-            active,
-            `${intent.direction} ${amount} ${intent.item}`,
-            () => this.#bot.clickWindow(nextSource.slot, 0, 1),
-            operationTimeout,
-          );
-        } else {
-          // Shift-click moves the whole stack, so right-click only the requested number of items.
-          await this.#awaitInventoryOperation(
-            active,
-            `pick up ${intent.item} for transfer`,
-            () => this.#bot.clickWindow(nextSource.slot, 0, 0),
-            operationTimeout,
-          );
-          if (window.selectedItem?.name !== intent.item || window.selectedItem.count !== sourceCount) {
-            throw new SkillFault('noProgress', 'the client did not observe the selected transfer stack');
-          }
-          for (let moved = 0; moved < amount; moved += 1) {
-            await this.#awaitInventoryOperation(
-              active,
-              `transfer ${intent.item} item ${moved + 1} of ${amount}`,
-              () => this.#bot.clickWindow(destination.slot, 1, 0),
-              transferOperationTimeout(deadline),
-            );
-            const expectedCursorCount = sourceCount - moved - 1;
-            if ((window.selectedItem?.count ?? 0) !== expectedCursorCount) {
-              throw new SkillFault('noProgress', 'the client did not observe the requested one-item transfer');
-            }
-          }
-          await this.#awaitInventoryOperation(
-            active,
-            `return remaining ${intent.item} stack`,
-            () => this.#bot.clickWindow(nextSource.slot, 0, 0),
-            transferOperationTimeout(deadline),
-          );
-          if (window.selectedItem !== null) {
-            throw new SkillFault('noProgress', 'the client did not observe the remaining stack returned to inventory');
-          }
-        }
-      } catch (error) {
-        if (error instanceof SkillInterrupted || error instanceof SkillFault) throw error;
-        throw new SkillFault('serverRejected', errorMessage(error));
-      }
-
-      remaining -= amount;
-      const transferred = intent.count - remaining;
-      const expectedInventory = intent.direction === 'deposit'
-        ? inventoryBefore - transferred
-        : inventoryBefore + transferred;
-      const expectedContainer = intent.direction === 'deposit'
-        ? containerBefore + transferred
-        : containerBefore - transferred;
-      await waitForCondition(
-        this.#bot,
-        () => this.#bot.currentWindow === window
-          && window.selectedItem === null
-          && countInventoryItemByName(this.#bot, intent.item) === expectedInventory
-          && countWindowItemByName(window, intent.item) === expectedContainer,
-        active.controller.signal,
-        transferOperationTimeout(deadline),
-      );
-    }
-
-    const expectedInventory = intent.direction === 'deposit'
-      ? inventoryBefore - intent.count
-      : inventoryBefore + intent.count;
-    const expectedContainer = intent.direction === 'deposit'
-      ? containerBefore + intent.count
-      : containerBefore - intent.count;
-    if (this.#bot.currentWindow !== window || window.selectedItem !== null
-      || countInventoryItemByName(this.#bot, intent.item) !== expectedInventory
-      || countWindowItemByName(window, intent.item) !== expectedContainer) {
-      throw new SkillFault('noProgress', 'the client did not observe the requested container transfer');
-    }
-  }
-
-  async #placeCivilizationBlock(
-    intent: Extract<CivIntent, { readonly kind: 'placeBlock' }>,
-    active: ActiveSkill,
-  ): Promise<void> {
-    this.#requireSynchronizedCivilizationInventory();
-    this.#requireInsideBorder(intent.target);
-    this.#requireInsideBorder(intent.referencePosition);
-    if (intent.face !== 'up'
-      || intent.target.x !== intent.referencePosition.x
-      || intent.target.z !== intent.referencePosition.z
-      || intent.target.y !== intent.referencePosition.y + 1) {
-      throw new SkillFault('preconditionsNotMet', 'oak plank placement must target the block directly above its support');
-    }
-    await this.#navigateTo(intent.referencePosition, 4, active);
-    const reference = this.#localBlock(intent.referencePosition);
-    const target = this.#localBlock(intent.target);
-    if (target?.name === 'oak_planks') return;
-    if (reference === null || reference.boundingBox !== 'block' || target === null || target.name !== 'air') {
-      throw new SkillFault('preconditionsNotMet', 'the locally observed placement target is unloaded, obstructed, or unsupported');
-    }
-    if (distance(this.#bot.entity.position, reference.position.offset(0.5, 0.5, 0.5)) > 4.5
-      || !isVisiblePosition(this.#bot, reference.position, 1)) {
-      throw new SkillFault('preconditionsNotMet', 'the placement support is not locally reachable');
-    }
-    if (this.#bot.inventory.selectedItem !== null) {
-      throw new SkillFault('preconditionsNotMet', 'inventory cursor is occupied before placing an outpost plank');
-    }
-    const plank = findInventoryStack(this.#bot, 'oak_planks');
-    if (plank === null) {
-      throw new SkillFault('preconditionsNotMet', 'no observed oak planks remain for the outpost');
-    }
-    const beforePlanks = countInventoryItemByName(this.#bot, 'oak_planks');
-    if (this.#bot.heldItem?.name !== 'oak_planks') {
-      try {
-        await this.#awaitInventoryOperation(active, 'equip oak plank', () => this.#bot.equip(plank, 'hand'));
-      } catch (error) {
-        if (error instanceof SkillInterrupted || error instanceof SkillFault) throw error;
-        throw new SkillFault('serverRejected', errorMessage(error));
-      }
-      throwIfInterrupted(active.controller.signal);
-      if (this.#bot.heldItem?.name !== 'oak_planks') {
-        throw new SkillFault('noProgress', 'the client did not observe oak planks in hand');
-      }
-    }
-    try {
-      await this.#awaitInventoryOperation(
-        active,
-        `place oak plank at ${positionText(intent.target)}`,
-        () => this.#bot.placeBlock(reference, reference.position.offset(0, 1, 0).minus(reference.position)),
-      );
-    } catch (error) {
-      if (error instanceof SkillInterrupted || error instanceof SkillFault) throw error;
-      throw new SkillFault('serverRejected', errorMessage(error));
-    }
-    throwIfInterrupted(active.controller.signal);
-    await waitForCondition(
-      this.#bot,
-      () => this.#localBlock(intent.target)?.name === 'oak_planks'
-        && countInventoryItemByName(this.#bot, 'oak_planks') === beforePlanks - 1,
-      active.controller.signal,
-      ACTION_TIMEOUT_MS,
-    );
-    if (this.#localBlock(intent.target)?.name !== 'oak_planks'
-      || countInventoryItemByName(this.#bot, 'oak_planks') !== beforePlanks - 1) {
-      throw new SkillFault('noProgress', 'the client did not observe the placed oak plank and consumed inventory');
-    }
-  }
-
-  async #openCivilizationContainer(position: BlockPosition, active: ActiveSkill): Promise<MineflayerChest> {
-    const key = positionText(position);
-    if (this.#bot.currentWindow !== null) {
-      throw new SkillFault('preconditionsNotMet', 'another inventory window is already open');
-    }
-    const block = this.#localBlock(position);
-    if (block === null || (block.name !== 'chest' && block.name !== 'trapped_chest')) {
-      throw new SkillFault('preconditionsNotMet', `container ${key} is not present in this client's loaded world`);
-    }
-    if (distance(this.#bot.entity.position, block.position.offset(0.5, 0.5, 0.5)) > 3
-      || !isVisiblePosition(this.#bot, block.position, 1)) {
-      throw new SkillFault('preconditionsNotMet', `container ${key} is outside interaction reach or occluded`);
-    }
-    await this.#awaitOwnedOperation(active, 'look at civilization container', () => this.#bot.lookAt(block.position.offset(0.5, 0.5, 0.5), true));
-    throwIfInterrupted(active.controller.signal);
-    const currentBlock = this.#localBlock(position);
-    if (currentBlock === null || (currentBlock.name !== 'chest' && currentBlock.name !== 'trapped_chest')
-      || distance(this.#bot.entity.position, currentBlock.position.offset(0.5, 0.5, 0.5)) > 3
-      || !isVisiblePosition(this.#bot, currentBlock.position, 1)) {
-      throw new SkillFault('preconditionsNotMet', `container ${key} changed before activation`);
-    }
-    const opening = waitForChestWindow(this.#bot, ACTION_TIMEOUT_MS);
-    const activation = this.#awaitOwnedOperation(
-      active,
-      `activate civilization container ${key}`,
-      () => this.#bot.activateBlock(currentBlock),
-    );
-    const [activationResult, openingResult] = await Promise.allSettled([activation, opening]);
-    if (openingResult.status === 'fulfilled') {
-      active.resources.window = openingResult.value;
-      this.#requireCivilizationObserver().markContainerOpened(position, openingResult.value);
-    }
-    if (activationResult.status === 'rejected') {
-      const error = activationResult.reason;
-      if (error instanceof SkillInterrupted || error instanceof SkillFault) throw error;
-      throw new SkillFault('serverRejected', errorMessage(error));
-    }
-    if (openingResult.status === 'rejected') throw openingResult.reason;
-    throwIfInterrupted(active.controller.signal);
-    return openingResult.value;
-  }
-
-  #localBlock(position: BlockPosition): MineflayerBlock | null {
-    return this.#bot.blockAt(asVec3(this.#bot, position));
-  }
-
-  #requireSynchronizedCivilizationInventory(): void {
-    if (!this.#requireCivilizationObserver().isInventorySynchronized()) {
-      throw new SkillFault('preconditionsNotMet', 'civilization inventory is unknown until this client receives a full inventory snapshot');
-    }
-  }
-
-  #requireCivilizationObserver(): MineflayerCivilizationObserver {
-    const observer = this.#civilizationObserver;
-    if (observer === null) throw new Error('civilization skills require a civilization observer');
-    return observer;
-  }
-
-  #requireInsideBorder(position: BlockPosition): void {
-    const border = this.#observer.currentBorder();
-    if (border.kind !== 'current' || isOutsideBorder(border.value, position)) {
-      throw new SkillFault('preconditionsNotMet', 'civilization action requires a current border and an in-border target');
-    }
+  #civilizationHost(): CivilizationSkillHost {
+    const civilizationObserver = this.#civilizationObserver;
+    if (civilizationObserver === null) throw new Error('civilization skills require a civilization observer');
+    return {
+      bot: this.#bot,
+      civilizationObserver,
+      currentBorder: () => this.#observer.currentBorder(),
+      navigateTo: (position, range, active) => this.#navigateTo(position, range, active),
+      awaitOwnedOperation: (active, name, action, timeoutMs, signal, settleOnInterruption) =>
+        this.#awaitOwnedOperation(active, name, action, timeoutMs, signal, settleOnInterruption),
+      awaitInventoryOperation: (active, name, action, timeoutMs, signal) =>
+        this.#awaitInventoryOperation(active, name, action, timeoutMs, signal),
+    };
   }
 
   async #navigateTo(position: BlockPosition, range: number, active: ActiveSkill): Promise<void> {
@@ -1875,25 +1495,6 @@ function waitForDropCollection(
   };
 }
 
-function waitForChestWindow(bot: Bot, timeoutMs: number): Promise<MineflayerChest> {
-  let finish!: (error?: Error, window?: MineflayerChest) => void;
-  return new Promise<MineflayerChest>((resolve, reject) => {
-    const timeout = setTimeout(() => finish(new SkillFault('timedOut', 'server did not open the requested chest')), timeoutMs);
-    const onOpen: BotEvents['windowOpen'] = (window) => {
-      if (!isChestWindow(window)) return;
-      finish(undefined, window);
-    };
-    finish = (error?: Error, window?: MineflayerChest) => {
-      clearTimeout(timeout);
-      bot.removeListener('windowOpen', onOpen);
-      if (error !== undefined) reject(error);
-      else if (window !== undefined) resolve(window);
-      else reject(new Error('chest window event did not include a window'));
-    };
-    bot.on('windowOpen', onOpen);
-  });
-}
-
 async function closeOwnedWindow(bot: Bot, window: MineflayerChest, timeoutMs: number): Promise<void> {
   if (bot.currentWindow !== window) return;
   let finish!: (error?: Error) => void;
@@ -1923,126 +1524,9 @@ async function closeOwnedWindow(bot: Bot, window: MineflayerChest, timeoutMs: nu
   }
 }
 
-async function waitForCondition(
-  bot: Bot,
-  condition: () => boolean,
-  signal: AbortSignal,
-  timeoutMs: number,
-): Promise<void> {
-  const deadline = performance.now() + timeoutMs;
-  while (!condition()) {
-    throwIfInterrupted(signal);
-    const remaining = deadline - performance.now();
-    if (remaining <= 0) throw new SkillFault('timedOut', 'expected client state did not arrive');
-    await waitForPhysicsTick(bot, signal, remaining);
-  }
-}
-
-async function waitForPhysicsTick(bot: Bot, signal: AbortSignal, timeoutMs: number): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    const timeout = setTimeout(() => finish(new SkillFault('timedOut', 'client did not advance to the next physics tick')), timeoutMs);
-    const onAbort = () => finish(new SkillInterrupted());
-    const onTick = () => finish();
-    const finish = (error?: Error) => {
-      clearTimeout(timeout);
-      bot.removeListener('physicsTick', onTick);
-      signal.removeEventListener('abort', onAbort);
-      if (error === undefined) resolve();
-      else reject(error);
-    };
-    bot.on('physicsTick', onTick);
-    signal.addEventListener('abort', onAbort, { once: true });
-    if (signal.aborted) onAbort();
-  });
-}
-
-function isChestWindow(window: MineflayerWindow): window is MineflayerChest {
-  return (window.inventoryStart === 27 || window.inventoryStart === 54)
-    && typeof (window as MineflayerChest).withdraw === 'function';
-}
-
 function inventoryItem(bot: Bot, slot: number): MineflayerItem | null {
   const item = bot.inventory.slots[slot];
   return item === undefined ? null : item;
-}
-
-function findInventoryStack(bot: Bot, name: string): MineflayerItem | null {
-  return bot.inventory.items().find((item) => item.name === name) ?? null;
-}
-
-function countInventoryItemByName(bot: Bot, name: string): number {
-  return bot.inventory.items()
-    .filter((item) => item.name === name)
-    .reduce((count, item) => count + item.count, 0);
-}
-
-function findTransferStack(
-  window: MineflayerChest,
-  name: string,
-  direction: 'deposit' | 'withdraw',
-): { readonly slot: number; readonly item: MineflayerItem } | null {
-  const start = direction === 'deposit' ? window.inventoryStart : 0;
-  const end = direction === 'deposit' ? window.inventoryEnd : window.inventoryStart;
-  for (let slot = start; slot < end; slot += 1) {
-    const item = window.slots[slot];
-    if (item !== null && item !== undefined && item.name === name && item.count > 0) {
-      return { slot, item };
-    }
-  }
-  return null;
-}
-
-function findTransferDestination(
-  window: MineflayerChest,
-  direction: 'deposit' | 'withdraw',
-  source: MineflayerItem,
-): { readonly slot: number; readonly capacity: number } | null {
-  const start = direction === 'deposit' ? 0 : window.inventoryStart;
-  const end = direction === 'deposit' ? window.inventoryStart : window.inventoryEnd;
-  let bestMatching: { readonly slot: number; readonly capacity: number } | null = null;
-  let bestEmpty: { readonly slot: number; readonly capacity: number } | null = null;
-  for (let slot = start; slot < end; slot += 1) {
-    const item = window.slots[slot];
-    if (item === null || item === undefined) {
-      bestEmpty ??= { slot, capacity: source.stackSize };
-    } else if (item.name === source.name) {
-      const capacity = Math.max(0, source.stackSize - item.count);
-      if (capacity > (bestMatching?.capacity ?? 0)) bestMatching = { slot, capacity };
-    }
-  }
-  return bestMatching ?? bestEmpty;
-}
-
-function countWindowItemByName(window: MineflayerChest, name: string): number {
-  return window.slots.slice(0, window.inventoryStart)
-    .filter((item) => item !== null && item !== undefined && item.name === name)
-    .reduce((count, item) => count + (item?.count ?? 0), 0);
-}
-
-function availableStackCapacity(
-  destination: readonly (MineflayerItem | null | undefined)[],
-  source: MineflayerItem,
-): number {
-  return destination.reduce((capacity, item) => {
-    if (item === null || item === undefined) return capacity + source.stackSize;
-    if (item.name !== source.name) return capacity;
-    return capacity + Math.max(0, source.stackSize - item.count);
-  }, 0);
-}
-
-function transferOperationTimeout(deadline: number): number {
-  const remaining = deadline - performance.now();
-  if (remaining <= 0) throw new SkillFault('timedOut', 'bounded container transfer exceeded its deadline');
-  return Math.min(ACTION_TIMEOUT_MS, remaining);
-}
-
-function asVec3(bot: Bot, position: BlockPosition): Parameters<Bot['blockAt']>[0] {
-  const current = bot.entity.position;
-  return current.offset(position.x - current.x, position.y - current.y, position.z - current.z);
-}
-
-function positionText(position: BlockPosition): string {
-  return `${position.x},${position.y},${position.z}`;
 }
 
 function countWindowItem(
@@ -2143,10 +1627,6 @@ function slotCount(bot: Bot, slot: number, target: MineflayerItem): number {
     : 0;
 }
 
-function distance(first: { readonly x: number; readonly y: number; readonly z: number }, second: { readonly x: number; readonly y: number; readonly z: number }): number {
-  return Math.hypot(first.x - second.x, first.y - second.y, first.z - second.z);
-}
-
 function hasArrived(
   current: { readonly x: number; readonly y: number; readonly z: number },
   target: NavigationPosition,
@@ -2171,14 +1651,6 @@ function waypointToward(
     Math.round(current.y + (target.y - current.y) * fraction),
     Math.round(current.z + (target.z - current.z) * fraction),
   );
-}
-
-function throwIfInterrupted(signal: AbortSignal): void {
-  if (signal.aborted) throw new SkillInterrupted();
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 function assertNever(value: never): never {
