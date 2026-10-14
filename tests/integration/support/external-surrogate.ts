@@ -246,27 +246,32 @@ function standableNear(
   const centerX = Math.floor(x);
   const centerY = Math.floor(y);
   const centerZ = Math.floor(z);
-  let best: { x: number; y: number; z: number; score: number } | undefined;
-  for (let dx = -4; dx <= 4; dx += 1) {
-    for (let dz = -4; dz <= 4; dz += 1) {
-      const span = Math.max(Math.abs(dx), Math.abs(dz));
-      if (span < minSpan || (minSpan === 1 && span === 0)) continue;
-      for (let dy = -1; dy <= 1; dy += 1) {
-        const candidateX = centerX + dx;
-        const candidateY = centerY + dy;
-        const candidateZ = centerZ + dz;
-        const feet = bot.blockAt(at(bot, candidateX, candidateY, candidateZ));
-        const head = bot.blockAt(at(bot, candidateX, candidateY + 1, candidateZ));
-        const floor = bot.blockAt(at(bot, candidateX, candidateY - 1, candidateZ));
-        if (feet?.name !== "air" || head?.name !== "air" || floor?.boundingBox !== "block") continue;
-        if (excluded.has(`${candidateX},${candidateY},${candidateZ}`)) continue;
-        const candidate = at(bot, candidateX + 0.5, candidateY, candidateZ + 0.5);
-        const score = candidate.distanceTo(at(bot, x, y, z)) * 100 + bot.entity.position.distanceTo(candidate);
-        if (best === undefined || score < best.score) best = { x: candidateX, y: candidateY, z: candidateZ, score };
+  const search = (radius: number, vertical: number, span: number, skip: ReadonlySet<string>) => {
+    let best: { x: number; y: number; z: number; score: number } | undefined;
+    for (let dx = -radius; dx <= radius; dx += 1) {
+      for (let dz = -radius; dz <= radius; dz += 1) {
+        if (Math.max(Math.abs(dx), Math.abs(dz)) < span) continue;
+        for (let dy = -vertical; dy <= vertical; dy += 1) {
+          const candidateX = centerX + dx;
+          const candidateY = centerY + dy;
+          const candidateZ = centerZ + dz;
+          const feet = bot.blockAt(at(bot, candidateX, candidateY, candidateZ));
+          const head = bot.blockAt(at(bot, candidateX, candidateY + 1, candidateZ));
+          const floor = bot.blockAt(at(bot, candidateX, candidateY - 1, candidateZ));
+          if (feet?.name !== "air" || head?.name !== "air" || floor?.boundingBox !== "block") continue;
+          if (skip.has(`${candidateX},${candidateY},${candidateZ}`)) continue;
+          const candidate = at(bot, candidateX + 0.5, candidateY, candidateZ + 0.5);
+          const score = candidate.distanceTo(at(bot, x, y, z)) * 100 + bot.entity.position.distanceTo(candidate);
+          if (best === undefined || score < best.score) best = { x: candidateX, y: candidateY, z: candidateZ, score };
+        }
       }
     }
-  }
-  assert.ok(best, `no standable block within four blocks of ${centerX},${centerY},${centerZ}`);
+    return best;
+  };
+  const best = search(4, 1, Math.max(1, minSpan), excluded)
+    ?? search(6, 2, 1, excluded)
+    ?? search(6, 2, 1, new Set());
+  assert.ok(best, `no standable block within six blocks of ${centerX},${centerY},${centerZ}`);
   return { x: best.x, y: best.y, z: best.z };
 }
 
