@@ -1,0 +1,198 @@
+six-seed live admission ready: 15.14 GiB available; swap-outs 9294772
+owned hunger-six launcher pid=56890
+TAP version 13
+# Downloading mojang_26.1.2.jar
+# Applying patches
+# Starting org.bukkit.craftbukkit.Main
+# [15:29:04 INFO]: [bootstrap] Running Java 25 (OpenJDK 64-Bit Server VM 25.0.4.1+1-LTS; Eclipse Adoptium Temurin-25.0.4.1+1) on Mac OS X 27.0 (aarch64)
+# [15:29:04 INFO]: [bootstrap] Loading Paper 26.1.2-74-ver/26.1.2@e4e17fc (2026-07-06T16:51:09Z) for Minecraft 26.1.2
+# [15:29:05 INFO]: [PluginInitializerManager] Initializing plugins...
+# [15:29:06 INFO]: [PluginInitializerManager] Initialized 1 plugin
+# [15:29:06 INFO]: [PluginInitializerManager] Bukkit plugins (1):
+#  - ArenaFoundation (0.1.0)
+# WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+# WARNING: sun.misc.Unsafe::objectFieldOffset has been called by org.joml.MemUtil$MemUtilUnsafe (file:/Users/josh/d/mc/arena/.work/arena/runs/hunger-six-seed-4815-642b2f17-b770-4b15-ab39-2fae08ab99f2/server/libraries/org/joml/joml/1.10.8/joml-1.10.8.jar)
+# WARNING: Please consider reporting this to the maintainers of class org.joml.MemUtil$MemUtilUnsafe
+# WARNING: sun.misc.Unsafe::objectFieldOffset will be removed in a future release
+# [15:29:08 INFO]: Environment: Environment[sessionHost=https://sessionserver.mojang.com, servicesHost=https://api.minecraftservices.com, profilesHost=https://api.mojang.com, name=PROD]
+# [15:29:09 INFO]: Loaded 1515 recipes
+# [15:29:09 INFO]: Loaded 1617 advancements
+# [15:29:09 INFO]: [ca.spottedleaf.dataconverter.minecraft.datatypes.MCTypeRegistry] Initialising converters for DataConverter...
+# [15:29:09 INFO]: [ca.spottedleaf.dataconverter.minecraft.datatypes.MCTypeRegistry] Finished initialising converters for DataConverter in 185.1ms
+# [15:29:09 INFO]: Starting minecraft server version 26.1.2
+# [15:29:09 INFO]: Loading properties
+# [15:29:09 INFO]: This server is running Paper version 26.1.2-74-ver/26.1.2@e4e17fc (2026-07-06T16:51:09Z) (Implementing API version 26.1.2.build.74-stable)
+# [15:29:09 INFO]: [spark] This server bundles the spark profiler. For more information please visit https://docs.papermc.io/paper/profiling
+# [15:29:09 INFO]: Server Ping Player Sample Count: 12
+# [15:29:09 INFO]: Using 4 threads for Netty based IO
+# [15:29:09 INFO]: [MoonriseCommon] Paper is using 2 worker threads, 1 I/O threads
+# [15:29:09 INFO]: Default game type: SURVIVAL
+# [15:29:09 INFO]: Generating keypair
+# [15:29:09 INFO]: Starting Minecraft server on 127.0.0.1:25565
+# [15:29:09 INFO]: Paper: Using libdeflate (macOS ARM64 / Apple Silicon) compression from Velocity.
+# [15:29:09 INFO]: Paper: Using native (macOS ARM64 / Apple Silicon) cipher from Velocity.
+# [15:29:09 INFO]: [ArenaFoundation] Loading server plugin ArenaFoundation v0.1.0
+# [15:29:09 INFO]: [ArenaFoundation] Enabling ArenaFoundation v0.1.0
+# [15:29:09 WARN]: **** SERVER IS RUNNING IN OFFLINE/INSECURE MODE!
+# [15:29:09 WARN]: The server will make no attempt to authenticate usernames. Beware.
+# [15:29:09 WARN]: While this makes the game possible to play without internet access, it also opens up the ability for hackers to connect with any username they choose.
+# [15:29:09 WARN]: To change this, set "online-mode" to "true" in the server.properties file.
+# [15:29:09 INFO]: Preparing level "world"
+# [15:29:10 INFO]: Loading 0 persistent chunks for level 'minecraft:overworld'...
+# [15:29:10 INFO]: Prepared spawn area in 1 ms
+# [15:29:10 INFO]: [ArenaFoundation] ARENA_MAP_READY|run_id=hunger-six-seed-4815-642b2f17-b770-4b15-ab39-2fae08ab99f2|map_semantic_id=8dfb7308175f11ced7c5d7969657c197f43c26bf39e6a598df8637d469141ee7|prepared_chunks=400
+# [15:29:10 INFO]: [ArenaFoundation] ARENA_READY|protocol=775|port=25565
+# [15:29:10 INFO]: Loading 0 persistent chunks for level 'minecraft:the_nether'...
+# [15:29:10 INFO]: Prepared spawn area in 1 ms
+# [15:29:10 INFO]: Loading 0 persistent chunks for level 'minecraft:the_end'...
+# [15:29:10 INFO]: Prepared spawn area in 0 ms
+# [15:29:10 INFO]: Done preparing level "world" (0.838s)
+# [15:29:10 INFO]: [spark] Starting background profiler...
+# [15:29:11 INFO]: Saving chunks for level 'ServerLevel[world]'/minecraft:overworld
+# [15:29:11 INFO]: Saving chunks for level 'ServerLevel[world]'/minecraft:the_nether
+# [15:29:11 INFO]: Saving chunks for level 'ServerLevel[world]'/minecraft:the_end
+# [15:29:11 INFO]: ThreadedAnvilChunkStorage (world): All chunks are saved
+# [15:29:11 INFO]: ThreadedAnvilChunkStorage (DIM-1): All chunks are saved
+# [15:29:11 INFO]: ThreadedAnvilChunkStorage (DIM1): All chunks are saved
+# [15:29:11 INFO]: ThreadedAnvilChunkStorage: All dimensions are saved
+# [15:29:11 INFO]: Running delayed init tasks
+# [15:29:11 INFO]: Done (7.362s)! For help, type "help"
+# [15:29:11 INFO]: *************************************************************************************
+# [15:29:11 INFO]: This is the first time you're starting this server.
+# [15:29:11 INFO]: It's recommended you read our 'Getting Started' documentation for guidance.
+# [15:29:11 INFO]: View this and more helpful information here: https://docs.papermc.io/paper/next-steps
+# [15:29:11 INFO]: *************************************************************************************
+# [15:29:11 WARN]: *************************************************************************************
+# [15:29:11 WARN]: You are running the latest build for your Minecraft version (26.1.2)
+# [15:29:11 WARN]: However, you are 4 release(s) behind the latest stable release (26.3)!
+# [15:29:11 WARN]: It is recommended that you update as soon as possible
+# [15:29:11 WARN]: https://papermc.io/downloads/paper
+# [15:29:11 WARN]: *************************************************************************************
+# [15:29:11 INFO]: UUID of player ArenaSpec2 is ccc0dd8d-cb5e-363e-ad94-90e1e505f7b4
+# [15:29:11 INFO]: UUID of player ArenaBot1 is fd3d4f76-4d81-3cb3-9a92-682f3c04f721
+# [15:29:11 INFO]: UUID of player ArenaBot4 is d140813a-d54f-3e55-94a2-1897a002f156
+# [15:29:11 INFO]: UUID of player ArenaBot2 is 79a61d3a-522c-3fd8-a604-e5dc4ad6471b
+# [15:29:11 INFO]: UUID of player ArenaSpec1 is fb4e80ab-c7a0-3d74-bb34-0e1138d768c7
+# [15:29:11 INFO]: UUID of player ArenaBot5 is 7863ca59-5464-30d6-bd93-649943652c2e
+# [15:29:11 INFO]: UUID of player ArenaSpec0 is 93fe61b4-2ec8-3f0e-9d60-53e9a960e1d2
+# [15:29:11 INFO]: UUID of player ArenaBot3 is ee330ac2-d767-3c27-adce-56af56e9ab98
+# [15:29:11 INFO]: UUID of player ArenaBot0 is 4f09a200-722b-3800-a45e-e2061f874719
+# [15:29:11 INFO]: UUID of player ArenaSpec3 is faf01e42-6d67-3f4e-999b-de2cb3d200b3
+# [15:29:12 INFO]: [ArenaFoundation] ARENA_JOIN|ArenaSpec0
+# [15:29:12 INFO]: ArenaSpec0 joined the game
+# [15:29:12 INFO]: ArenaSpec0[/127.0.0.1:63566] logged in with entity id 1 at ([minecraft:overworld]65.5, 65.0, 32.5)
+# [15:29:12 INFO]: [ArenaFoundation] ARENA_JOIN|ArenaSpec3
+# [15:29:12 INFO]: ArenaSpec3 joined the game
+# [15:29:12 INFO]: ArenaSpec3[/127.0.0.1:63569] logged in with entity id 2 at ([minecraft:overworld]60.5, 65.0, 48.5)
+# [15:29:12 INFO]: [ArenaFoundation] ARENA_JOIN|ArenaSpec1
+# [15:29:12 INFO]: ArenaSpec1 joined the game
+# [15:29:12 INFO]: ArenaSpec1[/127.0.0.1:63567] logged in with entity id 3 at ([minecraft:overworld]60.5, 65.0, 30.5)
+# [15:29:12 INFO]: [ArenaFoundation] ARENA_JOIN|ArenaSpec2
+# [15:29:12 INFO]: ArenaSpec2 joined the game
+# [15:29:12 INFO]: ArenaSpec2[/127.0.0.1:63568] logged in with entity id 4 at ([minecraft:overworld]59.5, 65.0, 30.5)
+# [15:29:12 INFO]: [ArenaFoundation] ARENA_JOIN|ArenaBot0
+# [15:29:12 INFO]: ArenaBot0 joined the game
+# [15:29:12 INFO]: ArenaBot0[/127.0.0.1:63570] logged in with entity id 5 at ([minecraft:overworld]64.5, 65.0, 40.5)
+# [15:29:12 INFO]: [ArenaFoundation] ARENA_JOIN|ArenaBot3
+# [15:29:12 INFO]: ArenaBot3 joined the game
+# [15:29:12 INFO]: ArenaBot3[/127.0.0.1:63573] logged in with entity id 6 at ([minecraft:overworld]64.5, 65.0, 88.5)
+# [15:29:12 INFO]: [ArenaFoundation] ARENA_JOIN|ArenaBot1
+# [15:29:12 INFO]: ArenaBot1 joined the game
+# [15:29:12 INFO]: ArenaBot1[/127.0.0.1:63571] logged in with entity id 7 at ([minecraft:overworld]84.5, 65.0, 52.5)
+# [15:29:12 INFO]: [ArenaFoundation] ARENA_JOIN|ArenaBot5
+# [15:29:12 INFO]: ArenaBot5 joined the game
+# [15:29:12 INFO]: ArenaBot5[/127.0.0.1:63575] logged in with entity id 8 at ([minecraft:overworld]44.5, 65.0, 52.5)
+# [15:29:12 INFO]: [ArenaFoundation] ARENA_JOIN|ArenaBot2
+# [15:29:12 INFO]: ArenaBot2 joined the game
+# [15:29:12 INFO]: ArenaBot2[/127.0.0.1:63572] logged in with entity id 9 at ([minecraft:overworld]84.5, 65.0, 76.5)
+# [15:29:12 INFO]: [ArenaFoundation] ARENA_JOIN|ArenaBot4
+# [15:29:12 INFO]: ArenaBot4 joined the game
+# [15:29:12 INFO]: ArenaBot4[/127.0.0.1:63574] logged in with entity id 10 at ([minecraft:overworld]44.5, 65.0, 76.5)
+# [15:29:18 INFO]: [ArenaFoundation] ARENA_MOVE|ArenaBot0
+# [15:29:41 INFO]: ArenaSpec0 lost connection: Disconnected
+# [15:29:41 INFO]: [ArenaFoundation] ARENA_QUIT|ArenaSpec0
+# [15:29:41 INFO]: ArenaSpec0 left the game
+# [15:29:41 INFO]: ArenaSpec3 lost connection: Disconnected
+# [15:29:41 INFO]: [ArenaFoundation] ARENA_QUIT|ArenaSpec3
+# [15:29:41 INFO]: ArenaSpec3 left the game
+# [15:29:41 INFO]: ArenaSpec1 lost connection: Disconnected
+# [15:29:41 INFO]: [ArenaFoundation] ARENA_QUIT|ArenaSpec1
+# [15:29:41 INFO]: ArenaSpec1 left the game
+# [15:29:41 INFO]: ArenaSpec2 lost connection: Disconnected
+# [15:29:41 INFO]: [ArenaFoundation] ARENA_QUIT|ArenaSpec2
+# [15:29:41 INFO]: ArenaSpec2 left the game
+# [15:29:41 INFO]: ArenaBot0 lost connection: Disconnected
+# [15:29:41 INFO]: [ArenaFoundation] ARENA_QUIT|ArenaBot0
+# [15:29:41 INFO]: ArenaBot0 left the game
+# [15:29:41 INFO]: ArenaBot3 lost connection: Disconnected
+# [15:29:41 INFO]: [ArenaFoundation] ARENA_QUIT|ArenaBot3
+# [15:29:41 INFO]: ArenaBot3 left the game
+# [15:29:41 INFO]: ArenaBot1 lost connection: Disconnected
+# [15:29:41 INFO]: [ArenaFoundation] ARENA_QUIT|ArenaBot1
+# [15:29:41 INFO]: ArenaBot1 left the game
+# [15:29:41 INFO]: ArenaBot5 lost connection: Disconnected
+# [15:29:41 INFO]: [ArenaFoundation] ARENA_QUIT|ArenaBot5
+# [15:29:41 INFO]: ArenaBot5 left the game
+# [15:29:41 INFO]: ArenaBot2 lost connection: Disconnected
+# [15:29:41 INFO]: [ArenaFoundation] ARENA_QUIT|ArenaBot2
+# [15:29:41 INFO]: ArenaBot2 left the game
+# [15:29:41 INFO]: ArenaBot4 lost connection: Disconnected
+# [15:29:41 INFO]: [ArenaFoundation] ARENA_QUIT|ArenaBot4
+# [15:29:41 INFO]: ArenaBot4 left the game
+# [15:29:41 INFO]: Stopping the server
+# [15:29:41 INFO]: Stopping server
+# [15:29:41 INFO]: [ArenaFoundation] Disabling ArenaFoundation v0.1.0
+# [15:29:41 INFO]: Saving players
+# [15:29:42 INFO]: Saving worlds
+# [15:29:42 INFO]: Saving chunks for level 'ServerLevel[world]'/minecraft:overworld
+# [15:29:42 INFO]: [ChunkHolderManager] Waiting 60s for chunk system to halt for world 'minecraft:overworld'
+# [15:29:42 INFO]: [ChunkHolderManager] Halted chunk system for world 'minecraft:overworld'
+# [15:29:42 INFO]: [ChunkHolderManager] Saving all chunkholders for world 'minecraft:overworld'
+# [15:29:42 INFO]: [ChunkHolderManager] Saved 716 block chunks, 52 entity chunks, 0 poi chunks in world 'minecraft:overworld' in 0.18s
+# [15:29:42 INFO]: [ChunkHolderManager] Waiting 60s for chunk I/O to halt for world 'minecraft:overworld'
+# [15:29:42 INFO]: [ChunkHolderManager] Halted I/O scheduler for world 'minecraft:overworld'
+# [15:29:42 INFO]: Saving chunks for level 'ServerLevel[world]'/minecraft:the_nether
+# [15:29:42 INFO]: [ChunkHolderManager] Waiting 60s for chunk system to halt for world 'minecraft:the_nether'
+# [15:29:42 INFO]: [ChunkHolderManager] Halted chunk system for world 'minecraft:the_nether'
+# [15:29:42 INFO]: [ChunkHolderManager] Saving all chunkholders for world 'minecraft:the_nether'
+# [15:29:42 INFO]: [ChunkHolderManager] Saved 0 block chunks, 0 entity chunks, 0 poi chunks in world 'minecraft:the_nether' in 0.00s
+# [15:29:42 INFO]: [ChunkHolderManager] Waiting 60s for chunk I/O to halt for world 'minecraft:the_nether'
+# [15:29:42 INFO]: [ChunkHolderManager] Halted I/O scheduler for world 'minecraft:the_nether'
+# [15:29:42 INFO]: Saving chunks for level 'ServerLevel[world]'/minecraft:the_end
+# [15:29:42 INFO]: [ChunkHolderManager] Waiting 60s for chunk system to halt for world 'minecraft:the_end'
+# [15:29:42 INFO]: [ChunkHolderManager] Halted chunk system for world 'minecraft:the_end'
+# [15:29:42 INFO]: [ChunkHolderManager] Saving all chunkholders for world 'minecraft:the_end'
+# [15:29:42 INFO]: [ChunkHolderManager] Saved 0 block chunks, 0 entity chunks, 0 poi chunks in world 'minecraft:the_end' in 0.00s
+# [15:29:42 INFO]: [ChunkHolderManager] Waiting 60s for chunk I/O to halt for world 'minecraft:the_end'
+# [15:29:42 INFO]: [ChunkHolderManager] Halted I/O scheduler for world 'minecraft:the_end'
+# [15:29:42 INFO]: ThreadedAnvilChunkStorage (world): All chunks are saved
+# [15:29:42 INFO]: ThreadedAnvilChunkStorage (DIM-1): All chunks are saved
+# [15:29:42 INFO]: ThreadedAnvilChunkStorage (DIM1): All chunks are saved
+# [15:29:42 INFO]: ThreadedAnvilChunkStorage: All dimensions are saved
+# [15:29:42 INFO]: Waiting for all RegionFile I/O tasks to complete...
+# [15:29:42 INFO]: All RegionFile I/O tasks to complete
+# [15:29:42 INFO]: [MoonriseCommon] Awaiting termination of worker pool for up to 60s...
+# [15:29:42 INFO]: [MoonriseCommon] Awaiting termination of I/O pool for up to 60s...
+# Subtest: hunger-six
+not ok 1 - hunger-six
+  ---
+  duration_ms: 43680.808083
+  type: 'test'
+  location: '/Users/josh/d/mc/arena/.work/build/tests/acceptance/hunger.js:27:1'
+  failureType: 'testCodeFailure'
+  error: 'resource_command_timeout'
+  code: 'ERR_TEST_FAILURE'
+  stack: |-
+    Timeout.<anonymous> (file:///Users/josh/d/mc/arena/.work/build/packages/arena-runner/src/runtime/resource-monitor.js:519:27)
+    listOnTimeout (node:internal/timers:685:17)
+    process.processTimers (node:internal/timers:618:7)
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 0
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 43966.393042
