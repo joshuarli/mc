@@ -15,9 +15,9 @@ import org.bukkit.Material;
 
 final class NaturalWorldSetup {
     static final String DECLARED_COLUMN_RECIPE = "declared-columns-v1";
-    static final int SEARCH_RING_RADIUS_BLOCKS = 8;
-    static final int SEARCH_MAX_CANDIDATES_PER_SEAT = 128;
-    static final String BOUNDED_SEARCH_RECIPE = "spawn-search-v3;ring-radius=" + SEARCH_RING_RADIUS_BLOCKS
+    static final int SEARCH_RING_RADIUS_BLOCKS = 24;
+    static final int SEARCH_MAX_CANDIDATES_PER_SEAT = 1024;
+    static final String BOUNDED_SEARCH_RECIPE = "spawn-search-v4;ring-radius=" + SEARCH_RING_RADIUS_BLOCKS
             + ";max-candidates=" + SEARCH_MAX_CANDIDATES_PER_SEAT
             + ";order=declared,chebyshev-ring,center-distance,x-then-z;preference=no-cliff-edge";
     private static final Set<Material> HAZARDS = Set.of(

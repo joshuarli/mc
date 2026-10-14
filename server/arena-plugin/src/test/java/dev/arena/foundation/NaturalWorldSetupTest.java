@@ -82,8 +82,8 @@ final class NaturalWorldSetupTest {
     void searchPlanReportsDiagnosticsInsteadOfRerollingWhenNoCandidateIsSafe() {
         NaturalMapPlan plan = searchPlan(List.of(spawn(0, 100, 100)), List.of(loot(120, 100)));
         TestWorld world = new TestWorld();
-        for (int x = 90; x <= 110; x++) {
-            for (int z = 90; z <= 110; z++) {
+        for (int x = 60; x <= 140; x++) {
+            for (int z = 60; z <= 140; z++) {
                 world.waterColumns.add(columnKey(x, z));
             }
         }
@@ -91,8 +91,8 @@ final class NaturalWorldSetupTest {
         IllegalStateException failure = assertThrows(IllegalStateException.class,
                 () -> NaturalWorldSetup.prepare(plan, world, 2, TEST_MATERIALS));
 
-        assertTrue(failure.getMessage().contains("seat 0 declared at (100,100) examined 128 candidates"));
-        assertTrue(failure.getMessage().contains("unsafe-support=128"));
+        assertTrue(failure.getMessage().contains("seat 0 declared at (100,100) examined 1024 candidates"));
+        assertTrue(failure.getMessage().contains("unsafe-support=1024"));
         assertEquals(List.of(), world.placedChests);
     }
 

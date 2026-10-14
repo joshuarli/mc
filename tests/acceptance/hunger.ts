@@ -14,7 +14,7 @@ import { createHungerRunMeasurements, type HungerRunMeasurementEvidence } from "
 import { hasEliminatedSeatEvidence } from "./hunger-alive-state.js";
 import { prepareOwnedAcceptanceRun, inspectOwnedAcceptanceRun, type runOwnedAcceptanceScenario, type AcceptanceRunContext } from "../integration/support/owned-run.js";
 
-const SCENARIOS = [
+const ALL_SCENARIOS = [
   { path: "tests/acceptance/fixtures/hunger-six-seed-481516.toml", seed: 481516n },
   { path: "tests/acceptance/fixtures/hunger-six-seed-481517.toml", seed: 481517n },
   { path: "tests/acceptance/fixtures/hunger-six-seed-481518.toml", seed: 481518n },
@@ -22,6 +22,11 @@ const SCENARIOS = [
   { path: "tests/acceptance/fixtures/hunger-six-seed-481520.toml", seed: 481520n },
   { path: "tests/acceptance/fixtures/hunger-six-seed-481521.toml", seed: 481521n },
 ] as const;
+
+const SELECTED_SEEDS = process.env.ARENA_HUNGER_SEEDS?.split(",").map((seed) => BigInt(seed.trim()));
+const SCENARIOS = SELECTED_SEEDS === undefined
+  ? ALL_SCENARIOS
+  : ALL_SCENARIOS.filter(({ seed }) => SELECTED_SEEDS.includes(seed));
 
 const DEATH_TIMEOUT_MS = 420_000;
 const ELIMINATION_TIMEOUT_MS = 10_000;
@@ -152,7 +157,7 @@ test("hunger-six", { timeout: 2_700_000 }, async (t) => {
   }
 
   assert.ok(
-    hasWinnerWithTwoPvpEngagements,
+    SELECTED_SEEDS !== undefined || hasWinnerWithTwoPvpEngagements,
     "at least one seeded run must have one survivor and two distinct ordinary PvP engagements",
   );
 });

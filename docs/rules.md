@@ -35,7 +35,7 @@ direction and 8,192 total prepared chunks.
 For a schema-3 natural plan the plugin resolves each seat with a bounded,
 deterministic candidate search instead of requiring the declared column to
 be safe. Candidates are the declared column, then Chebyshev rings of radius
-1 through 8 ordered by distance to the border center, then x, then z, at most 128 per seat. A candidate needs a
+1 through 24 ordered by distance to the border center, then x, then z, at most 1,024 per seat. A candidate needs a
 safe full-block support, two clear blocks, no lava, fire, magma, cactus,
 campfire, berry bush, powder snow, or cobweb within one block, a safe
 adjacent escape column, and two blocks of separation from already chosen
