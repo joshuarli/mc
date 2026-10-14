@@ -237,7 +237,7 @@ function parseErrorSource(value: StrictJsonValue | undefined): ErrorSource {
   if (source.published !== undefined && typeof source.published !== 'boolean') {
     throw invalidArtifact('invalid_source');
   }
-  return Object.freeze(source as unknown as ErrorSource);
+  return Object.freeze({ ...source } as unknown as ErrorSource);
 }
 
 function parseSegments(value: StrictJsonValue | undefined, runId: string): OperationalFailureTraceSegmentV1[] {
