@@ -20,6 +20,7 @@ import {
   validateBorder,
   validateReachableSurfacePosition,
   validateSpawnSeats,
+  type PlannedMapIr,
   type MapIr,
 } from "./map.js";
 import * as raw from "./raw.js";
@@ -31,6 +32,10 @@ export const GameMode = {
 } as const;
 
 export type GameMode = (typeof GameMode)[keyof typeof GameMode];
+
+export const OPENING_STYLES = ["explorer", "scavenger", "hunter"] as const;
+export type OpeningStyle = (typeof OPENING_STYLES)[number];
+export type OpeningStyleCycle = readonly [OpeningStyle, OpeningStyle, OpeningStyle];
 
 const CIVILIZATION_MAP_DIAMETER_BLOCKS = 192 as const;
 const CIVILIZATION_CAPTURE_UNCONTESTED_TICKS = 200 as const;
@@ -142,6 +147,7 @@ export type ResourceReference = string & { readonly [resourceReferenceBrand]: tr
 
 /** Shared validated scenario settings that do not depend on game mode. */
 interface ScenarioBaseIr {
+  readonly schemaVersion: 1 | 2;
   readonly name: string;
   readonly seed: bigint;
   readonly mapReference: ResourceReference;
@@ -155,17 +161,32 @@ interface ScenarioBaseIr {
   readonly semanticId: SemanticId;
 }
 
-/** Fully validated Hunger Games settings and compiled map IR. */
-export interface HungerGamesScenarioIr extends ScenarioBaseIr {
+/** Fully validated schema-v1 Hunger Games settings and compiled planned map IR. */
+export interface HungerGamesScenarioV1Ir extends ScenarioBaseIr {
+  readonly schemaVersion: 1;
   readonly mode: typeof GameMode.HungerGames;
   readonly border: ShrinkingBorderSettings;
+  readonly map: Extract<MapIr, { readonly terrain: "planned" }>;
 }
+
+/** Fully validated schema-v2 Hunger Games settings and compiled natural map IR. */
+export interface HungerGamesScenarioV2Ir extends ScenarioBaseIr {
+  readonly schemaVersion: 2;
+  readonly mode: typeof GameMode.HungerGames;
+  readonly border: ShrinkingBorderSettings;
+  readonly map: Extract<MapIr, { readonly terrain: "vanilla" }>;
+  readonly openingStyleCycle: OpeningStyleCycle;
+}
+
+export type HungerGamesScenarioIr = HungerGamesScenarioV1Ir | HungerGamesScenarioV2Ir;
 
 /** Fully validated civilization rules and compiled map IR. */
 export interface CivilizationScenarioIr extends ScenarioBaseIr {
+  readonly schemaVersion: 1;
   readonly mode: typeof GameMode.Civilization;
   readonly border: FixedBorderSettings;
   readonly civilization: CivilizationRulesIr;
+  readonly map: Extract<MapIr, { readonly terrain: "planned" }>;
 }
 
 /** Immutable scenario result narrowed by its game mode. */
@@ -197,18 +218,21 @@ export function scenarioMapReference(source: string): ResourceReference {
   return parseReference(raw.field(root, "map", "scenario"), "scenario.map");
 }
 
-/**
- * Compiles schema-v1 scenario settings and the content of its declared map.
- * Resolving file references remains the runner's responsibility.
- */
 export function compileScenario(scenarioSource: string, mapSource: string): ScenarioIr {
   const root = parseScenarioRoot(scenarioSource);
+  const schemaVersion = readScenarioSchemaVersion(root);
 
   const name = raw.string(raw.field(root, "name", "scenario"), "scenario.name");
   const mode = parseMode(raw.field(root, "mode", "scenario"));
+  if (schemaVersion === 2 && mode !== GameMode.HungerGames) {
+    throw new SpecError(SpecErrorKind.InvalidValue, "scenario.schema", "schema version 2 is only supported for Hunger Games");
+  }
   if (mode === GameMode.HungerGames && root.has("civilization")) {
     throw new SpecError(SpecErrorKind.InvalidValue, "scenario.civilization", "is only valid for civilization mode");
   }
+  const openingStyleCycle = schemaVersion === 2
+    ? parseOpeningStyleCycle(raw.field(root, "opening_styles", "scenario"))
+    : undefined;
   const seed = nonnegativeU64(raw.field(root, "seed", "scenario"), "scenario.seed");
   const mapReference = parseReference(raw.field(root, "map", "scenario"), "scenario.map");
   const policyReference = parseReference(raw.field(root, "policy", "scenario"), "scenario.policy");
@@ -224,11 +248,18 @@ export function compileScenario(scenarioSource: string, mapSource: string): Scen
 
   validateMode(mode, roster, matchSettings);
   const map = compileMap(mapSource);
+  if (schemaVersion === 1 && map.terrain !== "planned") {
+    throw new SpecError(SpecErrorKind.InvalidValue, "scenario.map", "schema version 1 requires a planned map");
+  }
+  if (schemaVersion === 2 && map.terrain !== "vanilla") {
+    throw new SpecError(SpecErrorKind.InvalidValue, "scenario.map", "schema version 2 requires a natural terrain map");
+  }
   validateSpawnSeats(map, roster.competitors, "scenario.roster.competitors");
   validatePreparedChunks(map, server.viewDistanceChunks);
   if (border.mode === GameMode.HungerGames) {
     validateBorder(map, border.settings.initialDiameterBlocks, border.settings.finalDiameterBlocks, "scenario.border");
     const semanticId = hashScenario(
+      schemaVersion,
       { mode: border.mode, border: border.settings },
       seed,
       policyReference,
@@ -238,8 +269,9 @@ export function compileScenario(scenarioSource: string, mapSource: string): Scen
       bots,
       record,
       map.semanticId,
+      openingStyleCycle,
     );
-    return Object.freeze({
+    const common = {
       name,
       mode: border.mode,
       seed,
@@ -253,13 +285,32 @@ export function compileScenario(scenarioSource: string, mapSource: string): Scen
       record,
       map,
       semanticId,
+    } as const;
+    if (schemaVersion === 1) {
+      if (map.terrain !== "planned") throw new Error("planned scenario contract is incomplete");
+      return Object.freeze({
+        ...common,
+        schemaVersion,
+        map,
+      });
+    }
+    if (openingStyleCycle === undefined || map.terrain !== "vanilla") throw new Error("natural scenario contract is incomplete");
+    return Object.freeze({
+      ...common,
+      schemaVersion,
+      map,
+      openingStyleCycle,
     });
   }
 
+  if (schemaVersion !== 1 || map.terrain !== "planned") {
+    throw new SpecError(SpecErrorKind.InvalidValue, "scenario.schema", "civilization requires schema version 1 and a planned map");
+  }
   if (civilization === undefined) throw new Error("civilization scenario was parsed without civilization rules");
   validateCivilizationMap(map, civilization);
   validateBorder(map, border.settings.diameterBlocks, border.settings.diameterBlocks, "scenario.border");
   const semanticId = hashScenario(
+    schemaVersion,
     { mode: border.mode, border: border.settings, civilization },
     seed,
     policyReference,
@@ -271,6 +322,7 @@ export function compileScenario(scenarioSource: string, mapSource: string): Scen
     map.semanticId,
   );
   return Object.freeze({
+    schemaVersion,
     name,
     mode: border.mode,
     seed,
@@ -290,11 +342,35 @@ export function compileScenario(scenarioSource: string, mapSource: string): Scen
 
 function parseScenarioRoot(source: string): raw.RawTable {
   const root = raw.asTable(raw.parseDocument(source, "scenario"), "scenario");
-  raw.checkFields(root, [...SCENARIO_FIELDS, ...OPTIONAL_SCENARIO_FIELDS], SCENARIO_FIELDS, "scenario");
-  if (raw.integer(raw.field(root, "schema", "scenario"), "scenario.schema") !== 1n) {
-    throw new SpecError(SpecErrorKind.InvalidValue, "scenario.schema", "only schema version 1 is supported");
-  }
+  const schemaVersion = readScenarioSchemaVersion(root);
+  const fields = schemaVersion === 1 ? SCENARIO_FIELDS : [...SCENARIO_FIELDS, "opening_styles"];
+  raw.checkFields(root, [...fields, ...OPTIONAL_SCENARIO_FIELDS], fields, "scenario");
   return root;
+}
+
+function readScenarioSchemaVersion(root: raw.RawTable): 1 | 2 {
+  const schema = raw.integer(raw.field(root, "schema", "scenario"), "scenario.schema");
+  if (schema === 1n || schema === 2n) return Number(schema) as 1 | 2;
+  throw new SpecError(SpecErrorKind.InvalidValue, "scenario.schema", "supported schema versions are 1 and 2");
+}
+
+function parseOpeningStyleCycle(value: raw.RawValue): OpeningStyleCycle {
+  const path = "scenario.opening_styles";
+  const values = raw.asArray(value, path);
+  if (values.length !== 3) {
+    throw new SpecError(SpecErrorKind.InvalidValue, path, "must list each opening style exactly once");
+  }
+  const styles = values.map((entry, index) => {
+    const style = raw.string(entry, `${path}[${index}]`);
+    if (!(OPENING_STYLES as readonly string[]).includes(style)) {
+      throw new SpecError(SpecErrorKind.InvalidValue, `${path}[${index}]`, `unknown opening style \`${style}\``);
+    }
+    return style as OpeningStyle;
+  });
+  if (new Set(styles).size !== 3) {
+    throw new SpecError(SpecErrorKind.InvalidValue, path, "must list each opening style exactly once");
+  }
+  return Object.freeze(styles) as unknown as OpeningStyleCycle;
 }
 
 function parseMode(value: raw.RawValue): GameMode {
@@ -674,6 +750,9 @@ function validateMode(mode: GameMode, roster: Roster, settings: MatchSettings): 
 /** Objectives must start clear and reachable because players activate them during a match. */
 function validateCivilizationMap(map: MapIr, rules: CivilizationRulesIr): void {
   const path = "scenario.civilization";
+  if (map.terrain !== "planned") {
+    throw new SpecError(SpecErrorKind.Geometry, "scenario.civilization.map", "civilization requires a planned map");
+  }
   if (
     map.dimensions.width !== CIVILIZATION_MAP_DIAMETER_BLOCKS
     || map.dimensions.depth !== CIVILIZATION_MAP_DIAMETER_BLOCKS
@@ -778,7 +857,7 @@ function validateCivilizationMap(map: MapIr, rules: CivilizationRulesIr): void {
   }
 }
 
-function validateMapPosition(map: MapIr, position: BlockPosition, path: string): void {
+function validateMapPosition(map: PlannedMapIr, position: BlockPosition, path: string): void {
   if (
     position.x < 0 || position.x >= map.dimensions.width
     || position.z < 0 || position.z >= map.dimensions.depth
@@ -788,7 +867,7 @@ function validateMapPosition(map: MapIr, position: BlockPosition, path: string):
   }
 }
 
-function validateCivilizationBorderPosition(map: MapIr, position: BlockPosition, path: string): void {
+function validateCivilizationBorderPosition(map: PlannedMapIr, position: BlockPosition, path: string): void {
   const centerX = (map.dimensions.width - 1) / 2;
   const centerZ = (map.dimensions.depth - 1) / 2;
   const radius = CIVILIZATION_MAP_DIAMETER_BLOCKS / 2;
@@ -835,6 +914,31 @@ function positiveNumber(value: raw.RawValue, path: string): number {
 }
 
 function validatePreparedChunks(map: MapIr, viewDistanceChunks: number): void {
+  if (map.terrain === "vanilla") {
+    const chunks = new Set<string>();
+    const columns = [
+      ...map.spawns.map(({ column }) => column),
+      ...map.lootContainers.map(({ column }) => column),
+    ];
+    for (const column of columns) {
+      const chunkX = Math.floor(column.x / 16);
+      const chunkZ = Math.floor(column.z / 16);
+      for (let x = chunkX - viewDistanceChunks; x <= chunkX + viewDistanceChunks; x += 1) {
+        for (let z = chunkZ - viewDistanceChunks; z <= chunkZ + viewDistanceChunks; z += 1) {
+          chunks.add(`${x},${z}`);
+        }
+      }
+    }
+    if (BigInt(chunks.size) > MAX_PREPARED_CHUNKS) {
+      throw new SpecError(
+        SpecErrorKind.ResourceLimit,
+        "scenario.server.view_distance_chunks",
+        "spawn, objective, and view-distance halo exceed the prepared-chunk limit of 8,192",
+      );
+    }
+    return;
+  }
+
   const maxChunkX = BigInt(Math.floor((map.dimensions.width - 1) / 16));
   const maxChunkZ = BigInt(Math.floor((map.dimensions.depth - 1) / 16));
   const halo = BigInt(viewDistanceChunks);
@@ -854,6 +958,7 @@ type ScenarioHashMode =
   | { readonly mode: typeof GameMode.Civilization; readonly border: FixedBorderSettings; readonly civilization: CivilizationRulesIr };
 
 function hashScenario(
+  schemaVersion: 1 | 2,
   modeSettings: ScenarioHashMode,
   seed: bigint,
   policy: ResourceReference,
@@ -863,8 +968,9 @@ function hashScenario(
   bots: BotSettings,
   record: RecordSettings,
   mapId: SemanticId,
+  openingStyleCycle?: OpeningStyleCycle,
 ): SemanticId {
-  const hash = new CanonicalHasher("arena.scenario.ir.v1\0");
+  const hash = new CanonicalHasher(schemaVersion === 1 ? "arena.scenario.ir.v1\0" : "arena.scenario.ir.v2\0");
   hash.u8(modeSettings.mode === GameMode.HungerGames ? 0 : 1);
   hash.u64(seed);
   hash.string(policy);
@@ -899,6 +1005,10 @@ function hashScenario(
   hash.u8(Number(record.worldOutcomes));
   hash.bytes(Buffer.from(mapId, "hex"));
   if (modeSettings.mode === GameMode.Civilization) hashCivilizationRules(hash, modeSettings.civilization);
+  if (schemaVersion === 2) {
+    if (openingStyleCycle === undefined) throw new Error("schema-v2 scenario has no opening style cycle");
+    for (const style of openingStyleCycle) hash.string(style);
+  }
   return hash.finish();
 }
 

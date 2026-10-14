@@ -26,6 +26,22 @@ import {
 
 const HUNGER = readRepoFile("scenarios/hunger-six.toml");
 const HUNGER_MAP = readRepoFile("maps/hunger-six.toml");
+const NATURAL_HUNGER_MAP = `
+schema = 2
+name = "natural-fixture"
+terrain = "vanilla"
+dimensions = { width = 1024, depth = 1024 }
+operations = [
+  { kind = "spawn", seat = 0, position = { x = 512, z = 500 } },
+  { kind = "spawn", seat = 1, position = { x = 512, z = 524 } },
+  { kind = "loot_container", position = { x = 510, z = 512 }, inventory = ["minecraft:bread"] }
+]
+`;
+const NATURAL_HUNGER_SCENARIO = HUNGER
+  .replace("schema = 1", "schema = 2")
+  .replace("map = \"../maps/hunger-six.toml\"", "map = \"../maps/natural-fixture.toml\"")
+  .replace("competitors = 6", "competitors = 2")
+  .replace("[roster]", "opening_styles = [\"explorer\", \"scavenger\", \"hunter\"]\n\n[roster]");
 const DUEL = readRepoFile("scenarios/duel.toml");
 const DUEL_MAP = readRepoFile("maps/duel.toml");
 const CIVILIZATION = readRepoFile("scenarios/civilization-six.toml");
@@ -113,6 +129,48 @@ test("scenario_v1_compiles_hunger_six_and_duel", () => {
   assert.notEqual(hunger.semanticId, duel.semanticId);
 });
 
+test("natural_map_v2_keeps_surface_columns_unresolved_and_rejects_invalid_columns", () => {
+  const map = compileMap(NATURAL_HUNGER_MAP);
+
+  assert.equal(map.terrain, "vanilla");
+  assert.deepEqual(map.dimensions, { width: 1024, depth: 1024 });
+  assert.deepEqual(map.spawns.map(({ seat, column }) => ({ seat, column })), [
+    { seat: 0, column: { x: 512, z: 500 } },
+    { seat: 1, column: { x: 512, z: 524 } },
+  ]);
+  assert.deepEqual(map.lootContainers.map(({ column }) => column), [{ x: 510, z: 512 }]);
+  assert.deepEqual(map.blocks, []);
+
+  const outOfBounds = specError(() => compileMap(NATURAL_HUNGER_MAP.replace("x = 512, z = 500", "x = 1024, z = 500")));
+  assert.equal(outOfBounds.kind, SpecErrorKind.Range);
+  assert.equal(outOfBounds.path, "map.operations[0].position.x");
+});
+
+test("scenario_v2_requires_natural_terrain_and_records_a_complete_opening_cycle", () => {
+  const scenario = compileScenario(NATURAL_HUNGER_SCENARIO, NATURAL_HUNGER_MAP);
+
+  assert.equal(scenario.schemaVersion, 2);
+  assert.equal(scenario.mode, GameMode.HungerGames);
+  if (scenario.schemaVersion !== 2) throw new Error("natural scenario compiled with the wrong schema");
+  assert.deepEqual(scenario.openingStyleCycle, ["explorer", "scavenger", "hunter"]);
+  assert.equal(scenario.map.terrain, "vanilla");
+  assert.equal(scenario.map.dimensions.width, 1024);
+  const reversedCycle = compileScenario(
+    NATURAL_HUNGER_SCENARIO.replace("[\"explorer\", \"scavenger\", \"hunter\"]", "[\"hunter\", \"scavenger\", \"explorer\"]"),
+    NATURAL_HUNGER_MAP,
+  );
+  assert.notEqual(reversedCycle.semanticId, scenario.semanticId);
+
+  const repeatedStyle = specError(() => compileScenario(
+    NATURAL_HUNGER_SCENARIO.replace("\"hunter\"]", "\"explorer\"]"),
+    NATURAL_HUNGER_MAP,
+  ));
+  assert.equal(repeatedStyle.path, "scenario.opening_styles");
+
+  const naturalUnderV1 = specError(() => compileScenario(HUNGER, NATURAL_HUNGER_MAP));
+  assert.equal(naturalUnderV1.path, "scenario.map");
+});
+
 test("civilization_scenario_compiles_fixed_seats_goals_and_outposts", () => {
   const scenario = compileScenario(CIVILIZATION, CIVILIZATION_MAP);
   assert.equal(scenario.mode, GameMode.Civilization);
@@ -146,6 +204,7 @@ test("civilization_scenario_compiles_fixed_seats_goals_and_outposts", () => {
   for (const anchor of Object.values(scenario.civilization.blueprint.anchors)) {
     assert.equal(civilizationOutpostCells(anchor.position, anchor.rotationDegrees).length, OUTPOST_BLOCK_COUNT);
   }
+  if (scenario.map.terrain !== "planned") throw new Error("civilization scenario compiled with natural terrain");
   assert.deepEqual(scenario.map.spawns.map(({ position }) => position), [
     blockPosition(24, 65, 94),
     blockPosition(24, 65, 96),
@@ -172,8 +231,10 @@ test("civilization_scenario_compiles_fixed_seats_goals_and_outposts", () => {
     .replaceAll("y = 70", "y = -30");
   const belowZero = compileScenario(negativeHeightScenario, negativeHeightMap);
   assert.equal(belowZero.mode, GameMode.Civilization);
+  if (belowZero.mode !== GameMode.Civilization || belowZero.map.terrain !== "planned") {
+    throw new Error("negative-height fixture compiled as the wrong scenario");
+  }
   assert.equal(belowZero.map.dimensions.minY, -100);
-  if (belowZero.mode !== GameMode.Civilization) throw new Error("negative-height fixture compiled as the wrong mode");
   assert.equal(belowZero.civilization.captureZone.min.y, -35);
 });
 
@@ -530,6 +591,7 @@ max_y = 8
 
 test("map_positions_use_shared_core_geometry_and_stable_order", () => {
   const map = compileMap(HUNGER_MAP);
+  if (map.terrain !== "planned") throw new Error("planned map compiled with natural terrain");
   const firstSpawn = map.spawns[0];
   assert.ok(firstSpawn);
   assert.deepEqual(firstSpawn.position, blockPosition(64, 65, 40));

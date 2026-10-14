@@ -21,6 +21,11 @@ export interface MapDimensions {
   readonly maxY: number;
 }
 
+export interface MapFootprint {
+  readonly width: number;
+  readonly depth: number;
+}
+
 /** A final non-air block placement in canonical coordinate order. */
 export interface BlockPlacement {
   readonly position: BlockPosition;
@@ -39,8 +44,23 @@ export interface LootContainer {
   readonly inventory: readonly string[];
 }
 
-/** Immutable, validated map input for the world adapter. */
-export interface MapIr {
+export interface SurfaceColumn {
+  readonly x: number;
+  readonly z: number;
+}
+
+export interface SurfaceSpawnPoint {
+  readonly seat: number;
+  readonly column: SurfaceColumn;
+}
+
+export interface SurfaceLootContainer {
+  readonly column: SurfaceColumn;
+  readonly inventory: readonly string[];
+}
+
+export interface PlannedMapIr {
+  readonly terrain: "planned";
   readonly name: string;
   readonly dimensions: MapDimensions;
   readonly blocks: readonly BlockPlacement[];
@@ -48,6 +68,18 @@ export interface MapIr {
   readonly lootContainers: readonly LootContainer[];
   readonly semanticId: SemanticId;
 }
+
+export interface NaturalMapIr {
+  readonly terrain: "vanilla";
+  readonly name: string;
+  readonly dimensions: MapFootprint;
+  readonly blocks: readonly [];
+  readonly spawns: readonly SurfaceSpawnPoint[];
+  readonly lootContainers: readonly SurfaceLootContainer[];
+  readonly semanticId: SemanticId;
+}
+
+export type MapIr = PlannedMapIr | NaturalMapIr;
 
 interface GeometryMetadata {
   readonly surfaceY: ReadonlyMap<string, number>;
@@ -62,14 +94,16 @@ type ParsedMapOperation =
 
 const geometryByMap = new WeakMap<MapIr, GeometryMetadata>();
 
-/** Compiles a schema-v1 TOML map into immutable, validated world data. */
 export function compileMap(source: string): MapIr {
   const root = raw.asTable(raw.parseDocument(source, "map"), "map");
-  raw.checkFields(root, ["schema", "name", "dimensions", "operations"], ["schema", "name", "dimensions", "operations"], "map");
+  const schema = raw.integer(raw.field(root, "schema", "map"), "map.schema");
+  if (schema === 1n) return compilePlannedMap(root);
+  if (schema === 2n) return compileNaturalMap(root);
+  throw new SpecError(SpecErrorKind.InvalidValue, "map.schema", "supported schema versions are 1 and 2");
+}
 
-  if (raw.integer(raw.field(root, "schema", "map"), "map.schema") !== 1n) {
-    throw new SpecError(SpecErrorKind.InvalidValue, "map.schema", "only schema version 1 is supported");
-  }
+function compilePlannedMap(root: raw.RawTable): PlannedMapIr {
+  raw.checkFields(root, ["schema", "name", "dimensions", "operations"], ["schema", "name", "dimensions", "operations"], "map");
   const name = raw.string(raw.field(root, "name", "map"), "map.name");
   const dimensions = parseDimensions(raw.field(root, "dimensions", "map"));
   const operations = raw.asArray(raw.field(root, "operations", "map"), "map.operations");
@@ -136,7 +170,8 @@ export function compileMap(source: string): MapIr {
     .map(({ position, block }) => Object.freeze({ position, block }));
   const semanticId = hashMap(dimensions, blockPlacements, spawnPoints, lootContainers);
 
-  const map: MapIr = Object.freeze({
+  const map: PlannedMapIr = Object.freeze({
+    terrain: "planned",
     name,
     dimensions,
     blocks: Object.freeze(blockPlacements),
@@ -145,6 +180,82 @@ export function compileMap(source: string): MapIr {
     semanticId,
   });
   geometryByMap.set(map, Object.freeze({ surfaceY, components }));
+  return map;
+}
+
+function compileNaturalMap(root: raw.RawTable): NaturalMapIr {
+  raw.checkFields(root, ["schema", "name", "terrain", "dimensions", "operations"], ["schema", "name", "terrain", "dimensions", "operations"], "map");
+  const terrain = raw.string(raw.field(root, "terrain", "map"), "map.terrain");
+  if (terrain !== "vanilla") {
+    throw new SpecError(SpecErrorKind.InvalidValue, "map.terrain", "schema version 2 requires vanilla terrain");
+  }
+  const name = raw.string(raw.field(root, "name", "map"), "map.name");
+  const dimensions = parseMapFootprint(raw.field(root, "dimensions", "map"));
+  const operations = raw.asArray(raw.field(root, "operations", "map"), "map.operations");
+  if (operations.length > MAX_OPERATIONS) {
+    throw new SpecError(SpecErrorKind.ResourceLimit, "map.operations", `at most ${MAX_OPERATIONS} operations are supported`);
+  }
+
+  const spawns = new Map<number, SurfaceColumn>();
+  const loot = new Map<string, { readonly column: SurfaceColumn; readonly inventory: readonly string[] }>();
+  for (const [index, operationValue] of operations.entries()) {
+    const path = `map.operations[${index}]`;
+    const operation = raw.asTable(operationValue, path);
+    const kind = raw.string(raw.field(operation, "kind", path), `${path}.kind`);
+    if (kind === "spawn") {
+      raw.checkFields(operation, ["kind", "position", "seat"], ["kind", "position", "seat"], path);
+      const column = parseSurfaceColumn(raw.field(operation, "position", path), `${path}.position`, dimensions);
+      const seat = nonnegativeU16(raw.field(operation, "seat", path), `${path}.seat`);
+      if (spawns.has(seat)) {
+        throw new SpecError(SpecErrorKind.Conflict, `${path}.seat`, "spawn seat is declared more than once");
+      }
+      spawns.set(seat, column);
+      continue;
+    }
+    if (kind === "loot_container") {
+      raw.checkFields(operation, ["kind", "position", "inventory"], ["kind", "position", "inventory"], path);
+      const column = parseSurfaceColumn(raw.field(operation, "position", path), `${path}.position`, dimensions);
+      const inventoryValues = raw.asArray(raw.field(operation, "inventory", path), `${path}.inventory`);
+      if (inventoryValues.length > MAX_LOOT_INVENTORY_ITEMS) {
+        throw new SpecError(SpecErrorKind.ResourceLimit, `${path}.inventory`, `a chest inventory can contain at most ${MAX_LOOT_INVENTORY_ITEMS} items`);
+      }
+      const inventory = inventoryValues.map((value, itemIndex) => parseResourceId(value, `${path}.inventory[${itemIndex}]`));
+      if (inventory.length === 0) {
+        throw new SpecError(SpecErrorKind.InvalidValue, `${path}.inventory`, "loot inventory must contain at least one item");
+      }
+      const key = surfaceColumnKey(column);
+      if (loot.has(key)) {
+        throw new SpecError(SpecErrorKind.Conflict, `${path}.position`, "loot container column is declared more than once");
+      }
+      loot.set(key, { column, inventory: Object.freeze(inventory) });
+      continue;
+    }
+    throw new SpecError(SpecErrorKind.InvalidValue, `${path}.kind`, `unknown natural-map operation \`${kind}\``);
+  }
+
+  if (spawns.size === 0) {
+    throw new SpecError(SpecErrorKind.Geometry, "map.operations", "map must define at least one spawn");
+  }
+  if (loot.size === 0) {
+    throw new SpecError(SpecErrorKind.Geometry, "map.operations", "map must define at least one loot container");
+  }
+
+  const spawnPoints = [...spawns.entries()]
+    .sort(([left], [right]) => left - right)
+    .map(([seat, column]) => Object.freeze({ seat, column }));
+  const lootContainers = [...loot.values()]
+    .sort((left, right) => compareSurfaceColumns(left.column, right.column))
+    .map(({ column, inventory }) => Object.freeze({ column, inventory }));
+  validateNaturalSpawnSeparation(spawnPoints);
+  const map: NaturalMapIr = Object.freeze({
+    terrain: "vanilla",
+    name,
+    dimensions,
+    blocks: Object.freeze([]) as readonly [],
+    spawns: Object.freeze(spawnPoints),
+    lootContainers: Object.freeze(lootContainers),
+    semanticId: hashNaturalMap(dimensions, spawnPoints, lootContainers),
+  });
   return map;
 }
 
@@ -247,7 +358,7 @@ export function validateSpawnSeats(map: MapIr, count: number, path: string): voi
 }
 
 /** Scenario objectives must begin on the same walkable component as the spawn seats. */
-export function validateReachableSurfacePosition(map: MapIr, position: BlockPosition, path: string): void {
+export function validateReachableSurfacePosition(map: PlannedMapIr, position: BlockPosition, path: string): void {
   const metadata = geometryByMap.get(map);
   if (metadata === undefined) throw new Error("compiled map geometry is missing");
   const key = columnKey(position.x, position.z);
@@ -272,12 +383,27 @@ export function validateBorder(
   if (initialDiameter > Math.min(map.dimensions.width, map.dimensions.depth)) {
     throw new SpecError(SpecErrorKind.Geometry, path, "initial border diameter must fit inside the map footprint");
   }
-  const metadata = geometryByMap.get(map);
-  if (metadata === undefined) throw new Error("compiled map geometry is missing");
   const centerX = (map.dimensions.width - 1) / 2;
   const centerZ = (map.dimensions.depth - 1) / 2;
   const initialRadiusSquared = (initialDiameter / 2) ** 2;
   const finalRadiusSquared = (finalDiameter / 2) ** 2;
+
+  if (map.terrain === "vanilla") {
+    for (const spawn of map.spawns) {
+      if (!insideCircle(spawn.column.x, spawn.column.z, centerX, centerZ, initialRadiusSquared)) {
+        throw new SpecError(SpecErrorKind.Geometry, path, `spawn seat ${spawn.seat} lies outside the initial border`);
+      }
+    }
+    for (const container of map.lootContainers) {
+      if (!insideCircle(container.column.x, container.column.z, centerX, centerZ, initialRadiusSquared)) {
+        throw new SpecError(SpecErrorKind.Geometry, path, "loot container lies outside the initial border");
+      }
+    }
+    return;
+  }
+
+  const metadata = geometryByMap.get(map);
+  if (metadata === undefined) throw new Error("compiled map geometry is missing");
 
   for (const spawn of map.spawns) {
     if (!insideCircle(spawn.position.x, spawn.position.z, centerX, centerZ, initialRadiusSquared)) {
@@ -316,6 +442,32 @@ function parseDimensions(value: raw.RawValue): MapDimensions {
     throw new SpecError(SpecErrorKind.Range, `${path}.max_y`, "must be greater than or equal to min_y");
   }
   return Object.freeze({ width, depth, minY, maxY });
+}
+
+function parseMapFootprint(value: raw.RawValue): MapFootprint {
+  const path = "map.dimensions";
+  const table = raw.asTable(value, path);
+  raw.checkFields(table, ["width", "depth"], ["width", "depth"], path);
+  const width = positiveU32(raw.field(table, "width", path), `${path}.width`);
+  const depth = positiveU32(raw.field(table, "depth", path), `${path}.depth`);
+  if (width - 1 > 2_147_483_647 || depth - 1 > 2_147_483_647) {
+    throw new SpecError(SpecErrorKind.Range, path, "width and depth must fit signed block coordinates");
+  }
+  return Object.freeze({ width, depth });
+}
+
+function parseSurfaceColumn(value: raw.RawValue, path: string, dimensions: MapFootprint): SurfaceColumn {
+  const table = raw.asTable(value, path);
+  raw.checkFields(table, ["x", "z"], ["x", "z"], path);
+  const x = signedI32(raw.field(table, "x", path), `${path}.x`);
+  const z = signedI32(raw.field(table, "z", path), `${path}.z`);
+  if (x < 0 || x >= dimensions.width) {
+    throw new SpecError(SpecErrorKind.Range, `${path}.x`, "must be within the map width");
+  }
+  if (z < 0 || z >= dimensions.depth) {
+    throw new SpecError(SpecErrorKind.Range, `${path}.z`, "must be within the map depth");
+  }
+  return Object.freeze({ x, z });
 }
 
 /** Parses signed block coordinates before a caller applies map-specific bounds. */
@@ -384,6 +536,10 @@ function positionKey(position: BlockPosition): string {
   return `${position.x},${position.y},${position.z}`;
 }
 
+function surfaceColumnKey(column: SurfaceColumn): string {
+  return `${column.x},${column.z}`;
+}
+
 function columnKey(x: number, z: number): string {
   return `${x},${z}`;
 }
@@ -395,6 +551,26 @@ function parseColumnKey(key: string): readonly [number, number] {
 
 function comparePositions(left: BlockPosition, right: BlockPosition): number {
   return left.x - right.x || left.y - right.y || left.z - right.z;
+}
+
+function compareSurfaceColumns(left: SurfaceColumn, right: SurfaceColumn): number {
+  return left.x - right.x || left.z - right.z;
+}
+
+function validateNaturalSpawnSeparation(spawns: readonly SurfaceSpawnPoint[]): void {
+  for (const [index, spawn] of spawns.entries()) {
+    for (const other of spawns.slice(0, index)) {
+      const dx = spawn.column.x - other.column.x;
+      const dz = spawn.column.z - other.column.z;
+      if (dx * dx + dz * dz < 4) {
+        throw new SpecError(
+          SpecErrorKind.Geometry,
+          `map.spawn[${spawn.seat}]`,
+          `spawn is less than two blocks from seat ${other.seat}`,
+        );
+      }
+    }
+  }
 }
 
 function assignBlock(
@@ -587,6 +763,31 @@ function hashMap(
     hash.i32(container.position.x);
     hash.i32(container.position.y);
     hash.i32(container.position.z);
+    hash.u64(BigInt(container.inventory.length));
+    for (const item of container.inventory) hash.string(item);
+  }
+  return hash.finish();
+}
+
+function hashNaturalMap(
+  dimensions: MapFootprint,
+  spawns: readonly SurfaceSpawnPoint[],
+  loot: readonly SurfaceLootContainer[],
+): SemanticId {
+  const hash = new CanonicalHasher("arena.map.ir.v2\0");
+  hash.string("vanilla");
+  hash.u32(dimensions.width);
+  hash.u32(dimensions.depth);
+  hash.u64(BigInt(spawns.length));
+  for (const spawn of spawns) {
+    hash.u16(spawn.seat);
+    hash.i32(spawn.column.x);
+    hash.i32(spawn.column.z);
+  }
+  hash.u64(BigInt(loot.length));
+  for (const container of loot) {
+    hash.i32(container.column.x);
+    hash.i32(container.column.z);
     hash.u64(BigInt(container.inventory.length));
     for (const item of container.inventory) hash.string(item);
   }
