@@ -19,6 +19,8 @@ export function actionFunnelReport(evidence: Evidence): object | undefined {
   if (funnelRecords.length === 0 && notes.length === 0) return undefined;
 
   const deaths = deathEliminations(evidence.records);
+  const hits = damageHits(evidence.records);
+  const source = damageEventsEnabled(evidence.records) ? 'damage_events' as const : 'authoritative_elimination_events' as const;
   const seats = new Map<number, SeatTally>();
   const tally = (seat: number): SeatTally => {
     let existing = seats.get(seat);
@@ -70,19 +72,63 @@ export function actionFunnelReport(evidence: Evidence): object | undefined {
     if (record.funnel.kind === 'stopped') bump(funnel.stopped, record.funnel.reason);
     if ((record.funnel.action === 'attack' || record.funnel.action === 'shoot') && record.target_seat !== null && record.tick !== null) {
       funnel.attributable += 1;
-      const tick = record.tick;
-      if (deaths.some((death) => death.seat === record.target_seat
-          && death.tick >= tick && death.tick <= tick + ATTRIBUTION_WINDOW_TICKS)) {
-        funnel.target_eliminated_within_window += 1;
-      }
+      if (effectConfirmed(record, source, hits, deaths) !== null) funnel.confirmed_effects += 1;
     }
   }
 
   return {
-    effect_source: 'authoritative_elimination_events',
+    effect_source: source,
     attribution_window_ticks: ATTRIBUTION_WINDOW_TICKS,
     seats: [...seats.entries()].sort(([left], [right]) => left - right).map(([seat, value]) => ({ seat, ...value })),
   };
+}
+
+export interface DamageHit {
+  readonly attacker: number;
+  readonly victim: number;
+  readonly cause: string;
+  readonly tick: number;
+}
+
+export function damageHits(records: readonly TraceRecord[]): readonly DamageHit[] {
+  const hits: DamageHit[] = [];
+  for (const record of records) {
+    if (record.direction !== 'plugin' || record.type !== 'damage') continue;
+    const payload = record.payload as { at?: { domain?: string; value?: string };
+      entries?: { victim: number; attacker: number | null; cause: string }[] };
+    if (payload.at?.domain !== 'match' || typeof payload.at.value !== 'string') continue;
+    const tick = Number(payload.at.value);
+    for (const entry of payload.entries ?? []) {
+      if (entry.attacker !== null) hits.push({ attacker: entry.attacker, victim: entry.victim, cause: entry.cause, tick });
+    }
+  }
+  return hits;
+}
+
+export function damageEventsEnabled(records: readonly TraceRecord[]): boolean {
+  return records.some((record) => record.direction === 'runner' && record.type === 'prepare'
+    && (record.payload as { damage_events?: unknown }).damage_events === true);
+}
+
+function effectConfirmed(
+  record: ActionFunnelTraceRecordV1,
+  source: 'damage_events' | 'authoritative_elimination_events',
+  hits: readonly DamageHit[],
+  deaths: readonly DeathElimination[],
+): { kind: string; seat: number; tick: number } | null {
+  if (record.funnel === null || record.target_seat === null || record.tick === null) return null;
+  const action = record.funnel.action;
+  if (action !== 'attack' && action !== 'shoot') return null;
+  const start = record.tick;
+  const end = start + ATTRIBUTION_WINDOW_TICKS;
+  if (source === 'damage_events') {
+    const cause = action === 'attack' ? 'melee' : 'projectile';
+    const hit = hits.find((entry) => entry.attacker === record.seat && entry.victim === record.target_seat
+      && entry.cause === cause && entry.tick >= start && entry.tick <= end);
+    return hit === undefined ? null : { kind: 'damage_dealt', seat: hit.victim, tick: hit.tick };
+  }
+  const death = deaths.find((entry) => entry.seat === record.target_seat && entry.tick >= start && entry.tick <= end);
+  return death === undefined ? null : { kind: 'target_eliminated', seat: death.seat, tick: death.tick };
 }
 
 export function deathEliminations(records: readonly TraceRecord[]): readonly DeathElimination[] {
@@ -137,7 +183,7 @@ interface FunnelTally {
   passed: Record<string, number>;
   stopped: Record<string, number>;
   attributable: number;
-  target_eliminated_within_window: number;
+  confirmed_effects: number;
 }
 
 interface SeatTally {
@@ -156,7 +202,7 @@ interface SeatTally {
 
 function newTally(): SeatTally {
   const funnel = (): FunnelTally => ({
-    engaged: 0, passed: {}, stopped: {}, attributable: 0, target_eliminated_within_window: 0,
+    engaged: 0, passed: {}, stopped: {}, attributable: 0, confirmed_effects: 0,
   });
   return {
     decisions: { proposed: 0, accepted: 0, continued: 0, held: 0, deferred: {}, border: {} },
@@ -184,6 +230,8 @@ export function explainSeatJson(evidence: Evidence, seat: number): object {
     }
   }
   const deaths = deathEliminations(evidence.records);
+  const hits = damageHits(evidence.records);
+  const source = damageEventsEnabled(evidence.records) ? 'damage_events' as const : 'authoritative_elimination_events' as const;
   const decisions: object[] = [];
   const actions: object[] = [];
   for (const record of evidence.records) {
@@ -201,10 +249,7 @@ export function explainSeatJson(evidence: Evidence, seat: number): object {
     if (summary.actionSequence === null) continue;
     const funnel = funnels.get(summary.actionSequence);
     const skill = effects.get(summary.actionSequence);
-    const confirmed = funnel === undefined || (funnel.funnel?.action !== 'attack' && funnel.funnel?.action !== 'shoot') || funnel.target_seat === null || funnel.tick === null
-      ? null
-      : deaths.find((death) => death.seat === funnel.target_seat
-        && death.tick >= funnel.tick! && death.tick <= funnel.tick! + ATTRIBUTION_WINDOW_TICKS) ?? null;
+    const confirmed = funnel === undefined ? null : effectConfirmed(funnel, source, hits, deaths);
     actions.push({
       action_sequence: summary.actionSequence,
       decision_tick: summary.tick,
@@ -213,7 +258,7 @@ export function explainSeatJson(evidence: Evidence, seat: number): object {
       skill_outcome: skill ?? null,
       funnel: funnel?.funnel ?? null,
       target_seat: funnel?.target_seat ?? null,
-      confirmed_effect: confirmed === null ? null : { kind: 'target_eliminated', seat: confirmed.seat, tick: confirmed.tick },
+      confirmed_effect: confirmed,
     });
   }
   return {
@@ -221,6 +266,7 @@ export function explainSeatJson(evidence: Evidence, seat: number): object {
     run_id: evidence.run_id,
     seat,
     basis: 'recorded_policy_inputs_skill_outcomes_and_authoritative_events',
+    effect_source: source,
     decisions,
     actions,
     failures: actions.filter((action) => {

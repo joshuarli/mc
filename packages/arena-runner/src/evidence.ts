@@ -196,6 +196,10 @@ export function reconstructRunEvidence(evidence: Evidence): ReconstructedRunEvid
     if (message.type === 'error') throw eventRecordFailure('plugin_reported_error', recordNumber);
     if (message.type === 'heartbeat' || message.type === 'metrics') continue;
     if (prepare === undefined) throw eventRecordFailure('prepare_context_missing', recordNumber);
+    if (message.type === 'damage') {
+      if (!startSeen) throw eventRecordFailure('event_before_start', recordNumber);
+      continue;
+    }
     const authoritativeEvent = message.type === 'public_clock' || message.type === 'public_state'
       || message.type === 'elimination' || message.type === 'civilization_state' || message.type === 'outcome';
     if (authoritativeEvent && pendingRunnerCommand !== undefined) {

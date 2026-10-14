@@ -54,12 +54,12 @@ test('action funnel report counts decisions, stages, misses and authoritative co
   assert.deepEqual(seat0.decisions.border, { current: 3 });
   assert.equal(seat0.funnel.attack.engaged, 1);
   assert.equal(seat0.funnel.attack.passed.clientResponse, 1);
-  assert.equal(seat0.funnel.attack.target_eliminated_within_window, 1);
+  assert.equal(seat0.funnel.attack.confirmed_effects, 1);
   const seat1 = report.seats[1]!;
   assert.deepEqual(seat1.funnel.attack.stopped, { cooldownNotReady: 1 });
   assert.equal(seat1.funnel.attack.passed.skillAdmission, undefined);
   assert.equal(seat1.funnel.attack.passed.tacticalChoice, 1);
-  assert.equal(seat1.funnel.attack.target_eliminated_within_window, 0);
+  assert.equal(seat1.funnel.attack.confirmed_effects, 0);
 });
 
 test('action funnel report is absent without funnel records and confirmation respects the attribution window', () => {
@@ -67,7 +67,7 @@ test('action funnel report is absent without funnel records and confirmation res
   const late = [records[0]!, funnel('1', 0, 10, 1, { kind: 'reached', action: 'attack', stage: 'issued' }),
     elimination(10 + ATTRIBUTION_WINDOW_TICKS + 1, 1, 'death')];
   const report = actionFunnelReport(evidence(late)) as { seats: { funnel: any }[] };
-  assert.equal(report.seats[0]!.funnel.attack.target_eliminated_within_window, 0);
+  assert.equal(report.seats[0]!.funnel.attack.confirmed_effects, 0);
 });
 
 test('explain ties a seat decisions to permitted evidence and confirmed effects without inventing causes', () => {
@@ -97,6 +97,29 @@ test('funnel trace records are strict and older trace schemas reject them', () =
     assert.throws(() => parseSegment(text(schema)), (error: unknown) =>
       error instanceof TraceError && error.source.kind === 'unsupported_funnel_schema');
   }
+});
+
+test('damage events confirm attack and shoot effects when the match opted in', () => {
+  const prepare = { direction: 'runner', type: 'prepare', payload: { damage_events: true } } as unknown as TraceRecord;
+  const damage = (tick: number, victim: number, attacker: number | null, cause: string) => ({
+    direction: 'plugin', type: 'damage',
+    payload: { at: { domain: 'match', value: String(tick) }, entries: [{ victim, attacker, cause, amount: 4, attacker_is_competitor: attacker !== null }] },
+  }) as unknown as TraceRecord;
+  const body = [
+    prepare,
+    funnel('1', 0, 10, 1, { kind: 'reached', action: 'attack', stage: 'clientResponse' }),
+    funnel('2', 0, 20, 2, { kind: 'reached', action: 'shoot', stage: 'clientResponse' }),
+    funnel('3', 0, 30, 3, { kind: 'reached', action: 'attack', stage: 'clientResponse' }),
+    damage(12, 1, 0, 'melee'),
+    damage(25, 2, 0, 'melee'),
+    damage(31, 3, null, 'melee'),
+    elimination(32, 3, 'death'),
+  ];
+  const report = actionFunnelReport(evidence(body)) as { effect_source: string; seats: { funnel: any }[] };
+  assert.equal(report.effect_source, 'damage_events');
+  assert.equal(report.seats[0]!.funnel.attack.attributable, 2);
+  assert.equal(report.seats[0]!.funnel.attack.confirmed_effects, 1);
+  assert.equal(report.seats[0]!.funnel.shoot.confirmed_effects, 0);
 });
 
 test('report counts client border-unknown diagnostics per seat', () => {

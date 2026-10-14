@@ -210,7 +210,7 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
     const serverInputs: RuntimeServerInputs = { ...options, javaTmpDir, signal: runSignal };
     const pluginIdentity = await readRuntimePluginIdentity(serverInputs);
     const pluginBytes = await readRuntimePluginJar(serverInputs);
-    const preparePayload = createPreparePayload(scenario, roster.competitors);
+    const basePreparePayload = createPreparePayload(scenario, roster.competitors);
 
     lease = await acquireOwnedRunLease({
       helperPath: options.helperPath,
@@ -310,6 +310,10 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
     assertRuntimePluginIdentity(session.ready, pluginIdentity);
     assertRuntimePluginCapabilities(session.ready, scenario);
 
+    const preparePayload = session.ready.payload.capabilities.includes('damage_events_v1')
+      && 'roster_version' in basePreparePayload && basePreparePayload.roster_version === 2
+      ? Object.freeze({ ...basePreparePayload, damage_events: true as const })
+      : basePreparePayload;
     const outcome = deferred<OutcomePayload>();
     void outcome.promise.catch(() => {});
     const completedEvents: RuntimeAuthorityEvent[] = [];
@@ -791,7 +795,7 @@ class ControlCoordinator {
           this.#events.push(message);
           if (message.type === 'outcome') {
             try {
-              reconstructEventResult(this.#runId, this.#prepare, this.#events);
+              reconstructEventResult(this.#runId, this.#prepare, this.#events.filter((event) => event.type !== 'damage'));
             } catch (error) {
               throw new RunnerError('corrupt_evidence', 'authoritative match events', {
                 kind: traceFailureKind(error),
@@ -1092,7 +1096,7 @@ async function cleanupOwnedRun(options: Readonly<{
 
 function isAuthorityEvent(message: ControlMessage): message is RuntimeAuthorityEvent {
   return message.type === 'public_clock' || message.type === 'public_state' || message.type === 'civilization_state'
-    || message.type === 'elimination' || message.type === 'outcome';
+    || message.type === 'elimination' || message.type === 'outcome' || message.type === 'damage';
 }
 
 async function processExitObserved(process: OwnedServerProcess): Promise<boolean> {

@@ -283,3 +283,20 @@ test('pending abort retains plugin sequence and public state invariants', async 
   assert.throws(() => reconstructRunEvidence(evidenceWithRecords(segment, mismatchedState)),
     rejectsEvidence('public_state_mismatch'));
 });
+
+test('damage events are accepted as evaluator evidence without changing the reconstructed result', async () => {
+  const segment = await readSegment(join(repositoryRoot, 'tests/fixtures/pending-abort/trace-v2-000001.json'), 1);
+  const original = reconstructRunEvidence(reconstruct([segment]));
+  const damage = { direction: 'plugin', protocol: 1, run_id: segment.runId, sequence: '9', type: 'damage',
+    payload: { at: { domain: 'match', value: '1' }, entries: [
+      { victim: 1, attacker: 0, cause: 'melee', amount: 4, attacker_is_competitor: true },
+    ] } };
+  const records = [...segment.records.slice(0, 8), damage, ...segment.records.slice(8)];
+  const withDamage = reconstruct([parseSegment(canonicalJson({ schema: 3, run_id: segment.runId, first_sequence: '1',
+    last_sequence: String(records.length), records, sha256: sha256Json(records), trailer: { complete: true } }))]);
+  assert.deepEqual(reconstructRunEvidence(withDamage), original);
+  const beforeStart = [segment.records[0]!, segment.records[1]!, segment.records[2]!, damage, ...segment.records.slice(3)];
+  assert.throws(() => reconstructRunEvidence(reconstruct([parseSegment(canonicalJson({ schema: 3, run_id: segment.runId,
+    first_sequence: '1', last_sequence: String(beforeStart.length), records: beforeStart, sha256: sha256Json(beforeStart),
+    trailer: { complete: true } }))])), (error: unknown) => error instanceof TraceError);
+});

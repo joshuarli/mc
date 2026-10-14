@@ -11,6 +11,11 @@ export function assertEventSeatsInRoster(event: RuntimeAuthorityEvent, rosterSiz
     case 'civilization_state':
       assertSeats(event.payload.occupants, rosterSize, 'occupants');
       return;
+    case 'damage':
+      assertSeats(event.payload.entries.map((entry) => entry.victim), rosterSize, 'damage_victims');
+      assertSeats(event.payload.entries.flatMap((entry) => entry.attacker === null ? [] : [entry.attacker]),
+        rosterSize, 'damage_attackers');
+      return;
     case 'elimination':
       assertSeats(event.payload.eliminations.map((entry) => entry.seat), rosterSize, 'eliminations');
       return;

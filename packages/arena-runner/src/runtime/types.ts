@@ -7,7 +7,7 @@ import type { RunnerCommandEnvelope } from './session.js';
 import type { PlayerIdentity, StoppedPlayerStats } from './observations.js';
 
 export type RuntimeAuthorityEvent = Extract<ControlMessage, {
-  readonly type: 'public_clock' | 'public_state' | 'civilization_state' | 'elimination' | 'outcome';
+  readonly type: 'public_clock' | 'public_state' | 'civilization_state' | 'elimination' | 'outcome' | 'damage';
 }>;
 
 export interface ChunkReceipt {
