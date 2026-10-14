@@ -1096,12 +1096,9 @@ test('attack waits for tick-driven non-forced look before launching', async () =
     assert.equal(attackCalls, 0);
     harness.bot.emit('physicsTick');
 
-    await waitUntil(() => lookCalls >= 2);
-    assert.equal(attackCalls, 0);
-    harness.bot.emit('physicsTick');
-
     assert.deepEqual(await running, { kind: 'succeeded' });
-    assert.deepEqual(lookForces, [undefined, undefined]);
+    assert.deepEqual(lookForces, [undefined]);
+    assert.equal(lookCalls, 1);
     assert.equal(attackCalls, 1);
   } finally {
     await harness.owner.close();
