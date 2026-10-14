@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import test from "node:test";
@@ -12,6 +13,7 @@ import {
   SpecErrorKind,
   compileScenario,
   isReservedRunnerUsername,
+  withExternalSeat,
 } from "../src/index.js";
 
 const SCENARIO_24 = readRepoFile("scenarios/hunger-24.toml");
@@ -274,4 +276,32 @@ test("reserved_runner_username_prefixes_are_exported_and_case_insensitive", () =
   for (const name of ["Alex_Fixture", "Arena_Bot", "BotArena"]) {
     assert.equal(isReservedRunnerUsername(name), false, name);
   }
+});
+
+test("scenario_external_seat_override_rebinds_identity_inside_the_spec", () => {
+  const base = compileScenario(SCENARIO_24, MAP_24);
+  const first = withExternalSeat(base, { seat: 0, username: "Alex_9" });
+
+  assert.deepEqual(first.roster.seats[0]?.controller, { kind: "external", username: "Alex_9" });
+  assert.deepEqual(base.roster.seats[0]?.controller, { kind: "bot" });
+  assert.notEqual(first.semanticId, base.semanticId);
+  assert.notEqual(first.semanticId, withExternalSeat(base, { seat: 1, username: "Alex_9" }).semanticId);
+  assert.notEqual(first.semanticId, withExternalSeat(base, { seat: 0, username: "Alex_8" }).semanticId);
+  assert.equal(withExternalSeat(base, { seat: 0, username: "Alex_9" }).semanticId, first.semanticId);
+  const expected = createHash("sha256")
+    .update(`arena.scenario.effective-roster.v1\0${base.semanticId}\x000\0Alex_9`, "utf8").digest("hex");
+  assert.equal(first.semanticId, expected);
+
+  const reject = (action: () => unknown, kind: SpecErrorKind, path: string): void => {
+    const error = specError(action);
+    assert.equal(error.kind, kind);
+    assert.equal(error.path, path);
+  };
+  reject(() => withExternalSeat(base, { seat: 24, username: "Alex_9" }), SpecErrorKind.Range, "external_seat.seat");
+  reject(() => withExternalSeat(base, { seat: 0, username: "ab" }), SpecErrorKind.InvalidValue, "external_seat.username");
+  reject(() => withExternalSeat(base, { seat: 0, username: "ArenaBot0" }), SpecErrorKind.Conflict, "external_seat.username");
+  reject(() => withExternalSeat(first, { seat: 0, username: "Alex_8" }), SpecErrorKind.Conflict, "external_seat.seat");
+  reject(() => withExternalSeat(first, { seat: 1, username: "alex_9" }), SpecErrorKind.Conflict, "external_seat.username");
+  reject(() => withExternalSeat(compileScenario(readRepoFile("scenarios/duel.toml"), readRepoFile("maps/duel.toml")),
+    { seat: 0, username: "Alex_9" }), SpecErrorKind.InvalidValue, "external_seat");
 });

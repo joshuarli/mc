@@ -63,6 +63,8 @@ export type {
   ServerSettings,
   ShrinkingBorderSettings,
 } from "./scenario.js";
+export { withExternalSeat } from "./effective.js";
+export type { ExternalSeatRequest } from "./effective.js";
 export type { SemanticId } from "./hash.js";
 export type { BlockPosition } from "@arena/core";
 export type { CivilizationFactionId, CivilizationRole, OutpostBlueprintId } from "@arena/core";
