@@ -37,6 +37,7 @@ import { MineflayerObserver } from './observer.js';
 import { recordPathDiagnostic } from './path-diagnostics.js';
 import { leadAimPoint, observedVelocity, type Point3 } from './ballistics.js';
 import { readCombatBody, readCombatSelfBody } from './combat-view.js';
+import { PICKUP_REACH_HORIZONTAL_BLOCKS, PickupReachGoal, withinPickupReach } from './pickup-reach.js';
 import { classifyEntityVisibility, isTargetablePlayer, isVisibleEntity, toBlockPosition } from './perception.js';
 import type { ArenaSkillIntent } from './skill-intent.js';
 import {
@@ -68,7 +69,6 @@ const MAX_PATH_SLICE_PER_CLIENT_MS = 3;
 const MAX_WORKER_PATH_SLICE_MS = 10;
 const PINNED_PATHFINDER_VERSION = '2.4.5';
 const PATH_TIMEOUT_MS = 20_000;
-const PICKUP_RANGE_BLOCKS = 0.9;
 const PURSUIT_STANDOFF_BLOCKS = 2;
 const EATING_THREAT_RANGE_BLOCKS = 8;
 const BOW_DRAW_TICKS = 20;
@@ -124,7 +124,8 @@ interface DropCollectionReceipt {
 
 type NavigationArrival =
   | { readonly kind: 'withinRange'; readonly range: number }
-  | { readonly kind: 'exactBlock' };
+  | { readonly kind: 'exactBlock' }
+  | { readonly kind: 'pickupReach' };
 type NavigationPosition = Readonly<{ x: number; y: number; z: number }>;
 
 
@@ -764,7 +765,7 @@ export class SkillOwner {
   }
 
   async #navigateToDrop(position: MineflayerEntity['position'], active: ActiveSkill, signal: AbortSignal): Promise<void> {
-    await this.#navigate(position, { kind: 'withinRange', range: PICKUP_RANGE_BLOCKS }, active, signal);
+    await this.#navigate(position, { kind: 'pickupReach' }, active, signal);
   }
 
   async #navigateToBlock(position: BlockPosition, active: ActiveSkill): Promise<void> {
@@ -792,13 +793,17 @@ export class SkillOwner {
       const remainingMs = deadline - performance.now();
       if (remainingMs <= 0) throw new SkillFault('timedOut', 'bounded navigation exceeded its deadline');
 
-      const finalLegAllowance = arrival.kind === 'withinRange' ? arrival.range : 0;
+      const finalLegAllowance = arrival.kind === 'withinRange'
+        ? arrival.range
+        : arrival.kind === 'pickupReach' ? PICKUP_REACH_HORIZONTAL_BLOCKS : 0;
       const waypoint = remainingDistance <= MAX_PATH_LEG_BLOCKS + finalLegAllowance
         ? position
         : waypointToward(current, position, MAX_PATH_LEG_BLOCKS);
       const goal = waypoint === position && arrival.kind === 'exactBlock'
         ? new goals.GoalBlock(waypoint.x, waypoint.y, waypoint.z)
-        : new goals.GoalNear(
+        : waypoint === position && arrival.kind === 'pickupReach'
+          ? new PickupReachGoal(position)
+          : new goals.GoalNear(
           waypoint.x,
           waypoint.y,
           waypoint.z,
@@ -1107,7 +1112,7 @@ export class SkillOwner {
         throwIfInterrupted(active.controller.signal);
         const drop = currentDrop(attempt === 0);
         if (drop === null) return;
-        if (distance(this.#bot.entity.position, drop.position) <= PICKUP_RANGE_BLOCKS) break;
+        if (withinPickupReach(this.#bot.entity.position, drop.position)) break;
         const approach = new AbortController();
         const stopApproachOnSkillCancellation = () => approach.abort();
         active.controller.signal.addEventListener('abort', stopApproachOnSkillCancellation, { once: true });
@@ -2017,6 +2022,7 @@ function hasArrived(
   target: NavigationPosition,
   arrival: NavigationArrival,
 ): boolean {
+  if (arrival.kind === 'pickupReach') return withinPickupReach(current, target);
   if (arrival.kind === 'withinRange') {
     if (distance(current, target) <= arrival.range) return true;
     const dx = Math.floor(current.x) - Math.floor(target.x);
