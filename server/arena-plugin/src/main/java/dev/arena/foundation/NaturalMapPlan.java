@@ -28,7 +28,7 @@ final class NaturalMapPlan extends WorldPlan {
 
     record SurfaceColumn(int x, int z) {}
 
-    record BorderCenter(double x, double z) {}
+    record BorderCenter(int x, int z) {}
 
     record RosterSeat(int seat, ControllerKind kind, String username) {
         RosterSeat {
@@ -174,9 +174,11 @@ final class NaturalMapPlan extends WorldPlan {
     }
 
     BorderCenter borderCenter() {
+        long sumX = spawns.stream().mapToLong(spawn -> spawn.column().x()).sum();
+        long sumZ = spawns.stream().mapToLong(spawn -> spawn.column().z()).sum();
         return new BorderCenter(
-                spawns.stream().mapToInt(spawn -> spawn.column().x()).average().orElseThrow(),
-                spawns.stream().mapToInt(spawn -> spawn.column().z()).average().orElseThrow());
+                (int) Math.floorDiv(sumX, (long) spawns.size()),
+                (int) Math.floorDiv(sumZ, (long) spawns.size()));
     }
 
     List<ChunkPosition> chunksWithViewHalo(int viewDistanceChunks) {

@@ -236,7 +236,7 @@ final class NaturalWorldSetupTest {
     }
 
     @Test
-    void centersNaturalBorderOnTheMeanSpawnColumn() {
+    void centersNaturalBorderOnTheFlooredMeanSpawnColumn() {
         NaturalMapPlan plan = plan(List.of(
                 spawn(0, 425, 620),
                 spawn(1, 425, 557),
@@ -245,7 +245,7 @@ final class NaturalWorldSetupTest {
                 spawn(4, 471, 650),
                 spawn(5, 380, 649)), List.of(loot(437, 600)));
 
-        assertEquals(new NaturalMapPlan.BorderCenter(427.5, 3662 / 6.0), plan.borderCenter());
+        assertEquals(new NaturalMapPlan.BorderCenter(427, 610), plan.borderCenter());
     }
 
     @Test

@@ -102,6 +102,9 @@ seat eliminated on the same tick.
 
 An abort while waiting has no phase tick. An abort during countdown carries the
 zero-based countdown tick; after release it carries the current match tick.
+For natural worlds the plugin sets the border center to the floor, per axis,
+of the mean declared spawn column, an integer block coordinate.
+
 World-border interpolation uses match ticks and reaches its configured final
 diameter at `shrink_end_tick`.
 

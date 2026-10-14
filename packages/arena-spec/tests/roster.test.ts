@@ -138,6 +138,28 @@ test("scenario_v3_requires_hunger_games_and_natural_terrain", () => {
   assert.equal(planned.path, "scenario.map");
 });
 
+test("natural_border_center_is_the_floor_of_the_mean_spawn_column", () => {
+  const map = `
+schema = 2
+name = "center"
+terrain = "vanilla"
+dimensions = { width = 1024, depth = 1024 }
+operations = [
+  { kind = "spawn", seat = 0, position = { x = 100, z = 500 } },
+  { kind = "spawn", seat = 1, position = { x = 103, z = 500 } },
+  { kind = "loot_container", position = { x = 101, z = 501 }, inventory = ["minecraft:bread"] }
+]
+`;
+  const scenario = (initial: string) => SCENARIO_24
+    .replace("competitors = 24", "competitors = 2")
+    .replace("initial_diameter_blocks = 400", `initial_diameter_blocks = ${initial}`)
+    .replace("final_diameter_blocks = 16", "final_diameter_blocks = 2");
+  assert.doesNotThrow(() => compileScenario(scenario("4.5"), map));
+  const error = specError(() => compileScenario(scenario("3.5"), map));
+  assert.equal(error.kind, SpecErrorKind.Geometry);
+  assert.match(error.message, /outside the initial border/);
+});
+
 function specError(operation: () => unknown): SpecError {
   try {
     operation();

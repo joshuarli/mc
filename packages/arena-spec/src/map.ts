@@ -730,8 +730,8 @@ function validateLoot(
 
 function naturalBorderCenter(map: NaturalMapIr): { readonly x: number; readonly z: number } {
   return {
-    x: map.spawns.reduce((sum, spawn) => sum + spawn.column.x, 0) / map.spawns.length,
-    z: map.spawns.reduce((sum, spawn) => sum + spawn.column.z, 0) / map.spawns.length,
+    x: Math.floor(map.spawns.reduce((sum, spawn) => sum + spawn.column.x, 0) / map.spawns.length),
+    z: Math.floor(map.spawns.reduce((sum, spawn) => sum + spawn.column.z, 0) / map.spawns.length),
   };
 }
 
