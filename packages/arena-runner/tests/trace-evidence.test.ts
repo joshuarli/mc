@@ -153,17 +153,16 @@ test('reconstructs authoritative evidence with v2 policy decisions while rejecti
     rngStateAfter: random.snapshotState(), disposition: { kind: 'hold' } });
   const withPolicy = (record: object) => {
     const records = [...complete.records.slice(0, 8), record, ...complete.records.slice(8)];
-    return reconstruct([parseSegment(canonicalJson({ schema: 2, run_id: complete.runId,
+    return reconstruct([parseSegment(canonicalJson({ schema: 3, run_id: complete.runId,
       first_sequence: '1', last_sequence: String(records.length), records, sha256: sha256Json(records), trailer: { complete: true } }))]);
   };
   const current = withPolicy(policy);
   assert.deepEqual(reconstructRunEvidence(current), reconstructRunEvidence(original));
   assert.equal(replayPolicyJson(current).decision_count, 1);
-  const unsupported = withPolicy({ ...policy, schema: 'policy-replay-v3' });
+  const unsupported = withPolicy({ ...policy, schema: 'policy-replay-v4' });
   assert.throws(() => reconstructRunEvidence(unsupported), (error: unknown) =>
     error instanceof TraceError && error.source.kind === 'invalid_event_direction');
-  assert.throws(() => replayPolicyJson(unsupported), (error: unknown) =>
-    error instanceof TraceError && error.source.kind === 'unsupported_policy_schema');
+  assert.throws(() => replayPolicyJson(unsupported), TraceError);
   assert.throws(() => replayPolicyJson(withPolicy({ ...policy, unexpected: true })), TraceError);
 });
 

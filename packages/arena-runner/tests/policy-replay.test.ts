@@ -107,7 +107,8 @@ function openingPolicyRecord(sequence = 1n) {
     state: openingPolicyState({ cacheTakenAt: null }) };
   const input = normalizeOpeningPolicyReplayInput({ observation, memory: emptyPolicyMemory(), feedback: [],
     params: PolicyParams.baseline(), random, opening });
-  const actual = decideOpening(observation, emptyPolicyMemory(), PolicyParams.baseline(), random, [], opening);
+  const actual = decideOpening(observation, emptyPolicyMemory(), PolicyParams.baseline(), random, [],
+    { style: opening.style, state: opening.state });
   const { openingState, ...decision } = actual;
   return makeOpeningPolicyReplayRecord({ sequence, seat, input, decision, openingStateAfter: openingState,
     rngStateAfter: random.snapshotState(), disposition: { kind: 'start', action_sequence: sequence.toString() } });
