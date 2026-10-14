@@ -787,6 +787,15 @@ export class SkillOwner {
     return isWithinMeleeReach(readCombatSelfBody(this.#bot.entity), readCombatBody(target));
   }
 
+  #playerInPerceptionCone(): boolean {
+    const selfId = this.#bot.entity.id;
+    for (const entity of Object.values(this.#bot.entities)) {
+      if (entity.id === selfId || !isTargetablePlayer(this.#bot, entity)) continue;
+      if (isVisibleEntity(this.#bot, entity)) return true;
+    }
+    return false;
+  }
+
   async #navigate(
     position: NavigationPosition,
     arrival: NavigationArrival,
@@ -856,6 +865,7 @@ export class SkillOwner {
       if (arrival.kind === 'withinRange' || arrival.kind === 'exactBlock') {
         throwIfInterrupted(signal);
         await this.#lookAt(active, 'look down the path', travelSightPoint(this.#bot, position));
+        if (this.#playerInPerceptionCone()) return;
       }
     }
     throw new Error('bounded navigation loop exited unexpectedly');

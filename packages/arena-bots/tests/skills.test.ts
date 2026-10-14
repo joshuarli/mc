@@ -7,6 +7,7 @@ import { blockPosition, entityId, inventorySlot } from '@arena/core';
 import type { Bot } from 'mineflayer';
 import { PathDiagnosticRing } from '../src/index.js';
 import { MineflayerObserver } from '../src/observer.js';
+import { isVisibleEntity } from '../src/perception.js';
 import { SkillOwner } from '../src/skills.js';
 
 const { goals, Movements } = createRequire(import.meta.url)('mineflayer-pathfinder') as typeof import('mineflayer-pathfinder');
@@ -134,6 +135,73 @@ test('travel navigation looks down between legs and melee pursuit does not', asy
   } finally {
     await harness.owner.close();
     harness.observer.close();
+  }
+
+  const seen = makeHarness();
+  const seenEvents: string[] = [];
+  const seenLooks: Array<{ x: number; y: number; z: number }> = [];
+  const seenSetGoal = seen.pathfinder.setGoal;
+  seen.pathfinder.setGoal = (goal) => {
+    seenSetGoal(goal);
+    if (goal !== null) seenEvents.push('goal');
+  };
+  const rivalHeight = 1.8;
+  const rivalHorizontal = 6;
+  const rivalPitchBelowLevel = 1.15;
+  const rivalFeetY = 64 + eyeHeight + rivalHorizontal * Math.tan(-rivalPitchBelowLevel) - rivalHeight / 2;
+  const rivalPosition = new TestPosition(rivalHorizontal, rivalFeetY, 0);
+  const rival = {
+    id: 2,
+    type: 'player',
+    position: rivalPosition,
+    velocity: new TestPosition(0, 0, 0),
+    yaw: 0,
+    pitch: 0,
+    width: 0.6,
+    height: rivalHeight,
+    getDroppedItem: () => null,
+  } as Bot['entity'];
+  Object.assign(seen.bot, {
+    entity: {
+      id: 1,
+      position: new TestPosition(0, 64, 0),
+      eyeHeight,
+      yaw: Math.atan2(-1, 0),
+      pitch: 0,
+      width: 0.6,
+      height: 1.8,
+    },
+    entities: { 2: rival },
+    players: { rival: { entity: rival, gamemode: 0 } },
+    blockAt: () => ({ name: 'air' }),
+    lookAt: async (point: Bot['entity']['position']) => {
+      seenEvents.push('look');
+      seenLooks.push({ x: point.x, y: point.y, z: point.z });
+      const delta = point.minus(seen.bot.entity.position.offset(0, eyeHeight, 0));
+      seen.bot.entity.yaw = Math.atan2(-delta.x, -delta.z);
+      seen.bot.entity.pitch = Math.atan2(delta.y, Math.hypot(delta.x, delta.z));
+    },
+  });
+
+  try {
+    assert.equal(isVisibleEntity(seen.bot, rival), false);
+    const running = seen.owner.run({ kind: 'navigate', target: blockPosition(16, 64, 0) });
+    await waitUntil(() => seenEvents.length >= 1);
+    assert.deepEqual(seenEvents, ['goal']);
+    seen.bot.emit('goal_reached', seen.pathfinder.goal as never);
+    await waitUntil(() => seenEvents.length >= 2);
+    assert.deepEqual(seenEvents, ['goal', 'look']);
+    const look = seenLooks[0];
+    assert.ok(look);
+    assert.ok(Math.abs(look.x - 8) < 1e-9);
+    assert.ok(Math.abs(look.y - (64 + eyeHeight - 12)) < 1e-9);
+    assert.ok(Math.abs(look.z) < 1e-9);
+    assert.equal(isVisibleEntity(seen.bot, rival), true);
+    assert.equal(seen.pathfinder.goal, null);
+    assert.deepEqual(await running, { kind: 'succeeded' });
+  } finally {
+    await seen.owner.close();
+    seen.observer.close();
   }
 
   const melee = makeHarness();
