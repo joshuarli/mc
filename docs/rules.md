@@ -35,12 +35,12 @@ direction and 8,192 total prepared chunks.
 For a schema-3 natural plan the plugin resolves each seat with a bounded,
 deterministic candidate search instead of requiring the declared column to
 be safe. Candidates are the declared column, then Chebyshev rings of radius
-1 through 8 ordered by x then z, at most 128 per seat. A candidate needs a
+1 through 8 ordered by distance to the border center, then x, then z, at most 128 per seat. A candidate needs a
 safe full-block support, two clear blocks, no lava, fire, magma, cactus,
 campfire, berry bush, powder snow, or cobweb within one block, a safe
 adjacent escape column, and two blocks of separation from already chosen
-seats. The first passing candidate wins; if none passes, preparation fails
-and lists the per-reason rejection counts. The world seed is never
+seats. The first passing candidate without a drop of two or more blocks beside it wins; if only cliff-edge candidates pass, the first of them is used; if none passes, preparation fails
+and lists the per-reason rejection counts. After the match settings are known, `prepare` also rejects a searched spawn that lies outside the initial border. The world seed is never
 rerolled. The recipe string and the chosen spawn and chest positions feed a
 world identity hash that the plugin logs as `ARENA_NATURAL_WORLD`. Cache
 chests in a schema-3 plan additionally reject hazards within one block.
