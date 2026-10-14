@@ -1,4 +1,4 @@
-export const CONTROL_CAPABILITIES = Object.freeze(["hunger_games_v1", "civilization_v1", "hunger_games_roster_v2", "checkpoint_v1", "damage_events_v1"] as const);
+export const CONTROL_CAPABILITIES = Object.freeze(["hunger_games_v1", "civilization_v1", "hunger_games_roster_v2", "checkpoint_v1", "damage_events_v1", "tick_metrics_v1"] as const);
 export type ControlCapability = typeof CONTROL_CAPABILITIES[number];
 export type FactionId = "ember" | "tide";
 export type CivilizationRole = "gatherer_crafter" | "builder" | "defender_scout";
@@ -279,6 +279,7 @@ export interface MetricsPayload {
   readonly server_tick_duration_micros: number;
   readonly critical_queue_depth: number;
   readonly dropped_optional_metrics: number;
+  readonly tick_durations_micros?: readonly number[];
 }
 
 export interface ClockPayload {

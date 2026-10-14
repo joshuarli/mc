@@ -235,6 +235,12 @@ export class ControlReceiver {
       throw new ControlCodecError("unsupported_capability", "plugin sent a checkpoint event without advertising checkpoint_v1");
     }
 
+    if (this.handshake === "complete" && message.type === "metrics"
+        && message.payload.tick_durations_micros !== undefined
+        && !this.helloCapabilities.includes("tick_metrics_v1")) {
+      throw new ControlCodecError("unsupported_capability", "plugin sent tick metrics without advertising tick_metrics_v1");
+    }
+
     if (this.handshake === "complete" && message.type === "damage"
         && !this.helloCapabilities.includes("damage_events_v1")) {
       throw new ControlCodecError("unsupported_capability", "plugin sent a damage event without advertising damage_events_v1");
@@ -1049,12 +1055,19 @@ function requireExactKeys(value: StrictJsonObject, path: string, expected: reado
 
 function readMetrics(value: StrictJsonValue): MetricsPayload {
   const payload = readObject(value, "payload",
-    ["server_tick_duration_micros", "critical_queue_depth", "dropped_optional_metrics"],
+    ["server_tick_duration_micros", "critical_queue_depth", "dropped_optional_metrics", "tick_durations_micros"],
     ["server_tick_duration_micros", "critical_queue_depth", "dropped_optional_metrics"]);
-  return {
+  const base = {
     server_tick_duration_micros: readSafeInteger(payload.server_tick_duration_micros, "payload.server_tick_duration_micros", 0, Number.MAX_SAFE_INTEGER, payload, "server_tick_duration_micros"),
     critical_queue_depth: readSafeInteger(payload.critical_queue_depth, "payload.critical_queue_depth", 0, Number.MAX_SAFE_INTEGER, payload, "critical_queue_depth"),
     dropped_optional_metrics: readSafeInteger(payload.dropped_optional_metrics, "payload.dropped_optional_metrics", 0, Number.MAX_SAFE_INTEGER, payload, "dropped_optional_metrics")
+  };
+  if (!Object.hasOwn(payload, "tick_durations_micros")) return base;
+  const samples = readArray(payload.tick_durations_micros, "payload.tick_durations_micros", 1, 20);
+  return {
+    ...base,
+    tick_durations_micros: samples.map((sample, index) =>
+      readSafeInteger(sample, `payload.tick_durations_micros[${index}]`, 0, Number.MAX_SAFE_INTEGER, samples, index))
   };
 }
 

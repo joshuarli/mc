@@ -54,7 +54,7 @@
         { "not": { "const": "0" } }
       ]
     },
-    "capability": { "enum": ["hunger_games_v1", "civilization_v1", "hunger_games_roster_v2", "checkpoint_v1", "damage_events_v1"] },
+    "capability": { "enum": ["hunger_games_v1", "civilization_v1", "hunger_games_roster_v2", "checkpoint_v1", "damage_events_v1", "tick_metrics_v1"] },
     "abort_reason": { "enum": ["operator", "lease_lost", "invalid_world", "protocol_error", "runtime_timeout"] },
     "tick": {
       "type": "object",
@@ -134,7 +134,7 @@
       "required": ["token", "capabilities"],
       "properties": {
         "token": { "type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[A-Za-z0-9_-]+$", "not": { "pattern": "[\\r\\n\\u2028\\u2029]" } },
-        "capabilities": { "type": "array", "minItems": 1, "maxItems": 5, "uniqueItems": true, "items": { "$ref": "#/$defs/capability" } }
+        "capabilities": { "type": "array", "minItems": 1, "maxItems": 6, "uniqueItems": true, "items": { "$ref": "#/$defs/capability" } }
       }
     },
     "ready_payload": {
@@ -162,7 +162,7 @@
             "version": { "type": "string", "minLength": 1, "maxLength": 128 }
           }
         },
-        "capabilities": { "type": "array", "minItems": 1, "maxItems": 5, "uniqueItems": true, "items": { "$ref": "#/$defs/capability" } }
+        "capabilities": { "type": "array", "minItems": 1, "maxItems": 6, "uniqueItems": true, "items": { "$ref": "#/$defs/capability" } }
       }
     },
     "build_progress_payload": {
@@ -669,7 +669,13 @@
       "properties": {
         "server_tick_duration_micros": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
         "critical_queue_depth": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
-        "dropped_optional_metrics": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 }
+        "dropped_optional_metrics": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "tick_durations_micros": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 20,
+          "items": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 }
+        }
       }
     },
     "error_payload": {

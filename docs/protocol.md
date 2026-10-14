@@ -142,6 +142,21 @@ version: 1, squads: [{id, seats}]}` declares 2 to 64 uniquely named squads
 whose ascending seats partition every roster seat, and requires the classic
 block rules. The codec and the plugin both check these cross-field rules.
 
+## Tick metrics
+
+The closed `tick_metrics_v1` capability announces authoritative tick service
+time. Once per second after `prepare` the plugin sends `metrics` with
+`server_tick_duration_micros` (the latest tick), `critical_queue_depth` (the
+plugin's outbound queue depth), `dropped_optional_metrics` (a running count),
+and `tick_durations_micros`, 1 to 20 integers ordered oldest first, taken from
+Paper's `ServerTickEndEvent` tick duration. `tick_durations_micros` is optional
+on the wire so older metrics stay valid, and the receiver rejects it from a
+plugin that did not announce the capability. Metrics are optional traffic: when
+the outbound queue is at least half full the plugin skips the message and
+counts it in `dropped_optional_metrics`; it never blocks the tick thread and
+never fails the session. Samples are recorded in a fixed 20-entry ring with no
+per-tick allocation.
+
 ## Damage events
 
 The closed `damage_events_v1` capability gates the evaluator-only `damage`

@@ -1,0 +1,1 @@
+{"protocol":1,"run_id":"fixture-run","sequence":"10","type":"metrics","payload":{"server_tick_duration_micros":50900,"critical_queue_depth":4,"dropped_optional_metrics":0,"tick_durations_micros":[49000,49100,49200,-1,49400,49500,49600,49700,49800,49900,50000,50100,50200,50300,50400,50500,50600,50700,50800,50900]}}
