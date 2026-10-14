@@ -88,10 +88,12 @@ final class NaturalWorldSetupTest {
             }
         }
 
+        world.allWater = true;
         IllegalStateException failure = assertThrows(IllegalStateException.class, () -> resolve(plan, world));
 
-        assertTrue(failure.getMessage().contains("seat 0 declared at (100,100) examined 2048 candidates"));
-        assertTrue(failure.getMessage().contains("unsafe-support=2048"));
+        assertTrue(failure.getMessage().contains("natural world resolution failed"));
+        assertTrue(failure.getMessage().contains("cache declared at (200,200) examined 2048 candidates"));
+        assertTrue(failure.getMessage().contains("unsafe-column=2048"));
     }
 
     @Test
@@ -333,11 +335,36 @@ final class NaturalWorldSetupTest {
                 lake.waterColumns.add(columnKey(x, z));
             }
         }
+        lake.allWater = true;
         IllegalStateException failure = assertThrows(IllegalStateException.class,
                 () -> NaturalWorldSetup.resolveWorld(plan, lake, TEST_MATERIALS, 6, 0.0, true));
         assertTrue(failure.getMessage().contains("cache declared at (300,300) examined"));
         assertTrue(failure.getMessage().contains("unsafe-column="));
         assertEquals(List.of(), lake.placedChests);
+    }
+
+    @Test
+    void anOceanFormationTranslatesToTheNearestLandFormationAndKeepsTheBorderCenterConsistent() {
+        NaturalMapPlan plan = searchPlan(
+                List.of(spawn(0, 500, 500), spawn(1, 540, 500)), List.of(loot(520, 520), loot(520, 480)));
+        TestWorld ocean = new TestWorld();
+        for (int x = 400; x <= 660; x++) {
+            for (int z = 400; z <= 640; z++) {
+                ocean.waterColumns.add(columnKey(x, z));
+            }
+        }
+        NaturalWorldSetup.prepare(plan, ocean, 2, TEST_MATERIALS);
+
+        NaturalWorldSetup.ResolvedWorld resolved = NaturalWorldSetup.resolveWorld(plan, ocean, TEST_MATERIALS, 6, 0.0, true);
+
+        assertTrue(resolved.recipe().contains(";translation="));
+        assertFalse(resolved.recipe().endsWith("translation=0,0"));
+        int dx = resolved.spawns().getFirst().position().x() - 500;
+        int dz = resolved.spawns().getFirst().position().z() - 500;
+        assertEquals(new NaturalMapPlan.BorderCenter(520 + (dx / 48) * 48, 500 + (dz / 48) * 48), resolved.borderCenter());
+        assertEquals(2, resolved.lootContainers().size());
+        assertTrue(resolved.spawns().stream().allMatch(point -> !ocean.waterColumns.contains(
+                columnKey(point.position().x(), point.position().z()))));
     }
 
     @Test
@@ -369,11 +396,10 @@ final class NaturalWorldSetupTest {
         assertTrue(Math.abs(wide.getFirst().position().x() - 100) > 10
                 || Math.abs(wide.getFirst().position().z() - 100) > 10);
 
-        IllegalStateException tight = assertThrows(IllegalStateException.class,
+        lake.allWater = true;
+        IllegalStateException exhausted = assertThrows(IllegalStateException.class,
                 () -> NaturalWorldSetup.resolveWorld(plan, lake, TEST_MATERIALS, 6, 6.0, true));
-        assertTrue(tight.getMessage().contains("seat 0 declared at (100,100)"));
-        assertThrows(IllegalStateException.class,
-                () -> NaturalWorldSetup.resolveWorld(plan, lake, TEST_MATERIALS, 0, 0.0, true));
+        assertTrue(exhausted.getMessage().contains("cache declared at (200,200)"));
     }
 
     private static NaturalMapPlan searchPlan(
@@ -405,6 +431,7 @@ final class NaturalWorldSetupTest {
     private static final class TestWorld implements NaturalWorldSetup.SurfaceAccess {
         private final Set<NaturalMapPlan.ChunkPosition> preparedChunks = new HashSet<>();
         private final Set<String> waterColumns = new HashSet<>();
+        private boolean allWater;
         private final Set<String> existingCacheColumns = new HashSet<>();
         private final Set<MapPlan.Position> blockedPositions = new HashSet<>();
         private final Set<MapPlan.Position> passableSturdyPositions = new HashSet<>();
@@ -450,7 +477,7 @@ final class NaturalWorldSetupTest {
             if (position.y() == terrainSurfaceY + 1 && existingCacheColumns.contains(key)) {
                 return new NaturalWorldSetup.BlockState(Material.CHEST, false, false, false);
             }
-            if (position.y() == terrainSurfaceY && waterColumns.contains(key)) {
+            if (position.y() == terrainSurfaceY && (allWater || waterColumns.contains(key))) {
                 return new NaturalWorldSetup.BlockState(Material.WATER, true, false, false);
             }
             if (position.y() <= terrainSurfaceY) {

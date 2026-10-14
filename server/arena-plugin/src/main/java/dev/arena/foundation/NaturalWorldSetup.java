@@ -50,7 +50,8 @@ final class NaturalWorldSetup {
             List<MapPlan.SpawnPoint> spawns,
             List<MapPlan.LootContainer> lootContainers,
             String recipe,
-            String worldIdentity) {}
+            String worldIdentity,
+            NaturalMapPlan.BorderCenter borderCenter) {}
 
     record PreparedWorld(
             List<MapPlan.SpawnPoint> spawns,
@@ -123,6 +124,99 @@ final class NaturalWorldSetup {
                 worldIdentity(plan, DECLARED_COLUMN_RECIPE, resolvedSpawns, resolvedLoot));
     }
 
+    record Formation(
+            int translationX,
+            int translationZ,
+            List<NaturalMapPlan.SurfaceSpawnPoint> spawns,
+            List<NaturalMapPlan.SurfaceLootContainer> caches,
+            NaturalMapPlan.BorderCenter center) {}
+
+    static final int TRANSLATION_STEP_BLOCKS = 48;
+    static final int TRANSLATION_MAX_RINGS = 7;
+    static final int TRANSLATION_MAX_SCREENED = 80;
+    static final int TRANSLATION_MAX_SEARCHED = 6;
+
+    static List<int[]> translationCandidates(NaturalMapPlan plan) {
+        int minX = Integer.MAX_VALUE;
+        int maxX = Integer.MIN_VALUE;
+        int minZ = Integer.MAX_VALUE;
+        int maxZ = Integer.MIN_VALUE;
+        List<NaturalMapPlan.SurfaceColumn> columns = new ArrayList<>();
+        plan.spawns().forEach(spawn -> columns.add(spawn.column()));
+        plan.lootContainers().forEach(container -> columns.add(container.column()));
+        for (NaturalMapPlan.SurfaceColumn column : columns) {
+            minX = Math.min(minX, column.x());
+            maxX = Math.max(maxX, column.x());
+            minZ = Math.min(minZ, column.z());
+            maxZ = Math.max(maxZ, column.z());
+        }
+        int margin = CACHE_SEARCH_RING_RADIUS_BLOCKS;
+        List<int[]> candidates = new ArrayList<>();
+        candidates.add(new int[] {0, 0});
+        for (int ring = 1; ring <= TRANSLATION_MAX_RINGS; ring++) {
+            List<int[]> ringTranslations = new ArrayList<>();
+            for (int a = -ring; a <= ring; a++) {
+                for (int b = -ring; b <= ring; b++) {
+                    if (Math.max(Math.abs(a), Math.abs(b)) != ring) {
+                        continue;
+                    }
+                    int dx = a * TRANSLATION_STEP_BLOCKS;
+                    int dz = b * TRANSLATION_STEP_BLOCKS;
+                    boolean fits = minX + dx - margin >= 0 && minZ + dz - margin >= 0
+                            && maxX + dx + margin < plan.footprint().width()
+                            && maxZ + dz + margin < plan.footprint().depth();
+                    if (fits) {
+                        ringTranslations.add(new int[] {dx, dz});
+                    }
+                }
+            }
+            ringTranslations.sort(java.util.Comparator
+                    .comparingInt((int[] value) -> value[0] * value[0] + value[1] * value[1])
+                    .thenComparingInt(value -> value[0])
+                    .thenComparingInt(value -> value[1]));
+            candidates.addAll(ringTranslations);
+        }
+        return candidates;
+    }
+
+    private static Formation translated(NaturalMapPlan plan, int dx, int dz) {
+        List<NaturalMapPlan.SurfaceSpawnPoint> spawns = plan.spawns().stream()
+                .map(spawn -> new NaturalMapPlan.SurfaceSpawnPoint(spawn.seat(),
+                        new NaturalMapPlan.SurfaceColumn(spawn.column().x() + dx, spawn.column().z() + dz)))
+                .toList();
+        List<NaturalMapPlan.SurfaceLootContainer> caches = plan.lootContainers().stream()
+                .map(container -> new NaturalMapPlan.SurfaceLootContainer(
+                        new NaturalMapPlan.SurfaceColumn(container.column().x() + dx, container.column().z() + dz),
+                        container.inventory()))
+                .toList();
+        NaturalMapPlan.BorderCenter center = plan.borderCenter();
+        return new Formation(dx, dz, spawns, caches,
+                new NaturalMapPlan.BorderCenter(center.x() + dx, center.z() + dz));
+    }
+
+    private static boolean landColumn(SurfaceAccess world, NaturalMapPlan.SurfaceColumn column) {
+        try {
+            BlockState top = world.blockAt(resolveTerrainSurface(world, column));
+            return !top.liquid() && top.sturdyTop();
+        } catch (IllegalStateException outside) {
+            return false;
+        }
+    }
+
+    private static boolean screens(Formation formation, SurfaceAccess world) {
+        for (NaturalMapPlan.SurfaceSpawnPoint spawn : formation.spawns()) {
+            if (!landColumn(world, spawn.column())) {
+                return false;
+            }
+        }
+        for (NaturalMapPlan.SurfaceLootContainer cache : formation.caches()) {
+            if (!landColumn(world, cache.column())) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     static ResolvedWorld resolveWorld(
             NaturalMapPlan plan,
             SurfaceAccess world,
@@ -131,43 +225,72 @@ final class NaturalWorldSetup {
             double initialBorderRadiusBlocks,
             boolean placeCaches) {
         int halo = Math.max(0, viewDistanceChunks) * 16;
-        List<MapPlan.LootContainer> loot = searchCaches(plan, world, materials,
-                Math.min(CACHE_SEARCH_RING_RADIUS_BLOCKS, halo), initialBorderRadiusBlocks);
-        Set<NaturalMapPlan.SurfaceColumn> cacheColumns = loot.stream()
-                .map(container -> new NaturalMapPlan.SurfaceColumn(container.position().x(), container.position().z()))
-                .collect(Collectors.toSet());
-        List<MapPlan.SpawnPoint> spawns = searchSpawns(plan, world, materials,
-                Math.min(SEARCH_RING_RADIUS_BLOCKS, halo), initialBorderRadiusBlocks, cacheColumns);
-        if (placeCaches) {
-            for (int index = 0; index < loot.size(); index++) {
-                List<Material> items = loot.get(index).inventory().stream()
-                        .map(resourceId -> ArenaChunkGenerator.requireItemMaterial(resourceId, materials))
-                        .toList();
-                world.placeLootChest(loot.get(index).position(), items);
+        List<String> attempts = new ArrayList<>();
+        int screened = 0;
+        int searched = 0;
+        for (int[] translation : translationCandidates(plan)) {
+            boolean identity = translation[0] == 0 && translation[1] == 0;
+            Formation formation = identity ? translated(plan, 0, 0) : translated(plan, translation[0], translation[1]);
+            if (!identity) {
+                if (screened >= TRANSLATION_MAX_SCREENED || searched >= TRANSLATION_MAX_SEARCHED) {
+                    break;
+                }
+                screened++;
+                if (!screens(formation, world)) {
+                    continue;
+                }
             }
-            world.setWorldSpawn(spawns.getFirst().position());
+            searched++;
+            try {
+                List<MapPlan.LootContainer> loot = searchCaches(plan, formation, world, materials,
+                        Math.min(CACHE_SEARCH_RING_RADIUS_BLOCKS, halo), initialBorderRadiusBlocks);
+                Set<NaturalMapPlan.SurfaceColumn> cacheColumns = loot.stream()
+                        .map(container -> new NaturalMapPlan.SurfaceColumn(
+                                container.position().x(), container.position().z()))
+                        .collect(Collectors.toSet());
+                List<MapPlan.SpawnPoint> spawns = searchSpawns(plan, formation, world, materials,
+                        Math.min(SEARCH_RING_RADIUS_BLOCKS, halo), initialBorderRadiusBlocks, cacheColumns);
+                if (placeCaches) {
+                    for (int index = 0; index < loot.size(); index++) {
+                        List<Material> items = loot.get(index).inventory().stream()
+                                .map(resourceId -> ArenaChunkGenerator.requireItemMaterial(resourceId, materials))
+                                .toList();
+                        world.placeLootChest(loot.get(index).position(), items);
+                    }
+                    world.setWorldSpawn(spawns.getFirst().position());
+                }
+                String recipe = BOUNDED_SEARCH_RECIPE + ";translation=" + formation.translationX() + ","
+                        + formation.translationZ();
+                return new ResolvedWorld(spawns, loot, recipe, worldIdentity(plan, recipe, spawns, loot),
+                        formation.center());
+            } catch (IllegalStateException failed) {
+                attempts.add("translation (" + translation[0] + "," + translation[1] + "): " + failed.getMessage());
+            }
         }
-        return new ResolvedWorld(spawns, loot, BOUNDED_SEARCH_RECIPE,
-                worldIdentity(plan, BOUNDED_SEARCH_RECIPE, spawns, loot));
+        String first = attempts.isEmpty() ? "no translation passed the land screen" : attempts.getFirst();
+        throw new IllegalStateException("natural world resolution failed after " + searched + " searched and "
+                + screened + " screened formation translations (step " + TRANSLATION_STEP_BLOCKS + "); first: "
+                + first);
     }
 
     private static List<MapPlan.LootContainer> searchCaches(
             NaturalMapPlan plan,
+            Formation formation,
             SurfaceAccess world,
             ArenaChunkGenerator.MaterialCatalog materials,
             int searchRadius,
             double borderRadius) {
-        Set<NaturalMapPlan.SurfaceColumn> spawnColumns = plan.spawns().stream()
+        Set<NaturalMapPlan.SurfaceColumn> spawnColumns = formation.spawns().stream()
                 .map(NaturalMapPlan.SurfaceSpawnPoint::column)
                 .collect(Collectors.toSet());
-        List<MapPlan.LootContainer> chosen = new ArrayList<>(plan.lootContainers().size());
+        List<MapPlan.LootContainer> chosen = new ArrayList<>(formation.caches().size());
         Set<MapPlan.Position> chosenPositions = new HashSet<>();
         List<String> failures = new ArrayList<>();
-        for (NaturalMapPlan.SurfaceLootContainer container : plan.lootContainers()) {
+        for (NaturalMapPlan.SurfaceLootContainer container : formation.caches()) {
             Map<String, Integer> rejections = new LinkedHashMap<>();
             MapPlan.Position found = null;
             List<NaturalMapPlan.SurfaceColumn> candidates = searchCandidates(
-                    container.column(), plan.footprint(), plan.borderCenter(), searchRadius, borderRadius);
+                    container.column(), plan.footprint(), formation.center(), searchRadius, borderRadius);
             for (NaturalMapPlan.SurfaceColumn candidate : candidates) {
                 String rejection = null;
                 MapPlan.Position position = null;
@@ -311,18 +434,19 @@ final class NaturalWorldSetup {
 
     private static List<MapPlan.SpawnPoint> searchSpawns(
             NaturalMapPlan plan,
+            Formation formation,
             SurfaceAccess world,
             ArenaChunkGenerator.MaterialCatalog materials,
             int searchRadius,
             double borderRadius,
             Set<NaturalMapPlan.SurfaceColumn> cacheColumns) {
-        List<MapPlan.SpawnPoint> chosen = new ArrayList<>(plan.spawns().size());
+        List<MapPlan.SpawnPoint> chosen = new ArrayList<>(formation.spawns().size());
         List<String> failures = new ArrayList<>();
-        for (NaturalMapPlan.SurfaceSpawnPoint spawn : plan.spawns()) {
+        for (NaturalMapPlan.SurfaceSpawnPoint spawn : formation.spawns()) {
             Map<String, Integer> rejections = new LinkedHashMap<>();
             MapPlan.SpawnPoint found = null;
             MapPlan.SpawnPoint cliffFallback = null;
-            List<NaturalMapPlan.SurfaceColumn> candidates = searchCandidates(spawn.column(), plan.footprint(), plan.borderCenter(), searchRadius, borderRadius);
+            List<NaturalMapPlan.SurfaceColumn> candidates = searchCandidates(spawn.column(), plan.footprint(), formation.center(), searchRadius, borderRadius);
             for (NaturalMapPlan.SurfaceColumn candidate : candidates) {
                 String rejection = cacheColumns.contains(candidate) ? "cache-column" : null;
                 MapPlan.Position feet = null;

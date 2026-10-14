@@ -114,6 +114,7 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
     private WorldPlan generationPlan;
     private List<MapPlan.SpawnPoint> resolvedSpawns = List.of();
     private List<MapPlan.LootContainer> resolvedLootContainers = List.of();
+    private NaturalMapPlan.BorderCenter resolvedBorderCenter;
     private ArenaChunkGenerator chunkGenerator;
     private ControlSession controlSession;
     private String runId;
@@ -548,6 +549,7 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
                         prepare.initialBorderDiameterBlocks() / 2.0, loadedCheckpoint == null);
                 resolvedSpawns = resolved.spawns();
                 resolvedLootContainers = resolved.lootContainers();
+                resolvedBorderCenter = resolved.borderCenter();
                 if (loadedCheckpoint == null) {
                     naturalWorldIdentity = resolved.worldIdentity();
                 }
@@ -557,6 +559,7 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
                         message.length() > 1000 ? message.substring(0, 1000) : message, unresolvable);
             }
             getLogger().info("ARENA_NATURAL_WORLD|recipe=" + NaturalWorldSetup.BOUNDED_SEARCH_RECIPE
+                    + "|border_center=" + resolvedBorderCenter.x() + "," + resolvedBorderCenter.z()
                     + "|world_identity=" + naturalWorldIdentity
                     + "|spawns=" + resolvedSpawns.stream()
                             .map(spawn -> spawn.seat() + ":" + spawn.position().x() + "," + spawn.position().z())
@@ -628,7 +631,9 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
             WorldBorder worldBorder = world.getWorldBorder();
             WorldPlan.Footprint dimensions = generationPlan.footprint();
             if (generationPlan instanceof NaturalMapPlan naturalPlan) {
-                NaturalMapPlan.BorderCenter center = naturalPlan.borderCenter();
+                NaturalMapPlan.BorderCenter center = resolvedBorderCenter != null
+                        ? resolvedBorderCenter
+                        : naturalPlan.borderCenter();
                 worldBorder.setCenter(center.x(), center.z());
             } else {
                 worldBorder.setCenter(dimensions.width() / 2.0, dimensions.depth() / 2.0);
@@ -676,7 +681,8 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
             ControlProtocol.PrepareRules rules = preparedMatch.rules().get();
             if (rules instanceof ControlProtocol.FrontierSurvivalRules frontier) {
                 NaturalMapPlan natural = (NaturalMapPlan) generationPlan;
-                frontierEdits = new FrontierEdits(natural.borderCenter(), frontier,
+                frontierEdits = new FrontierEdits(
+                        resolvedBorderCenter != null ? resolvedBorderCenter : natural.borderCenter(), frontier,
                         resolvedLootContainers.stream().map(MapPlan.LootContainer::position)
                                 .collect(java.util.stream.Collectors.toSet()));
             } else {
