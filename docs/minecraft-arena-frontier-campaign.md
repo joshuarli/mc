@@ -1,6 +1,6 @@
 # Arena Frontier: from a six-bot experiment to competitive worlds
 
-**Status:** resumed 2026-10-14. Active priorities: bot quality and UHC-style duel training (Priority override). Integration branch `campaign/frontier`. Q-trapped is merged offline. In flight: Q-engage, D-rules, D-ladder. Q-resilience waits on Q-engage (`skills.ts`). D-pool and D-skills wait on the strike rewrite. Written against `master` at `f479b16` (2026-10-14). It supersedes the earlier agent campaign plans, which G0 deleted.
+**Status:** resumed 2026-10-14. Active priorities: bot quality and UHC-style duel training (Priority override). Integration branch `campaign/frontier`. Q-trapped and D-ladder are merged offline. In flight: Q-engage, D-rules. Q-resilience waits on Q-engage (`skills.ts`). D-pool and D-skills wait on the strike rewrite. `--opponent pool` stays rejected until D-pool. Written against `master` at `f479b16` (2026-10-14). It supersedes the earlier agent campaign plans, which G0 deleted.
 
 ## Priority override (2026-10-14, owner)
 
@@ -41,9 +41,9 @@ Merged means on `campaign/frontier` and verified at least offline. Partial and p
 | State | Items |
 |---|---|
 | Merged and live-verified | G0, G1, G2 (baseline recorded), S1, S2, M0, M1 (melee curriculum), M2 (ranged curriculum), K1 plugin and runner (`checkpoint-resume` live), Q0, Q-loop |
-| Merged, offline only or partly live | R1b (rules sent by the runner; no live run uses a rule mode), S3/S3a, S4–S7, S8/S8b, S9, S10, S11, S13, M3, M3a, L1a, R2, R3, L1, B1, Q1 (v5 set), `steadyMeleeEngagement`, Q-trapped |
+| Merged, offline only or partly live | R1b (rules sent by the runner; no live run uses a rule mode), S3/S3a, S4–S7, S8/S8b, S9, S10, S11, S13, M3, M3a, L1a, R2, R3, L1, B1, Q1 (v5 set), `steadyMeleeEngagement`, Q-trapped, D-ladder (`./arena duel`; `--opponent pool` rejected) |
 | Partial / parked | C0 (craft defect), M4 (`curriculum-survival` unrun, calibration unmeasured), R1/R1c (`external-seat` row 1), S12 (seed matrix incomplete), Q1 (live comparison mixed) |
-| Not started | Q-engage, Q-resilience, D-rules, D-pool, D-ladder, D-skills, D-train, Q2, C1–C5, H-SRV/MECH/RUN/CIV, O1, L2, Z1 |
+| Not started | Q-engage, Q-resilience, D-rules, D-pool, D-skills, D-train, Q2, C1–C5, H-SRV/MECH/RUN/CIV, O1, L2, Z1 |
 
 ## Handoff (paused 2026-10-14, second pause)
 
@@ -502,6 +502,7 @@ Do not spend a research phase rediscovering launchers, server replacements, bot 
 - 2026-10-14 quality sprint: Q0 baseline, Q-loop, policy-v5/improved, S11/S13 spawn fixes merged; melee engage rewrite planned not implemented; second pause at owner request.
 - 2026-10-14 resumed: wave is Q-engage (`campaign/frontier-engage`), D-rules (`campaign/frontier-duel-rules`), D-ladder (`campaign/frontier-duel-ladder`), Q-trapped (`campaign/frontier-trapped`). Worktrees under `.work/wt/frontier-*`. Q-resilience waits on Q-engage because both edit `skills.ts`. D-pool and D-skills wait for the same reason. D-ladder does not depend on the `uhc_duel` kind; it accepts any two-seat hunger scenario until D-rules merges.
 - 2026-10-14 Q-trapped merged offline at `7707b16`. Compiled package tests 624/624, lint clean. Report shape adds `idle.trapped_ticks` and `idle.max_trapped_span_ticks` and a `trapped` column. Not live-checked.
+- 2026-10-14 D-ladder merged offline at `96c7f5a`. `./arena duel` plans both seat assignments, scores with the league seed-cluster `tInterval`, and records run ids. `--opponent pool` is `duel_opponent_pool_unavailable` until D-pool. Engagement omits swings, time in reach, heals, bow shots, bow hits, and first strike. Compiled package tests 627/627, lint clean. Not live-checked.
 
 ## 13. For the owner afterwards
 
