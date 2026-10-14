@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { constants as osConstants } from 'node:os';
 import { randomBytes } from 'node:crypto';
-import { access, link as linkFile, lstat, mkdir, mkdtemp, readFile, readlink, readdir, rename, rm, symlink, truncate, unlink, writeFile } from 'node:fs/promises';
+import { access, link as linkFile, lstat, mkdir, mkdtemp, readFile, readlink, readdir, rename, rm, symlink, unlink, writeFile } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
 import { setImmediate as nextTurn } from 'node:timers/promises';
 import { test } from 'node:test';
@@ -12,7 +12,6 @@ import {
   cloneOwnedTree,
   createOwnedDirectory,
   createRunDirectory,
-  inspectOwnedResources,
   listOwnedRuns,
   MAX_OWNED_FILE_BYTES,
   MAX_OWNED_TREE_BYTES,
@@ -55,73 +54,15 @@ function nativeFailure(category: string, relativePath?: Buffer,
     (sourceRelativePath === undefined || error.sourceRelativePath?.equals(sourceRelativePath) === true);
 }
 
-test('inspects owned resource bytes without following links and counts retained run directories', async () => {
-  await withOwnedRoot(async (root, rootText) => {
-    const arenaRoot = join(rootText, '.work/arena');
-    const runsRoot = join(arenaRoot, 'runs');
-    await mkdir(join(arenaRoot, 'bootstrap'), { recursive: true });
-    await mkdir(join(arenaRoot, 'traces'), { recursive: true });
-    await mkdir(join(arenaRoot, 'npm-workspace/node_modules/.bin'), { recursive: true });
-    await mkdir(join(runsRoot, 'run-one'), { recursive: true });
-    await mkdir(join(runsRoot, 'run-two'));
-    await writeFile(join(arenaRoot, 'download.bin'), Buffer.alloc(7));
-    await writeFile(join(arenaRoot, 'bootstrap/template.zip'), Buffer.alloc(11));
-    await writeFile(join(arenaRoot, 'traces/history.jsonl'), Buffer.alloc(13));
-    await writeFile(join(runsRoot, 'run-one/world.dat'), Buffer.alloc(17));
-    await writeFile(join(runsRoot, 'run-two/result.json'), Buffer.alloc(19));
-    await writeFile(join(runsRoot, 'not-a-run'), Buffer.alloc(23));
-
-    const externalFile = join(rootText, 'large-outside-file');
-    const externalDirectory = join(rootText, 'large-outside-directory');
-    await writeFile(externalFile, Buffer.alloc(4096));
-    await mkdir(externalDirectory);
-    await writeFile(join(externalDirectory, 'large'), Buffer.alloc(8192));
-    const dependencyLink = join(arenaRoot, 'npm-workspace/node_modules/.bin/runner');
-    const externalLink = join(arenaRoot, 'external-directory');
-    const runLink = join(runsRoot, 'linked-run');
-    await symlink(externalFile, dependencyLink);
-    await symlink(externalDirectory, externalLink, 'dir');
-    await symlink(externalDirectory, runLink, 'dir');
-
-    const dependencyLinkBytes = BigInt((await lstat(dependencyLink)).size);
-    const externalLinkBytes = BigInt((await lstat(externalLink)).size);
-    const runLinkBytes = BigInt((await lstat(runLink)).size);
-    const usage = await inspectOwnedResources({ helperPath, ownedRoot: root });
-
-    assert.equal(usage.workBytes,
-      7n + 11n + 13n + 17n + 19n + 23n + dependencyLinkBytes + externalLinkBytes + runLinkBytes);
-    assert.equal(usage.dependencyBytes, 7n + 11n + dependencyLinkBytes + externalLinkBytes);
-    assert.equal(usage.runCount, 2);
-    assert.equal(typeof usage.freeBytes, 'bigint');
-    assert.equal(usage.freeBytes > 0n, true);
-  });
-});
-
-test('reports zero owned usage when the optional arena root is missing', async () => {
+test('creates runs after the previous ten-run storage threshold', async () => {
   await withOwnedRoot(async (root) => {
-    const usage = await inspectOwnedResources({ helperPath, ownedRoot: root });
-    assert.equal(usage.workBytes, 0n);
-    assert.equal(usage.dependencyBytes, 0n);
-    assert.equal(usage.runCount, 0);
-    assert.equal(usage.freeBytes > 0n, true);
-  });
-});
-
-test('fails the owned resource scan when its depth or byte bound is exceeded', async () => {
-  await withOwnedRoot(async (root, rootText) => {
-    const arenaRoot = join(rootText, '.work/arena');
-    const nestedPath = Array.from({ length: 65 }, (_, index) => `depth-${index}`).join('/');
-    await mkdir(join(arenaRoot, nestedPath), { recursive: true });
-    await assert.rejects(inspectOwnedResources({ helperPath, ownedRoot: root }), nativeFailure('too_large'));
-  });
-
-  await withOwnedRoot(async (root, rootText) => {
-    const arenaRoot = join(rootText, '.work/arena');
-    await mkdir(arenaRoot, { recursive: true });
-    const sparsePath = join(arenaRoot, 'sparse-overflow.bin');
-    await writeFile(sparsePath, Buffer.alloc(0));
-    await truncate(sparsePath, 64 * 1024 * 1024 * 1024 + 1);
-    await assert.rejects(inspectOwnedResources({ helperPath, ownedRoot: root }), nativeFailure('too_large'));
+    for (let index = 0; index < 11; index += 1) {
+      await createRunDirectory({
+        helperPath,
+        ownedRoot: root,
+        relativePath: Buffer.from(`.work/arena/runs/run-${String(index).padStart(2, '0')}`),
+      });
+    }
   });
 });
 
@@ -130,7 +71,11 @@ test('rejects a symlink in the fixed work-root path', async () => {
     const externalDirectory = join(rootText, 'external-work');
     await mkdir(externalDirectory);
     await symlink(externalDirectory, join(rootText, '.work'), 'dir');
-    await assert.rejects(inspectOwnedResources({ helperPath, ownedRoot: root }), nativeFailure('symlink_rejected'));
+    await assert.rejects(createRunDirectory({
+      helperPath,
+      ownedRoot: root,
+      relativePath: Buffer.from('.work/arena/runs/run-linked'),
+    }), nativeFailure('symlink_rejected'));
   });
 });
 

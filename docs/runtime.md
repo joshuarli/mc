@@ -12,7 +12,7 @@ Optional `spectatorMode` defaults to `automated`. `reserveExternalSlot` starts o
 
 The CLI applies a 180 second cold-start deadline, a 60 second per-server readiness deadline, and a wall deadline of 600 seconds for Hunger Games or 1,200 seconds for Civilization. The runtime derives that limit from the validated scenario mode and arms it before server preparation; it remains active through match execution and cleanup. Deadlines fail with a structured runtime timeout. Cleanup preserves the initiating error and reports cleanup failure separately. An interrupted run retains its structured failure artifact and any completed trace checkpoints; cancellation does not invent a terminal outcome. A genuine operator-abort outcome may be emitted during cleanup after cancellation when backed by its preceding recorded runner operator-abort command and independently validated authority events; it cannot be replaced by a winner, draw, or fabricated outcome.
 
-The resource monitor aborts when combined owned RSS exceeds 8 GiB, process-available memory falls below 4 GiB, or swap-outs increase. Swap-in-only activity is permitted; both system-wide counters remain in opt-in samples. These counters do not identify which process caused the activity. Live admission reserves 8 GiB available memory and checks stable swap-outs before launch.
+The runner does not poll host memory or swap and has no run-count, free-space, or aggregate work-tree admission gate. Acceptance reports mark host resource measurements unavailable. Operating-system failures remain visible when an actual read, write, process start, or allocation fails.
 
 ## Integration selectors
 
@@ -51,7 +51,7 @@ Registered path searches detach returned `Move` nodes and action arrays from ASt
 
 Checkpoints at 200, 400, and subsequent decision counts are ordered beside the recorded decisions. The checkpoint watermark counts recorded observations and decisions, rather than completed effects. A skill still running at a checkpoint has no completed effect in that segment. Its real outcome may appear in a later segment, including after the authoritative outcome during shutdown.
 
-Internal acceptance evaluators may provide `onPolicyActivity` and `onResourceSample` callbacks. Decision timing measures from the runtime's receipt of a public clock through acceptance, separately from action execution and cleanup settlement. Action samples identify the initiating decision, report a null start time for reservations that never execute, and describe thrown failures separately from skill outcomes. Callbacks receive diagnostic events and cannot add policy observations. Callback errors fail the run.
+Internal acceptance evaluators may provide `onPolicyActivity`. Decision timing measures from the runtime's receipt of a public clock through acceptance, separately from action execution and cleanup settlement. Action samples identify the initiating decision, report a null start time for reservations that never execute, and describe thrown failures separately from skill outcomes. Callbacks receive diagnostic events and cannot add policy observations. Callback errors fail the run.
 
 
 ## Civilization adapter

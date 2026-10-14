@@ -5,7 +5,6 @@ import {
   inventorySlot, observationSequence, tick, unknownKnowledge, type SkillOutcome,
 } from "@arena/core";
 
-import { RunnerError } from "../../../packages/arena-runner/src/errors.js";
 import { failureCleanup } from "../../../packages/arena-runner/src/runtime/failures.js";
 import { eliminateOpponentWithSkillAttacks, runEvaluatorSkill, stageOpponentForCombat } from "./duel.js";
 import type { AcceptanceRunContext } from "./owned-run.js";
@@ -43,11 +42,9 @@ test("combat staging uses block navigation and verifies the exact arrival tile",
   assert.deepStrictEqual(requestedIntent, { kind: "navigateToBlock", target: destination });
 });
 
-test("evaluator skill cancellation preserves the initiating resource failure", async () => {
+test("evaluator skill cancellation preserves the initiating run failure", async () => {
   const controller = new AbortController();
-  const primary = new RunnerError("runtime_failure", "runtime resource monitor", {
-    kind: "system_swapping_detected", field: "swap_ins",
-  });
+  const primary = new Error("run aborted");
   const started = deferred<void>();
   const skill = deferred<SkillOutcome>();
   const observation = agentObservation({
@@ -85,7 +82,7 @@ test("evaluator skill cancellation preserves the initiating resource failure", a
 
 test("evaluator skill refuses to start after its signal is aborted", async () => {
   const controller = new AbortController();
-  const primary = new RunnerError("runtime_failure", "runtime resource monitor", { kind: "system_swapping_detected" });
+  const primary = new Error("run aborted");
   controller.abort(primary);
   let started = false;
   await assert.rejects(runEvaluatorSkill({ run: async () => {
@@ -101,14 +98,14 @@ test("evaluator skill leaves an unaborted failed outcome subject to the caller a
   const outcome = await runEvaluatorSkill({ run: async () => failed },
     { kind: "navigate", target: blockPosition(0, 64, 0) }, controller.signal);
   assert.strictEqual(outcome, failed);
-  const primary = new RunnerError("runtime_failure", "runtime resource monitor", { kind: "system_swapping_detected" });
+  const primary = new Error("run aborted");
   assert.throws(() => assert.deepStrictEqual(outcome, { kind: "succeeded" }), (error: unknown) =>
     error instanceof assert.AssertionError && failureCleanup(error, primary).status === "failed");
 });
 
 test("evaluator skill preserves an independent operation rejection even after signal abortion", async () => {
   const controller = new AbortController();
-  const primary = new RunnerError("runtime_failure", "runtime resource monitor", { kind: "system_swapping_detected" });
+  const primary = new Error("run aborted");
   const assertion = new assert.AssertionError({ message: "skill operation failed independently" });
   const started = deferred<void>();
   let reject!: (error: unknown) => void;

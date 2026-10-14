@@ -100,7 +100,6 @@ verify_node() {
 prepare_node() {
     node_version=$(locked_section_value node version)
     npm_version=$(locked_section_value node npm_version)
-    download_limit=$(locked_section_number limits max_download_bytes)
     case "$(uname -s):$(uname -m)" in
         Darwin:arm64) platform=macos_arm64 ;;
         Linux:x86_64) platform=linux_x86_64 ;;
@@ -122,7 +121,6 @@ prepare_node() {
         "https://nodejs.org/dist/v$node_version/"*) ;;
         *) fail "Node URL is not under its official pinned release directory" ;;
     esac
-    [ "$archive_size" -le "$download_limit" ] || fail "locked Node archive exceeds the download limit in versions.lock.toml"
 
     download_root="$root/.work/arena/downloads"
     ensure_work_directory "$download_root"
@@ -133,7 +131,7 @@ prepare_node() {
     fi
     if [ ! -f "$archive_path" ]; then
         download_tmp=$(mktemp "$download_root/.node.XXXXXXXX") || fail "create Node download staging file"
-        curl --fail --location --proto '=https' --tlsv1.2 --max-filesize "$download_limit" \
+        curl --fail --location --proto '=https' --tlsv1.2 \
             --output "$download_tmp" "$archive_url" || fail "download locked Node archive"
         actual_size=$(wc -c < "$download_tmp" | awk '{ print $1 }')
         [ "$actual_size" = "$archive_size" ] || fail "Node archive size mismatch: expected $archive_size bytes, got $actual_size"
@@ -247,7 +245,6 @@ prepare_jdk() {
     export GRADLE_USER_HOME
     jdk_version=$(locked_section_value java version)
     runtime_build=$(locked_section_value java runtime_build)
-    download_limit=$(locked_section_number limits max_download_bytes)
     case "$(uname -s):$(uname -m)" in
         Darwin:arm64) platform=macos_arm64 ;;
         Linux:x86_64) platform=linux_x86_64 ;;
@@ -269,7 +266,6 @@ prepare_jdk() {
         https://github.com/adoptium/temurin25-binaries/releases/download/*) ;;
         *) fail "JDK URL is not an official Temurin release URL" ;;
     esac
-    [ "$archive_size" -le "$download_limit" ] || fail "locked JDK archive exceeds the download limit in versions.lock.toml"
 
     download_root="$root/.work/arena/downloads"
     ensure_work_directory "$download_root"
@@ -280,7 +276,7 @@ prepare_jdk() {
     fi
     if [ ! -f "$archive_path" ]; then
         download_tmp=$(mktemp "$download_root/.jdk.XXXXXXXX") || fail "create JDK download staging file"
-        curl --fail --location --proto '=https' --tlsv1.2 --max-filesize "$download_limit" \
+        curl --fail --location --proto '=https' --tlsv1.2 \
             --output "$download_tmp" "$archive_url" || fail "download locked Temurin JDK archive"
         actual_size=$(wc -c < "$download_tmp" | awk '{ print $1 }')
         [ "$actual_size" = "$archive_size" ] || fail "JDK archive size mismatch: expected $archive_size bytes, got $actual_size"
@@ -402,7 +398,6 @@ ensure_paper_artifact() {
     paper_url=$(locked_value server_url)
     expected_sha=$(locked_value server_sha256)
     expected_size=$(awk -F ' = ' '$1 == "server_size_bytes" { print $2; matches++ } END { if (matches != 1) exit 1 }' "$root/versions.lock.toml") || fail "versions.lock.toml must contain one server_size_bytes"
-    download_limit=$(locked_section_number limits max_download_bytes)
     case "$paper_file" in
         /*|*".."*) fail "unsafe Paper filename in versions.lock.toml" ;;
     esac
@@ -410,7 +405,6 @@ ensure_paper_artifact() {
         https://fill-data.papermc.io/*) ;;
         *) fail "Paper URL is not an official Fill artifact URL" ;;
     esac
-    [ "$expected_size" -le "$download_limit" ] || fail "locked Paper artifact exceeds the download limit in versions.lock.toml"
 
     download_root="$root/.work/arena/downloads"
     paper_path="$download_root/$paper_file"
@@ -421,7 +415,7 @@ ensure_paper_artifact() {
     fi
     if [ ! -f "$paper_path" ]; then
         download_tmp=$(mktemp "$download_root/.paper.XXXXXXXX") || fail "create Paper download staging file"
-        curl --fail --location --proto '=https' --tlsv1.2 --max-filesize "$download_limit" \
+        curl --fail --location --proto '=https' --tlsv1.2 \
             -H 'User-Agent: Arena/0.1 (dankmeme133769@proton.me)' \
             --output "$download_tmp" "$paper_url" || fail "download locked Paper artifact"
         actual_size=$(wc -c < "$download_tmp" | awk '{ print $1 }')

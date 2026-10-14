@@ -57,7 +57,6 @@ import type {
 } from './types.js';
 import { startOwnedServerProcess } from './process.js';
 import type { OwnedServerProcess, ServerProcessExit } from './process.js';
-import { startOwnedResourceMonitor, type OwnedResourceMonitor, type ResourceMonitorSampleEvent } from './resource-monitor.js';
 import type { OperationalFailurePrimaryV1 } from './failure-artifact.js';
 import { TextDecoder } from 'node:util';
 import { waitForExternalPlayer } from './external-player-gate.js';
@@ -92,7 +91,6 @@ export interface RunPreparedRunOptions {
   readonly spectatorMode?: RuntimeSpectatorMode;
   readonly waitForExternalPlayer?: true;
   readonly onPolicyActivity?: (event: PolicyActivityEvent) => void;
-  readonly onResourceSample?: (event: ResourceMonitorSampleEvent) => void;
   readonly onRosterReady?: (details: Readonly<{
     host: typeof CLIENT_HOST;
     port: typeof GAME_PORT;
@@ -128,7 +126,6 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
   let listener: ControlListenerLease | undefined;
   let session: ControlSession | undefined;
   let serverProcess: OwnedServerProcess | undefined;
-  let resourceMonitor: ObservedResourceMonitor | undefined;
   let trace: RuntimeTraceBuilder | undefined;
   let coordinator: ControlCoordinator | undefined;
   let clients: readonly RuntimeCompetitorClient[] = [];
@@ -227,11 +224,7 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
       capabilities: CONTROL_CAPABILITIES,
     });
     serverProcess = await startPaper(options, serverInputs, listener.address.port, token, runSignal);
-    resourceMonitor = observeResourceMonitor(await startOwnedResourceMonitor({
-      javaPid: serverProcess.pid,
-      ...(options.onResourceSample === undefined ? {} : { onSample: options.onResourceSample }),
-    }));
-    const processFailure = unexpectedExit(serverProcess, resourceMonitor.failure);
+    const processFailure = unexpectedExit(serverProcess);
     session = await withStartupTimeout(
       listener.accept(runSignal),
       processFailure,
@@ -389,8 +382,6 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
     if (clientFailure !== undefined) throw clientFailure;
 
     await closeClients(clients, spectators);
-    await stopResourceMonitor(resourceMonitor);
-    resourceMonitor = undefined;
     const exit = await serverProcess.shutdown();
     assertSuccessfulExit(exit);
     await session.close();
@@ -424,7 +415,6 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
       listener,
       session,
       process: serverProcess,
-      resourceMonitor,
       trace,
       primaryFailure,
       clients,
@@ -729,7 +719,6 @@ async function createBootstrapWorld(options: Readonly<{
     capabilities: CONTROL_CAPABILITIES,
   });
   let server: OwnedServerProcess | undefined;
-  let resourceMonitor: ObservedResourceMonitor | undefined;
   let session: ControlSession | undefined;
   let startupFailure: unknown;
   try {
@@ -741,27 +730,19 @@ async function createBootstrapWorld(options: Readonly<{
       options.signal,
       serverPath,
     );
-    resourceMonitor = observeResourceMonitor(await startOwnedResourceMonitor({
-      javaPid: server.pid,
-      ...(options.options.onResourceSample === undefined ? {} : { onSample: options.options.onResourceSample }),
-    }));
     session = await withStartupTimeout(
       listener.accept(options.signal),
-      unexpectedExit(server, resourceMonitor.failure),
+      unexpectedExit(server),
       options.abortPromise,
       options.leaseLost,
     );
     assertRuntimePluginIdentity(session.ready, options.pluginIdentity);
     assertRuntimePluginCapability(session.ready, requiredControlCapability(options.options.preparedRun.scenario.mode));
-    await stopResourceMonitor(resourceMonitor);
-    resourceMonitor = undefined;
     assertSuccessfulExit(await server.shutdown());
   } catch (error) {
     startupFailure = error;
   }
   let cleanupFailure: unknown;
-  try { await stopResourceMonitor(resourceMonitor, startupFailure); }
-  catch (error) { cleanupFailure ??= error; }
   try { await server?.shutdown(); } catch (error) { cleanupFailure ??= error; }
   try { await session?.close(); } catch (error) { cleanupFailure ??= error; }
   try { await listener.close(); } catch (error) { cleanupFailure ??= error; }
@@ -816,7 +797,6 @@ async function cleanupOwnedRun(options: Readonly<{
   listener: ControlListenerLease | undefined;
   session: ControlSession | undefined;
   process: OwnedServerProcess | undefined;
-  resourceMonitor: ObservedResourceMonitor | undefined;
   trace: RuntimeTraceBuilder | undefined;
   primaryFailure: RunnerError;
   clients: readonly RuntimeCompetitorClient[];
@@ -861,8 +841,6 @@ async function cleanupOwnedRun(options: Readonly<{
   if (clientFailure !== undefined) {
     failure ??= cleanupErrorUnlessPrimary(clientFailure.reason, options.primaryFailure);
   }
-  try { await stopResourceMonitor(options.resourceMonitor, options.primaryFailure); }
-  catch (error) { failure ??= cleanupErrorUnlessPrimary(error, options.primaryFailure); }
   let processReaped = options.process === undefined;
   if (options.process !== undefined) {
     try {
@@ -906,36 +884,6 @@ function isAuthorityEvent(message: ControlMessage): message is RuntimeAuthorityE
     || message.type === 'elimination' || message.type === 'outcome';
 }
 
-interface ObservedResourceMonitor {
-  readonly monitor: OwnedResourceMonitor;
-  readonly failure: Promise<never>;
-  readonly error: RunnerError | undefined;
-}
-
-function observeResourceMonitor(monitor: OwnedResourceMonitor): ObservedResourceMonitor {
-  let error: RunnerError | undefined;
-  const failure = monitor.failure.then((failure) => {
-    error = failure;
-    throw failure;
-  });
-  void failure.catch(() => {});
-  return Object.freeze({
-    monitor,
-    failure,
-    get error() { return error; },
-  });
-}
-
-async function stopResourceMonitor(
-  monitor: ObservedResourceMonitor | undefined,
-  primaryFailure?: unknown,
-): Promise<void> {
-  if (monitor === undefined) return;
-  await monitor.monitor.stop();
-  await Promise.resolve();
-  if (cleanupErrorUnlessPrimary(monitor.error, primaryFailure) !== undefined) throw monitor.error;
-}
-
 async function processExitObserved(process: OwnedServerProcess): Promise<boolean> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
@@ -954,7 +902,7 @@ function failurePrimary(error: RunnerError): OperationalFailurePrimaryV1 {
   return Object.freeze({ category: error.category, resource: error.resource, source: error.source });
 }
 
-function unexpectedExit(process: OwnedServerProcess, resourceFailure: Promise<never>): Promise<never> {
+function unexpectedExit(process: OwnedServerProcess): Promise<never> {
   const outputFailure = process.fatalOutputError.then((error) => { throw error; });
   const exitFailure = process.exited.then((exit) => {
     throw new RunnerError('runtime_failure', 'Paper server', {
@@ -962,7 +910,7 @@ function unexpectedExit(process: OwnedServerProcess, resourceFailure: Promise<ne
       ...(exit.code === null ? {} : { field: String(exit.code) }),
     });
   });
-  return Promise.race([outputFailure, resourceFailure, exitFailure]);
+  return Promise.race([outputFailure, exitFailure]);
 }
 
 function withStartupTimeout<T>(

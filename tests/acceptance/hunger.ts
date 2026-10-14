@@ -11,7 +11,6 @@ import { readStoppedPlayerStatsFile } from "../../packages/arena-runner/src/runt
 import { runPreparedRun } from "../../packages/arena-runner/src/runtime/run.js";
 import { recordHungerGameplayEvidence, type HungerGameplayEvidence } from "./hunger-gameplay.js";
 import { createHungerRunMeasurements, type HungerRunMeasurementEvidence } from "./hunger-measurements.js";
-import { withHungerResourceDiagnostic } from "./hunger-resource-diagnostic.js";
 import { hasEliminatedSeatEvidence } from "./hunger-alive-state.js";
 import { prepareOwnedAcceptanceRun, inspectOwnedAcceptanceRun, type runOwnedAcceptanceScenario, type AcceptanceRunContext } from "../integration/support/owned-run.js";
 
@@ -42,12 +41,10 @@ test("hunger-six", { timeout: 2_700_000 }, async (t) => {
       `hunger-six-seed-${scenario.seed}`,
       t.signal,
     );
-    const completed = await withHungerResourceDiagnostic(
-      { ...prepared, seed: scenario.seed },
-      async (onResourceSample) => await runPreparedRun({
-        ...prepared,
-        competitorDriver: "baselinePolicy",
-        evaluate: async (active, signal) => {
+    const completed = await runPreparedRun({
+      ...prepared,
+      competitorDriver: "baselinePolicy",
+      evaluate: async (active, signal) => {
           assertCanonicalHungerScenario(active, scenario.seed);
           prepareSixBotRoster(active);
           const recorder = recordHungerGameplayEvidence(active, () => observedPolicyTick.value);
@@ -81,26 +78,19 @@ test("hunger-six", { timeout: 2_700_000 }, async (t) => {
           } finally {
             recorder.close();
           }
-        },
-        onPolicyActivity: (event) => {
-          if (event.kind === "decision") observedPolicyTick.value = event.tick;
-          measurements.onPolicyActivity(event);
-        },
-        onResourceSample: (event) => {
-          onResourceSample(event);
-          measurements.onResourceSample(event);
-        },
-      }),
-      stageOwnedFile,
-    );
+      },
+      onPolicyActivity: (event) => {
+        if (event.kind === "decision") observedPolicyTick.value = event.tick;
+        measurements.onPolicyActivity(event);
+      },
+    });
     const run = { ...completed, inspection: await inspectOwnedAcceptanceRun(completed.runId) };
-    // Runtime shutdown settles owned actions and emits the final resource sample before returning.
     measurementEvidence = measurements.snapshot();
 
     assert.equal(run.inspection.run_id, run.runId);
     assert.ok(run.outcome.kind === "winner" || run.outcome.kind === "draw", "seeded run must reach an ordinary outcome");
     assert.ok(gameplayEvidence, "the clients must retain live gameplay observations for each seed");
-    assert.ok(measurementEvidence, "the runner must retain bounded policy and resource observations for each seed");
+    assert.ok(measurementEvidence, "the runner must retain bounded policy observations for each seed");
     assert.ok(
       run.events.some((event) => event.type === "outcome" && event.payload.kind === run.outcome.kind),
       "the completed outcome must come from the authenticated event stream",
@@ -414,8 +404,6 @@ async function createHungerAcceptanceReport(input: Readonly<{
     seats: Object.freeze(seats),
     measurements: Object.freeze({
       active_boundary: input.measurements.activeBoundary,
-      resource_phase_assignment: "sample_start_time_relative_to_first_observed_active_clock",
-      resource_phase_scope: input.measurements.resourcePhaseScope,
       timing_metrics: input.measurements.timingMetrics,
       policy_by_seat: Object.freeze(Object.fromEntries(input.measurements.policyBySeat)),
       resources: input.measurements.resources,
@@ -664,9 +652,7 @@ function hungerTapSummary(report: HungerAcceptanceReport): Readonly<Record<strin
     })];
   }));
   const measurements = object(report.measurements, "run measurements must be an object");
-  const resources = object(measurements.resources, "resource evidence must be an object");
-  const startup = object(resources.startup, "startup resource evidence must be an object");
-  const active = object(resources.active, "active resource evidence must be an object");
+  const resources = object(measurements.resources, "resource monitoring status must be an object");
   const timingMetrics = object(measurements.timing_metrics, "timing metrics must be an object");
   return Object.freeze({
     schema: "hunger-acceptance-v1",
@@ -677,13 +663,7 @@ function hungerTapSummary(report: HungerAcceptanceReport): Readonly<Record<strin
     pvp_engagements: report.pvp_engagements,
     looted_seats: report.looted_seats,
     seats: Object.freeze(seats),
-    startup_resource_samples: startup.sampleCount,
-    active_resource_samples: active.sampleCount,
-    startup_peak_summed_rss_bytes: startup.peakSummedRssBytes,
-    active_peak_summed_rss_bytes: active.peakSummedRssBytes,
-    startup_resource_poll_interval_overshoot: startup.maximumResourcePollIntervalOvershoot,
-    active_resource_poll_interval_overshoot: active.maximumResourcePollIntervalOvershoot,
-    resource_phase_scope: measurements.resource_phase_scope,
+    resource_monitoring: resources,
     timing_metrics: timingMetrics,
   });
 }

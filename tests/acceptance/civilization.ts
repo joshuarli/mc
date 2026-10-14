@@ -43,7 +43,6 @@ export type CivilizationIntentEvidence = Intent | CivIntent;
 export type CivilizationAcceptanceOptions = Readonly<{
   readonly competitorDriver?: NonNullable<RunPreparedRunOptions["competitorDriver"]>;
   readonly onPolicyActivity?: RunPreparedRunOptions["onPolicyActivity"];
-  readonly onResourceSample?: RunPreparedRunOptions["onResourceSample"];
 }>;
 
 /** Runs one owned Civilization scenario with private census enabled only for its Paper child. */
@@ -82,7 +81,6 @@ export async function runOwnedCivilizationAcceptanceScenario(
       evaluate,
       competitorDriver: options.competitorDriver ?? "evaluator",
       ...(options.onPolicyActivity === undefined ? {} : { onPolicyActivity: options.onPolicyActivity }),
-      ...(options.onResourceSample === undefined ? {} : { onResourceSample: options.onResourceSample }),
     });
   } finally {
     if (previousJavaToolOptions === undefined) delete process.env.JAVA_TOOL_OPTIONS;

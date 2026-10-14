@@ -8,7 +8,6 @@ import { runCli } from '../src/index.js';
 import { runPreparedRun } from '../src/runtime/run.js';
 import { canonicalJson, sha256Json } from '../src/canonical.js';
 import { encodeControlEnvelope } from '../src/control/index.js';
-import { assertPrepareResourceCapacity } from '../src/prepare.js';
 import type { ControlMessage } from '../src/control/types.js';
 
 const repositoryRoot = process.cwd();
@@ -85,32 +84,6 @@ test('validate compiles a scenario, map, and policy without preparing a run', as
   } finally {
     if (previousHelper === undefined) delete process.env.ARENA_FS_HELPER;
     else process.env.ARENA_FS_HELPER = previousHelper;
-  }
-});
-
-test('prepare capacity limits accept their boundaries and reject excess resources', () => {
-  const gibibyte = 1024n * 1024n * 1024n;
-  const atLimits = {
-    freeBytes: 4n * gibibyte,
-    workBytes: 16n * gibibyte,
-    dependencyBytes: 8n * gibibyte,
-    runCount: 9,
-  };
-  assert.doesNotThrow(() => assertPrepareResourceCapacity(atLimits));
-
-  for (const [field, resources] of [
-    ['free_bytes', { ...atLimits, freeBytes: atLimits.freeBytes - 1n }],
-    ['work_bytes', { ...atLimits, workBytes: atLimits.workBytes + 1n }],
-    ['dependency_bytes', { ...atLimits, dependencyBytes: atLimits.dependencyBytes + 1n }],
-    ['run_count', { ...atLimits, runCount: 10 }],
-  ] as const) {
-    assert.throws(() => assertPrepareResourceCapacity(resources), (error: unknown) => {
-      assert.ok(error instanceof Error);
-      assert.equal((error as { category?: string }).category, 'runtime_failure');
-      assert.equal((error as { source?: { kind?: string; field?: string } }).source?.kind, 'resource_limit_exceeded');
-      assert.equal((error as { source?: { kind?: string; field?: string } }).source?.field, field);
-      return true;
-    });
   }
 });
 

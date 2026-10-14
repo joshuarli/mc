@@ -25,7 +25,7 @@ After C1 passes, run civilization-six and civilization-baseline before M2. H1 fo
 
 ## Capacity and make server
 
-The prior make server run-count error came from the ten-run cap. An intact archive of a stopped run opened one slot; native inspection now reports 9,308,422,381 work bytes, 7,011,638,677 dependency bytes, and nine runs. The target has not been started because it waits for an external player to join.
+The prior `make server` failure came from a ten-run cap and repeated work-tree capacity scan. Those gates and free-space, aggregate-byte, generic download-size, host memory, and swap thresholds are removed. A local run prepared its map, started Paper, connected six competitors and three automated spectators, and reached the external-player wait. I stopped it with Ctrl-C; the runner recorded structured cancellation, reaped Paper, and released port 25565. No external-client join or game outcome was observed. Host memory and swap measurements are unavailable.
 
 The make server feature reserves one of four spectator slots, starts six competitors and three automated spectators, and waits for an external player before match start. RunPreparedRunOptions gained the additive waitForExternalPlayer option. Cancellation and observer disconnects are handled. No external-client join has been verified.
 

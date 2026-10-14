@@ -3,14 +3,12 @@ import type { ResourceReference, ScenarioIr } from '@arena/spec';
 import { TextDecoder } from 'node:util';
 import {
   createRunDirectory,
-  inspectOwnedResources,
   MAX_WORLD_PLAN_BYTES,
   readOwnedFile,
   removeCreatedDirectory,
   removeCreatedFile,
   stageWorldPlan,
   type FileIdentity,
-  type OwnedResourceSnapshot,
   OwnedFilesError,
 } from './owned-files/index.js';
 import { RunnerError } from './errors.js';
@@ -19,11 +17,6 @@ import { encodeWorldPlanV1 } from './world-plan.js';
 const RUN_DIRECTORY_PREFIX = '.work/arena/runs/';
 const WORLD_PLAN_NAME = 'world-plan.json';
 const UTF8 = new TextDecoder('utf-8', { fatal: true });
-const GIBIBYTE = 1024n * 1024n * 1024n;
-const MIN_FREE_BYTES = 4n * GIBIBYTE;
-const MAX_WORK_BYTES = 16n * GIBIBYTE;
-const MAX_DEPENDENCY_BYTES = 8n * GIBIBYTE;
-const MAX_RETAINED_RUNS = 10;
 
 export interface PreparedRun {
   readonly runId: string;
@@ -75,18 +68,6 @@ export async function prepareRun(
 
   const runDirectoryPath = Buffer.from(`${RUN_DIRECTORY_PREFIX}${runId}`, 'utf8');
   const worldPlanPath = Buffer.concat([runDirectoryPath, Buffer.from(`/${WORLD_PLAN_NAME}`, 'utf8')]);
-  let resources: OwnedResourceSnapshot;
-  try {
-    resources = await inspectOwnedResources({
-      helperPath,
-      ownedRoot,
-      ...(signal === undefined ? {} : { signal }),
-    });
-  } catch (error) {
-    throw mapPrepareOwnedFilesError(error, 'run resource inspection', signal);
-  }
-  assertPrepareResourceCapacity(resources);
-
   let runDirectoryIdentity: FileIdentity;
   try {
     runDirectoryIdentity = await createRunDirectory({
@@ -282,29 +263,6 @@ function mapPrepareOwnedFilesError(
     return signal.reason;
   }
   return mapOwnedFilesError(error, resource, published);
-}
-
-/** Keeps new runs within explicit host-storage and retained-run bounds. */
-export function assertPrepareResourceCapacity(resources: OwnedResourceSnapshot): void {
-  if (resources.freeBytes < MIN_FREE_BYTES) {
-    throw prepareCapacityFailure('free_bytes');
-  }
-  if (resources.workBytes > MAX_WORK_BYTES) {
-    throw prepareCapacityFailure('work_bytes');
-  }
-  if (resources.dependencyBytes > MAX_DEPENDENCY_BYTES) {
-    throw prepareCapacityFailure('dependency_bytes');
-  }
-  if (resources.runCount >= MAX_RETAINED_RUNS) {
-    throw prepareCapacityFailure('run_count');
-  }
-}
-
-function prepareCapacityFailure(field: 'free_bytes' | 'work_bytes' | 'dependency_bytes' | 'run_count'): RunnerError {
-  return new RunnerError('runtime_failure', 'run resource capacity', {
-    kind: 'resource_limit_exceeded',
-    field,
-  });
 }
 
 function mapPrepareCleanupError(stageError: unknown, cleanupError: unknown, published: boolean): RunnerError {

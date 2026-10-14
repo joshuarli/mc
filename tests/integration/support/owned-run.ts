@@ -60,7 +60,6 @@ export async function runOwnedAcceptanceScenario(
   options: Readonly<{
     competitorDriver?: NonNullable<Parameters<typeof runPreparedRun>[0]["competitorDriver"]>;
     onPolicyActivity?: RunPreparedRunOptions["onPolicyActivity"];
-    onResourceSample?: RunPreparedRunOptions["onResourceSample"];
   }> = {},
 ) {
   const prepared = await prepareOwnedAcceptanceRun(scenarioPath, runId, signal);
@@ -69,7 +68,6 @@ export async function runOwnedAcceptanceScenario(
     evaluate,
     competitorDriver: options.competitorDriver ?? "baselinePolicy",
     ...(options.onPolicyActivity === undefined ? {} : { onPolicyActivity: options.onPolicyActivity }),
-    ...(options.onResourceSample === undefined ? {} : { onResourceSample: options.onResourceSample }),
   });
   const inspection = await inspectCompletedRun(prepared.helperPath, completed.runId);
   return { ...completed, inspection };

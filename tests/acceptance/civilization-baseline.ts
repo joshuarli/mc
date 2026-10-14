@@ -14,7 +14,7 @@ import {
   assertCivilizationPlacedPositionsPresent,
   parseCivilizationMaterialLog,
 } from "./civilization-material-evidence.js";
-import { createHungerRunMeasurements, type HungerResourcePhaseEvidence } from "./hunger-measurements.js";
+import { createHungerRunMeasurements } from "./hunger-measurements.js";
 import {
   assertCivilizationRoster,
   civilizationActionLayout,
@@ -105,7 +105,6 @@ test("civilization-baseline", { timeout: TEST_TIMEOUT_MS }, async (t) => {
         measurements.onPolicyActivity(event);
         activity.record(event);
       },
-      onResourceSample: measurements.onResourceSample,
     },
   );
 
@@ -145,14 +144,6 @@ test("civilization-baseline", { timeout: TEST_TIMEOUT_MS }, async (t) => {
 
   const resourceEvidence = measurements.snapshot();
   assert.equal(resourceEvidence.activeBoundary.status, "available");
-  assertResourceSamples(resourceEvidence.resources.startup, "startup");
-  assertResourceSamples(resourceEvidence.resources.active, "active");
-  const activeResources = resourceEvidence.resources.active;
-  assert.ok(activeResources.sampleCount > 0, "active resource phase must contain owned process samples");
-  const peakNodeRss = requireAvailable(activeResources.peakNodeRssBytes, "active Node RSS peak");
-  const peakJavaRss = BigInt(requireAvailable(activeResources.peakJavaRssBytes, "active Paper RSS peak"));
-  assert.ok(Number.isFinite(peakNodeRss) && peakNodeRss > 0, "active Node RSS must be an observed positive value");
-  assert.ok(peakJavaRss > 0n, "active Paper RSS must be an observed positive value");
 
   t.diagnostic(JSON.stringify({
     run_id: run.runId,
@@ -185,8 +176,7 @@ test("civilization-baseline", { timeout: TEST_TIMEOUT_MS }, async (t) => {
       final_placed_planks: finalCheckpoint.placedOakPlanks.length,
     },
     resources: {
-      startup: resourceEvidence.resources.startup,
-      active: activeResources,
+      monitoring: resourceEvidence.resources,
     },
   }));
 });
@@ -446,24 +436,10 @@ async function waitForCivilizationActive(active: AcceptanceRunContext, signal: A
   throw new Error("Civilization baseline did not reach its active phase within 30 seconds");
 }
 
-function assertResourceSamples(resource: HungerResourcePhaseEvidence, phase: string): void {
-  assert.equal(resource.failedSampleCount, 0, `${phase} resource samples must not fail`);
-  assert.equal(Object.values(resource.failureKinds).reduce((total, count) => total + count, 0), 0,
-    `${phase} resource sampling must not report failure kinds`);
-}
-
 function requiredSeat(activity: ReadonlyMap<number, SeatActivitySnapshot>, seat: number): SeatActivitySnapshot {
   const evidence = activity.get(seat);
   assert.ok(evidence, `policy evidence must contain configured seat ${seat}`);
   return evidence;
-}
-
-function requireAvailable<T>(
-  value: { readonly status: "available"; readonly value: T } | { readonly status: "unavailable"; readonly reason: string },
-  description: string,
-): T {
-  if (value.status !== "available") throw new Error(`${description} is unavailable: ${value.reason}`);
-  return value.value;
 }
 
 function parsePositionKey(key: string): BlockPosition {

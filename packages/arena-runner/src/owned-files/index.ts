@@ -75,7 +75,6 @@ type NativeOperation =
   | 'stage-world-plan'
   | 'stage-owned-file'
   | 'clone-owned-tree'
-  | 'inspect-owned-resources'
   | 'list-owned-runs'
   | 'remove-owned-run-tree'
   | 'hold-run-lease'
@@ -97,20 +96,9 @@ type NativeSuccess = Readonly<{
   device?: string;
   inode?: string;
   data?: string;
-  free_bytes?: string;
-  work_bytes?: string;
-  dependency_bytes?: string;
-  run_count?: number;
   runs?: unknown;
   run_device?: string;
   run_inode?: string;
-}>;
-
-export type OwnedResourceSnapshot = Readonly<{
-  freeBytes: bigint;
-  workBytes: bigint;
-  dependencyBytes: bigint;
-  runCount: number;
 }>;
 
 export type OwnedRunSnapshot = Readonly<{
@@ -1365,25 +1353,6 @@ export async function readOwnedFile(options: Readonly<{
   return (await readOwnedFileWithIdentity(options)).contents;
 }
 
-function resourceByteCount(value: unknown, field: string): bigint {
-  if (typeof value !== 'string' || value.length > 20 || !/^(?:0|[1-9][0-9]*)$/.test(value)) {
-    throw new OwnedFilesError({
-      message: `native inspect-owned-resources result has invalid ${field}`,
-      category: 'protocol_error',
-      operation: 'inspect-owned-resources',
-    });
-  }
-  const byteCount = BigInt(value);
-  if (byteCount > (1n << 64n) - 1n) {
-    throw new OwnedFilesError({
-      message: `native inspect-owned-resources result has invalid ${field}`,
-      category: 'protocol_error',
-      operation: 'inspect-owned-resources',
-    });
-  }
-  return byteCount;
-}
-
 function ownedRunTimestamp(value: unknown, field: string, optional: boolean): bigint | undefined {
   if (optional && value === null) return undefined;
   if (typeof value !== 'string' || !/^(?:0|-?[1-9][0-9]*)$/.test(value)) {
@@ -1571,30 +1540,6 @@ export async function removeOwnedRun(options: Readonly<{
   } finally {
     finishOwnedRunLeaseOperation(provenance);
   }
-}
-
-export async function inspectOwnedResources(options: Readonly<{
-  helperPath: string;
-  ownedRoot: Buffer;
-  signal?: AbortSignal;
-}>): Promise<OwnedResourceSnapshot> {
-  const { helperPath, ownedRoot, signal } = options;
-  const { result } = await spawnHelper(helperPath, 'inspect-owned-resources', [
-    encodePath(ownedRoot, 'owned root', 'inspect-owned-resources'),
-  ], undefined, signal);
-  if (!Number.isSafeInteger(result.run_count) || (result.run_count as number) < 0) {
-    throw new OwnedFilesError({
-      message: 'native inspect-owned-resources result has invalid run_count',
-      category: 'protocol_error',
-      operation: 'inspect-owned-resources',
-    });
-  }
-  return {
-    freeBytes: resourceByteCount(result.free_bytes, 'free_bytes'),
-    workBytes: resourceByteCount(result.work_bytes, 'work_bytes'),
-    dependencyBytes: resourceByteCount(result.dependency_bytes, 'dependency_bytes'),
-    runCount: result.run_count as number,
-  };
 }
 
 export async function removeCreatedFile(options: Readonly<{

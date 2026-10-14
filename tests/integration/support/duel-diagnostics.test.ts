@@ -15,7 +15,7 @@ import type { DuelCombatDiagnosticArtifact } from "./duel-diagnostics.js";
 
 test("duel combat diagnostics preserve abort and operation failures after successful cleanup and staging", async () => {
   const active = duelContext().active;
-  const abortReason = new Error("resource monitor abort");
+  const abortReason = new Error("run abort");
   const controller = new AbortController();
   controller.abort(abortReason);
   const operationFailure = new Error("independent combat operation rejection");

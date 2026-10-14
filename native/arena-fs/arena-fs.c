@@ -14,7 +14,6 @@
 #include <string.h>
 #include <sys/file.h>
 #include <sys/stat.h>
-#include <sys/statvfs.h>
 #include <sys/types.h>
 #include <time.h>
 #include <unistd.h>
@@ -49,7 +48,6 @@ extern char **environ;
 #define MAX_RESOURCE_SCAN_DEPTH 64U
 #define MAX_RESOURCE_SCAN_BYTES (UINT64_C(64) * 1024U * 1024U * 1024U)
 #define MAX_OWNED_RUN_LIST_ENTRIES 10000U
-#define MAX_OWNED_RUN_CAPACITY 10U
 #define MAX_OWNED_TRACE_SEGMENTS 100000U
 #define OWNED_RUNS_DIRECTORY ".work/arena/runs"
 #define OWNED_TRACES_DIRECTORY ".work/arena/traces"
@@ -329,167 +327,6 @@ static int open_owned_root(const char *path) {
         return error;
     }
     return root_fd;
-}
-
-struct resource_usage {
-    uint64_t free_bytes;
-    uint64_t work_bytes;
-    uint64_t dependency_bytes;
-    uint64_t run_count;
-    uint64_t entries;
-    dev_t device;
-};
-
-static int available_bytes(int directory_fd, uint64_t *bytes) {
-    struct statvfs status;
-    if (fstatvfs(directory_fd, &status) != 0) return errno;
-    uintmax_t block_size = (uintmax_t)status.f_frsize;
-    uintmax_t available_blocks = (uintmax_t)status.f_bavail;
-    if (block_size == 0 || available_blocks > (uintmax_t)UINT64_MAX / block_size) {
-        return EOVERFLOW;
-    }
-    *bytes = (uint64_t)(available_blocks * block_size);
-    return 0;
-}
-
-static int add_resource_bytes(uint64_t *total, off_t size) {
-    if (size < 0) return EOVERFLOW;
-    uint64_t amount = (uint64_t)size;
-    if (amount > MAX_RESOURCE_SCAN_BYTES - *total) return EFBIG;
-    *total += amount;
-    return 0;
-}
-
-/* Count logical leaf sizes while opening each descendant directory without following links. */
-static int scan_resource_directory(int directory_fd, unsigned int depth, bool dependency,
-                                   bool inside_runs, struct resource_usage *usage) {
-    int scan_fd = fcntl(directory_fd, F_DUPFD_CLOEXEC, 0);
-    if (scan_fd < 0) return errno;
-    DIR *directory = fdopendir(scan_fd);
-    if (directory == NULL) {
-        int error = errno;
-        close(scan_fd);
-        return error;
-    }
-
-    int error = 0;
-    errno = 0;
-    struct dirent *entry;
-    while ((entry = readdir(directory)) != NULL) {
-        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) continue;
-        if (usage->entries >= MAX_RESOURCE_SCAN_ENTRIES) {
-            error = EFBIG;
-            break;
-        }
-        usage->entries++;
-
-        struct stat status;
-        if (fstatat(directory_fd, entry->d_name, &status, AT_SYMLINK_NOFOLLOW) != 0) {
-            error = errno;
-            break;
-        }
-        if (status.st_dev != usage->device) {
-            error = EXDEV;
-            break;
-        }
-        if (S_ISDIR(status.st_mode)) {
-            if (depth >= MAX_RESOURCE_SCAN_DEPTH) {
-                error = EFBIG;
-                break;
-            }
-            int child_fd = openat(directory_fd, entry->d_name,
-                                  O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
-            if (child_fd < 0) {
-                error = errno;
-                break;
-            }
-            struct stat opened_status;
-            if (fstat(child_fd, &opened_status) != 0) {
-                error = errno;
-            } else if (!S_ISDIR(opened_status.st_mode) || opened_status.st_dev != status.st_dev ||
-                       opened_status.st_ino != status.st_ino) {
-                error = ESTALE;
-            } else if (inside_runs && depth == 1U) {
-                usage->run_count++;
-            }
-            bool child_dependency = dependency;
-            bool child_inside_runs = inside_runs;
-            /* Run data and traces contribute to work totals but not dependency totals. */
-            if (depth == 0U) {
-                child_dependency = strcmp(entry->d_name, "runs") != 0 &&
-                                   strcmp(entry->d_name, "traces") != 0;
-                child_inside_runs = strcmp(entry->d_name, "runs") == 0;
-            }
-            if (error == 0) {
-                error = scan_resource_directory(child_fd, depth + 1U, child_dependency,
-                                                child_inside_runs, usage);
-            }
-            if (close(child_fd) != 0 && error == 0) error = errno;
-            if (error != 0) break;
-        } else if (S_ISREG(status.st_mode) || S_ISLNK(status.st_mode)) {
-            error = add_resource_bytes(&usage->work_bytes, status.st_size);
-            if (error == 0 && dependency) {
-                error = add_resource_bytes(&usage->dependency_bytes, status.st_size);
-            }
-            if (error != 0) break;
-        } else {
-            error = ENOTSUP;
-            break;
-        }
-        errno = 0;
-    }
-    if (error == 0 && errno != 0) error = errno;
-    if (closedir(directory) != 0 && error == 0) error = errno;
-    return error;
-}
-
-static int inspect_owned_resources(const char *root, struct fs_error *failure,
-                                   struct resource_usage *usage) {
-    int root_fd = open_owned_root(root);
-    if (root_fd < 0) {
-        failure->code = -root_fd;
-        return failure->code;
-    }
-    int resource_fd = root_fd;
-    int work_fd = -1;
-    int arena_fd = -1;
-    int error = 0;
-
-    int opened_work = open_directory_at(root_fd, ".work");
-    if (opened_work < 0) {
-        error = -opened_work;
-        if (error == ENOENT) error = 0;
-    } else {
-        work_fd = opened_work;
-        error = validate_existing_parent(work_fd);
-        resource_fd = work_fd;
-    }
-    if (error == 0 && work_fd >= 0) {
-        int opened_arena = open_directory_at(work_fd, "arena");
-        if (opened_arena < 0) {
-            error = -opened_arena;
-            if (error == ENOENT) error = 0;
-        } else {
-            arena_fd = opened_arena;
-            error = validate_existing_parent(arena_fd);
-            resource_fd = arena_fd;
-        }
-    }
-    if (error == 0) error = available_bytes(resource_fd, &usage->free_bytes);
-    if (error == 0 && arena_fd >= 0) {
-        struct stat arena_status;
-        if (fstat(arena_fd, &arena_status) != 0) {
-            error = errno;
-        } else {
-            usage->device = arena_status.st_dev;
-            error = scan_resource_directory(arena_fd, 0, true, false, usage);
-        }
-    }
-    if (arena_fd >= 0 && close(arena_fd) != 0 && error == 0) error = errno;
-    if (work_fd >= 0 && close(work_fd) != 0 && error == 0) error = errno;
-    if (close(root_fd) != 0 && error == 0) error = errno;
-    if (error != 0) failure->code = error;
-    return error;
 }
 
 static int check_relative_path(const char *path, size_t length) {
@@ -959,14 +796,6 @@ static void print_read_success(const unsigned char *bytes, size_t length,
            (uintmax_t)file_status->st_dev, (uintmax_t)file_status->st_ino, encoded);
     fflush(stdout);
     free(encoded);
-}
-
-static void print_resource_success(const struct resource_usage *usage) {
-    printf("{\"v\":1,\"ok\":true,\"operation\":\"inspect-owned-resources\","
-           "\"free_bytes\":\"%" PRIu64 "\",\"work_bytes\":\"%" PRIu64 "\","
-           "\"dependency_bytes\":\"%" PRIu64 "\",\"run_count\":%" PRIu64 "}\n",
-           usage->free_bytes, usage->work_bytes, usage->dependency_bytes, usage->run_count);
-    fflush(stdout);
 }
 
 static void print_owned_runs_success(const struct owned_run_record *records, size_t count) {
@@ -1513,66 +1342,6 @@ static int lock_owned_runs_directory(int directory_fd) {
 }
 
 /* Count only while holding the runs-directory lock shared with create and remove operations. */
-static int count_owned_run_directories(int directory_fd, size_t *run_count) {
-    struct stat directory_status;
-    if (fstat(directory_fd, &directory_status) != 0) return errno;
-    int scan_fd = fcntl(directory_fd, F_DUPFD_CLOEXEC, 0);
-    if (scan_fd < 0) return errno;
-    DIR *directory = fdopendir(scan_fd);
-    if (directory == NULL) {
-        int error = errno;
-        close(scan_fd);
-        return error;
-    }
-    int error = 0;
-    size_t count = 0;
-    uint64_t entries = 0;
-    errno = 0;
-    struct dirent *entry;
-    while ((entry = readdir(directory)) != NULL) {
-        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) continue;
-        if (++entries > MAX_RESOURCE_SCAN_ENTRIES) {
-            error = EFBIG;
-            break;
-        }
-        struct stat status;
-        if (fstatat(directory_fd, entry->d_name, &status, AT_SYMLINK_NOFOLLOW) != 0) {
-            error = errno;
-            break;
-        }
-        if (S_ISLNK(status.st_mode)) {
-            error = ELOOP;
-            break;
-        }
-        if (S_ISREG(status.st_mode)) {
-            errno = 0;
-            continue;
-        }
-        if (!S_ISDIR(status.st_mode)) {
-            error = ENOTSUP;
-            break;
-        }
-        if (!valid_owned_run_id(entry->d_name)) {
-            error = EINVAL;
-            break;
-        }
-        if (status.st_dev != directory_status.st_dev) {
-            error = EXDEV;
-            break;
-        }
-        count++;
-        if (count > MAX_OWNED_RUN_CAPACITY) {
-            error = EFBIG;
-            break;
-        }
-        errno = 0;
-    }
-    if (error == 0 && errno != 0) error = errno;
-    if (closedir(directory) != 0 && error == 0) error = errno;
-    if (error == 0) *run_count = count;
-    return error;
-}
-
 /* Create only the final run leaf; missing ancestors are private and removed on failure. */
 static int create_owned_directory(const char *root, const char *relative, size_t relative_length,
                                   struct fs_error *failure, struct stat *created_status) {
@@ -1641,13 +1410,6 @@ static int create_owned_directory(const char *root, const char *relative, size_t
             if (fstatat(current_fd, component, &existing_status, AT_SYMLINK_NOFOLLOW) != 0) {
                 if (errno != ENOENT) {
                     error = errno;
-                    goto fail;
-                }
-                size_t run_count = 0;
-                error = count_owned_run_directories(current_fd, &run_count);
-                if (error != 0) goto fail;
-                if (run_count >= MAX_OWNED_RUN_CAPACITY) {
-                    error = EFBIG;
                     goto fail;
                 }
             }
@@ -3002,22 +2764,6 @@ static int run_read(int argc, char **argv) {
     return error == 0 ? 0 : 1;
 }
 
-static int run_inspect_resources(int argc, char **argv) {
-    struct fs_error failure = {0};
-    struct resource_usage usage = {0};
-    char *root = NULL;
-    size_t root_length = 0;
-    int error = decode_path_argument(argv[2], &root, &root_length);
-    if (error == 0 && (root_length == 0 || root[0] != '/')) error = EINVAL;
-    if (error == 0) error = inspect_owned_resources(root, &failure, &usage);
-    else failure.code = error;
-    if (error == 0) print_resource_success(&usage);
-    else print_error("inspect-owned-resources", &failure);
-    free(root);
-    (void)argc;
-    return error == 0 ? 0 : 1;
-}
-
 static int run_list_owned_runs(int argc, char **argv) {
     struct fs_error failure = {0};
     char *root = NULL;
@@ -3159,9 +2905,6 @@ int main(int argc, char **argv) {
     }
     if (argc == 4 && strcmp(argv[1], "hold-run-lease") == 0) return run_hold_lease(argc, argv);
     if (argc == 5 && strcmp(argv[1], "read-owned-file") == 0) return run_read(argc, argv);
-    if (argc == 3 && strcmp(argv[1], "inspect-owned-resources") == 0) {
-        return run_inspect_resources(argc, argv);
-    }
     if (argc == 3 && strcmp(argv[1], "list-owned-runs") == 0) {
         return run_list_owned_runs(argc, argv);
     }
