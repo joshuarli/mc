@@ -463,6 +463,7 @@ test_command() {
             [ -f "$root/tests/integration/$integration_source_name.ts" ] || fail "blocked: integration case is not ready: $integration_source_name"
             prepare_node
             ensure_workspace_dependencies
+            build_typescript all
             build_typescript stack
             build_fs_helper
             prepare_jdk
@@ -474,6 +475,7 @@ test_command() {
             [ -f "$root/tests/integration/faults.ts" ] || fail "blocked: integration case is not ready: faults"
             prepare_node
             ensure_workspace_dependencies
+            build_typescript all
             build_typescript stack
             build_fs_helper
             prepare_jdk
@@ -485,6 +487,7 @@ test_command() {
             [ -f "$root/tests/integration/lifecycle.ts" ] || fail "blocked: lifecycle smoke case is not ready"
             prepare_node
             ensure_workspace_dependencies
+            build_typescript all
             build_typescript stack
             build_fs_helper
             prepare_jdk
@@ -496,6 +499,7 @@ test_command() {
             [ -f "$root/tests/integration/match-rules-authority.ts" ] || fail "blocked: integration case is not ready: $case_name"
             prepare_node
             ensure_workspace_dependencies
+            build_typescript all
             build_typescript stack
             build_fs_helper
             prepare_jdk
@@ -511,6 +515,7 @@ test_command() {
             [ -f "$root/tests/acceptance/$acceptance_source_name.ts" ] || fail "blocked: acceptance case is not ready: $case_name"
             prepare_node
             ensure_workspace_dependencies
+            build_typescript all
             build_typescript stack
             build_fs_helper
             prepare_jdk
