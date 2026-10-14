@@ -70,7 +70,8 @@ export function makeActionFunnelTraceRecord(input: Readonly<{
 
 const FIELDS = ['schema', 'seat', 'action_sequence', 'tick', 'intent', 'target_entity', 'target_seat', 'border', 'skill', 'funnel'];
 const SKILLS = new Set(['succeeded', 'failed', 'cancelled', 'progress', 'pending']);
-const ACTIONS = new Set<string>(['approach', 'attack']);
+export const FUNNEL_ACTIONS = ['approach', 'attack', 'shoot', 'eat'] as const satisfies readonly ActionFunnelAction[];
+const ACTIONS = new Set<string>(FUNNEL_ACTIONS);
 
 export function readActionFunnelTraceRecord(record: TraceRecord, recordNumber: number): ActionFunnelTraceRecordV1 {
   const fail = (field: string): TraceError => new TraceError({ kind: 'invalid_action_funnel_record', record: recordNumber, field });

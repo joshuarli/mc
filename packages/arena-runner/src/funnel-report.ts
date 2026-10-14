@@ -1,6 +1,6 @@
 import { ACTION_FUNNEL_STAGES, type ActionFunnelAction } from '@arena/core';
 import type { Evidence } from './evidence.js';
-import { readActionFunnelTraceRecord, type ActionFunnelTraceRecordV1 } from './funnel-record.js';
+import { FUNNEL_ACTIONS, readActionFunnelTraceRecord, type ActionFunnelTraceRecordV1 } from './funnel-record.js';
 import type { TraceRecord } from './trace.js';
 
 export const ATTRIBUTION_WINDOW_TICKS = 100;
@@ -56,7 +56,7 @@ export function actionFunnelReport(evidence: Evidence): object | undefined {
       if (stage === last) break;
     }
     if (record.funnel.kind === 'stopped') bump(funnel.stopped, record.funnel.reason);
-    if (record.funnel.action === 'attack' && record.target_seat !== null && record.tick !== null) {
+    if ((record.funnel.action === 'attack' || record.funnel.action === 'shoot') && record.target_seat !== null && record.tick !== null) {
       funnel.attributable += 1;
       const tick = record.tick;
       if (deaths.some((death) => death.seat === record.target_seat
@@ -148,7 +148,7 @@ function newTally(): SeatTally {
   return {
     decisions: { proposed: 0, accepted: 0, continued: 0, held: 0, deferred: {}, border: {} },
     actions: { total: 0, by_intent: {}, skill: {} },
-    funnel: { approach: funnel(), attack: funnel() },
+    funnel: Object.fromEntries(FUNNEL_ACTIONS.map((action) => [action, funnel()])) as Record<ActionFunnelAction, FunnelTally>,
   };
 }
 
@@ -187,7 +187,7 @@ export function explainSeatJson(evidence: Evidence, seat: number): object {
     if (summary.actionSequence === null) continue;
     const funnel = funnels.get(summary.actionSequence);
     const skill = effects.get(summary.actionSequence);
-    const confirmed = funnel === undefined || funnel.funnel?.action !== 'attack' || funnel.target_seat === null || funnel.tick === null
+    const confirmed = funnel === undefined || (funnel.funnel?.action !== 'attack' && funnel.funnel?.action !== 'shoot') || funnel.target_seat === null || funnel.tick === null
       ? null
       : deaths.find((death) => death.seat === funnel.target_seat
         && death.tick >= funnel.tick! && death.tick <= funnel.tick! + ATTRIBUTION_WINDOW_TICKS) ?? null;
