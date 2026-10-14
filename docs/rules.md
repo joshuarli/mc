@@ -51,7 +51,7 @@ a safe full-block support (water and other non-solid columns fail here, which
 moves a seat toward the nearest land), two clear blocks, no lava, fire,
 magma, cactus, campfire, berry bush, powder snow, or cobweb within one block,
 a safe adjacent escape column, and two blocks of separation from already
-chosen seats. The first passing candidate without a drop of two or more
+chosen seats. A candidate seat or chest must also reach the border center region by a bounded best-first walk over the loaded surface (one-block step up, three-block step down, no liquid or non-solid columns, two clear blocks, inside the border, at most 6,000 columns); otherwise it is counted as `unreachable-from-center`. If every candidate column of the declared formation fails, the search retries whole-formation translations of 48 blocks, nearest first, and the chosen translation is part of the recipe and the world identity. The first passing candidate without a drop of two or more
 blocks beside it wins; if only cliff-edge candidates pass, the first of them
 is used; if none passes, `prepare` is rejected as `invalid_world` with
 per-seat, per-reason rejection counts (truncated to 1,000 characters). The

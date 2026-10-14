@@ -310,6 +310,9 @@ final class NaturalWorldSetup {
                 if (rejection == null && chosenPositions.contains(position)) {
                     rejection = "duplicate";
                 }
+                if (rejection == null && !reachableFromCenter(world, position, formation.center(), borderRadius)) {
+                    rejection = "unreachable-from-center";
+                }
                 if (rejection == null) {
                     Set<MapPlan.Position> withCandidate = new HashSet<>(chosenPositions);
                     withCandidate.add(position);
@@ -469,6 +472,9 @@ final class NaturalWorldSetup {
                         }
                     }
                 }
+                if (rejection == null && !reachableFromCenter(world, feet, formation.center(), borderRadius)) {
+                    rejection = "unreachable-from-center";
+                }
                 if (rejection == null) {
                     MapPlan.SpawnPoint accepted = new MapPlan.SpawnPoint(spawn.seat(), feet);
                     if (!cliffEdge(world, feet)) {
@@ -498,6 +504,86 @@ final class NaturalWorldSetup {
                     + " for world seed " + plan.worldSeed() + ": " + String.join("; ", failures));
         }
         return chosen;
+    }
+
+    static final int REACHABILITY_MAX_VISITED_COLUMNS = 6000;
+    static final int REACHABILITY_TARGET_RADIUS_BLOCKS = 16;
+    static final int REACHABILITY_MAX_STEP_UP = 1;
+    static final int REACHABILITY_MAX_STEP_DOWN = 3;
+
+    static boolean reachableFromCenter(
+            SurfaceAccess world,
+            MapPlan.Position start,
+            NaturalMapPlan.BorderCenter center,
+            double borderRadius) {
+        if (!(borderRadius > 0.0)) {
+            return true;
+        }
+        double limit = borderRadius - SEARCH_BORDER_INSET_BLOCKS;
+        long targetSquared = (long) REACHABILITY_TARGET_RADIUS_BLOCKS * REACHABILITY_TARGET_RADIUS_BLOCKS;
+        java.util.PriorityQueue<long[]> frontier = new java.util.PriorityQueue<>((left, right) -> {
+            int byPriority = Long.compare(left[0], right[0]);
+            if (byPriority != 0) {
+                return byPriority;
+            }
+            int byX = Long.compare(left[1], right[1]);
+            return byX != 0 ? byX : Long.compare(left[2], right[2]);
+        });
+        Set<Long> visited = new HashSet<>();
+        frontier.add(new long[] {0, start.x(), start.z(), start.y()});
+        visited.add(columnKey(start.x(), start.z()));
+        int[][] steps = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+        while (!frontier.isEmpty() && visited.size() <= REACHABILITY_MAX_VISITED_COLUMNS) {
+            long[] node = frontier.poll();
+            int x = (int) node[1];
+            int z = (int) node[2];
+            int y = (int) node[3];
+            long dx = x - center.x();
+            long dz = z - center.z();
+            if (dx * dx + dz * dz <= targetSquared) {
+                return true;
+            }
+            for (int[] step : steps) {
+                int nx = x + step[0];
+                int nz = z + step[1];
+                if (nx < 0 || nz < 0 || !visited.add(columnKey(nx, nz))) {
+                    continue;
+                }
+                double cx = nx + 0.5 - center.x();
+                double cz = nz + 0.5 - center.z();
+                if (Math.sqrt(cx * cx + cz * cz) > limit) {
+                    continue;
+                }
+                int surface;
+                try {
+                    surface = world.highestBlockY(nx, nz);
+                } catch (RuntimeException unloaded) {
+                    continue;
+                }
+                int feetY = surface + 1;
+                if (surface < world.minHeight() || feetY + 1 >= world.maxHeight()
+                        || feetY - y > REACHABILITY_MAX_STEP_UP || y - feetY > REACHABILITY_MAX_STEP_DOWN) {
+                    continue;
+                }
+                BlockState top = world.blockAt(new MapPlan.Position(nx, surface, nz));
+                if (top.liquid() || top.passable() || !top.sturdyTop()) {
+                    continue;
+                }
+                if (!isClearStandingBlock(world.blockAt(new MapPlan.Position(nx, feetY, nz)))
+                        || !isClearStandingBlock(world.blockAt(new MapPlan.Position(nx, feetY + 1, nz)))) {
+                    continue;
+                }
+                long remainingX = nx - center.x();
+                long remainingZ = nz - center.z();
+                long priority = Math.abs(remainingX) + Math.abs(remainingZ);
+                frontier.add(new long[] {priority, nx, nz, feetY});
+            }
+        }
+        return false;
+    }
+
+    private static long columnKey(int x, int z) {
+        return ((long) x << 32) ^ (z & 0xffffffffL);
     }
 
     static boolean cliffEdge(SurfaceAccess world, MapPlan.Position feet) {

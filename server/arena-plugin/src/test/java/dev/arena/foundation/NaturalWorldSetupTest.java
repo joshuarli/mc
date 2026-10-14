@@ -158,6 +158,32 @@ final class NaturalWorldSetupTest {
     }
 
     @Test
+    void spawnsWalledOffFromTheBorderCenterAreRejectedAsUnreachable() {
+        NaturalMapPlan plan = searchPlan(List.of(spawn(0, 60, 100), spawn(1, 140, 100)), List.of(loot(100, 110)));
+        TestWorld walled = new TestWorld();
+        for (int x = 136; x <= 144; x++) {
+            for (int z = 96; z <= 104; z++) {
+                boolean inside = x >= 138 && x <= 142 && z >= 98 && z <= 102;
+                if (!inside) {
+                    walled.surfaceByColumn.put(columnKey(x, z), 80);
+                }
+            }
+        }
+        NaturalWorldSetup.prepare(plan, walled, 2, TEST_MATERIALS);
+        MapPlan.Position inside = new MapPlan.Position(140, 65, 100);
+        NaturalMapPlan.BorderCenter center = new NaturalMapPlan.BorderCenter(100, 100);
+
+        assertFalse(NaturalWorldSetup.reachableFromCenter(walled, inside, center, 60.0));
+        assertTrue(NaturalWorldSetup.reachableFromCenter(new TestWorld(), inside, center, 60.0));
+
+        List<MapPlan.SpawnPoint> resolved = NaturalWorldSetup.resolveWorld(
+                plan, walled, TEST_MATERIALS, 6, 60.0, false).spawns();
+        MapPlan.Position chosen = resolved.get(1).position();
+        assertFalse(chosen.x() >= 138 && chosen.x() <= 142 && chosen.z() >= 98 && chosen.z() <= 102);
+        assertTrue(NaturalWorldSetup.reachableFromCenter(walled, chosen, center, 60.0));
+    }
+
+    @Test
     void searchCandidatesAreBoundedAndOrderedDeterministically() {
         List<NaturalMapPlan.SurfaceColumn> candidates = NaturalWorldSetup.searchCandidates(
                 new NaturalMapPlan.SurfaceColumn(0, 0), new WorldPlan.Footprint(1024, 1024),
