@@ -206,14 +206,17 @@ test('travel navigation looks down between legs and melee pursuit does not', asy
     assert.deepEqual(seenAfterLook, [false, true]);
     const alongGoal = seenLooks[0];
     const sawPlayer = seenLooks[1];
-    assert.ok(alongGoal);
-    assert.ok(sawPlayer);
-    assert.ok(Math.abs(alongGoal.x - headings[0].x) < 1e-9);
+    const goalHeading = headings[0];
+    const sideHeading = headings[1];
+    if (alongGoal === undefined || sawPlayer === undefined || goalHeading === undefined || sideHeading === undefined) {
+      throw new Error('missing travel look');
+    }
+    assert.ok(Math.abs(alongGoal.x - goalHeading.x) < 1e-9);
     assert.ok(Math.abs(alongGoal.y - sightY) < 1e-9);
-    assert.ok(Math.abs(alongGoal.z - headings[0].z) < 1e-9);
-    assert.ok(Math.abs(sawPlayer.x - headings[1].x) < 1e-9);
+    assert.ok(Math.abs(alongGoal.z - goalHeading.z) < 1e-9);
+    assert.ok(Math.abs(sawPlayer.x - sideHeading.x) < 1e-9);
     assert.ok(Math.abs(sawPlayer.y - sightY) < 1e-9);
-    assert.ok(Math.abs(sawPlayer.z - headings[1].z) < 1e-9);
+    assert.ok(Math.abs(sawPlayer.z - sideHeading.z) < 1e-9);
     assert.equal(isVisibleEntity(seen.bot, rival), true);
     assert.equal(seen.pathfinder.goal, null);
     assert.equal(seenEvents.filter((event) => event === 'goal').length, 1);
