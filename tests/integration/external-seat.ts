@@ -375,7 +375,6 @@ function writeFixtures(): Readonly<Record<Seats, string>> {
     );
     assert.notEqual(map, mapSource, "the fixture map must drop the surplus spawn seats");
     const scenario = [
-      ['schema = 2', 'schema = 3'],
       ['name = "hunger-six"', `name = "external-seat-${seats}"`],
       ['map = "../maps/hunger-six.toml"', `map = "${mapName}"`],
       ['policy = "../policies/baseline.toml"', 'policy = "../../../policies/baseline.toml"'],
