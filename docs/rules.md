@@ -72,9 +72,11 @@ admitted, and not again after death. The kit is one armor tier, a sword, a
 bow, arrows, golden apples, food, and a shield only when the kit includes
 one. The plugin sets natural health regeneration off and adds no heal,
 damage, reach, or teleport rule. Last survivor still wins, and a tick limit
-with both competitors alive is still a draw. The arena stays on the natural
-1024 by 1024 plan because schema 3 has no superflat world; the declared
-spawns mirror across the border center. Last-survivor outcomes are unchanged.
+with both competitors alive is still a draw. Schema 3 keeps the arena on the natural 1024 by 1024 plan and has no
+superflat world; the declared spawns mirror across the border center.
+Schema 4 is the planned-uhc exception: the same kit and the same
+natural-regeneration rule, on a small planned footprint encoded as
+world-plan schema 1. Last-survivor outcomes are unchanged.
 
 A checkpointed match resumes in a new runtime epoch. The plugin loads the
 complete record at startup and skips the loot-chest placement and world-spawn

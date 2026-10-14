@@ -1,0 +1,77 @@
+schema = 1
+name = "uhc-elevation"
+
+[dimensions]
+width = 41
+depth = 41
+min_y = 0
+max_y = 80
+
+[[operations]]
+kind = "cuboid"
+from = { x = 0, y = 64, z = 0 }
+to = { x = 40, y = 64, z = 40 }
+block = "minecraft:stone"
+
+[[operations]]
+kind = "cuboid"
+from = { x = 8, y = 65, z = 0 }
+to = { x = 14, y = 68, z = 40 }
+block = "minecraft:stone"
+
+[[operations]]
+kind = "cuboid"
+from = { x = 26, y = 65, z = 0 }
+to = { x = 32, y = 68, z = 40 }
+block = "minecraft:stone"
+
+[[operations]]
+kind = "cuboid"
+from = { x = 15, y = 65, z = 0 }
+to = { x = 15, y = 67, z = 40 }
+block = "minecraft:cobblestone"
+
+[[operations]]
+kind = "cuboid"
+from = { x = 16, y = 65, z = 0 }
+to = { x = 16, y = 66, z = 40 }
+block = "minecraft:cobblestone"
+
+[[operations]]
+kind = "cuboid"
+from = { x = 17, y = 65, z = 0 }
+to = { x = 17, y = 65, z = 40 }
+block = "minecraft:cobblestone"
+
+[[operations]]
+kind = "cuboid"
+from = { x = 23, y = 65, z = 0 }
+to = { x = 23, y = 65, z = 40 }
+block = "minecraft:cobblestone"
+
+[[operations]]
+kind = "cuboid"
+from = { x = 24, y = 65, z = 0 }
+to = { x = 24, y = 66, z = 40 }
+block = "minecraft:cobblestone"
+
+[[operations]]
+kind = "cuboid"
+from = { x = 25, y = 65, z = 0 }
+to = { x = 25, y = 67, z = 40 }
+block = "minecraft:cobblestone"
+
+[[operations]]
+kind = "spawn"
+seat = 0
+position = { x = 10, y = 69, z = 20 }
+
+[[operations]]
+kind = "spawn"
+seat = 1
+position = { x = 30, y = 69, z = 20 }
+
+[[operations]]
+kind = "loot_container"
+position = { x = 20, y = 65, z = 20 }
+inventory = ["minecraft:bread"]

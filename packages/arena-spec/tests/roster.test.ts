@@ -127,8 +127,8 @@ test("scenario_v1_and_v2_reject_the_generalized_roster", () => {
   ));
   assert.equal(v1External.kind, SpecErrorKind.UnknownField);
 
-  const v4 = specError(() => compileScenario(SCENARIO_24.replace("schema = 3", "schema = 4"), MAP_24));
-  assert.equal(v4.path, "scenario.schema");
+  const unsupported = specError(() => compileScenario(SCENARIO_24.replace("schema = 3", "schema = 5"), MAP_24));
+  assert.equal(unsupported.path, "scenario.schema");
 });
 
 test("scenario_v3_requires_hunger_games_and_natural_terrain", () => {

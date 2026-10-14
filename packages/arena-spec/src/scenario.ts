@@ -127,7 +127,6 @@ export interface UhcDuelKitIr {
   readonly shield: boolean;
 }
 
-/** Versioned rule mode of a schema-3 Hunger Games scenario; `classic` is the frozen rule set. */
 export type RuleModeIr =
   | { readonly kind: "classic" }
   | {
@@ -239,8 +238,10 @@ declare const resourceReferenceBrand: unique symbol;
 export type ResourceReference = string & { readonly [resourceReferenceBrand]: true };
 
 /** Shared validated scenario settings that do not depend on game mode. */
+type ScenarioSchemaVersion = 1 | 2 | 3 | 4;
+
 interface ScenarioBaseIr {
-  readonly schemaVersion: 1 | 2 | 3;
+  readonly schemaVersion: ScenarioSchemaVersion;
   readonly name: string;
   readonly seed: bigint;
   readonly mapReference: ResourceReference;
@@ -281,7 +282,20 @@ export interface HungerGamesScenarioV3Ir extends ScenarioBaseIr {
   readonly rules: RuleModeIr;
 }
 
-export type HungerGamesScenarioIr = HungerGamesScenarioV1Ir | HungerGamesScenarioV2Ir | HungerGamesScenarioV3Ir;
+export interface HungerGamesScenarioV4Ir extends ScenarioBaseIr {
+  readonly schemaVersion: 4;
+  readonly mode: typeof GameMode.HungerGames;
+  readonly border: ShrinkingBorderSettings;
+  readonly map: MapIr;
+  readonly openingStyleCycle: OpeningStyleCycle;
+  readonly rules: RuleModeIr;
+}
+
+export type HungerGamesScenarioIr =
+  | HungerGamesScenarioV1Ir
+  | HungerGamesScenarioV2Ir
+  | HungerGamesScenarioV3Ir
+  | HungerGamesScenarioV4Ir;
 
 /** Fully validated civilization rules and compiled map IR. */
 export interface CivilizationScenarioIr extends ScenarioBaseIr {
@@ -350,7 +364,7 @@ export function compileScenario(scenarioSource: string, mapSource: string): Scen
     ? parseCivilization(raw.field(root, "civilization", "scenario"))
     : undefined;
 
-  const rules: RuleModeIr = schemaVersion === 3 && root.has("rules")
+  const rules: RuleModeIr = schemaVersion >= 3 && root.has("rules")
     ? parseRules(raw.field(root, "rules", "scenario"), roster)
     : Object.freeze({ kind: "classic" });
   validateMode(mode, roster, matchSettings, rules);
@@ -358,11 +372,21 @@ export function compileScenario(scenarioSource: string, mapSource: string): Scen
   if (schemaVersion === 1 && map.terrain !== "planned") {
     throw new SpecError(SpecErrorKind.InvalidValue, "scenario.map", "schema version 1 requires a planned map");
   }
-  if (schemaVersion >= 2 && map.terrain !== "vanilla") {
-    throw new SpecError(SpecErrorKind.InvalidValue, "scenario.map", `schema version ${schemaVersion} requires a natural terrain map`);
+  if (schemaVersion >= 2 && map.terrain !== "vanilla"
+    && !(schemaVersion === 4 && rules.kind === "uhc_duel" && map.terrain === "planned")) {
+    throw new SpecError(
+      SpecErrorKind.InvalidValue,
+      "scenario.map",
+      schemaVersion === 4 && map.terrain === "planned"
+        ? "schema version 4 allows a planned map only for uhc duel"
+        : `schema version ${schemaVersion} requires a natural terrain map`,
+    );
   }
   validateSpawnSeats(map, roster.competitors, "scenario.roster.competitors");
-  if (rules.kind === "uhc_duel") validateUhcSpawnMirror(map);
+  if (rules.kind === "uhc_duel") {
+    if (map.terrain === "vanilla") validateUhcSpawnMirror(map);
+    else validatePlannedUhcArena(map);
+  }
   validatePreparedChunks(map, server.viewDistanceChunks);
   if (border.mode === GameMode.HungerGames) {
     validateBorder(map, border.settings.initialDiameterBlocks, border.settings.finalDiameterBlocks, "scenario.border");
@@ -403,13 +427,24 @@ export function compileScenario(scenarioSource: string, mapSource: string): Scen
         map,
       });
     }
-    if (openingStyleCycle === undefined || map.terrain !== "vanilla") throw new Error("natural scenario contract is incomplete");
+    if (openingStyleCycle === undefined) throw new Error(`schema-v${schemaVersion} scenario has no opening style cycle`);
+    if (map.terrain === "planned") {
+      if (schemaVersion !== 4) throw new Error("planned scenario contract is incomplete");
+      return Object.freeze({
+        ...common,
+        schemaVersion,
+        map,
+        openingStyleCycle,
+        rules,
+      });
+    }
+    if (map.terrain !== "vanilla") throw new Error("natural scenario contract is incomplete");
     return Object.freeze({
       ...common,
       schemaVersion,
       map,
       openingStyleCycle,
-      ...(schemaVersion === 3 ? { rules } : {}),
+      ...(schemaVersion >= 3 ? { rules } : {}),
     }) as HungerGamesScenarioIr;
   }
 
@@ -454,15 +489,15 @@ function parseScenarioRoot(source: string): raw.RawTable {
   const root = raw.asTable(raw.parseDocument(source, "scenario"), "scenario");
   const schemaVersion = readScenarioSchemaVersion(root);
   const fields = schemaVersion === 1 ? SCENARIO_FIELDS : [...SCENARIO_FIELDS, "opening_styles"];
-  const optional = schemaVersion === 3 ? OPTIONAL_SCENARIO_V3_FIELDS : OPTIONAL_SCENARIO_FIELDS;
+  const optional = schemaVersion >= 3 ? OPTIONAL_SCENARIO_V3_FIELDS : OPTIONAL_SCENARIO_FIELDS;
   raw.checkFields(root, [...fields, ...optional], fields, "scenario");
   return root;
 }
 
-function readScenarioSchemaVersion(root: raw.RawTable): 1 | 2 | 3 {
+function readScenarioSchemaVersion(root: raw.RawTable): ScenarioSchemaVersion {
   const schema = raw.integer(raw.field(root, "schema", "scenario"), "scenario.schema");
-  if (schema === 1n || schema === 2n || schema === 3n) return Number(schema) as 1 | 2 | 3;
-  throw new SpecError(SpecErrorKind.InvalidValue, "scenario.schema", "supported schema versions are 1, 2, and 3");
+  if (schema === 1n || schema === 2n || schema === 3n || schema === 4n) return Number(schema) as ScenarioSchemaVersion;
+  throw new SpecError(SpecErrorKind.InvalidValue, "scenario.schema", "supported schema versions are 1, 2, 3, and 4");
 }
 
 function parseOpeningStyleCycle(value: raw.RawValue): OpeningStyleCycle {
@@ -490,12 +525,12 @@ function parseMode(value: raw.RawValue): GameMode {
   throw new SpecError(SpecErrorKind.InvalidValue, "scenario.mode", `unknown mode \`${mode}\``);
 }
 
-function parseRoster(value: raw.RawValue, schemaVersion: 1 | 2 | 3): Roster {
+function parseRoster(value: raw.RawValue, schemaVersion: ScenarioSchemaVersion): Roster {
   const path = "scenario.roster";
   const table = raw.asTable(value, path);
   const required = ["competitors", "spectator_capacity"];
-  raw.checkFields(table, schemaVersion === 3 ? [...required, "external"] : required, required, path);
-  const maxCompetitors = schemaVersion === 3 ? MAX_COMPETITORS : LEGACY_MAX_COMPETITORS;
+  raw.checkFields(table, schemaVersion >= 3 ? [...required, "external"] : required, required, path);
+  const maxCompetitors = schemaVersion >= 3 ? MAX_COMPETITORS : LEGACY_MAX_COMPETITORS;
   const competitors = boundedNumber(
     raw.field(table, "competitors", path),
     "scenario.roster.competitors",
@@ -503,7 +538,7 @@ function parseRoster(value: raw.RawValue, schemaVersion: 1 | 2 | 3): Roster {
     BigInt(maxCompetitors),
   );
   const spectatorCapacity = nonnegativeU64(raw.field(table, "spectator_capacity", path), "scenario.roster.spectator_capacity");
-  const externalSeats = schemaVersion === 3 && table.has("external")
+  const externalSeats = schemaVersion >= 3 && table.has("external")
     ? parseExternalSeats(raw.field(table, "external", path), competitors)
     : new Map<number, string>();
   const seats = Object.freeze(Array.from({ length: competitors }, (_, seat): SeatIr => {
@@ -944,8 +979,8 @@ function parseUhcKit(value: raw.RawValue): UhcDuelKitIr {
   });
 }
 
-function validateUhcSpawnMirror(map: MapIr): void {
-  if (map.terrain !== "vanilla" || map.spawns.length !== 2) {
+function validateUhcSpawnMirror(map: Extract<MapIr, { readonly terrain: "vanilla" }>): void {
+  if (map.spawns.length !== 2) {
     throw new SpecError(SpecErrorKind.Geometry, "scenario.map", "uhc duel requires two natural spawn columns");
   }
   const [first, second] = map.spawns;
@@ -959,6 +994,112 @@ function validateUhcSpawnMirror(map: MapIr): void {
       "uhc duel spawn columns must mirror across the border center",
     );
   }
+}
+
+const UHC_PERCEPTION_RANGE_BLOCKS = 40;
+const UHC_EYE_HEIGHT_BLOCKS = 1.62;
+const UHC_MAX_STEP_BLOCKS = 1;
+const UHC_UNESCAPABLE_DROP_BLOCKS = 20;
+
+function validatePlannedUhcArena(map: PlannedMapIr): void {
+  const [first, second] = map.spawns;
+  if (first === undefined || second === undefined || map.spawns.length !== 2) {
+    throw new SpecError(SpecErrorKind.Geometry, "scenario.map", "uhc duel requires two planned spawns");
+  }
+  const origin = uhcEye(first.position);
+  const target = uhcEye(second.position);
+  const distance = Math.hypot(target.x - origin.x, target.y - origin.y, target.z - origin.z);
+  if (!(distance > 0) || distance > UHC_PERCEPTION_RANGE_BLOCKS) {
+    throw new SpecError(SpecErrorKind.Geometry, "scenario.map", "uhc duel spawns are outside perception range");
+  }
+  const solids = new Set(map.blocks.map(({ position }) => `${position.x},${position.y},${position.z}`));
+  if (!uhcEyeRayClear(solids, origin, target) || !uhcEyeRayClear(solids, target, origin)) {
+    throw new SpecError(SpecErrorKind.Geometry, "scenario.map", "uhc duel spawns have no reciprocal line of sight");
+  }
+  if (!uhcSpawnsShareEscapableSurface(map, first.position, second.position)) {
+    throw new SpecError(SpecErrorKind.Geometry, "scenario.map", "uhc duel spawns are separated by an unescapable drop");
+  }
+}
+
+function uhcEye(position: BlockPosition): { readonly x: number; readonly y: number; readonly z: number } {
+  return { x: position.x + 0.5, y: position.y + UHC_EYE_HEIGHT_BLOCKS, z: position.z + 0.5 };
+}
+
+function uhcEyeRayClear(
+  solids: ReadonlySet<string>,
+  from: { readonly x: number; readonly y: number; readonly z: number },
+  to: { readonly x: number; readonly y: number; readonly z: number },
+): boolean {
+  const deltaX = to.x - from.x;
+  const deltaY = to.y - from.y;
+  const deltaZ = to.z - from.z;
+  if (deltaX === 0 && deltaY === 0 && deltaZ === 0) return false;
+  let x = Math.floor(from.x);
+  let y = Math.floor(from.y);
+  let z = Math.floor(from.z);
+  const endX = Math.floor(to.x);
+  const endY = Math.floor(to.y);
+  const endZ = Math.floor(to.z);
+  const stepX = Math.sign(deltaX);
+  const stepY = Math.sign(deltaY);
+  const stepZ = Math.sign(deltaZ);
+  for (let guard = 0; guard < 4096; guard += 1) {
+    if (solids.has(`${x},${y},${z}`)) return false;
+    if (x === endX && y === endY && z === endZ) return true;
+    const tx = deltaX === 0 ? Number.POSITIVE_INFINITY : ((deltaX > 0 ? x + 1 : x) - from.x) / deltaX;
+    const ty = deltaY === 0 ? Number.POSITIVE_INFINITY : ((deltaY > 0 ? y + 1 : y) - from.y) / deltaY;
+    const tz = deltaZ === 0 ? Number.POSITIVE_INFINITY : ((deltaZ > 0 ? z + 1 : z) - from.z) / deltaZ;
+    if (tx <= ty && tx <= tz) {
+      if (tx > 1) return false;
+      x += stepX;
+    } else if (ty <= tz) {
+      if (ty > 1) return false;
+      y += stepY;
+    } else {
+      if (tz > 1) return false;
+      z += stepZ;
+    }
+  }
+  throw new Error("uhc line of sight traversal did not reach its target");
+}
+
+function uhcSpawnsShareEscapableSurface(map: PlannedMapIr, from: BlockPosition, to: BlockPosition): boolean {
+  const highest = new Map<string, number>();
+  for (const { position } of map.blocks) {
+    const key = `${position.x},${position.z}`;
+    const previous = highest.get(key);
+    if (previous === undefined || position.y > previous) highest.set(key, position.y);
+  }
+  const surface = new Map<string, number>();
+  for (const [key, y] of highest) {
+    const feet = y + 1;
+    if (feet >= map.dimensions.minY && feet + 1 <= map.dimensions.maxY) surface.set(key, feet);
+  }
+  const start = `${from.x},${from.z}`;
+  const goal = `${to.x},${to.z}`;
+  if (surface.get(start) !== from.y || surface.get(goal) !== to.y) return false;
+  const queue = [start];
+  const seen = new Set([start]);
+  for (let cursor = 0; cursor < queue.length; cursor += 1) {
+    const current = queue[cursor];
+    if (current === undefined) throw new Error("uhc surface traversal queue is missing a pending column");
+    if (current === goal) return true;
+    const y = surface.get(current);
+    if (y === undefined) throw new Error("uhc surface traversal reached a missing column");
+    const separator = current.indexOf(",");
+    const x = Number(current.slice(0, separator));
+    const z = Number(current.slice(separator + 1));
+    for (const [nextX, nextZ] of [[x + 1, z], [x - 1, z], [x, z + 1], [x, z - 1]] as const) {
+      const next = `${nextX},${nextZ}`;
+      const nextY = surface.get(next);
+      if (nextY === undefined || seen.has(next)) continue;
+      const rise = nextY - y;
+      if (rise > UHC_MAX_STEP_BLOCKS || -rise >= UHC_UNESCAPABLE_DROP_BLOCKS) continue;
+      seen.add(next);
+      queue.push(next);
+    }
+  }
+  return false;
 }
 
 function parseSquads(value: raw.RawValue, roster: Roster): readonly SquadIr[] {
@@ -1257,7 +1398,7 @@ type ScenarioHashMode =
   | { readonly mode: typeof GameMode.Civilization; readonly border: FixedBorderSettings; readonly civilization: CivilizationRulesIr };
 
 function hashScenario(
-  schemaVersion: 1 | 2 | 3,
+  schemaVersion: ScenarioSchemaVersion,
   modeSettings: ScenarioHashMode,
   seed: bigint,
   policy: ResourceReference,
@@ -1309,8 +1450,8 @@ function hashScenario(
     if (openingStyleCycle === undefined) throw new Error(`schema-v${schemaVersion} scenario has no opening style cycle`);
     for (const style of openingStyleCycle) hash.string(style);
   }
-  if (schemaVersion === 3) {
-    if (rules === undefined) throw new Error("schema-v3 scenario has no rule mode");
+  if (schemaVersion >= 3) {
+    if (rules === undefined) throw new Error(`schema-v${schemaVersion} scenario has no rule mode`);
     hashRules(hash, rules);
     for (const { seat, controller } of roster.seats) {
       hash.u16(seat);

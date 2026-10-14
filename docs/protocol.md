@@ -148,7 +148,9 @@ and the classic match booleans, including `respawn: false`. `armor` and
 kit items, a per-seat kit field, a missing required kit field, and any other
 roster size. The plugin gives that one kit to each admitted competitor and
 sets natural regeneration off. Classic prepares without `rules` are unchanged.
-The codec and the plugin both check these cross-field rules.
+The codec and the plugin both check these cross-field rules. Scenario schema
+4 does not add a control field. A planned uhc laboratory is world-plan schema
+1, and a legacy prepare still cannot carry `rules`.
 
 ## Tick metrics
 

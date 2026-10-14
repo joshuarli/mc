@@ -1,0 +1,29 @@
+schema = 1
+name = "uhc-melee"
+
+[dimensions]
+width = 33
+depth = 17
+min_y = 0
+max_y = 80
+
+[[operations]]
+kind = "cuboid"
+from = { x = 0, y = 64, z = 0 }
+to = { x = 32, y = 64, z = 16 }
+block = "minecraft:stone"
+
+[[operations]]
+kind = "spawn"
+seat = 0
+position = { x = 10, y = 65, z = 8 }
+
+[[operations]]
+kind = "spawn"
+seat = 1
+position = { x = 22, y = 65, z = 8 }
+
+[[operations]]
+kind = "loot_container"
+position = { x = 16, y = 65, z = 8 }
+inventory = ["minecraft:bread"]

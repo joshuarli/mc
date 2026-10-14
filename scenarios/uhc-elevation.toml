@@ -1,0 +1,57 @@
+schema = 4
+name = "uhc-elevation"
+mode = "hunger_games"
+seed = 260114
+map = "../maps/uhc-elevation.toml"
+policy = "../policies/baseline.toml"
+opening_styles = ["explorer", "scavenger", "hunter"]
+
+[roster]
+competitors = 2
+spectator_capacity = 2
+
+[server]
+minecraft = "26.1.2"
+view_distance_chunks = 6
+simulation_distance_chunks = 5
+max_tick_rate = 20
+
+[match]
+countdown_ticks = 100
+grace_ticks = 200
+authoritative_max_ticks = 7200
+respawn = false
+block_breaking = false
+block_placing = false
+natural_mobs = false
+natural_random_ticks = false
+
+[border]
+initial_diameter_blocks = 28
+shrink_start_tick = 1200
+shrink_end_tick = 6000
+final_diameter_blocks = 8
+
+[bots]
+strategy_interval_ticks = 4
+path_expansions_per_slice = 2048
+max_pending_paths_per_bot = 1
+perception = "competitive-v1"
+
+[record]
+mode = "evaluation"
+policy_replay = true
+world_outcomes = true
+
+[rules]
+kind = "uhc_duel"
+version = 1
+
+[rules.kit]
+armor = "iron"
+sword = "iron"
+arrows = 16
+golden_apples = 2
+food = "minecraft:cooked_beef"
+food_count = 8
+shield = true

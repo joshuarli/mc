@@ -1,0 +1,29 @@
+schema = 1
+name = "uhc-bow"
+
+[dimensions]
+width = 41
+depth = 41
+min_y = 0
+max_y = 80
+
+[[operations]]
+kind = "cuboid"
+from = { x = 0, y = 64, z = 0 }
+to = { x = 40, y = 64, z = 40 }
+block = "minecraft:stone"
+
+[[operations]]
+kind = "spawn"
+seat = 0
+position = { x = 6, y = 65, z = 20 }
+
+[[operations]]
+kind = "spawn"
+seat = 1
+position = { x = 34, y = 65, z = 20 }
+
+[[operations]]
+kind = "loot_container"
+position = { x = 20, y = 65, z = 20 }
+inventory = ["minecraft:bread"]

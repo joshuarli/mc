@@ -53,6 +53,7 @@ export type {
   HungerGamesScenarioV1Ir,
   HungerGamesScenarioV2Ir,
   HungerGamesScenarioV3Ir,
+  HungerGamesScenarioV4Ir,
   ItemStackIr,
   MatchSettings,
   OpeningStyle,
