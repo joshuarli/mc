@@ -86,5 +86,6 @@ export interface CompletedOwnedRun {
   readonly competitors: readonly PlayerIdentity[];
   readonly spectators: readonly PlayerIdentity[];
   readonly stats: readonly StoppedPlayerStats[];
+  readonly seatPolicies?: readonly Readonly<{ seat: number; candidate: string; semanticId: string }>[];
   readonly degraded?: readonly import('../workers/cohort.js').WorkerLoss[];
 }

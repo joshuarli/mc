@@ -3,7 +3,9 @@ import {
   decideOpening,
   normalizeOpeningPolicyReplayInputV4,
   normalizePolicyReplayInputV4,
+  PolicyParams as CorePolicyParams,
   type AgentObservation,
+  type CompiledCandidate,
   type Decision,
   type DeterministicRandom,
   type OpeningPolicyContext,
@@ -63,6 +65,65 @@ export function decideRuntimeOpeningPolicy(
   const input = normalizeOpeningPolicyReplayInputV4({ observation, memory, feedback, params, random,
     opening: { seed: assignment.seed, style: assignment.style, cycle: assignment.cycle, state: assignment.state } });
   const result = decideOpening(observation, memory, params, random, feedback, opening);
+  const { openingState, ...decision } = result;
+  return Object.freeze({ input, decision, openingState, rngStateAfter: random.snapshotState() });
+}
+
+const candidateParams = new Map<string, CorePolicyParams>();
+
+export function candidatePolicyParams(candidate: CompiledCandidate): CorePolicyParams {
+  let params = candidateParams.get(candidate.semanticId);
+  if (params === undefined) {
+    const values = candidate.params;
+    params = CorePolicyParams.create({
+      version: 1,
+      eatAtHungerOrBelow: values.eatAtHungerOrBelow,
+      retreatAtHealthHalfHeartsOrBelow: values.retreatAtHealthHalfHeartsOrBelow,
+      borderMarginBlocks: values.borderMarginBlocks,
+      fightRangeBlocks: values.fightRangeBlocks,
+      opponentMemoryTicks: values.opponentMemoryTicks,
+      lootHysteresisBlocks: values.lootHysteresisBlocks,
+      searchRadiusBlocks: values.searchRadiusBlocks,
+    });
+    candidateParams.set(candidate.semanticId, params);
+  }
+  return params;
+}
+
+export function decideRuntimeCandidatePolicy(
+  candidate: CompiledCandidate,
+  observation: AgentObservation,
+  memory: PolicyMemory,
+  random: DeterministicRandom,
+  feedback: PolicyFeedbackBatch = [],
+): RuntimePolicyDecision {
+  const input = normalizePolicyReplayInputV4({
+    observation, memory, params: candidatePolicyParams(candidate), random, feedback,
+  });
+  const decision = candidate.decide(observation, memory, random, feedback);
+  return Object.freeze({ input, decision, rngStateAfter: random.snapshotState() });
+}
+
+export function decideRuntimeCandidateOpening(
+  candidate: CompiledCandidate,
+  observation: AgentObservation,
+  memory: PolicyMemory,
+  random: DeterministicRandom,
+  feedback: PolicyFeedbackBatch,
+  assignment: Readonly<{
+    readonly seed: bigint;
+    readonly seat: number;
+    readonly style: CoreOpeningStyle;
+    readonly cycle: CoreOpeningStyleCycle;
+    readonly state: OpeningPolicyState;
+  }>,
+): RuntimeOpeningPolicyDecision {
+  const input = normalizeOpeningPolicyReplayInputV4({
+    observation, memory, feedback, params: candidatePolicyParams(candidate), random,
+    opening: { seed: assignment.seed, style: assignment.style, cycle: assignment.cycle, state: assignment.state },
+  });
+  const result = candidate.decideOpening(observation, memory, random, feedback,
+    { style: assignment.style, state: assignment.state });
   const { openingState, ...decision } = result;
   return Object.freeze({ input, decision, openingState, rngStateAfter: random.snapshotState() });
 }

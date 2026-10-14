@@ -133,7 +133,7 @@ export function parseSegment(input: string | Uint8Array): TraceSegment {
   }
   if (root.schema !== FUNNEL_TRACE_SCHEMA_VERSION && records.some((record) => record.schema === 'action-funnel-v1'
     || record.schema === 'worker-topology-v1' || record.schema === 'worker-loss-v1'
-    || record.schema === 'client-diagnostic-v1')) {
+    || record.schema === 'client-diagnostic-v1' || record.schema === 'seat-policy-v1')) {
     throw traceFailure('unsupported_funnel_schema');
   }
   if (root.schema !== FUNNEL_TRACE_SCHEMA_VERSION && records.some((record) => record.schema === 'policy-replay-v4')) {

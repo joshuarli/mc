@@ -14,6 +14,7 @@ export type RunNoteRecord =
     reason: string;
     tick: number | null;
   }>
+  | SeatPolicyNote
   | Readonly<{
     schema: 'client-diagnostic-v1';
     seat: number;
@@ -23,4 +24,16 @@ export type RunNoteRecord =
     consecutive_observations: number;
   }>;
 
-export const RUN_NOTE_SCHEMAS: readonly string[] = ['worker-topology-v1', 'worker-loss-v1', 'client-diagnostic-v1'];
+export interface SeatPolicyNote {
+  readonly schema: 'seat-policy-v1';
+  readonly seat: number;
+  readonly candidate: string;
+  readonly version: number;
+  readonly implementation: string;
+  readonly semantic_id: string;
+  readonly params: Readonly<Record<string, number>>;
+}
+
+export const RUN_NOTE_SCHEMAS: readonly string[] = [
+  'worker-topology-v1', 'worker-loss-v1', 'client-diagnostic-v1', 'seat-policy-v1',
+];

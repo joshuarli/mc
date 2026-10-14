@@ -6,10 +6,14 @@ import { makeCivilizationPolicyEffectRecord, makeCivilizationPolicyReplayRecord,
 import { canonicalJson } from '../canonical.js';
 import type { RuntimeTraceBuilder } from './trace.js';
 import { mapRuntimeFailure } from './failures.js';
-import { decideRuntimeOpeningPolicy, decideRuntimePolicy, isStrategyDecisionTick } from './policy-decision.js';
+import {
+  decideRuntimeCandidateOpening, decideRuntimeCandidatePolicy, decideRuntimeOpeningPolicy, decideRuntimePolicy,
+  isStrategyDecisionTick,
+} from './policy-decision.js';
 import { PolicyCompetitorGate } from './policy-gate.js';
 import type { RuntimeCompetitorClient } from './clients.js';
 import type { ActionFunnelCollector } from './funnel.js';
+import type { CompiledCandidate } from '@arena/core';
 import { makeActionFunnelTraceRecord } from '../funnel-record.js';
 
 type PolicyCompetitor = Pick<RuntimeCompetitorClient, 'seat' | 'gameplay' | 'bot'>;
@@ -54,6 +58,7 @@ export class LivePolicyLoop {
   readonly #fail: (error: unknown) => void;
   readonly #onActivity: ((event: PolicyActivityEvent) => void) | undefined;
   readonly #funnel: ActionFunnelCollector | undefined;
+  readonly #candidates: ReadonlyMap<number, CompiledCandidate> | undefined;
   readonly #memories = new Map<number, PolicyMemory>();
   readonly #openingStates = new Map<number, OpeningPolicyState>();
   readonly #feedback = new Map<number, PolicyFeedbackBatch>();
@@ -83,6 +88,7 @@ export class LivePolicyLoop {
     fail(error: unknown): void;
     onActivity?: (event: PolicyActivityEvent) => void;
     funnel?: ActionFunnelCollector;
+    candidates?: ReadonlyMap<number, CompiledCandidate>;
   }>) {
     this.#trace = options.trace;
     this.#params = options.params;
@@ -94,6 +100,7 @@ export class LivePolicyLoop {
     this.#fail = options.fail;
     this.#onActivity = options.onActivity;
     this.#funnel = options.funnel;
+    this.#candidates = options.candidates;
   }
 
   onTick(tick: number, tickReceivedAtNs?: bigint): void {
@@ -137,14 +144,19 @@ export class LivePolicyLoop {
         const feedback = this.#feedback.get(seat) ?? [];
         this.#feedback.delete(seat);
         const inputObservation = gameplay.client.observe(tick);
+        const candidate = this.#candidates?.get(seat);
         if (this.#openingStyleCycle === undefined) {
-          const result = decideRuntimePolicy(inputObservation, memory, this.#params, random, feedback);
+          const result = candidate === undefined
+            ? decideRuntimePolicy(inputObservation, memory, this.#params, random, feedback)
+            : decideRuntimeCandidatePolicy(candidate, inputObservation, memory, random, feedback);
           return { mode: 'hunger_games' as const, observation: inputObservation, ...result };
         }
         const style = openingStyleForSeat(this.#seed, seat, this.#openingStyleCycle);
         const openingState = this.#openingStates.get(seat) ?? Object.freeze({ cacheTakenAt: null });
-        const result = decideRuntimeOpeningPolicy(inputObservation, memory, this.#params, random, feedback,
-          { seed: this.#seed, seat, style, cycle: this.#openingStyleCycle, state: openingState });
+        const assignment = { seed: this.#seed, seat, style, cycle: this.#openingStyleCycle, state: openingState };
+        const result = candidate === undefined
+          ? decideRuntimeOpeningPolicy(inputObservation, memory, this.#params, random, feedback, assignment)
+          : decideRuntimeCandidateOpening(candidate, inputObservation, memory, random, feedback, assignment);
         this.#openingStates.set(seat, result.openingState);
         return { mode: 'hunger_games' as const, observation: inputObservation, ...result };
       })()

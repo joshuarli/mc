@@ -110,7 +110,7 @@ export function reconstructRunEvidence(evidence: Evidence): ReconstructedRunEvid
     if (record.schema === 'policy-replay-v1' || record.schema === 'policy-replay-v2' || record.schema === 'policy-replay-v3' || record.schema === 'policy-replay-v4' || record.schema === 'policy-effect-v1' || record.schema === 'civilization-policy-replay-v1'
         || record.schema === 'civilization-policy-effect-v1' || record.schema === 'action-funnel-v1'
         || record.schema === 'worker-topology-v1' || record.schema === 'worker-loss-v1'
-        || record.schema === 'client-diagnostic-v1') continue;
+        || record.schema === 'client-diagnostic-v1' || record.schema === 'seat-policy-v1') continue;
     const direction = record.direction;
     if (direction !== 'runner' && direction !== 'plugin') {
       throw eventRecordFailure('invalid_event_direction', recordNumber);

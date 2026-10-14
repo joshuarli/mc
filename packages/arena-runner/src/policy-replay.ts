@@ -9,6 +9,9 @@ import {
   civilizationPolicyContext,
   decideCivilization,
   decideOpening,
+  compileCandidate,
+  type CandidateId,
+  type CompiledCandidate,
   openingPolicyState,
   openingStyleForSeat,
   normalizePolicyReplayInput,
@@ -369,6 +372,7 @@ export function replayPolicyJson(evidence: Evidence): PolicyReplaySummary {
   const activeActions = new Map<number, string>();
   const actionOwners = new Map<string, number>();
   const prepared = readPreparedContext(evidence);
+  const seatCandidates = readSeatCandidates(evidence);
   let previousSequence = 0n;
   let firstSequence: string | undefined;
   let lastSequence: string | undefined;
@@ -399,7 +403,7 @@ export function replayPolicyJson(evidence: Evidence): PolicyReplaySummary {
       previousSequence = sequence;
       firstSequence ??= decision.sequence;
       lastSequence = decision.sequence;
-      const openingTransition = replayDecision(decision, index + 1, prepared?.seed);
+      const openingTransition = replayDecision(decision, index + 1, prepared?.seed, seatCandidates.get(decision.seat));
       if (hasOpeningInput(decision)) {
         if (openingTransition === undefined) throw replayFailure('policy_opening_state_chain_mismatch', index + 1);
         const expectedState = openingStates.get(decision.seat) ?? openingPolicyState({ cacheTakenAt: null });
@@ -469,6 +473,27 @@ export function replayPolicyJson(evidence: Evidence): PolicyReplaySummary {
       .sort(([first], [second]) => first - second)
       .map(([seat, value]) => [String(seat), freezeOpeningEvidence(value)]))),
   };
+}
+
+function readSeatCandidates(evidence: Evidence): ReadonlyMap<number, CompiledCandidate> {
+  const candidates = new Map<number, CompiledCandidate>();
+  for (const [index, record] of evidence.records.entries()) {
+    if (record.schema !== 'seat-policy-v1') continue;
+    const params = record.params;
+    if (typeof record.seat !== 'number' || typeof record.candidate !== 'string' || typeof record.semantic_id !== 'string'
+        || params === null || typeof params !== 'object' || Array.isArray(params) || candidates.has(record.seat)) {
+      throw replayFailure('invalid_seat_policy', index + 1);
+    }
+    let compiled: CompiledCandidate;
+    try {
+      compiled = compileCandidate(record.candidate as CandidateId, params as Record<string, number>);
+    } catch {
+      throw replayFailure('invalid_seat_policy', index + 1, 'candidate');
+    }
+    if (compiled.semanticId !== record.semantic_id) throw replayFailure('seat_policy_identity_mismatch', index + 1, 'semantic_id');
+    candidates.set(record.seat, compiled);
+  }
+  return candidates;
 }
 
 function readPreparedContext(evidence: Evidence): { readonly seats: ReadonlySet<number>; readonly mode: 'hunger_games' | 'civilization'; readonly seed: bigint } | undefined {
@@ -601,6 +626,7 @@ function replayDecision(
   record: PolicyReplayRecord,
   recordNumber: number,
   preparedSeed?: bigint,
+  candidate?: CompiledCandidate,
 ): OpeningPolicyReplayTransition | undefined {
   if (record.schema === 'civilization-policy-replay-v1') {
     const input = strictObject(record.input);
@@ -658,7 +684,9 @@ function replayDecision(
       if (record.opening_state_after !== null) {
         throw replayFailure('policy_opening_state_mismatch', recordNumber, 'opening_state_after');
       }
-      const actualDecision = decide(restored.observation, restored.memory, restored.params, restored.random, restored.feedback);
+      const actualDecision = candidate === undefined
+        ? decide(restored.observation, restored.memory, restored.params, restored.random, restored.feedback)
+        : candidate.decide(restored.observation, restored.memory, restored.random, restored.feedback);
       if (canonicalJson(actualDecision) !== canonicalJson(record.decision)) {
         throw replayFailure('policy_decision_mismatch', recordNumber, 'decision');
       }
@@ -678,8 +706,11 @@ function replayDecision(
     }
     let actual: ReturnType<typeof decideOpening>;
     try {
-      actual = decideOpening(restored.observation, restored.memory, restored.params, restored.random, restored.feedback,
-        { style: restored.opening.style, state: restored.opening.state });
+      actual = candidate === undefined
+        ? decideOpening(restored.observation, restored.memory, restored.params, restored.random, restored.feedback,
+          { style: restored.opening.style, state: restored.opening.state })
+        : candidate.decideOpening(restored.observation, restored.memory, restored.random, restored.feedback,
+          { style: restored.opening.style, state: restored.opening.state });
     } catch {
       throw replayFailure('invalid_policy_input', recordNumber, 'input.opening');
     }

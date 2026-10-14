@@ -39,6 +39,7 @@ import { externalSeats } from '../effective-scenario.js';
 import { ActionFunnelCollector, flushDiagnosticRings } from './funnel.js';
 import { launchWorkerProcess, WorkerCohort, type WorkerLauncher } from '../workers/cohort.js';
 import { parseWorkerCount } from '../workers/assignment.js';
+import { compileCandidate, type CandidateId, type CompiledCandidate } from '@arena/core';
 import { assertEventSeatsInRoster } from './roster-bounds.js';
 import {
   paperArguments,
@@ -114,6 +115,7 @@ export interface RunPreparedRunOptions {
   readonly waitForExternalPlayer?: true;
   readonly externalJoinTimeoutMs?: number;
   readonly workers?: number;
+  readonly seatCandidates?: ReadonlyMap<number, Readonly<{ id: CandidateId; params?: Readonly<Record<string, number>> }>>;
   readonly workerLauncher?: WorkerLauncher;
   readonly onExternalAdmitted?: (username: string) => void;
   readonly onUnexpectedPlayer?: (username: string) => void;
@@ -183,6 +185,20 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
     if (workerCount > 1 && (scenario.mode !== 'hunger_games' || competitorDriver !== 'baselinePolicy'
         || options.evaluate !== undefined)) {
       throw new RunnerError('invalid_input', 'worker count', { kind: 'workers_require_unattended_hunger_games' });
+    }
+    const seatCandidates = new Map<number, CompiledCandidate>();
+    for (const [seat, request] of options.seatCandidates ?? []) {
+      if (scenario.mode !== 'hunger_games' || !roster.botCompetitors.some((entry) => entry.seat === seat)) {
+        throw new RunnerError('invalid_input', 'seat candidate', { kind: 'candidate_seat_not_a_bot_seat', field: String(seat) });
+      }
+      try {
+        seatCandidates.set(seat, compileCandidate(request.id, request.params ?? {}));
+      } catch (error) {
+        throw new RunnerError('invalid_input', 'seat candidate', { kind: 'invalid_candidate', field: String(seat) }, { cause: error });
+      }
+    }
+    if (seatCandidates.size > 0 && workerCount > 1) {
+      throw new RunnerError('invalid_input', 'worker count', { kind: 'candidates_require_one_worker' });
     }
     const loadedPolicy = await loadPolicy(options, runSignal);
     const policy = loadedPolicy.policy;
@@ -352,6 +368,18 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
     if (prepareEnvelope.type !== 'prepare') {
       throw new RunnerError('runtime_failure', 'prepare command', { kind: 'invalid_prepare_envelope' });
     }
+    if (seatCandidates.size > 0) {
+      if (!recordsActionFunnel) {
+        throw new RunnerError('invalid_input', 'seat candidate', { kind: 'candidates_require_policy_replay_recording' });
+      }
+      for (const [seat, candidate] of [...seatCandidates.entries()].sort(([a], [b]) => a - b)) {
+        await runtimeTrace.recordRunNote({
+          schema: 'seat-policy-v1', seat, candidate: candidate.id, version: candidate.version,
+          implementation: candidate.implementation, semantic_id: candidate.semanticId,
+          params: { ...candidate.params },
+        });
+      }
+    }
     const clientOptions = { host: CLIENT_HOST, port: GAME_PORT, scenario, signal: runSignal,
       publicRoster: roster.botCompetitors.map((entry) => ({ seat: entry.seat, username: entry.username, offlineUuid: entry.offline_uuid })) } as const;
     clients = (cohort !== undefined ? [] : roster.botCompetitors).map((competitor) => new RuntimeCompetitorClient(
@@ -518,6 +546,10 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
       spectators: roster.spectators,
       stats,
       ...(cohort !== undefined && cohort.losses.length > 0 ? { degraded: cohort.losses } : {}),
+      ...(seatCandidates.size === 0 ? {} : {
+        seatPolicies: Object.freeze([...seatCandidates.entries()].sort(([a], [b]) => a - b)
+          .map(([seat, candidate]) => Object.freeze({ seat, candidate: candidate.id, semanticId: candidate.semanticId }))),
+      }),
     });
   } catch (error) {
     const failure = runSignal.reason instanceof RunnerError ? runSignal.reason : error;
@@ -600,6 +632,7 @@ class ControlCoordinator {
     strategyIntervalTicks: bigint;
     competitors(): readonly RuntimeCompetitorClient[];
     funnel?: ActionFunnelCollector;
+    candidates?: ReadonlyMap<number, CompiledCandidate>;
     rosterSize: number;
     onPhase?: (phase: ClockPayload['phase']) => void;
     recordPolicy: boolean;
@@ -629,6 +662,7 @@ class ControlCoordinator {
         strategyIntervalTicks: options.strategyIntervalTicks,
         recordPolicy: options.recordPolicy,
         ...(options.funnel === undefined ? {} : { funnel: options.funnel }),
+        ...(options.candidates === undefined ? {} : { candidates: options.candidates }),
         competitors: options.competitors,
         fail: (error) => this.#fail(error),
         ...(options.onPolicyActivity === undefined ? {} : { onActivity: options.onPolicyActivity }),
