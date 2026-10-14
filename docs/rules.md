@@ -34,17 +34,24 @@ direction and 8,192 total prepared chunks.
 
 For a schema-3 natural plan the plugin resolves each seat with a bounded,
 deterministic candidate search instead of requiring the declared column to
-be safe. Candidates are the declared column, then Chebyshev rings of radius
-1 through 24 ordered by distance to the border center, then x, then z, at most 1,024 per seat. A candidate needs a
-safe full-block support, two clear blocks, no lava, fire, magma, cactus,
-campfire, berry bush, powder snow, or cobweb within one block, a safe
-adjacent escape column, and two blocks of separation from already chosen
-seats. The first passing candidate without a drop of two or more blocks beside it wins; if only cliff-edge candidates pass, the first of them is used; if none passes, preparation fails
-and lists the per-reason rejection counts. After the match settings are known, `prepare` also rejects a searched spawn that lies outside the initial border. The world seed is never
-rerolled. The recipe string and the chosen spawn and chest positions feed a
-world identity hash that the plugin logs as `ARENA_NATURAL_WORLD`. Cache
-chests in a schema-3 plan additionally reject hazards within one block.
-Schema-1 and schema-2 plans keep the declared-column checks.
+be safe. World setup prepares chunks and places the caches; the search runs
+when `prepare` arrives, because only then is the initial border known.
+Candidates are the declared column, then Chebyshev rings of radius 1 through
+48 (at most the view-distance halo, so inside the prepared chunks) ordered by
+distance to the border center, then x, then z, keeping at most 2,048 per seat
+and only columns inside the initial border minus one block. A candidate needs
+a safe full-block support (water and other non-solid columns fail here, which
+moves a seat toward the nearest land), two clear blocks, no lava, fire,
+magma, cactus, campfire, berry bush, powder snow, or cobweb within one block,
+a safe adjacent escape column, and two blocks of separation from already
+chosen seats. The first passing candidate without a drop of two or more
+blocks beside it wins; if only cliff-edge candidates pass, the first of them
+is used; if none passes, `prepare` is rejected as `invalid_world` with
+per-seat, per-reason rejection counts (truncated to 1,000 characters). The
+world seed is never rerolled. The recipe string and the chosen spawn and
+chest positions feed a world identity hash that the plugin logs as
+`ARENA_NATURAL_WORLD`. Cache chests in a schema-3 plan additionally reject
+hazards within one block. Schema-1 and schema-2 plans keep the declared-column checks.
 
 Frontier survival (rule mode `frontier_survival` v1) lets competitors break
 and place blocks only within the edit radius of the border center, never on a

@@ -15,11 +15,13 @@ import org.bukkit.Material;
 
 final class NaturalWorldSetup {
     static final String DECLARED_COLUMN_RECIPE = "declared-columns-v1";
-    static final int SEARCH_RING_RADIUS_BLOCKS = 24;
-    static final int SEARCH_MAX_CANDIDATES_PER_SEAT = 1024;
-    static final String BOUNDED_SEARCH_RECIPE = "spawn-search-v4;ring-radius=" + SEARCH_RING_RADIUS_BLOCKS
+    static final int SEARCH_RING_RADIUS_BLOCKS = 48;
+    static final int SEARCH_MAX_CANDIDATES_PER_SEAT = 2048;
+    static final double SEARCH_BORDER_INSET_BLOCKS = 1.0;
+    static final String DEFERRED_SEARCH_RECIPE = "spawn-search-deferred";
+    static final String BOUNDED_SEARCH_RECIPE = "spawn-search-v5;ring-radius=" + SEARCH_RING_RADIUS_BLOCKS
             + ";max-candidates=" + SEARCH_MAX_CANDIDATES_PER_SEAT
-            + ";order=declared,chebyshev-ring,center-distance,x-then-z;preference=no-cliff-edge";
+            + ";border-inset=1;order=declared,chebyshev-ring,center-distance,x-then-z;preference=no-cliff-edge";
     private static final Set<Material> HAZARDS = Set.of(
             Material.LAVA, Material.FIRE, Material.SOUL_FIRE, Material.MAGMA_BLOCK, Material.CACTUS,
             Material.CAMPFIRE, Material.SOUL_CAMPFIRE, Material.SWEET_BERRY_BUSH, Material.WITHER_ROSE,
@@ -79,7 +81,7 @@ final class NaturalWorldSetup {
 
         boolean searching = plan.schemaVersion() == NaturalMapPlan.SCHEMA_VERSION_GENERALIZED_ROSTER;
         List<MapPlan.SpawnPoint> resolvedSpawns = searching
-                ? searchSpawns(plan, world, materials)
+                ? provisionalSpawns(plan, world)
                 : resolveDeclaredSpawns(plan, world, materials);
 
         List<MapPlan.LootContainer> resolvedLoot = new ArrayList<>(plan.lootContainers().size());
@@ -111,9 +113,27 @@ final class NaturalWorldSetup {
             }
             world.setWorldSpawn(resolvedSpawns.getFirst().position());
         }
-        String recipe = searching ? BOUNDED_SEARCH_RECIPE : DECLARED_COLUMN_RECIPE;
+        String recipe = searching ? DEFERRED_SEARCH_RECIPE : DECLARED_COLUMN_RECIPE;
         return new PreparedWorld(resolvedSpawns, resolvedLoot, chunks.size(), recipe,
                 worldIdentity(plan, recipe, resolvedSpawns, resolvedLoot));
+    }
+
+    private static List<MapPlan.SpawnPoint> provisionalSpawns(NaturalMapPlan plan, SurfaceAccess world) {
+        List<MapPlan.SpawnPoint> provisional = new ArrayList<>(plan.spawns().size());
+        for (NaturalMapPlan.SurfaceSpawnPoint spawn : plan.spawns()) {
+            provisional.add(new MapPlan.SpawnPoint(spawn.seat(), resolveSpawnPosition(world, spawn.column())));
+        }
+        return provisional;
+    }
+
+    static List<MapPlan.SpawnPoint> resolveSpawns(
+            NaturalMapPlan plan,
+            SurfaceAccess world,
+            ArenaChunkGenerator.MaterialCatalog materials,
+            int viewDistanceChunks,
+            double initialBorderRadiusBlocks) {
+        int radius = Math.min(SEARCH_RING_RADIUS_BLOCKS, Math.max(0, viewDistanceChunks) * 16);
+        return searchSpawns(plan, world, materials, radius, initialBorderRadiusBlocks);
     }
 
     private static List<MapPlan.SpawnPoint> resolveDeclaredSpawns(
@@ -145,9 +165,18 @@ final class NaturalWorldSetup {
             NaturalMapPlan.SurfaceColumn declared,
             WorldPlan.Footprint footprint,
             NaturalMapPlan.BorderCenter center) {
+        return searchCandidates(declared, footprint, center, SEARCH_RING_RADIUS_BLOCKS, 0.0);
+    }
+
+    static List<NaturalMapPlan.SurfaceColumn> searchCandidates(
+            NaturalMapPlan.SurfaceColumn declared,
+            WorldPlan.Footprint footprint,
+            NaturalMapPlan.BorderCenter center,
+            int searchRadius,
+            double borderRadius) {
         List<NaturalMapPlan.SurfaceColumn> candidates = new ArrayList<>();
         candidates.add(declared);
-        for (int ring = 1; ring <= SEARCH_RING_RADIUS_BLOCKS
+        for (int ring = 1; ring <= searchRadius
                 && candidates.size() < SEARCH_MAX_CANDIDATES_PER_SEAT; ring++) {
             List<NaturalMapPlan.SurfaceColumn> ringColumns = new ArrayList<>();
             for (int dx = -ring; dx <= ring; dx++) {
@@ -172,9 +201,17 @@ final class NaturalWorldSetup {
                     .thenComparingInt(NaturalMapPlan.SurfaceColumn::x)
                     .thenComparingInt(NaturalMapPlan.SurfaceColumn::z));
             for (NaturalMapPlan.SurfaceColumn column : ringColumns) {
-                if (candidates.size() < SEARCH_MAX_CANDIDATES_PER_SEAT) {
-                    candidates.add(column);
+                if (candidates.size() >= SEARCH_MAX_CANDIDATES_PER_SEAT) {
+                    break;
                 }
+                if (borderRadius > 0.0) {
+                    double cx = column.x() + 0.5 - center.x();
+                    double cz = column.z() + 0.5 - center.z();
+                    if (Math.sqrt(cx * cx + cz * cz) > borderRadius - SEARCH_BORDER_INSET_BLOCKS) {
+                        continue;
+                    }
+                }
+                candidates.add(column);
             }
         }
         return candidates;
@@ -183,7 +220,9 @@ final class NaturalWorldSetup {
     private static List<MapPlan.SpawnPoint> searchSpawns(
             NaturalMapPlan plan,
             SurfaceAccess world,
-            ArenaChunkGenerator.MaterialCatalog materials) {
+            ArenaChunkGenerator.MaterialCatalog materials,
+            int searchRadius,
+            double borderRadius) {
         Set<NaturalMapPlan.SurfaceColumn> cacheColumns = plan.lootContainers().stream()
                 .map(NaturalMapPlan.SurfaceLootContainer::column)
                 .collect(Collectors.toSet());
@@ -193,7 +232,7 @@ final class NaturalWorldSetup {
             Map<String, Integer> rejections = new LinkedHashMap<>();
             MapPlan.SpawnPoint found = null;
             MapPlan.SpawnPoint cliffFallback = null;
-            List<NaturalMapPlan.SurfaceColumn> candidates = searchCandidates(spawn.column(), plan.footprint(), plan.borderCenter());
+            List<NaturalMapPlan.SurfaceColumn> candidates = searchCandidates(spawn.column(), plan.footprint(), plan.borderCenter(), searchRadius, borderRadius);
             for (NaturalMapPlan.SurfaceColumn candidate : candidates) {
                 String rejection = cacheColumns.contains(candidate) ? "cache-column" : null;
                 MapPlan.Position feet = null;
@@ -311,7 +350,7 @@ final class NaturalWorldSetup {
         return false;
     }
 
-    private static String worldIdentity(
+    static String worldIdentity(
             NaturalMapPlan plan,
             String recipe,
             List<MapPlan.SpawnPoint> spawns,

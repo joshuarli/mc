@@ -65,22 +65,22 @@ final class NaturalWorldSetupTest {
         TestWorld world = new TestWorld();
         world.waterColumns.add(columnKey(100, 100));
 
-        NaturalWorldSetup.PreparedWorld prepared = NaturalWorldSetup.prepare(plan, world, 2, TEST_MATERIALS);
+        List<MapPlan.SpawnPoint> resolved = resolve(plan, world);
 
-        assertEquals(List.of(new MapPlan.SpawnPoint(0, new MapPlan.Position(99, 65, 100))), prepared.spawns());
-        assertEquals(NaturalWorldSetup.BOUNDED_SEARCH_RECIPE, prepared.spawnRecipe());
+        assertEquals(List.of(new MapPlan.SpawnPoint(0, new MapPlan.Position(99, 65, 100))), resolved);
         TestWorld repeat = new TestWorld();
         repeat.waterColumns.add(columnKey(100, 100));
-        NaturalWorldSetup.PreparedWorld again = NaturalWorldSetup.prepare(plan, repeat, 2, TEST_MATERIALS);
-        assertEquals(prepared.worldIdentity(), again.worldIdentity());
-        NaturalWorldSetup.PreparedWorld unmoved = NaturalWorldSetup.prepare(plan, new TestWorld(), 2, TEST_MATERIALS);
-        assertEquals(new MapPlan.Position(100, 65, 100), unmoved.spawns().getFirst().position());
-        assertFalse(prepared.worldIdentity().equals(unmoved.worldIdentity()));
+        assertEquals(resolved, resolve(plan, repeat));
+        List<MapPlan.SpawnPoint> unmoved = resolve(plan, new TestWorld());
+        assertEquals(new MapPlan.Position(100, 65, 100), unmoved.getFirst().position());
+        List<MapPlan.LootContainer> noLoot = List.of();
+        assertFalse(NaturalWorldSetup.worldIdentity(plan, NaturalWorldSetup.BOUNDED_SEARCH_RECIPE, resolved, noLoot)
+                .equals(NaturalWorldSetup.worldIdentity(plan, NaturalWorldSetup.BOUNDED_SEARCH_RECIPE, unmoved, noLoot)));
     }
 
     @Test
     void searchPlanReportsDiagnosticsInsteadOfRerollingWhenNoCandidateIsSafe() {
-        NaturalMapPlan plan = searchPlan(List.of(spawn(0, 100, 100)), List.of(loot(120, 100)));
+        NaturalMapPlan plan = searchPlan(List.of(spawn(0, 100, 100)), List.of(loot(200, 200)));
         TestWorld world = new TestWorld();
         for (int x = 60; x <= 140; x++) {
             for (int z = 60; z <= 140; z++) {
@@ -88,12 +88,10 @@ final class NaturalWorldSetupTest {
             }
         }
 
-        IllegalStateException failure = assertThrows(IllegalStateException.class,
-                () -> NaturalWorldSetup.prepare(plan, world, 2, TEST_MATERIALS));
+        IllegalStateException failure = assertThrows(IllegalStateException.class, () -> resolve(plan, world));
 
-        assertTrue(failure.getMessage().contains("seat 0 declared at (100,100) examined 1024 candidates"));
-        assertTrue(failure.getMessage().contains("unsafe-support=1024"));
-        assertEquals(List.of(), world.placedChests);
+        assertTrue(failure.getMessage().contains("seat 0 declared at (100,100) examined 2048 candidates"));
+        assertTrue(failure.getMessage().contains("unsafe-support=2048"));
     }
 
     @Test
@@ -101,8 +99,7 @@ final class NaturalWorldSetupTest {
         NaturalMapPlan plan = searchPlan(List.of(spawn(0, 100, 100)), List.of(loot(120, 100)));
         TestWorld hazard = new TestWorld();
         hazard.hazardPositions.add(new MapPlan.Position(101, 65, 100));
-        assertEquals(new MapPlan.Position(99, 65, 100),
-                NaturalWorldSetup.prepare(plan, hazard, 2, TEST_MATERIALS).spawns().getFirst().position());
+        assertEquals(new MapPlan.Position(99, 65, 100), resolve(plan, hazard).getFirst().position());
 
         TestWorld boxed = new TestWorld();
         boxed.blockedPositions.addAll(List.of(
@@ -122,12 +119,11 @@ final class NaturalWorldSetupTest {
         water.waterColumns.add(columnKey(380, 649));
         water.blockedPositions.add(new MapPlan.Position(425, 66, 557));
 
-        NaturalWorldSetup.PreparedWorld prepared =
-                NaturalWorldSetup.prepare(searchPlan(spawns, loot), water, 2, TEST_MATERIALS);
+        List<MapPlan.SpawnPoint> resolved = resolve(searchPlan(spawns, loot), water);
 
-        assertEquals(6, prepared.spawns().size());
-        assertTrue(prepared.spawns().stream().noneMatch(spawn -> spawn.position().equals(new MapPlan.Position(380, 65, 588))));
-        assertEquals(new MapPlan.Position(425, 65, 620), prepared.spawns().getFirst().position());
+        assertEquals(6, resolved.size());
+        assertTrue(resolved.stream().noneMatch(spawn -> spawn.position().equals(new MapPlan.Position(380, 65, 588))));
+        assertEquals(new MapPlan.Position(425, 65, 620), resolved.getFirst().position());
         TestWorld legacyWorld = new TestWorld();
         legacyWorld.waterColumns.add(columnKey(380, 588));
         assertThrows(IllegalStateException.class,
@@ -142,10 +138,10 @@ final class NaturalWorldSetupTest {
         cliff.surfaceByColumn.put(columnKey(99, 99), 58);
         cliff.surfaceByColumn.put(columnKey(101, 99), 58);
 
-        NaturalWorldSetup.PreparedWorld prepared = NaturalWorldSetup.prepare(plan, cliff, 2, TEST_MATERIALS);
+        List<MapPlan.SpawnPoint> resolved = resolve(plan, cliff);
 
-        assertFalse(prepared.spawns().getFirst().position().equals(new MapPlan.Position(100, 65, 100)));
-        assertFalse(NaturalWorldSetup.cliffEdge(cliff, prepared.spawns().getFirst().position()));
+        assertFalse(resolved.getFirst().position().equals(new MapPlan.Position(100, 65, 100)));
+        assertFalse(NaturalWorldSetup.cliffEdge(cliff, resolved.getFirst().position()));
         assertTrue(NaturalWorldSetup.cliffEdge(cliff, new MapPlan.Position(100, 65, 100)));
 
         TestWorld edgeEverywhere = new TestWorld();
@@ -156,7 +152,7 @@ final class NaturalWorldSetupTest {
                 }
             }
         }
-        assertEquals(1, NaturalWorldSetup.prepare(plan, edgeEverywhere, 2, TEST_MATERIALS).spawns().size());
+        assertEquals(1, resolve(plan, edgeEverywhere).size());
     }
 
     @Test
@@ -310,6 +306,33 @@ final class NaturalWorldSetupTest {
         WorldPlan.Footprint footprint = new WorldPlan.Footprint(1024, 1024);
         String semanticId = NaturalMapPlan.computeSemanticId(footprint, spawns, loot);
         return new NaturalMapPlan("natural-test", BigInteger.ONE, semanticId, footprint, spawns, loot);
+    }
+
+    private static List<MapPlan.SpawnPoint> resolve(NaturalMapPlan plan, TestWorld world) {
+        NaturalWorldSetup.prepare(plan, world, 2, TEST_MATERIALS);
+        return NaturalWorldSetup.resolveSpawns(plan, world, TEST_MATERIALS, 6, 0.0);
+    }
+
+    @Test
+    void searchStaysInsideTheInitialBorderAndPreparedHalo() {
+        NaturalMapPlan plan = searchPlan(List.of(spawn(0, 100, 100)), List.of(loot(200, 200)));
+        TestWorld lake = new TestWorld();
+        for (int x = 90; x <= 130; x++) {
+            for (int z = 90; z <= 130; z++) {
+                lake.waterColumns.add(columnKey(x, z));
+            }
+        }
+        NaturalWorldSetup.prepare(plan, lake, 2, TEST_MATERIALS);
+
+        List<MapPlan.SpawnPoint> wide = NaturalWorldSetup.resolveSpawns(plan, lake, TEST_MATERIALS, 6, 0.0);
+        assertTrue(Math.abs(wide.getFirst().position().x() - 100) > 10
+                || Math.abs(wide.getFirst().position().z() - 100) > 10);
+
+        IllegalStateException tight = assertThrows(IllegalStateException.class,
+                () -> NaturalWorldSetup.resolveSpawns(plan, lake, TEST_MATERIALS, 6, 6.0));
+        assertTrue(tight.getMessage().contains("seat 0 declared at (100,100)"));
+        assertThrows(IllegalStateException.class,
+                () -> NaturalWorldSetup.resolveSpawns(plan, lake, TEST_MATERIALS, 0, 0.0));
     }
 
     private static NaturalMapPlan searchPlan(
