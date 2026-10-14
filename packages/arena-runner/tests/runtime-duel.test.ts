@@ -9,6 +9,7 @@ import {
   type DuelEngagement,
 } from '../src/league/duel.js';
 import { planDigest, type MatchObservation, type MatchPlan, type MatchRunner } from '../src/league/harness.js';
+import { accountAttackFunnel } from '../src/league/contact.js';
 import { seatOpponent } from '../src/league/live-runner.js';
 import { runCli } from '../src/index.js';
 import type { MatchQuality, SeatQuality } from '../src/seat-quality.js';
@@ -26,6 +27,7 @@ const request = {
 function attacks(engaged: number, issued: number): SeatQuality['attacks'] {
   return {
     engaged, issued, rejected: engaged - issued, rejected_by_cause: {}, self_inflicted_rejected: 0,
+    funnel: accountAttackFunnel([]),
   };
 }
 
@@ -59,6 +61,7 @@ function quality(candidateSeat: number, hits: number): MatchQuality {
     pvp_hits: hits,
     reasons: {},
     eliminations: { total: 0, pvp: 0, by_cause: {} },
+    attack_funnel_records: null,
   };
 }
 
@@ -210,7 +213,7 @@ test('duel plans the opponent pool once per member across the swap matrix', asyn
   });
   const report = result.report;
   const planned = planDuelMatches({ ...pooled, rounds: 1 });
-  assert.equal(report.schema, 1);
+  assert.equal(report.schema, 2);
   assert.equal(report.opponent, 'pool');
   assert.equal(report.pool_version, 1);
   assert.equal(report.matches.length, planned.length);

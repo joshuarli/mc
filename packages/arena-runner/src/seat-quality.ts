@@ -1,19 +1,16 @@
-import { ACTION_FUNNEL_STAGES, type ActionFunnelMissReason } from '@arena/core';
+import { ACTION_FUNNEL_STAGES, type ActionFunnelAction } from '@arena/core';
 import type { Evidence } from './evidence.js';
-import { readActionFunnelTraceRecord } from './funnel-record.js';
+import { readActionFunnelTraceRecord, type ActionFunnelTraceRecordV1 } from './funnel-record.js';
 import { policyDecision } from './funnel-report.js';
+import {
+  accountAttackFunnel,
+  SELF_INFLICTED_REJECTIONS,
+  type AttackFunnelReport,
+  type ContactFunnelRecord,
+} from './league/contact.js';
 import type { TraceRecord } from './trace.js';
 
-export const SELF_INFLICTED_REJECTIONS: ReadonlySet<ActionFunnelMissReason> = new Set<ActionFunnelMissReason>([
-  'outOfGeometricReach',
-  'cooldownNotReady',
-  'aimNotReady',
-  'blockedLineOfSight',
-  'ownershipDeferred',
-  'clientOperationFailed',
-  'friendlyFireRisk',
-  'noAmmunition',
-]);
+export { SELF_INFLICTED_REJECTIONS };
 
 export const QUALITY_GATES = Object.freeze({
   minLootingSeatFraction: 0.75,
@@ -53,6 +50,7 @@ export interface SeatQuality {
     rejected: number;
     rejected_by_cause: Readonly<Record<string, number>>;
     self_inflicted_rejected: number;
+    funnel: AttackFunnelReport;
   }>;
   readonly damage: Readonly<{ dealt: number; taken: number; taken_from_competitors: number }>;
   readonly time_alive_ticks: number;
@@ -69,6 +67,7 @@ export interface MatchQuality {
   readonly pvp_hits: number;
   readonly reasons: Readonly<Record<string, number>>;
   readonly eliminations: Readonly<{ total: number; pvp: number; by_cause: Readonly<Record<string, number>> }>;
+  readonly attack_funnel_records: readonly ContactFunnelRecord[] | null;
 }
 
 interface Point { readonly x: number; readonly z: number }
@@ -99,7 +98,7 @@ interface Scan {
   readonly decisionsBySeat: ReadonlyMap<number, readonly SeatDecision[]>;
   readonly effects: ReadonlyMap<string, string>;
   readonly candidates: ReadonlyMap<number, string>;
-  readonly funnelBySeat: ReadonlyMap<number, readonly FunnelOutcome[]>;
+  readonly funnelBySeat: ReadonlyMap<number, readonly ContactFunnelRecord[]>;
   readonly notesBySeat: ReadonlyMap<number, readonly ExplainEntry[]>;
   readonly damage: readonly DamageEntry[];
   readonly eliminations: readonly { tick: number; seat: number; cause: string }[];
@@ -124,7 +123,7 @@ function scan(evidence: Evidence): Scan {
   const decisionsBySeat = new Map<number, SeatDecision[]>();
   const effects = new Map<string, string>();
   const candidates = new Map<number, string>();
-  const funnelBySeat = new Map<number, FunnelOutcome[]>();
+  const funnelBySeat = new Map<number, ContactFunnelRecord[]>();
   const damage: DamageEntry[] = [];
   const eliminations: { tick: number; seat: number; cause: string }[] = [];
   const failedNavigation = new Set<string>();
@@ -154,9 +153,10 @@ function scan(evidence: Evidence): Scan {
     }
     if (record.schema === 'action-funnel-v1') {
       const funnel = readActionFunnelTraceRecord(record, index + 1);
-      if (funnel.funnel === null || (funnel.funnel.action !== 'attack' && funnel.funnel.action !== 'shoot')) continue;
+      const attack = attackFunnelRecord(funnel);
+      if (attack === null) continue;
       const list = funnelBySeat.get(funnel.seat) ?? [];
-      list.push(funnel.funnel);
+      list.push(attack);
       funnelBySeat.set(funnel.seat, list);
       continue;
     }
@@ -243,6 +243,7 @@ export function matchQuality(evidence: Evidence): MatchQuality {
     pvp_hits: hits,
     reasons: matchReasons,
     eliminations: { total: eliminations.length, pvp, by_cause: byCause },
+    attack_funnel_records: [...funnelBySeat.values()].flat(),
   };
 }
 
@@ -388,25 +389,40 @@ function idleReason(
   return { reason: `no_progress:${previous.intent}`, class: 'unexplained' };
 }
 
-type FunnelOutcome = NonNullable<ReturnType<typeof readActionFunnelTraceRecord>['funnel']>;
+function attackAction(action: ActionFunnelAction): ContactFunnelRecord['action'] | null {
+  return action === 'attack' || action === 'shoot' ? action : null;
+}
 
-function attacksOf(outcomes: readonly FunnelOutcome[]): SeatQuality['attacks'] {
+function attackFunnelRecord(record: ActionFunnelTraceRecordV1): ContactFunnelRecord | null {
+  if (record.funnel === null) return null;
+  const action = attackAction(record.funnel.action);
+  if (action === null) return null;
+  if (record.funnel.kind === 'reached') {
+    return { action, kind: 'reached', stage: record.funnel.stage, reason: null, seat: record.seat, tick: record.tick };
+  }
+  return {
+    action, kind: 'stopped', stage: record.funnel.last_passed, reason: record.funnel.reason, seat: record.seat, tick: record.tick,
+  };
+}
+
+function attacksOf(records: readonly ContactFunnelRecord[]): SeatQuality['attacks'] {
   let issued = 0;
   let rejected = 0;
   let selfInflicted = 0;
   const byCause: Record<string, number> = {};
-  for (const outcome of outcomes) {
-    const last = outcome.kind === 'reached' ? outcome.stage : outcome.last_passed;
-    if (ACTION_FUNNEL_STAGES.indexOf(last) >= ISSUED_INDEX) {
+  for (const record of records) {
+    if (ACTION_FUNNEL_STAGES.indexOf(record.stage) >= ISSUED_INDEX) {
       issued += 1;
       continue;
     }
-    if (outcome.kind !== 'stopped') continue;
+    if (record.kind !== 'stopped' || record.reason === null) continue;
     rejected += 1;
-    byCause[outcome.reason] = (byCause[outcome.reason] ?? 0) + 1;
-    if (SELF_INFLICTED_REJECTIONS.has(outcome.reason)) selfInflicted += 1;
+    byCause[record.reason] = (byCause[record.reason] ?? 0) + 1;
+    if (SELF_INFLICTED_REJECTIONS.has(record.reason)) selfInflicted += 1;
   }
-  return { engaged: outcomes.length, issued, rejected, rejected_by_cause: byCause, self_inflicted_rejected: selfInflicted };
+  const funnel = accountAttackFunnel(records);
+  if (funnel.issued !== issued) throw new TypeError(`issued attacks ${issued} do not match funnel ${funnel.issued}`);
+  return { engaged: records.length, issued, rejected, rejected_by_cause: byCause, self_inflicted_rejected: selfInflicted, funnel };
 }
 
 function deathOf(
@@ -463,6 +479,7 @@ export function qualityGates(matches: readonly QualityMatchInput[]): readonly Qu
   const pvpDeaths = sum(withQuality.map((match) => match.quality.eliminations.pvp));
   const issued = sum(seats.map((seat) => seat.attacks.issued));
   const selfInflicted = sum(seats.map((seat) => seat.attacks.self_inflicted_rejected));
+  const issuedIllegal = sum(seats.map((seat) => seat.attacks.funnel.issued_illegal_count));
   const worstIdle = seats.length === 0 ? null : Math.max(...seats.map((seat) => seat.idle.max_unexplained_span_ticks));
   return [
     gate('all_terminate', 'matches that terminate', terminated, 1, 'min'),
@@ -471,6 +488,8 @@ export function qualityGates(matches: readonly QualityMatchInput[]): readonly Qu
       QUALITY_GATES.minPvpEliminationFraction, 'min'),
     gate('self_inflicted_rejections', 'self-inflicted attack rejections per issued attack',
       issued === 0 ? null : selfInflicted / issued, QUALITY_GATES.maxSelfInflictedRejectionFraction, 'max'),
+    gate('issued_illegal_fraction', 'issued illegal swings per issued attack, excluding ownershipDeferred',
+      issued === 0 ? null : issuedIllegal / issued, QUALITY_GATES.maxSelfInflictedRejectionFraction, 'max'),
     gate('no_unexplained_idle', 'longest unexplained idle span in ticks', worstIdle, QUALITY_GATES.maxUnexplainedIdleTicks, 'max'),
   ];
 }

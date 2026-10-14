@@ -4,6 +4,7 @@ import { canonicalJson } from '../canonical.js';
 import { RunnerError } from '../errors.js';
 import { renderQualityTable, type MatchQuality } from '../seat-quality.js';
 import { estimateMean, scoreOutcome, type ScoredMatch } from './analysis.js';
+import { classifyContact, type CombatOpportunities, type ContactAssessment } from './contact.js';
 import {
   planDigest,
   type MatchObservation, type MatchPlan, type MatchRunner, type StoredMatch,
@@ -223,7 +224,7 @@ interface DuelRoundEngagement {
 }
 
 export interface DuelReport {
-  readonly schema: 1;
+  readonly schema: 2;
   readonly kind: 'duel';
   readonly scenario: string;
   readonly candidate: string;
@@ -309,6 +310,7 @@ function duelReport(
       concurrency: entry?.concurrency ?? null,
       run_id: observation?.runId ?? null,
       score,
+      ...contactFields(classifyMatch(observation, score)),
       engagement,
       quality: observation?.quality ?? null,
     };
@@ -336,7 +338,7 @@ function duelReport(
   const estimate = estimateMean(scored, 'tInterval', 0, 0);
   const roundLog = roundEntries(plans, byId);
   const report: DuelReport = {
-    schema: 1 as const,
+    schema: 2 as const,
     kind: 'duel' as const,
     scenario: request.scenario,
     candidate: request.candidate.id,
@@ -372,6 +374,45 @@ function duelReport(
   };
   if (request.opponent.kind !== 'pool') return report;
   return { ...report, pool_version: 1 as const };
+}
+
+function classifyMatch(observation: MatchObservation | undefined, score: 0 | 0.5 | 1 | null): ContactAssessment {
+  if (observation === undefined || observation.status !== 'completed') {
+    return classifyContact({
+      completed: false, legal_outcome: false, score: null, attacks_issued: null, pvp_hits: null, funnel: null, seats: null,
+    });
+  }
+  const quality = observation.quality ?? null;
+  if (quality === null) {
+    return classifyContact({
+      completed: true, legal_outcome: true, score, attacks_issued: null, pvp_hits: null, funnel: null, seats: null,
+    });
+  }
+  return classifyContact({
+    completed: true,
+    legal_outcome: true,
+    score,
+    attacks_issued: quality.seats.reduce((total, seat) => total + seat.attacks.issued, 0),
+    pvp_hits: quality.pvp_hits,
+    funnel: quality.attack_funnel_records,
+    seats: quality.seats.map((seat) => seat.seat),
+  });
+}
+
+function contactFields(contact: ContactAssessment): Pick<
+  ContactAssessment, 'contact_validity' | 'combat_opportunities' | 'combat_skill_qualified' | 'contact_class' | 'attack_funnel'
+> {
+  return {
+    contact_validity: contact.contact_validity,
+    combat_opportunities: contact.combat_opportunities,
+    combat_skill_qualified: contact.combat_skill_qualified,
+    contact_class: contact.contact_class,
+    attack_funnel: contact.attack_funnel,
+  };
+}
+
+function formatOpportunities(value: CombatOpportunities): string {
+  return value.count === null ? value.reason : String(value.count);
 }
 
 function reportedOpponent(request: DuelRunRequest): string {
@@ -445,6 +486,16 @@ function renderDuel(plans: readonly DuelPlannedMatch[], stored: readonly DuelSto
     `duel ${report.candidate} vs ${report.opponent}`,
     `planned ${report.denominators.planned} completed ${report.denominators.completed} failed ${report.denominators.censored_or_failed}`,
     `score mean ${score.mean ?? 'n/a'} lower ${score.lower ?? 'n/a'} upper ${score.upper ?? 'n/a'} method ${score.method} clusters ${score.clusters}`,
+    ...report.matches.flatMap((row) => {
+      const match = row as {
+        status: string; match_id: string; score: 0 | 0.5 | 1 | null; contact_class: string | null;
+        contact_validity: string | null; combat_skill_qualified: boolean | null; combat_opportunities: CombatOpportunities;
+      };
+      if (match.status !== 'completed') return [];
+      return [`${match.match_id} score ${match.score ?? 'n/a'} ${match.contact_class ?? 'n/a'} ${match.contact_validity ?? 'n/a'}`
+        + ` qualified ${match.combat_skill_qualified === null ? 'n/a' : String(match.combat_skill_qualified)}`
+        + ` opportunities ${formatOpportunities(match.combat_opportunities)}`];
+    }),
     `mean if censored lost ${score.mean_if_censored_lost ?? 'n/a'}`,
     `grouped by world seed across both seat assignments${report.timing_sensitive ? ' (timing-sensitive outcomes: matches ran concurrently)' : ''}`,
     `engagement omitted: ${DUEL_ENGAGEMENT_OMITTED.map((entry) => `${entry.field} (${entry.reason})`).join('; ')}`,
