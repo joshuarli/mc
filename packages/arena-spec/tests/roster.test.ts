@@ -7,9 +7,11 @@ import {
   GameMode,
   LEGACY_MAX_COMPETITORS,
   MAX_COMPETITORS,
+  RESERVED_RUNNER_USERNAME_PREFIXES,
   SpecError,
   SpecErrorKind,
   compileScenario,
+  isReservedRunnerUsername,
 } from "../src/index.js";
 
 const SCENARIO_24 = readRepoFile("scenarios/hunger-24.toml");
@@ -263,3 +265,13 @@ function specError(operation: () => unknown): SpecError {
 function readRepoFile(path: string): string {
   return readFileSync(resolve(process.cwd(), path), "utf8");
 }
+
+test("reserved_runner_username_prefixes_are_exported_and_case_insensitive", () => {
+  assert.deepEqual([...RESERVED_RUNNER_USERNAME_PREFIXES], ["ArenaBot", "ArenaSpec"]);
+  for (const name of ["ArenaBot3", "arenabot", "ARENASPEC9", "ArenaSpecX"]) {
+    assert.equal(isReservedRunnerUsername(name), true, name);
+  }
+  for (const name of ["Alex_Fixture", "Arena_Bot", "BotArena"]) {
+    assert.equal(isReservedRunnerUsername(name), false, name);
+  }
+});

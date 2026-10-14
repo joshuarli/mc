@@ -27,6 +27,8 @@ export {
   MIN_FRONTIER_EDIT_RADIUS_BLOCKS,
   SQUAD_ID_PATTERN,
   OPENING_STYLES,
+  RESERVED_RUNNER_USERNAME_PREFIXES,
+  isReservedRunnerUsername,
   compileScenario,
   scenarioMapReference,
 } from "./scenario.js";

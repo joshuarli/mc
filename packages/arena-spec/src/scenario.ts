@@ -51,7 +51,12 @@ const CIVILIZATION_STARTING_KIT = Object.freeze([
 export const MAX_COMPETITORS = 256 as const;
 export const LEGACY_MAX_COMPETITORS = 6 as const;
 export const EXTERNAL_USERNAME_PATTERN = /^[A-Za-z0-9_]{3,16}$/;
-const RESERVED_USERNAME_PREFIXES = ["arenabot", "arenaspec"] as const;
+export const RESERVED_RUNNER_USERNAME_PREFIXES = ["ArenaBot", "ArenaSpec"] as const;
+
+export function isReservedRunnerUsername(username: string): boolean {
+  const folded = username.toLowerCase();
+  return RESERVED_RUNNER_USERNAME_PREFIXES.some((prefix) => folded.startsWith(prefix.toLowerCase()));
+}
 
 export type SeatController =
   | { readonly kind: "bot" }
@@ -480,7 +485,7 @@ function parseExternalSeats(value: raw.RawValue, competitors: number): ReadonlyM
       throw new SpecError(SpecErrorKind.InvalidValue, `${entryPath}.username`, "must be 3 to 16 ASCII letters, digits, or underscores");
     }
     const folded = username.toLowerCase();
-    if (RESERVED_USERNAME_PREFIXES.some((prefix) => folded.startsWith(prefix))) {
+    if (isReservedRunnerUsername(username)) {
       throw new SpecError(SpecErrorKind.Conflict, `${entryPath}.username`, "collides with the runner's bot and spectator identity space");
     }
     if (usernames.has(folded)) {
