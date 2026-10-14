@@ -570,6 +570,7 @@ Do not spend a research phase rediscovering launchers, server replacements, bot 
 - 2026-10-14 resume: Q-resilience stays behind Q-engage (shared `skills.ts`); D-ladder accepts any two-seat hunger scenario until `uhc_duel` merges; Q-trapped runs beside D-ladder because it only edits seat quality.
 - 2026-10-14 Q-resilience: a Mineflayer error whose message contains `this client is quarantined` retires that seat only. `RunDegradation.worker` and `epoch` are `number | null`; a quarantine row uses null, so result JSON `worker_losses` can contain nulls. It is not a `worker-loss-v1` trace note. `--workers` greater than 1 does not copy that row onto the supervisor result.
 - 2026-10-14 steering: the owner stopped execution during the drop duel. That run is not a result. Search and drop commits `92a09ea`, `eea8169`, `6accccf`, and `7e93161` stay on the branch and are a rejected method. Seed 260114 score 0.75 is a match fact and is excluded from combat-skill qualification. Next order is S0, then S1. `decideOpeningV5` ignores `OpeningPolicyContext.style` and returns `context.state` unchanged.
+- 2026-10-14 S0 review: a draw is not a `valid_loss`. Zero attacks and zero PvP hits are not a `valid_win`. The score stays in the mean. `contact_validity` stays `no_combat_demonstrated`.
 
 ## 12. Campaign log (append-only, one line per phase end or parked item)
 
