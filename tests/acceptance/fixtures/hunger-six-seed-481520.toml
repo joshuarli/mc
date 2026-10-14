@@ -1,9 +1,10 @@
-schema = 1
+schema = 2
 name = "hunger-six-seed-481520"
 mode = "hunger_games"
 seed = 481520
 map = "../../../maps/hunger-six.toml"
 policy = "../../../policies/baseline.toml"
+opening_styles = ["explorer", "scavenger", "hunter"]
 
 [roster]
 competitors = 6
