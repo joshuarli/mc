@@ -18,7 +18,7 @@ import {
 import {
   parseLeagueManifest, parseSeedManifest, profileSpec, resolveLeagueManifest, seedsOf, type CandidateSpec,
 } from '../src/league/manifest.js';
-import { seededScenarioSource } from '../src/league/live-runner.js';
+import { seededScenarioFileName, seededScenarioSource } from '../src/league/live-runner.js';
 import { parseTomlSubset } from '../src/league/toml-subset.js';
 import { makePolicyReplayRecordV4, replayPolicyJson } from '../src/policy-replay.js';
 import { decideRuntimeCandidatePolicy, decideRuntimePolicy } from '../src/runtime/policy-decision.js';
@@ -290,6 +290,15 @@ test('paired analysis groups swaps by world seed with the declared interval meth
   assert.ok(first.lower! >= 0.5 && first.upper! <= 1);
   assert.equal(estimateMean([], 'tInterval', 200, 1).mean, null);
   assert.equal(estimateMean([{ worldSeed: 1, score: 1 }], 'bootstrap', 200, 1).lower, null);
+});
+
+test('one duel seed can name two scenarios', () => {
+  const seed = 710114;
+  const bow = seededScenarioFileName(Buffer.from('scenarios/uhc-bow.toml'), seed);
+  const cover = seededScenarioFileName(Buffer.from('scenarios/uhc-cover.toml'), seed);
+  assert.notEqual(bow, cover);
+  assert.equal(bow, seededScenarioFileName(Buffer.from('scenarios/uhc-bow.toml'), seed));
+  assert.match(bow, /^seed-710114-[0-9a-f]{16}\.toml$/);
 });
 
 test('seeded scenario text changes only the world seed and the resource references', () => {

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { CandidateId, DuelPoolId } from '@arena/core';
 import type { ResourceReference } from '@arena/spec';
 import { RunnerError } from '../errors.js';
@@ -21,6 +22,11 @@ export interface LiveMatchRunnerOptions {
   readonly leagueId: string;
   readonly scenarioPath: Buffer;
   readonly scenarioSource: string;
+}
+
+export function seededScenarioFileName(scenarioPath: Buffer, seed: number): string {
+  const scenarioKey = createHash('sha256').update(scenarioPath).digest('hex').slice(0, 16);
+  return `seed-${seed}-${scenarioKey}.toml`;
 }
 
 export function seededScenarioSource(
@@ -139,7 +145,7 @@ export class LiveMatchRunner implements MatchRunner {
   async #seedScenario(seed: number, signal: AbortSignal): Promise<Buffer> {
     const options = this.#options;
     const directory = `.work/arena/league/${options.leagueId}/scenarios`;
-    const path = Buffer.from(`${directory}/seed-${seed}.toml`);
+    const path = Buffer.from(`${directory}/${seededScenarioFileName(options.scenarioPath, seed)}`);
     if (this.#prepared.has(seed)) return path;
     const originalSource = options.scenarioSource;
     const mapReference = /^map = "(.*)"$/m.exec(originalSource)?.[1];
