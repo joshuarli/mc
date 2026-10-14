@@ -50,7 +50,7 @@ export interface ActiveRunEvaluationContext {
   readonly preparedRun: PreparedRun;
   readonly ready: Extract<ControlMessage, { readonly type: 'ready' }>;
   readonly prepare: RunnerCommandEnvelope & { readonly type: 'prepare'; readonly payload: PreparePayload };
-  readonly gameAddress: Readonly<{ host: '127.0.0.1'; port: 25565 }>;
+  readonly gameAddress: Readonly<{ host: '127.0.0.1'; port: number }>;
   readonly competitors: readonly RuntimeCompetitorHandle[];
   readonly spectators: readonly RuntimeSpectatorHandle[];
   events(): readonly RuntimeAuthorityEvent[];

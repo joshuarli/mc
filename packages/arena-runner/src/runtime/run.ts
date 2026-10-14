@@ -53,6 +53,7 @@ import {
   readRuntimePluginJar,
   serverWorkingDirectory,
   stageServerDirectory,
+  DEFAULT_GAME_PORT,
   validateJavaTempDirectory,
 } from './server.js';
 import type { RuntimeServerInputs } from './server.js';
@@ -70,6 +71,7 @@ import type {
   RuntimeAuthorityEvent,
 } from './types.js';
 import { startOwnedServerProcess } from './process.js';
+import { reserveEphemeralGamePort } from './game-port.js';
 import type { OwnedServerProcess, ServerProcessExit } from './process.js';
 import type { OperationalFailurePrimaryV1 } from './failure-artifact.js';
 import { TextDecoder } from 'node:util';
@@ -104,7 +106,6 @@ function assertRuntimePluginCapabilities(
 }
 const SERVER_DIRECTORY = Buffer.from('/server', 'ascii');
 const CLIENT_HOST = '127.0.0.1' as const;
-const GAME_PORT = 25565;
 const STARTUP_TIMEOUT_MS = 60_000;
 const EVALUATOR_JOIN_TIMEOUT_MS = 5_000;
 const MAX_RETAINED_AUTHORITY_EVENTS = 100_000;
@@ -124,6 +125,7 @@ export interface RunPreparedRunOptions {
   readonly competitorDriver?: 'baselinePolicy' | 'evaluator';
   readonly spectatorMode?: RuntimeSpectatorMode;
   readonly waitForExternalPlayer?: true;
+  readonly ephemeralGamePort?: true;
   readonly externalJoinTimeoutMs?: number;
   readonly workers?: number;
   readonly checkpointing?: true;
@@ -144,7 +146,7 @@ export interface RunPreparedRunOptions {
   }) => void;
   readonly onRosterReady?: (details: Readonly<{
     host: typeof CLIENT_HOST;
-    port: typeof GAME_PORT;
+    port: number;
     minecraftVersion: string;
     protocolVersion: number;
   }>) => void;
@@ -202,6 +204,7 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
       throw new RunnerError('invalid_input', 'competitor driver', { kind: 'evaluator_missing' });
     }
     const javaTmpDir = validateJavaTempDirectory(options.ownedRoot);
+    const gamePort = options.ephemeralGamePort === true ? await reserveEphemeralGamePort() : DEFAULT_GAME_PORT;
     const workerCount = parseWorkerCount(options.workers ?? 1);
     if (workerCount > 1 && (scenario.mode !== 'hunger_games' || competitorDriver !== 'baselinePolicy'
         || options.evaluate !== undefined)) {
@@ -242,7 +245,7 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
       : resume.record.seats.filter((entry) => entry.alive).map((entry) => entry.seat));
     const epoch = resume === undefined ? 0 : resume.record.epoch + 1;
     const serverInputs: RuntimeServerInputs = {
-      ...options, javaTmpDir, signal: runSignal,
+      ...options, javaTmpDir, gamePort, signal: runSignal,
       ...(resume === undefined ? {} : {
         resumeCheckpointPath: resolvePath(options.ownedRoot.toString('utf8'), resume.recordPath.toString('utf8')),
       }),
@@ -409,7 +412,7 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
         currentTick: () => coordinator!.lastMatchTick,
         base: {
           host: CLIENT_HOST,
-          port: GAME_PORT,
+          port: gamePort,
           minecraft: scenario.server.minecraft,
           view_distance_chunks: scenario.server.viewDistanceChunks,
           seed: scenario.seed.toString(),
@@ -452,7 +455,7 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
         });
       }
     }
-    const clientOptions = { host: CLIENT_HOST, port: GAME_PORT, scenario, signal: runSignal,
+    const clientOptions = { host: CLIENT_HOST, port: gamePort, scenario, signal: runSignal,
       publicRoster: roster.botCompetitors.map((entry) => ({ seat: entry.seat, username: entry.username, offlineUuid: entry.offline_uuid })) } as const;
     clients = (cohort !== undefined ? [] : roster.botCompetitors.filter((entry) => livingSeats.has(entry.seat))).map((competitor) => new RuntimeCompetitorClient(
       competitor.seat,
@@ -477,7 +480,7 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
     if (startupFailure !== undefined) throw startupFailure;
     options.onRosterReady?.({
       host: CLIENT_HOST,
-      port: GAME_PORT,
+      port: gamePort,
       minecraftVersion: session.ready.payload.server.minecraft_version,
       protocolVersion: session.ready.payload.server.protocol_version,
     });
@@ -531,7 +534,7 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
       preparedRun: options.preparedRun,
       ready: session.ready,
       prepare: prepareEnvelope,
-      gameAddress: Object.freeze({ host: CLIENT_HOST, port: GAME_PORT }),
+      gameAddress: Object.freeze({ host: CLIENT_HOST, port: gamePort }),
       competitors: Object.freeze([...clients]),
       spectators: Object.freeze([...spectators]),
       events: () => Object.freeze([...completedEvents]),
@@ -1121,8 +1124,12 @@ async function createBootstrapWorld(options: Readonly<{
     relativePath: serverPath,
     signal: options.signal,
   });
+  const inputs: RuntimeServerInputs = {
+    ...options.inputs,
+    gamePort: options.options.ephemeralGamePort === true ? await reserveEphemeralGamePort() : DEFAULT_GAME_PORT,
+  };
   await stageServerDirectory({
-    inputs: options.inputs,
+    inputs,
     scenario: options.options.preparedRun.scenario,
     relativePath: serverPath,
     pluginBytes: options.pluginBytes,
@@ -1141,7 +1148,7 @@ async function createBootstrapWorld(options: Readonly<{
   try {
     server = await startPaper(
       options.options,
-      options.inputs,
+      inputs,
       listener.address.port,
       token,
       options.signal,
@@ -1190,6 +1197,7 @@ async function startPaper(
       args: paperArguments(inputs, controlPort, options.preparedRun.runId),
       cwd: serverWorkingDirectory(options.ownedRoot, serverPath),
       env,
+      gamePort: inputs.gamePort ?? DEFAULT_GAME_PORT,
       signal,
     });
   } catch (error) {

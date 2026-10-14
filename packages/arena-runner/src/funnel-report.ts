@@ -158,7 +158,8 @@ export interface DecisionSummary {
 
 export function policyDecision(record: TraceRecord): DecisionSummary | undefined {
   const schema = record.schema;
-  if (schema !== 'policy-replay-v2' && schema !== 'policy-replay-v3' && schema !== 'civilization-policy-replay-v1') return undefined;
+  if (schema !== 'policy-replay-v2' && schema !== 'policy-replay-v3' && schema !== 'policy-replay-v4'
+      && schema !== 'civilization-policy-replay-v1') return undefined;
   const input = record.input as { observation?: Record<string, unknown> };
   const observation = schema === 'civilization-policy-replay-v1'
     ? (input.observation?.base as Record<string, unknown> | undefined)

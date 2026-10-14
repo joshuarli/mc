@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import type { Readable, Writable } from 'node:stream';
 import { RunnerError } from '../errors.js';
+import { DEFAULT_GAME_PORT } from './server.js';
 
 const GRACEFUL_STOP_MS = 15_000;
 const TERMINATION_GRACE_MS = 1_000;
@@ -25,6 +26,7 @@ export interface StartServerProcessOptions {
   readonly args: readonly string[];
   readonly cwd: string;
   readonly env: NodeJS.ProcessEnv;
+  readonly gamePort?: number;
   readonly signal?: AbortSignal;
   readonly output?: Readonly<{
     stdout?: Writable;
@@ -98,6 +100,7 @@ export async function startOwnedServerProcess(
     child,
     options.output?.stdout ?? process.stdout,
     options.output?.stderr ?? process.stderr,
+    options.gamePort ?? DEFAULT_GAME_PORT,
   );
 }
 
@@ -116,7 +119,7 @@ class SpawnedServerProcess implements OwnedServerProcess {
   #ownerRequestedTermination = false;
   #fatalOutputFailure: RunnerError | undefined;
 
-  constructor(child: ChildProcess, stdout: Writable, stderr: Writable) {
+  constructor(child: ChildProcess, stdout: Writable, stderr: Writable, gamePort: number) {
     if (child.pid === undefined) throw new RunnerError('runtime_failure', 'server process', { kind: 'missing_pid' });
     this.pid = child.pid;
     this.#child = child;
@@ -144,7 +147,7 @@ class SpawnedServerProcess implements OwnedServerProcess {
     const bindFailure = (): void => {
       this.#recordOutputFailure(new RunnerError('owner_conflict', 'Paper server port', {
         kind: 'paper_port_bind_failed',
-        field: '25565',
+        field: String(gamePort),
       }));
     };
     this.#outputBindings = Object.freeze([

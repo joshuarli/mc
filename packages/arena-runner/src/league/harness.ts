@@ -1,7 +1,9 @@
 import { createHash } from 'node:crypto';
 import { candidateSemanticId, validateCandidateParams } from '@arena/core';
+import { mapBounded } from '../bounded.js';
 import { canonicalJson } from '../canonical.js';
 import { RunnerError } from '../errors.js';
+import { qualityGates, renderGates, renderQualityTable, type MatchQuality, type QualityGateResult } from '../seat-quality.js';
 import { estimateMean, scoreOutcome, type MatchOutcomeKind, type ScoredMatch } from './analysis.js';
 import {
   opponentLabel,
@@ -35,6 +37,7 @@ export type MatchObservation =
     disconnects: number;
     degraded: boolean;
     attacks: Readonly<Record<number, Readonly<{ engaged: number; issued: number }>>>;
+    quality?: MatchQuality | null;
     runId: string;
   }>
   | Readonly<{ status: 'failed'; reason: string; runId: string }>;
@@ -52,6 +55,7 @@ export interface StoredMatch {
   readonly world_seed: number;
   readonly round: 0 | 1;
   readonly candidate_seats: readonly number[];
+  readonly concurrency?: number;
   readonly observation: MatchObservation;
 }
 
@@ -73,6 +77,7 @@ export interface LeagueStore {
 export interface LeagueProgress {
   matchStarted?(plan: MatchPlan, index: number, total: number): void;
   matchSettled?(plan: MatchPlan, observation: MatchObservation, reused: boolean): void;
+  summary?(text: string): void;
 }
 
 export function candidateSetDigest(manifest: LeagueManifest): string {
@@ -127,6 +132,7 @@ export async function runLeague(options: Readonly<{
   runner: MatchRunner;
   signal: AbortSignal;
   progress?: LeagueProgress;
+  concurrency?: number;
 }>): Promise<object> {
   const { manifest, store, runner, signal } = options;
   const set = resolveSeedSet(manifest, options.seeds);
@@ -151,20 +157,21 @@ export async function runLeague(options: Readonly<{
     }
   }
 
+  const concurrency = options.concurrency ?? 1;
   const plans = planMatches(manifest, set);
-  const stored: StoredMatch[] = [];
-  for (const [index, plan] of plans.entries()) {
+  const slots: (StoredMatch | undefined)[] = [];
+  for (const plan of plans) {
     signal.throwIfAborted();
-    const expected = planDigest(plan);
     const existing = await store.readMatch(plan.matchId);
-    if (existing !== undefined) {
-      if (existing.plan_digest !== expected) {
-        throw new RunnerError('corrupt_evidence', 'league results', { kind: 'league_results_plan_mismatch', field: plan.matchId });
-      }
-      stored.push(existing);
-      options.progress?.matchSettled?.(plan, existing.observation, true);
-      continue;
+    if (existing !== undefined && existing.plan_digest !== planDigest(plan)) {
+      throw new RunnerError('corrupt_evidence', 'league results', { kind: 'league_results_plan_mismatch', field: plan.matchId });
     }
+    slots.push(existing);
+    if (existing !== undefined) options.progress?.matchSettled?.(plan, existing.observation, true);
+  }
+  const pending = plans.flatMap((plan, index) => slots[index] === undefined ? [{ plan, index }] : []);
+  const running = Math.min(concurrency, Math.max(1, pending.length));
+  await mapBounded(pending, concurrency, async ({ plan, index }) => {
     options.progress?.matchStarted?.(plan, index, plans.length);
     let observation: MatchObservation;
     try {
@@ -179,17 +186,20 @@ export async function runLeague(options: Readonly<{
       });
     }
     const record: StoredMatch = Object.freeze({
-      schema: 1, match_id: plan.matchId, plan_digest: expected,
+      schema: 1, match_id: plan.matchId, plan_digest: planDigest(plan),
       candidate: opponentLabel(plan.candidate), opponent: plan.opponent.label,
-      world_seed: plan.worldSeed, round: plan.round, candidate_seats: plan.candidateSeats, observation,
+      world_seed: plan.worldSeed, round: plan.round, candidate_seats: plan.candidateSeats,
+      concurrency: running, observation,
     });
     await store.writeMatch(record);
-    stored.push(record);
+    slots[index] = record;
     options.progress?.matchSettled?.(plan, observation, false);
-  }
+  }, signal);
+  const stored = slots as readonly StoredMatch[];
 
   const report = buildReport(manifest, set, digest, plans, stored);
   const path = await store.writeReport(report);
+  options.progress?.summary?.(renderLeagueQuality(plans, new Map(stored.map((entry) => [entry.match_id, entry]))));
   return { ...report, report_path: path };
 }
 
@@ -326,5 +336,77 @@ export function buildReport(
     thresholds: { ...gates, minSeeds },
     pairs: pairReports,
     candidates: byCandidate,
+    matches: matchRows(plans, byId),
+    quality: leagueQuality(plans, byId),
   };
+}
+
+export function matchRows(plans: readonly MatchPlan[], byId: ReadonlyMap<string, StoredMatch>): readonly object[] {
+  return plans.map((plan) => {
+    const entry = byId.get(plan.matchId);
+    const observation = entry?.observation;
+    const base = {
+      match_id: plan.matchId,
+      world_seed: plan.worldSeed,
+      round: plan.round,
+      candidate: opponentLabel(plan.candidate),
+      opponent: plan.opponent.label,
+      concurrency: entry?.concurrency ?? null,
+    };
+    if (observation === undefined) return { ...base, status: 'not_run' };
+    if (observation.status === 'failed') return { ...base, status: 'failed', reason: observation.reason, run_id: observation.runId };
+    return {
+      ...base,
+      status: 'completed',
+      outcome: observation.outcome,
+      survivors: observation.survivors,
+      degraded: observation.degraded,
+      disconnects: observation.disconnects,
+      run_id: observation.runId,
+      quality: observation.quality ?? null,
+    };
+  });
+}
+
+export interface LeagueQualityReport {
+  readonly gates: readonly QualityGateResult[];
+  readonly matches_with_quality: number;
+  readonly matches_planned: number;
+  readonly max_concurrency: number;
+  readonly timing_sensitive: boolean;
+}
+
+export function leagueQuality(plans: readonly MatchPlan[], byId: ReadonlyMap<string, StoredMatch>): LeagueQualityReport {
+  const inputs = plans.map((plan) => {
+    const observation = byId.get(plan.matchId)?.observation;
+    return {
+      label: plan.matchId,
+      terminated: observation?.status === 'completed',
+      quality: observation?.status === 'completed' ? observation.quality ?? null : null,
+    };
+  });
+  const maxConcurrency = Math.max(1, ...plans.map((plan) => byId.get(plan.matchId)?.concurrency ?? 1));
+  return {
+    gates: qualityGates(inputs),
+    matches_with_quality: inputs.filter((entry) => entry.quality !== null).length,
+    matches_planned: plans.length,
+    max_concurrency: maxConcurrency,
+    timing_sensitive: maxConcurrency > 1,
+  };
+}
+
+export function renderLeagueQuality(plans: readonly MatchPlan[], byId: ReadonlyMap<string, StoredMatch>): string {
+  const report = leagueQuality(plans, byId);
+  const tables = plans.flatMap((plan) => {
+    const observation = byId.get(plan.matchId)?.observation;
+    if (observation?.status !== 'completed' || observation.quality === undefined || observation.quality === null) return [];
+    return [{ label: `${plan.matchId} seed ${plan.worldSeed}`, quality: observation.quality,
+      note: `concurrency ${byId.get(plan.matchId)?.concurrency ?? 1}` }];
+  });
+  return [
+    renderQualityTable(tables),
+    `quality gates over ${report.matches_with_quality}/${report.matches_planned} matches`
+      + `${report.timing_sensitive ? ' (timing-sensitive outcomes: matches ran concurrently)' : ''}`,
+    renderGates(report.gates),
+  ].join('\n');
 }

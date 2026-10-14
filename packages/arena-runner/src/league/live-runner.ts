@@ -1,6 +1,7 @@
 import type { ResourceReference } from '@arena/spec';
 import { RunnerError } from '../errors.js';
 import { actionFunnelReport } from '../funnel-report.js';
+import { matchQuality } from '../seat-quality.js';
 import { createOwnedDirectory, OwnedFilesError, readOwnedFile, stageOwnedFile } from '../owned-files/index.js';
 import { prepareRun, resolveScenarioResource } from '../prepare.js';
 import { readStoppedRunEvidence } from '../runtime/inspect.js';
@@ -65,6 +66,7 @@ export class LiveMatchRunner implements MatchRunner {
       paperJarPath: options.paperJarPath,
       pluginJarPath: options.pluginJarPath,
       acceptMinecraftEula: true,
+      ephemeralGamePort: true,
       seatCandidates,
       signal,
     });
@@ -97,6 +99,7 @@ export class LiveMatchRunner implements MatchRunner {
       disconnects,
       degraded: completed.degraded !== undefined,
       attacks,
+      quality: matchQuality(evidence),
       runId: completed.runId,
     });
   }

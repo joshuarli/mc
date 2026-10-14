@@ -4,6 +4,7 @@ import type { ScenarioIr } from '@arena/spec';
 import { RunnerError } from '../errors.js';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
 
+export const DEFAULT_GAME_PORT = 25565;
 const MAX_PLUGIN_JAR_BYTES = MAX_OWNED_READ_BYTES;
 const EULA_PATH = Buffer.from('/eula.txt', 'ascii');
 const SERVER_PROPERTIES_PATH = Buffer.from('/server.properties', 'ascii');
@@ -18,6 +19,7 @@ export interface RuntimeServerInputs {
   readonly paperJarPath: string;
   readonly pluginJarPath: string;
   readonly javaTmpDir: string;
+  readonly gamePort?: number;
   readonly resumeCheckpointPath?: string;
   readonly signal?: AbortSignal;
 }
@@ -66,7 +68,7 @@ export async function stageServerDirectory(options: Readonly<{
       helperPath: inputs.helperPath,
       ownedRoot: inputs.ownedRoot,
       relativePath: Buffer.concat([serverPath, SERVER_PROPERTIES_PATH]),
-      contents: serverProperties(scenario),
+      contents: serverProperties(scenario, inputs.gamePort ?? DEFAULT_GAME_PORT),
       maxBytes: 16 * 1024,
       ...(signal === undefined ? {} : { signal }),
     });
@@ -135,7 +137,7 @@ export function validateJavaTempDirectory(ownedRoot: Buffer): string {
   return actual;
 }
 
-function serverProperties(scenario: ScenarioIr): Buffer {
+function serverProperties(scenario: ScenarioIr, gamePort: number): Buffer {
   const spectatorCapacity = scenario.roster.spectatorCapacity;
   const maxPlayers = BigInt(scenario.roster.competitors) + spectatorCapacity;
   if (maxPlayers > 2_147_483_647n) {
@@ -143,7 +145,7 @@ function serverProperties(scenario: ScenarioIr): Buffer {
   }
   const contents = [
     'server-ip=127.0.0.1',
-    'server-port=25565',
+    `server-port=${gamePort}`,
     'online-mode=false',
     'enforce-secure-profile=false',
     'white-list=false',

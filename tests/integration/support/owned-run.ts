@@ -16,6 +16,7 @@ export async function prepareOwnedAcceptanceRun(
   scenarioPath: string,
   runId: string,
   signal: AbortSignal,
+  gamePort: "ephemeral" | "default" = "ephemeral",
 ): Promise<RunPreparedRunOptions> {
   const repositoryRoot = process.cwd();
   const helperPath = process.env.ARENA_FS_HELPER ?? resolve(repositoryRoot, ".work/arena-fs/arena-fs");
@@ -46,6 +47,7 @@ export async function prepareOwnedAcceptanceRun(
     paperJarPath,
     pluginJarPath,
     acceptMinecraftEula: true,
+    ...(gamePort === "ephemeral" ? { ephemeralGamePort: true as const } : {}),
     signal,
   };
 }

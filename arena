@@ -314,7 +314,8 @@ usage:
   ./arena <report|inspect|compare|prepare|validate|doctor|run|replay-policy|gc> <arguments...>
   ./arena play --scenario <path> --username <name> [--seat <n>] --accept-minecraft-eula [--join-timeout-seconds <n>] [--workers <n>]
   ./arena explain --run-id <id> --seat <n>
-  ./arena league --manifest <path> --accept-minecraft-eula
+  ./arena league --manifest <path> --accept-minecraft-eula [--concurrency <1-4>]
+  ./arena quality --scenario <path> --seeds <a,b,c> --accept-minecraft-eula [--candidate <id>] [--concurrency <1-4>]
   ./arena bench --profile scale-v1 --accept-minecraft-eula [--workloads <list>] [--layouts <1,2,4>] [--regimes <list>] [--max-level <n>]
   ./arena save --run-id <id> [--checkpoint-id <id>]
   ./arena resume --checkpoint <id> --accept-minecraft-eula [--run-id <id>]
@@ -355,7 +356,11 @@ launch_runner() {
     fs_helper="$root/.work/arena-fs/arena-fs"
     cli="$root/.work/build/packages/arena-runner/src/cli.js"
     [ -f "$cli" ] || fail "runner CLI is not built at $cli"
-    if [ "$cli_command" = run ]; then
+    case "$cli_command" in
+        run|play|watch|resume|league|quality|bench) needs_runtime=1 ;;
+        *) needs_runtime=0 ;;
+    esac
+    if [ "$needs_runtime" = 1 ]; then
         prepare_jdk
         build_plugin
         ensure_paper_artifact
@@ -547,7 +552,7 @@ case "$command" in
     build) build_command "$@" ;;
     check) check_command "$@" ;;
     test) test_command "$@" ;;
-    report|inspect|compare|prepare|validate|doctor|run|play|watch|explain|league|bench|save|resume|replay-policy|gc)
+    report|inspect|compare|prepare|validate|doctor|run|play|watch|explain|league|quality|bench|save|resume|replay-policy|gc)
         launch_runner "$command" "$@"
         ;;
     help|-h|--help)

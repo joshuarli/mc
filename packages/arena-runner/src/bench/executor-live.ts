@@ -100,6 +100,7 @@ export class LiveBenchExecutor implements BenchExecutor {
       paperJarPath: options.paperJarPath,
       pluginJarPath: options.pluginJarPath,
       acceptMinecraftEula: true,
+      ephemeralGamePort: true,
       signal: runSignal,
       onServerStarted: (pid) => { serverPid = pid; },
       onPhase: (phase) => { if (phase === 'active') onActive(); },

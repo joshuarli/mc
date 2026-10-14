@@ -1,4 +1,5 @@
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
+import { CANDIDATE_IDS } from '@arena/core';
 import { pathToFileURL } from 'node:url';
 import { isAbsolute, resolve } from 'node:path';
 import { TextDecoder } from 'node:util';
@@ -16,7 +17,9 @@ import { LiveBenchExecutor } from './bench/executor-live.js';
 import { benchReport, runMatrix, type MatrixFilter } from './bench/matrix.js';
 import { commandPerfGate } from './bench/perf-gate.js';
 import { profileById, WORKLOAD_KINDS, type WorkerLayout, type WorkloadKind, type WorldRegime } from './bench/profile.js';
+import { parseConcurrency } from './bounded.js';
 import { runLeague } from './league/harness.js';
+import { runQuality } from './league/quality.js';
 import { LiveMatchRunner } from './league/live-runner.js';
 import { parseLeagueManifest, parseSeedManifest, profileSpec, resolveLeagueManifest, type CandidateSpec } from './league/manifest.js';
 import { OwnedLeagueStore } from './league/store.js';
@@ -26,6 +29,7 @@ import { replayPolicyJson } from './policy-replay.js';
 import { isValidRunId } from './run-id.js';
 import { inspectStoppedRun, readStoppedRunEvidence } from './runtime/inspect.js';
 import { explainSeatJson } from './funnel-report.js';
+import { matchQuality, renderQualityTable } from './seat-quality.js';
 import { collectOwnedRuns, type RunGarbageCollectionMode } from './runtime/gc.js';
 import { runPreparedRun } from './runtime/run.js';
 import { createRuntimeRoster, type RuntimeSpectatorMode } from './runtime/roster.js';
@@ -68,7 +72,10 @@ async function dispatchCliBytes(args: readonly Buffer[]): Promise<CliResult> {
   }
   if (command === 'inspect' || command === 'report') {
     const evidence = await loadEvidence(rest);
-    return success(command === 'inspect' ? inspectJson(evidence) : reportJson(evidence));
+    if (command === 'inspect') return success(inspectJson(evidence));
+    const quality = matchQuality(evidence);
+    if (quality.seats.length > 0) writeProgress([renderQualityTable([{ label: `run ${evidence.run_id}`, quality }])]);
+    return success({ ...reportJson(evidence), seat_quality: quality });
   }
   if (command === 'replay-policy') {
     const evidence = await loadEvidence(rest);
@@ -82,6 +89,7 @@ async function dispatchCliBytes(args: readonly Buffer[]): Promise<CliResult> {
   }
   if (command === 'explain') return await explainCommand(rest);
   if (command === 'league') return await leagueCommand(rest);
+  if (command === 'quality') return await qualityCommand(rest);
   if (command === 'bench') return await benchCommand(rest);
   if (command === 'prepare') return await prepareCommand(rest);
   if (command === 'validate') return await validateCommand(rest);
@@ -310,9 +318,15 @@ async function saveCommand(args: readonly Buffer[]): Promise<CliResult> {
 async function leagueCommand(args: readonly Buffer[]): Promise<CliResult> {
   let manifestArgument: Buffer | undefined;
   let accepted = false;
+  let concurrency = 1;
   for (let index = 0; index < args.length;) {
     const option = argumentText(args[index]!, index + 1);
-    if (option === '--manifest') {
+    if (option === '--concurrency') {
+      const parsed = index + 1 < args.length ? parseConcurrency(argumentText(args[index + 1]!, index + 2)) : undefined;
+      if (parsed === undefined) throw invalidInput('league_invalid_concurrency');
+      concurrency = parsed;
+      index += 2;
+    } else if (option === '--manifest') {
       if (manifestArgument !== undefined || index + 1 >= args.length) throw invalidInput('league_requires_manifest');
       manifestArgument = args[index + 1]!;
       index += 2;
@@ -360,8 +374,9 @@ async function leagueCommand(args: readonly Buffer[]): Promise<CliResult> {
     });
     const store = new OwnedLeagueStore({ helperPath, ownedRoot, leagueId: manifest.id });
     const report = await runLeague({
-      manifest, seeds, store, runner, signal,
+      manifest, seeds, store, runner, signal, concurrency,
       progress: {
+        summary: (text) => writeProgress([text]),
         matchStarted: (plan, index, total) => writeProgress([
           `League ${manifest.id}: match ${index + 1}/${total} ${plan.matchId} (${plan.candidate.id} vs ${plan.opponent.label}, seed ${plan.worldSeed})`,
         ]),
@@ -371,6 +386,75 @@ async function leagueCommand(args: readonly Buffer[]): Promise<CliResult> {
       },
     });
     return success(report);
+  });
+}
+
+async function qualityCommand(args: readonly Buffer[]): Promise<CliResult> {
+  let scenarioArgument: Buffer | undefined;
+  let seedsText: string | undefined;
+  let candidateText: string | undefined;
+  let concurrency = 1;
+  let accepted = false;
+  for (let index = 0; index < args.length;) {
+    const option = argumentText(args[index]!, index + 1);
+    if (option === '--accept-minecraft-eula') {
+      if (accepted) throw invalidInput('quality_accept_minecraft_eula_repeated');
+      accepted = true;
+      index += 1;
+      continue;
+    }
+    if (index + 1 >= args.length) throw invalidInput('quality_option_requires_value');
+    const value = args[index + 1]!;
+    if (option === '--scenario' && scenarioArgument === undefined) scenarioArgument = value;
+    else if (option === '--seeds' && seedsText === undefined) seedsText = argumentText(value, index + 2);
+    else if (option === '--candidate' && candidateText === undefined) candidateText = argumentText(value, index + 2);
+    else if (option === '--concurrency') {
+      const parsed = parseConcurrency(argumentText(value, index + 2));
+      if (parsed === undefined) throw invalidInput('quality_invalid_concurrency');
+      concurrency = parsed;
+    } else throw invalidInput('unexpected_argument');
+    index += 2;
+  }
+  if (scenarioArgument === undefined) throw invalidInput('quality_requires_scenario');
+  if (seedsText === undefined) throw invalidInput('quality_requires_seeds');
+  const seeds = seedsText.split(',').map((entry) => {
+    if (!/^(0|[1-9][0-9]{0,15})$/.test(entry)) throw invalidInput('quality_invalid_seed');
+    return Number(entry);
+  });
+  if (seeds.length > 64 || new Set(seeds).size !== seeds.length) throw invalidInput('quality_invalid_seeds');
+  const candidateId = candidateText ?? 'baseline';
+  if (!(CANDIDATE_IDS as readonly string[]).includes(candidateId)) throw invalidInput('quality_unknown_candidate');
+  if (!accepted) throw new RunnerError('missing_prerequisite', 'Minecraft EULA', { kind: 'missing_eula' });
+  const scenarioPath = normalizeScenarioPath(scenarioArgument);
+  const helperPath = configuredAbsolutePath('ARENA_FS_HELPER', 'filesystem helper');
+  const javaHome = configuredAbsolutePath('ARENA_JAVA_HOME', 'Java runtime');
+  const paperJarPath = configuredAbsolutePath('ARENA_PAPER_JAR', 'Paper server JAR');
+  const pluginJarPath = configuredAbsolutePath('ARENA_PLUGIN_JAR', 'Arena plugin JAR');
+  const ownedRoot = Buffer.from(process.cwd(), 'utf8');
+  return await withProcessAbortSignal(async (signal) => {
+    const inputs = await compileScenarioAndPolicy(helperPath, ownedRoot, scenarioPath, signal);
+    if (inputs.scenario.mode !== 'hunger_games') throw invalidInput('quality_requires_hunger_games');
+    const scenarioSource = decodeSource(await readSource(helperPath, ownedRoot, scenarioPath, 'scenario input', signal), 'scenario input');
+    const runner = new LiveMatchRunner({
+      helperPath, ownedRoot, javaExecutable: resolve(javaHome, 'bin', 'java'), paperJarPath, pluginJarPath,
+      leagueId: 'quality', scenarioPath, scenarioSource,
+    });
+    const { report, text } = await runQuality({
+      request: {
+        scenario: scenarioPath.toString('utf8'),
+        seeds,
+        competitors: Number(inputs.scenario.roster.competitors),
+        candidate: { id: candidateId as CandidateSpec['id'], params: {} },
+        baseline: { id: 'baseline', params: {} },
+        runTag: randomBytes(3).toString('hex'),
+      },
+      runner, concurrency, signal,
+      progress: (message) => writeProgress([`Quality: ${message}`]),
+    });
+    writeProgress([text]);
+    const store = new OwnedLeagueStore({ helperPath, ownedRoot, leagueId: 'quality' });
+    const path = await store.writeReport(report);
+    return success({ ...report, report_path: path });
   });
 }
 
@@ -912,7 +996,8 @@ function helpJson(): object {
       'bench --profile scale-v1 --accept-minecraft-eula [--workloads <list>] [--layouts <1,2,4>] [--regimes <list>] [--max-level <n>]': 'Measure the highest qualifying population per workload against fixed quality floors.',
       'save --run-id <id> [--checkpoint-id <id>]': 'Checkpoint a running generalized-roster Hunger match, stop it, and publish the checkpoint.',
       'resume --checkpoint <id> --accept-minecraft-eula [--run-id <id>] [--join-timeout-seconds <n>]': 'Resume a saved match in a new run at the next epoch.',
-      'league --manifest <path> --accept-minecraft-eula': 'Run or resume a league of candidate policies against frozen opponents and report the paired analysis.',
+      'league --manifest <path> --accept-minecraft-eula [--concurrency <1-4>]': 'Run or resume a league of candidate policies against frozen opponents and report the paired analysis, per-seat quality, and quality gates.',
+      'quality --scenario <path> --seeds <a,b,c> --accept-minecraft-eula [--candidate <id>] [--concurrency <1-4>]': 'Run one Hunger Games match per seed, concurrently on ephemeral ports, and report the per-seat quality table and quality gates.',
       'prepare --scenario <path> --run-id <id>': 'Compile a scenario and stage its world plan in a new run directory.',
       'validate --scenario <path>': 'Compile the scenario, map, and policy without staging a run.',
       'run --scenario <path> --accept-minecraft-eula [--run-id <id>] [--reserve-external-spectator-slot] [--wait-for-external-player] [--join-timeout-seconds <n>] [--workers <n>]': 'Run a match and report its stopped result.',

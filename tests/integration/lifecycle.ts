@@ -59,7 +59,7 @@ async function runLifecycleCycle(
   cycle: number,
   signal: AbortSignal,
 ): Promise<CompletedCycle> {
-  const prepared = await prepareOwnedAcceptanceRun(scenarioPath, `lifecycle-${cycle}`, signal);
+  const prepared = await prepareOwnedAcceptanceRun(scenarioPath, `lifecycle-${cycle}`, signal, "default");
   const beforeServers = activeResourceCount("TCPServerWrap");
   const beforeSockets = activeResourceCount("TCPSocketWrap");
   let connectionDetails: Readonly<{
