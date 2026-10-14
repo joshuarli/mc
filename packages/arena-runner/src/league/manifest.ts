@@ -1,4 +1,4 @@
-import { CANDIDATE_IDS, InvalidCandidateError, validateCandidateParams, type CandidateId } from '@arena/core';
+import { CANDIDATE_IDS, InvalidCandidateError, validateCandidateParams, type CandidateId, type DuelPoolId } from '@arena/core';
 import { RunnerError } from '../errors.js';
 import { parseTomlSubset, type TomlTable, type TomlValue } from './toml-subset.js';
 
@@ -22,6 +22,7 @@ export interface CandidateSpec {
 
 export interface OpponentSpec extends CandidateSpec {
   readonly label: string;
+  readonly poolPartner?: DuelPoolId;
 }
 
 export type CandidateEntry =

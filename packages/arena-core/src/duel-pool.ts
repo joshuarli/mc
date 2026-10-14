@@ -225,8 +225,8 @@ function perpendicular(dx: number, dz: number): { readonly x: number; readonly z
 }
 
 function kiteBlock(agent: BlockPosition, opponent: BlockPosition): BlockPosition {
-  const outside = squaredDistance(agent, opponent) > MELEE_LIMIT;
-  return away(agent, opponent, outside ? 1 : MELEE_REACH_BLOCKS + 1);
+  if (squaredDistance(agent, opponent) > MELEE_LIMIT) return agent;
+  return away(agent, opponent, MELEE_REACH_BLOCKS + 1);
 }
 
 function away(agent: BlockPosition, opponent: BlockPosition, blocks: number): BlockPosition {

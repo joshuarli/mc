@@ -122,7 +122,7 @@ function poolOpponent(id: DuelPoolId): OpponentSpec {
     const spec = Object.freeze({ id: 'baseline' as const, params: Object.freeze({}) });
     return Object.freeze({ ...spec, label: opponentLabel(spec) });
   }
-  return Object.freeze({ id: 'baseline', params: Object.freeze({}), label: id });
+  return Object.freeze({ id: 'baseline', params: Object.freeze({}), label: id, poolPartner: id });
 }
 
 export function duelPlanDigest(plan: MatchPlan, duelRound: number): string {
@@ -130,7 +130,7 @@ export function duelPlanDigest(plan: MatchPlan, duelRound: number): string {
     seat_plan: planDigest(plan),
     duel_round: duelRound,
   };
-  if (plan.opponent.label !== plan.opponent.id) body.pool_member = plan.opponent.label;
+  if (plan.opponent.poolPartner !== undefined) body.pool_member = plan.opponent.poolPartner;
   return createHash('sha256').update(canonicalJson(body)).digest('hex');
 }
 

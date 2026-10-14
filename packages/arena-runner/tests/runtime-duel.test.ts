@@ -9,6 +9,7 @@ import {
   type DuelEngagement,
 } from '../src/league/duel.js';
 import { planDigest, type MatchObservation, type MatchPlan, type MatchRunner } from '../src/league/harness.js';
+import { seatOpponent } from '../src/league/live-runner.js';
 import { runCli } from '../src/index.js';
 import type { MatchQuality, SeatQuality } from '../src/seat-quality.js';
 
@@ -192,6 +193,9 @@ test('duel plans the opponent pool once per member across the swap matrix', asyn
   const member = planDuelMatches({ ...request, opponent: { kind: 'member', id: 'strafer' } });
   assert.equal(member.length, matrix);
   assert.ok(member.every((planned) => planned.plan.opponent.label === 'strafer'));
+  assert.deepEqual(seatOpponent(member[0]!.plan.opponent), { id: 'strafer', params: {} });
+  assert.equal(plans[plans.length - 1]!.plan.opponent.poolPartner, undefined);
+  assert.deepEqual(seatOpponent(plans[plans.length - 1]!.plan.opponent), { id: 'baseline', params: {} });
 
   const runner: MatchRunner = {
     async run(plan) {

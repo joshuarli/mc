@@ -25,8 +25,8 @@ import {
   worldBorder,
 } from '../src/index.js';
 
-test('duel pool partners emit distinct intents on one observation', () => {
-  const observation = agentObservation({
+function seenOpponent(opponentZ: number) {
+  return agentObservation({
     tick: tick(300),
     sequence: observationSequence(301),
     agent: currentKnowledge(agentState({
@@ -39,10 +39,14 @@ test('duel pool partners emit distinct intents on one observation', () => {
     })),
     border: currentKnowledge(worldBorder(0, 0, 100)),
     opponents: currentKnowledge([
-      visibleOpponent(entityId(7), blockPosition(0, 64, 6), false),
+      visibleOpponent(entityId(7), blockPosition(0, 64, opponentZ), false),
     ]),
     loot: currentKnowledge([]),
   });
+}
+
+test('duel pool partners emit distinct intents on one observation', () => {
+  const observation = seenOpponent(6);
   const intent = (id: typeof DUEL_POOL_IDS[number]) => duelPoolMember(id).decide(observation);
   const stationary = intent('stationary-dummy');
   const strafer = intent('strafer');
@@ -53,7 +57,7 @@ test('duel pool partners emit distinct intents on one observation', () => {
   deepStrictEqual(stationary, { kind: 'navigate', target: { x: 0, y: 64, z: 0 } });
   deepStrictEqual(strafer, { kind: 'navigate', target: { x: 3, y: 64, z: 6 } });
   deepStrictEqual(rusher, { kind: 'approach', target: 7 });
-  deepStrictEqual(kiter, { kind: 'navigate', target: { x: 0, y: 64, z: -1 } });
+  deepStrictEqual(kiter, { kind: 'navigate', target: { x: 0, y: 64, z: 0 } });
   deepStrictEqual(shield, { kind: 'attack', target: 7 });
   const compiled = compileCandidate('baseline').decide(
     observation,
@@ -62,7 +66,11 @@ test('duel pool partners emit distinct intents on one observation', () => {
   );
   deepStrictEqual(baseline, compiled.intent);
   equal(duelPoolMember('baseline').semanticId, candidateSemanticId('baseline', candidateDefaults('baseline')));
-  const emitted = [stationary, strafer, rusher, kiter, shield, baseline];
+  const close = seenOpponent(2);
+  const closeKiter = duelPoolMember('bow-kiter').decide(close);
+  deepStrictEqual(closeKiter, { kind: 'navigate', target: { x: 0, y: 64, z: -4 } });
+  deepStrictEqual(duelPoolMember('stationary-dummy').decide(close), { kind: 'attack', target: 7 });
+  const emitted = [stationary, strafer, rusher, shield, baseline, closeKiter];
   equal(new Set(emitted.map((entry) => JSON.stringify(entry))).size, emitted.length);
   for (const id of DUEL_POOL_IDS) {
     equal((CANDIDATE_IDS as readonly string[]).includes(id), id === 'baseline');

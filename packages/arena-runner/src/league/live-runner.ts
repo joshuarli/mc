@@ -1,4 +1,4 @@
-import { isDuelPoolId, type CandidateId, type DuelPoolId } from '@arena/core';
+import type { CandidateId, DuelPoolId } from '@arena/core';
 import type { ResourceReference } from '@arena/spec';
 import { RunnerError } from '../errors.js';
 import { actionFunnelReport } from '../funnel-report.js';
@@ -8,6 +8,7 @@ import { prepareRun, resolveScenarioResource } from '../prepare.js';
 import { readStoppedRunEvidence } from '../runtime/inspect.js';
 import { runPreparedRun } from '../runtime/run.js';
 import type { MatchObservation, MatchPlan, MatchRunner } from './harness.js';
+import type { OpponentSpec } from './manifest.js';
 
 const MAX_SCENARIO_BYTES = 256 * 1024;
 
@@ -43,8 +44,8 @@ export function seededScenarioSource(
   return text;
 }
 
-function seatOpponent(opponent: Readonly<{ id: CandidateId; params: Readonly<Record<string, number>>; label: string }>): { readonly id: CandidateId | DuelPoolId; readonly params: Readonly<Record<string, number>> } {
-  if (isDuelPoolId(opponent.label) && opponent.label !== opponent.id) return { id: opponent.label, params: {} };
+export function seatOpponent(opponent: OpponentSpec): { readonly id: CandidateId | DuelPoolId; readonly params: Readonly<Record<string, number>> } {
+  if (opponent.poolPartner !== undefined) return { id: opponent.poolPartner, params: {} };
   return { id: opponent.id, params: opponent.params };
 }
 
