@@ -96,6 +96,14 @@ test('navigate succeeds when the pathfinder ends on the cell its goal range acce
 });
 
 test('travel navigation looks down between legs and melee pursuit does not', async () => {
+  const eyeHeight = 1.62;
+  const sightY = 64 + eyeHeight - 12;
+  const headings = [
+    { x: 8, z: 0 },
+    { x: 0, z: 8 },
+    { x: -8, z: 0 },
+    { x: 0, z: -8 },
+  ];
   const harness = makeHarness();
   const events: string[] = [];
   const looks: Array<{ x: number; y: number; z: number }> = [];
@@ -104,7 +112,6 @@ test('travel navigation looks down between legs and melee pursuit does not', asy
     setGoal(goal);
     if (goal !== null) events.push('goal');
   };
-  const eyeHeight = 1.62;
   Object.assign(harness.bot, {
     entity: {
       id: 1,
@@ -122,13 +129,16 @@ test('travel navigation looks down between legs and melee pursuit does not', asy
     await waitUntil(() => events.length >= 1);
     assert.deepEqual(events, ['goal']);
     harness.bot.emit('goal_reached', harness.pathfinder.goal as never);
-    await waitUntil(() => events.length >= 3);
-    assert.deepEqual(events, ['goal', 'look', 'goal']);
-    const look = looks[0];
-    assert.ok(look);
-    assert.ok(Math.abs(look.x - 8) < 1e-9);
-    assert.ok(Math.abs(look.y - (64 + eyeHeight - 12)) < 1e-9);
-    assert.ok(Math.abs(look.z) < 1e-9);
+    await waitUntil(() => events.length >= 6);
+    assert.deepEqual(events, ['goal', 'look', 'look', 'look', 'look', 'goal']);
+    assert.equal(looks.length, 4);
+    for (const [index, heading] of headings.entries()) {
+      const look = looks[index];
+      assert.ok(look);
+      assert.ok(Math.abs(look.x - heading.x) < 1e-9);
+      assert.ok(Math.abs(look.y - sightY) < 1e-9);
+      assert.ok(Math.abs(look.z - heading.z) < 1e-9);
+    }
     const cancellation = harness.owner.cancel('shutdown');
     assert.deepEqual(await running, { kind: 'cancelled', reason: 'shutdown' });
     await cancellation;
@@ -140,16 +150,17 @@ test('travel navigation looks down between legs and melee pursuit does not', asy
   const seen = makeHarness();
   const seenEvents: string[] = [];
   const seenLooks: Array<{ x: number; y: number; z: number }> = [];
+  const seenAfterLook: boolean[] = [];
   const seenSetGoal = seen.pathfinder.setGoal;
   seen.pathfinder.setGoal = (goal) => {
     seenSetGoal(goal);
     if (goal !== null) seenEvents.push('goal');
   };
   const rivalHeight = 1.8;
-  const rivalHorizontal = 6;
-  const rivalPitchBelowLevel = 1.15;
-  const rivalFeetY = 64 + eyeHeight + rivalHorizontal * Math.tan(-rivalPitchBelowLevel) - rivalHeight / 2;
-  const rivalPosition = new TestPosition(rivalHorizontal, rivalFeetY, 0);
+  const sideOffset = 6;
+  const belowEye = 20;
+  const rivalFeetY = 64 + eyeHeight - belowEye - rivalHeight / 2;
+  const rivalPosition = new TestPosition(0, rivalFeetY, sideOffset);
   const rival = {
     id: 2,
     type: 'player',
@@ -180,6 +191,7 @@ test('travel navigation looks down between legs and melee pursuit does not', asy
       const delta = point.minus(seen.bot.entity.position.offset(0, eyeHeight, 0));
       seen.bot.entity.yaw = Math.atan2(-delta.x, -delta.z);
       seen.bot.entity.pitch = Math.atan2(delta.y, Math.hypot(delta.x, delta.z));
+      seenAfterLook.push(isVisibleEntity(seen.bot, rival));
     },
   });
 
@@ -189,16 +201,22 @@ test('travel navigation looks down between legs and melee pursuit does not', asy
     await waitUntil(() => seenEvents.length >= 1);
     assert.deepEqual(seenEvents, ['goal']);
     seen.bot.emit('goal_reached', seen.pathfinder.goal as never);
-    await waitUntil(() => seenEvents.length >= 2);
-    assert.deepEqual(seenEvents, ['goal', 'look']);
-    const look = seenLooks[0];
-    assert.ok(look);
-    assert.ok(Math.abs(look.x - 8) < 1e-9);
-    assert.ok(Math.abs(look.y - (64 + eyeHeight - 12)) < 1e-9);
-    assert.ok(Math.abs(look.z) < 1e-9);
+    assert.deepEqual(await running, { kind: 'succeeded' });
+    assert.deepEqual(seenEvents, ['goal', 'look', 'look']);
+    assert.deepEqual(seenAfterLook, [false, true]);
+    const alongGoal = seenLooks[0];
+    const sawPlayer = seenLooks[1];
+    assert.ok(alongGoal);
+    assert.ok(sawPlayer);
+    assert.ok(Math.abs(alongGoal.x - headings[0].x) < 1e-9);
+    assert.ok(Math.abs(alongGoal.y - sightY) < 1e-9);
+    assert.ok(Math.abs(alongGoal.z - headings[0].z) < 1e-9);
+    assert.ok(Math.abs(sawPlayer.x - headings[1].x) < 1e-9);
+    assert.ok(Math.abs(sawPlayer.y - sightY) < 1e-9);
+    assert.ok(Math.abs(sawPlayer.z - headings[1].z) < 1e-9);
     assert.equal(isVisibleEntity(seen.bot, rival), true);
     assert.equal(seen.pathfinder.goal, null);
-    assert.deepEqual(await running, { kind: 'succeeded' });
+    assert.equal(seenEvents.filter((event) => event === 'goal').length, 1);
   } finally {
     await seen.owner.close();
     seen.observer.close();

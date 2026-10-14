@@ -863,9 +863,11 @@ export class SkillOwner {
         recordPathDiagnostic(this.#bot, { kind: 'navigation', active: false });
       }
       if (arrival.kind === 'withinRange' || arrival.kind === 'exactBlock') {
-        throwIfInterrupted(signal);
-        await this.#lookAt(active, 'look down the path', travelSightPoint(this.#bot, position));
-        if (this.#playerInPerceptionCone()) return;
+        for (let quarterTurn = 0; quarterTurn < 4; quarterTurn += 1) {
+          throwIfInterrupted(signal);
+          await this.#lookAt(active, 'look down the path', travelSightPoint(this.#bot, position, quarterTurn));
+          if (this.#playerInPerceptionCone()) return;
+        }
       }
     }
     throw new Error('bounded navigation loop exited unexpectedly');
@@ -2167,7 +2169,7 @@ function hasArrived(
     && Math.floor(current.z) === Math.floor(target.z);
 }
 
-function travelSightPoint(bot: Bot, goal: NavigationPosition): Bot['entity']['position'] {
+function travelSightPoint(bot: Bot, goal: NavigationPosition, quarterTurn: number): Bot['entity']['position'] {
   const position = bot.entity.position;
   const eyeHeight = (bot.entity as MineflayerEntity & { readonly eyeHeight?: number }).eyeHeight;
   if (typeof eyeHeight !== 'number' || !Number.isFinite(eyeHeight)) {
@@ -2177,7 +2179,21 @@ function travelSightPoint(bot: Bot, goal: NavigationPosition): Bot['entity']['po
   const dz = goal.z - position.z;
   const horizontal = Math.hypot(dx, dz);
   const scale = horizontal === 0 ? 0 : TRAVEL_SIGHT_AHEAD_BLOCKS / horizontal;
-  return position.offset(dx * scale, eyeHeight - TRAVEL_SIGHT_BELOW_EYE_BLOCKS, dz * scale);
+  let aheadX = dx * scale;
+  let aheadZ = dz * scale;
+  if (quarterTurn === 1) {
+    const rotatedX = -aheadZ;
+    aheadZ = aheadX;
+    aheadX = rotatedX;
+  } else if (quarterTurn === 2) {
+    aheadX = -aheadX;
+    aheadZ = -aheadZ;
+  } else if (quarterTurn === 3) {
+    const rotatedX = aheadZ;
+    aheadZ = -aheadX;
+    aheadX = rotatedX;
+  }
+  return position.offset(aheadX, eyeHeight - TRAVEL_SIGHT_BELOW_EYE_BLOCKS, aheadZ);
 }
 
 function waypointToward(
