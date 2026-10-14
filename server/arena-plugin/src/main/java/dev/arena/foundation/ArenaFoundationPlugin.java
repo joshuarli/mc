@@ -457,6 +457,8 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
                 default -> throw new IllegalStateException("control session delivered a non-command message");
             }
         } catch (CommandFailure invalidCommand) {
+            getLogger().warning("ARENA_COMMAND_REJECTED|" + command.type().wireName() + "|"
+                    + invalidCommand.code.wireName() + "|" + invalidCommand.getMessage());
             controlSession.reject(command.header().sequence(), invalidCommand.code, invalidCommand.getMessage());
         }
     }

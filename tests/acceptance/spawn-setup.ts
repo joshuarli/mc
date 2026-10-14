@@ -53,7 +53,7 @@ test("spawn-setup", { timeout: 7_200_000 }, async (t) => {
           } catch (error) {
             row = positions.length > 0
               ? `SETUP|${name}|${seed}|resolved|${((Date.now() - started) / 1000).toFixed(0)}s|${positions.join(";")}`
-              : `SETUP|${name}|${seed}|failed|${JSON.stringify(error, Object.getOwnPropertyNames(error as object)).slice(0, 700)}`;
+              : `SETUP|${name}|${seed}|failed|${describeFailure(error)}`;
           }
         } catch (error) {
           row = `SETUP|${name}|${seed}|prepare-failed|${String(error).slice(0, 300)}`;
@@ -67,3 +67,11 @@ test("spawn-setup", { timeout: 7_200_000 }, async (t) => {
   }
   writeFileSync(join(process.cwd(), ".work", "tmp", "spawn-setup-table.txt"), rows.join("\n") + "\n");
 });
+
+function describeFailure(error: unknown): string {
+  if (typeof error === "object" && error !== null) {
+    const record = error as { readonly source?: unknown; readonly message?: unknown; readonly category?: unknown };
+    return JSON.stringify({ category: record.category, message: record.message, source: record.source }).slice(0, 1500);
+  }
+  return String(error).slice(0, 500);
+}
