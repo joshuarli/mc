@@ -4,6 +4,7 @@ import { createRequire } from 'node:module';
 import test from 'node:test';
 import {
   blockPosition,
+  civilizationPolicyContext,
   civilizationProfileForSeat,
   type CivilizationPolicyContextInput,
 } from '@arena/core';
@@ -138,6 +139,30 @@ test('invalid civilization context unwinds the already-created base observer', (
   assert.equal(bot._client.listenerCount('initialize_world_border'), 0);
   assert.equal(bot._client.listenerCount('entity_velocity'), velocityListeners);
   assert.equal(bot._client.listenerCount('spawn_entity'), spawnVelocityListeners);
+});
+
+test('runtime policy input is accepted while a previously validated context stays strict', async () => {
+  const bot = makeBot(5);
+  const contextInput = options(5).context;
+  const validatedContext = civilizationPolicyContext(contextInput);
+
+  assert.throws(() => createMineflayerCivilizationClient(bot as unknown as Bot, {
+    context: validatedContext,
+    publicRoster: publicRoster(),
+  }), /civilization policy context has missing or unknown fields/);
+  assert.equal(bot.listenerCount('spawn'), 0);
+  assert.equal(bot.listenerCount('health'), 0);
+  assert.equal(bot._client.listenerCount('window_items'), 0);
+
+  const client = createMineflayerCivilizationClient(bot as unknown as Bot, {
+    context: contextInput,
+    publicRoster: publicRoster(),
+  });
+  try {
+    assert.equal(client.observe(0).base.tick, 0);
+  } finally {
+    await client.close();
+  }
 });
 
 test('client preserves protocol 775 setup, exact block navigation, and only releases owned listeners', async () => {

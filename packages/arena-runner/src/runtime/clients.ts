@@ -1,9 +1,9 @@
-import { civilizationPolicyContext, civilizationProfileForSeat } from '@arena/core';
 import { createBot, type Bot } from 'mineflayer';
 import type { PartiallyComputedPath } from 'mineflayer-pathfinder';
-import { createMineflayerArenaClient, createMineflayerCivilizationClient, type CivilizationRosterMember, type MineflayerArenaClient } from '@arena/bots';
+import { createMineflayerArenaClient, type CivilizationRosterMember, type MineflayerArenaClient } from '@arena/bots';
 import { performance } from 'node:perf_hooks';
 import { RunnerError } from '../errors.js';
+import { createCivilizationRuntimeGameplayAdapter } from './civilization-adapter.js';
 import type { ScenarioIr } from '@arena/spec';
 import type {
   ChunkReceipt,
@@ -356,16 +356,10 @@ async function connectRuntimeBot(
     let adapter: RuntimeConnectionAdapter;
     try {
       if (options.scenario.mode === 'civilization' && role.kind === 'competitor') {
-        const profile = civilizationProfileForSeat(role.seat);
-        if (profile === null) throw new RangeError('civilization competitor seat is outside the canonical roster');
-        const rules = options.scenario.civilization;
-        const anchor = rules.blueprint.anchors[profile.faction];
-        const context = civilizationPolicyContext({ ...profile, objective: {
-          captureBox: { min: rules.captureZone.min, max: rules.captureZone.max },
-          outpost: { blueprintId: rules.blueprint.id, anchor: anchor.position, rotationDegrees: anchor.rotationDegrees },
-        } });
-        const client = createMineflayerCivilizationClient(bot, { context, publicRoster: options.publicRoster });
-        adapter = { kind: 'competitor', gameplay: { mode: 'civilization', context, client } };
+        adapter = {
+          kind: 'competitor',
+          gameplay: createCivilizationRuntimeGameplayAdapter(bot, options.scenario, role.seat, options.publicRoster),
+        };
       } else {
         const client = createMineflayerArenaClient(bot);
         adapter = role.kind === 'spectator' ? { kind: 'spectator', client }
