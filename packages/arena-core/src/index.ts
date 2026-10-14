@@ -269,13 +269,31 @@ export {
   candidateVersion,
   compileCandidate,
   coordinateSearchProposals,
+  decisionDiff,
   randomSearchProposals,
   validateCandidateParams,
 } from './candidates.js';
+export {
+  DECISION_EXPLANATION_VERSION,
+  MAX_EXPLANATION_ALTERNATIVES,
+} from './policy-v5.js';
+export type {
+  AlternativeCondition,
+  AlternativeKind,
+  DecisionExplanation,
+  DecisionReason,
+  ExplainedDecision,
+  ExplainedOpeningDecision,
+  ScoredAlternative,
+} from './policy-v5.js';
 export type {
   CandidateId,
   CandidateImplementationId,
   CandidateParamValues,
   CandidateTunable,
   CompiledCandidate,
+  DecisionDiffEntry,
+  DecisionDiffInput,
+  DecisionDiffReport,
+  DecisionDiffSide,
 } from './candidates.js';

@@ -1,0 +1,2104 @@
+{
+  "initialSearch": {
+    "goal": {
+      "kind": "explore"
+    },
+    "intent": {
+      "kind": "navigate",
+      "target": {
+        "x": 4,
+        "y": 64,
+        "z": -8
+      }
+    },
+    "memory": {
+      "lastGoal": {
+        "kind": "explore"
+      },
+      "lastOpponent": null,
+      "failedTargets": [],
+      "knowledge": {
+        "visitedRegions": [
+          {
+            "x": 0,
+            "z": 0
+          }
+        ],
+        "trail": [
+          {
+            "x": 0,
+            "y": 64,
+            "z": 0
+          }
+        ]
+      }
+    }
+  },
+  "initialSearch/explorer": {
+    "goal": {
+      "kind": "explore"
+    },
+    "intent": {
+      "kind": "navigate",
+      "target": {
+        "x": 4,
+        "y": 64,
+        "z": -8
+      }
+    },
+    "memory": {
+      "lastGoal": {
+        "kind": "explore"
+      },
+      "lastOpponent": null,
+      "failedTargets": [],
+      "knowledge": {
+        "visitedRegions": [
+          {
+            "x": 0,
+            "z": 0
+          }
+        ],
+        "trail": [
+          {
+            "x": 0,
+            "y": 64,
+            "z": 0
+          }
+        ]
+      }
+    },
+    "openingState": {
+      "cacheTakenAt": null
+    }
+  },
+  "initialSearch/scavenger": {
+    "goal": {
+      "kind": "explore"
+    },
+    "intent": {
+      "kind": "navigate",
+      "target": {
+        "x": 4,
+        "y": 64,
+        "z": -8
+      }
+    },
+    "memory": {
+      "lastGoal": {
+        "kind": "explore"
+      },
+      "lastOpponent": null,
+      "failedTargets": [],
+      "knowledge": {
+        "visitedRegions": [
+          {
+            "x": 0,
+            "z": 0
+          }
+        ],
+        "trail": [
+          {
+            "x": 0,
+            "y": 64,
+            "z": 0
+          }
+        ]
+      }
+    },
+    "openingState": {
+      "cacheTakenAt": null
+    }
+  },
+  "initialSearch/hunter": {
+    "goal": {
+      "kind": "explore"
+    },
+    "intent": {
+      "kind": "navigate",
+      "target": {
+        "x": 4,
+        "y": 64,
+        "z": -8
+      }
+    },
+    "memory": {
+      "lastGoal": {
+        "kind": "explore"
+      },
+      "lastOpponent": null,
+      "failedTargets": [],
+      "knowledge": {
+        "visitedRegions": [
+          {
+            "x": 0,
+            "z": 0
+          }
+        ],
+        "trail": [
+          {
+            "x": 0,
+            "y": 64,
+            "z": 0
+          }
+        ]
+      }
+    },
+    "openingState": {
+      "cacheTakenAt": null
+    }
+  },
+  "containerContention": {
+    "goal": {
+      "kind": "loot",
+      "target": {
+        "kind": "container",
+        "position": {
+          "x": 2,
+          "y": 64,
+          "z": 0
+        }
+      }
+    },
+    "intent": {
+      "kind": "containerOpen",
+      "position": {
+        "x": 2,
+        "y": 64,
+        "z": 0
+      }
+    },
+    "memory": {
+      "lastGoal": {
+        "kind": "loot",
+        "target": {
+          "kind": "container",
+          "position": {
+            "x": 2,
+            "y": 64,
+            "z": 0
+          }
+        }
+      },
+      "lastOpponent": null,
+      "failedTargets": [],
+      "knowledge": {
+        "visitedRegions": [
+          {
+            "x": 0,
+            "z": 0
+          }
+        ],
+        "trail": [
+          {
+            "x": 0,
+            "y": 64,
+            "z": 0
+          }
+        ]
+      }
+    }
+  },
+  "containerContention/explorer": {
+    "goal": {
+      "kind": "explore"
+    },
+    "intent": {
+      "kind": "navigate",
+      "target": {
+        "x": 4,
+        "y": 64,
+        "z": -8
+      }
+    },
+    "memory": {
+      "lastGoal": {
+        "kind": "explore"
+      },
+      "lastOpponent": null,
+      "failedTargets": [],
+      "knowledge": {
+        "visitedRegions": [
+          {
+            "x": 0,
+            "z": 0
+          }
+        ],
+        "trail": [
+          {
+            "x": 0,
+            "y": 64,
+            "z": 0
+          }
+        ]
+      }
+    },
+    "openingState": {
+      "cacheTakenAt": null
+    }
+  },
+  "containerContention/scavenger": {
+    "goal": {
+      "kind": "loot",
+      "target": {
+        "kind": "container",
+        "position": {
+          "x": 2,
+          "y": 64,
+          "z": 0
+        }
+      }
+    },
+    "intent": {
+      "kind": "containerOpen",
+      "position": {
+        "x": 2,
+        "y": 64,
+        "z": 0
+      }
+    },
+    "memory": {
+      "lastGoal": {
+        "kind": "loot",
+        "target": {
+          "kind": "container",
+          "position": {
+            "x": 2,
+            "y": 64,
+            "z": 0
+          }
+        }
+      },
+      "lastOpponent": null,
+      "failedTargets": [],
+      "knowledge": {
+        "visitedRegions": [
+          {
+            "x": 0,
+            "z": 0
+          }
+        ],
+        "trail": [
+          {
+            "x": 0,
+            "y": 64,
+            "z": 0
+          }
+        ]
+      }
+    },
+    "openingState": {
+      "cacheTakenAt": null
+    }
+  },
+  "containerContention/hunter": {
+    "goal": {
+      "kind": "loot",
+      "target": {
+        "kind": "container",
+        "position": {
+          "x": 2,
+          "y": 64,
+          "z": 0
+        }
+      }
+    },
+    "intent": {
+      "kind": "containerOpen",
+      "position": {
+        "x": 2,
+        "y": 64,
+        "z": 0
+      }
+    },
+    "memory": {
+      "lastGoal": {
+        "kind": "loot",
+        "target": {
+          "kind": "container",
+          "position": {
+            "x": 2,
+            "y": 64,
+            "z": 0
+          }
+        }
+      },
+      "lastOpponent": null,
+      "failedTargets": [],
+      "knowledge": {
+        "visitedRegions": [
+          {
+            "x": 0,
+            "z": 0
+          }
+        ],
+        "trail": [
+          {
+            "x": 0,
+            "y": 64,
+            "z": 0
+          }
+        ]
+      }
+    },
+    "openingState": {
+      "cacheTakenAt": null
+    }
+  },
+  "equipmentUnderdog": {
+    "goal": {
+      "kind": "improveEquipment",
+      "inventorySlot": 17,
+      "equipmentSlot": "weapon",
+      "rating": 2
+    },
+    "intent": {
+      "kind": "equip",
+      "inventorySlot": 17,
+      "equipmentSlot": "weapon",
+      "rating": 2
+    },
+    "memory": {
+      "lastGoal": {
+        "kind": "improveEquipment",
+        "inventorySlot": 17,
+        "equipmentSlot": "weapon",
+        "rating": 2
+      },
+      "lastOpponent": null,
+      "failedTargets": [],
+      "knowledge": {
+        "visitedRegions": [
+          {
+            "x": 0,
+            "z": 0
+          }
+        ],
+        "trail": [
+          {
+            "x": 0,
+            "y": 64,
+            "z": 0
+          }
+        ]
+      }
+    }
+  },
+  "equipmentUnderdog/explorer": {
+    "goal": {
+      "kind": "improveEquipment",
+      "inventorySlot": 17,
+      "equipmentSlot": "weapon",
+      "rating": 2
+    },
+    "intent": {
+      "kind": "equip",
+      "inventorySlot": 17,
+      "equipmentSlot": "weapon",
+      "rating": 2
+    },
+    "memory": {
+      "lastGoal": {
+        "kind": "improveEquipment",
+        "inventorySlot": 17,
+        "equipmentSlot": "weapon",
+        "rating": 2
+      },
+      "lastOpponent": null,
+      "failedTargets": [],
+      "knowledge": {
+        "visitedRegions": [
+          {
+            "x": 0,
+            "z": 0
+          }
+        ],
+        "trail": [
+          {
+            "x": 0,
+            "y": 64,
+            "z": 0
+          }
+        ]
+      }
+    },
+    "openingState": {
+      "cacheTakenAt": null
+    }
+  },
+  "equipmentUnderdog/scavenger": {
+    "goal": {
+      "kind": "improveEquipment",
+      "inventorySlot": 17,
+      "equipmentSlot": "weapon",
+      "rating": 2
+    },
+    "intent": {
+      "kind": "equip",
+      "inventorySlot": 17,
+      "equipmentSlot": "weapon",
+      "rating": 2
+    },
+    "memory": {
+      "lastGoal": {
+        "kind": "improveEquipment",
+        "inventorySlot": 17,
+        "equipmentSlot": "weapon",
+        "rating": 2
+      },
+      "lastOpponent": null,
+      "failedTargets": [],
+      "knowledge": {
+        "visitedRegions": [
+          {
+            "x": 0,
+            "z": 0
+          }
+        ],
+        "trail": [
+          {
+            "x": 0,
+            "y": 64,
+            "z": 0
+          }
+        ]
+      }
+    },
+    "openingState": {
+      "cacheTakenAt": null
+    }
+  },
+  "equipmentUnderdog/hunter": {
+    "goal": {
+      "kind": "improveEquipment",
+      "inventorySlot": 17,
+      "equipmentSlot": "weapon",
+      "rating": 2
+    },
+    "intent": {
+      "kind": "equip",
+      "inventorySlot": 17,
+      "equipmentSlot": "weapon",
+      "rating": 2
+    },
+    "memory": {
+      "lastGoal": {
+        "kind": "improveEquipment",
+        "inventorySlot": 17,
+        "equipmentSlot": "weapon",
+        "rating": 2
+      },
+      "lastOpponent": null,
+      "failedTargets": [],
+      "knowledge": {
+        "visitedRegions": [
+          {
+            "x": 0,
+            "z": 0
+          }
+        ],
+        "trail": [
+          {
+            "x": 0,
+            "y": 64,
+            "z": 0
+          }
+        ]
+      }
+    },
+    "openingState": {
+      "cacheTakenAt": null
+    }
+  },
+  "equipmentAhead": {
+    "goal": {
+      "kind": "explore"
+    },
+    "intent": {
+      "kind": "navigate",
+      "target": {
+        "x": 4,
+        "y": 64,
+        "z": -8
+      }
+    },
+    "memory": {
+      "lastGoal": {
+        "kind": "explore"
+      },
+      "lastOpponent": null,
+      "failedTargets": [],
+      "knowledge": {
+        "visitedRegions": [
+          {
+            "x": 0,
+            "z": 0
+          }
+        ],
+        "trail": [
+          {
+            "x": 0,
+            "y": 64,
+            "z": 0
+          }
+        ]
+      }
+    }
+  },
+  "equipmentAhead/explorer": {
+    "goal": {
+      "kind": "explore"
+    },
+    "intent": {
+      "kind": "navigate",
+      "target": {
+        "x": 4,
+        "y": 64,
+        "z": -8
+      }
+    },
+    "memory": {
+      "lastGoal": {
+        "kind": "explore"
+      },
+      "lastOpponent": null,
+      "failedTargets": [],
+      "knowledge": {
+        "visitedRegions": [
+          {
+            "x": 0,
+            "z": 0
+          }
+        ],
+        "trail": [
+          {
+            "x": 0,
+            "y": 64,
+            "z": 0
+          }
+        ]
+      }
+    },
+    "openingState": {
+      "cacheTakenAt": null
+    }
+  },
+  "equipmentAhead/scavenger": {
+    "goal": {
+      "kind": "explore"
+    },
+    "intent": {
+      "kind": "navigate",
+      "target": {
+        "x": 4,
+        "y": 64,
+        "z": -8
+      }
+    },
+    "memory": {
+      "lastGoal": {
+        "kind": "explore"
+      },
+      "lastOpponent": null,
+      "failedTargets": [],
+      "knowledge": {
+        "visitedRegions": [
+          {
+            "x": 0,
+            "z": 0
+          }
+        ],
+        "trail": [
+          {
+            "x": 0,
+            "y": 64,
+            "z": 0
+          }
+        ]
+      }
+    },
+    "openingState": {
+      "cacheTakenAt": null
+    }
+  },
+  "equipmentAhead/hunter": {
+    "goal": {
+      "kind": "explore"
+    },
+    "intent": {
+      "kind": "navigate",
+      "target": {
+        "x": 4,
+        "y": 64,
+        "z": -8
+      }
+    },
+    "memory": {
+      "lastGoal": {
+        "kind": "explore"
+      },
+      "lastOpponent": null,
+      "failedTargets": [],
+      "knowledge": {
+        "visitedRegions": [
+          {
+            "x": 0,
+            "z": 0
+          }
+        ],
+        "trail": [
+          {
+            "x": 0,
+            "y": 64,
+            "z": 0
+          }
+        ]
+      }
+    },
+    "openingState": {
+      "cacheTakenAt": null
+    }
+  },
+  "lowHealthThreat": {
+    "goal": {
+      "kind": "retreatFromOpponent",
+      "target": 8
+    },
+    "intent": {
+      "kind": "navigate",
+      "target": {
+        "x": -4,
+        "y": 64,
+        "z": 0
+      }
+    },
+    "memory": {
+      "lastGoal": {
+        "kind": "retreatFromOpponent",
+        "target": 8
+      },
+      "lastOpponent": {
+        "id": 7,
+        "position": {
+          "x": 1,
+          "y": 64,
+          "z": 0
+        },
+        "observedAt": 40
+      },
+      "failedTargets": [],
+      "knowledge": {
+        "visitedRegions": [
+          {
+            "x": 0,
+            "z": 0
+          }
+        ],
+        "trail": [
+          {
+            "x": 0,
+            "y": 64,
+            "z": 0
+          }
+        ]
+      }
+    }
+  },
+  "lowHealthThreat/explorer": {
+    "goal": {
+      "kind": "retreatFromOpponent",
+      "target": 8
+    },
+    "intent": {
+      "kind": "navigate",
+      "target": {
+        "x": -4,
+        "y": 64,
+        "z": 0
+      }
+    },
+    "memory": {
+      "lastGoal": {
+        "kind": "retreatFromOpponent",
+        "target": 8
+      },
+      "lastOpponent": {
+        "id": 7,
+        "position": {
+          "x": 1,
+          "y": 64,
+          "z": 0
+        },
+        "observedAt": 40
+      },
+      "failedTargets": [],
+      "knowledge": {
+        "visitedRegions": [
+          {
+            "x": 0,
+            "z": 0
+          }
+        ],
+        "trail": [
+          {
+            "x": 0,
+            "y": 64,
+            "z": 0
+          }
+        ]
+      }
+    },
+    "openingState": {
+      "cacheTakenAt": null
+    }
+  },
+  "lowHealthThreat/scavenger": {
+    "goal": {
+      "kind": "retreatFromOpponent",
+      "target": 8
+    },
+    "intent": {
+      "kind": "navigate",
+      "target": {
+        "x": -4,
+        "y": 64,
+        "z": 0
+      }
+    },
+    "memory": {
+      "lastGoal": {
+        "kind": "retreatFromOpponent",
+        "target": 8
+      },
+      "lastOpponent": {
+        "id": 7,
+        "position": {
+          "x": 1,
+          "y": 64,
+          "z": 0
+        },
+        "observedAt": 40
+      },
+      "failedTargets": [],
+      "knowledge": {
+        "visitedRegions": [
+          {
+            "x": 0,
+            "z": 0
+          }
+        ],
+        "trail": [
+          {
+            "x": 0,
+            "y": 64,
+            "z": 0
+          }
+        ]
+      }
+    },
+    "openingState": {
+      "cacheTakenAt": null
+    }
+  },
+  "lowHealthThreat/hunter": {
+    "goal": {
+      "kind": "retreatFromOpponent",
+      "target": 8
+    },
+    "intent": {
+      "kind": "navigate",
+      "target": {
+        "x": -4,
+        "y": 64,
+        "z": 0
+      }
+    },
+    "memory": {
+      "lastGoal": {
+        "kind": "retreatFromOpponent",
+        "target": 8
+      },
+      "lastOpponent": {
+        "id": 7,
+        "position": {
+          "x": 1,
+          "y": 64,
+          "z": 0
+        },
+        "observedAt": 40
+      },
+      "failedTargets": [],
+      "knowledge": {
+        "visitedRegions": [
+          {
+            "x": 0,
+            "z": 0
+          }
+        ],
+        "trail": [
+          {
+            "x": 0,
+            "y": 64,
+            "z": 0
+          }
+        ]
+      }
+    },
+    "openingState": {
+      "cacheTakenAt": null
+    }
+  },
+  "eatingThreat": {
+    "goal": {
+      "kind": "engageVisibleOpponent",
+      "target": 19
+    },
+    "intent": {
+      "kind": "attack",
+      "target": 19
+    },
+    "memory": {
+      "lastGoal": {
+        "kind": "engageVisibleOpponent",
+        "target": 19
+      },
+      "lastOpponent": {
+        "id": 19,
+        "position": {
+          "x": 3,
+          "y": 64,
+          "z": 0
+        },
+        "observedAt": 50
+      },
+      "failedTargets": [],
+      "knowledge": {
+        "visitedRegions": [
+          {
+            "x": 0,
+            "z": 0
+          }
+        ],
+        "trail": [
+          {
+            "x": 0,
+            "y": 64,
+            "z": 0
+          }
+        ]
+      }
+    }
+  },
+  "eatingThreat/explorer": {
+    "goal": {
+      "kind": "engageVisibleOpponent",
+      "target": 19
+    },
+    "intent": {
+      "kind": "attack",
+      "target": 19
+    },
+    "memory": {
+      "lastGoal": {
+        "kind": "engageVisibleOpponent",
+        "target": 19
+      },
+      "lastOpponent": {
+        "id": 19,
+        "position": {
+          "x": 3,
+          "y": 64,
+          "z": 0
+        },
+        "observedAt": 50
+      },
+      "failedTargets": [],
+      "knowledge": {
+        "visitedRegions": [
+          {
+            "x": 0,
+            "z": 0
+          }
+        ],
+        "trail": [
+          {
+            "x": 0,
+            "y": 64,
+            "z": 0
+          }
+        ]
+      }
+    },
+    "openingState": {
+      "cacheTakenAt": null
+    }
+  },
+  "eatingThreat/scavenger": {
+    "goal": {
+      "kind": "engageVisibleOpponent",
+      "target": 19
+    },
+    "intent": {
+      "kind": "attack",
+      "target": 19
+    },
+    "memory": {
+      "lastGoal": {
+        "kind": "engageVisibleOpponent",
+        "target": 19
+      },
+      "lastOpponent": {
+        "id": 19,
+        "position": {
+          "x": 3,
+          "y": 64,
+          "z": 0
+        },
+        "observedAt": 50
+      },
+      "failedTargets": [],
+      "knowledge": {
+        "visitedRegions": [
+          {
+            "x": 0,
+            "z": 0
+          }
+        ],
+        "trail": [
+          {
+            "x": 0,
+            "y": 64,
+            "z": 0
+          }
+        ]
+      }
+    },
+    "openingState": {
+      "cacheTakenAt": null
+    }
+  },
+  "eatingThreat/hunter": {
+    "goal": {
+      "kind": "engageVisibleOpponent",
+      "target": 19
+    },
+    "intent": {
+      "kind": "attack",
+      "target": 19
+    },
+    "memory": {
+      "lastGoal": {
+        "kind": "engageVisibleOpponent",
+        "target": 19
+      },
+      "lastOpponent": {
+        "id": 19,
+        "position": {
+          "x": 3,
+          "y": 64,
+          "z": 0
+        },
+        "observedAt": 50
+      },
+      "failedTargets": [],
+      "knowledge": {
+        "visitedRegions": [
+          {
+            "x": 0,
+            "z": 0
+          }
+        ],
+        "trail": [
+          {
+            "x": 0,
+            "y": 64,
+            "z": 0
+          }
+        ]
+      }
+    },
+    "openingState": {
+      "cacheTakenAt": null
+    }
+  },
+  "lostTarget": {
+    "goal": {
+      "kind": "searchLastKnown",
+      "target": 41
+    },
+    "intent": {
+      "kind": "navigate",
+      "target": {
+        "x": 5,
+        "y": 64,
+        "z": 0
+      }
+    },
+    "memory": {
+      "lastGoal": {
+        "kind": "searchLastKnown",
+        "target": 41
+      },
+      "lastOpponent": {
+        "id": 41,
+        "position": {
+          "x": 5,
+          "y": 64,
+          "z": 0
+        },
+        "observedAt": 60
+      },
+      "failedTargets": [],
+      "knowledge": {
+        "visitedRegions": [
+          {
+            "x": 0,
+            "z": 0
+          }
+        ],
+        "trail": [
+          {
+            "x": 0,
+            "y": 64,
+            "z": 0
+          }
+        ]
+      }
+    }
+  },
+  "lostTarget/explorer": {
+    "goal": {
+      "kind": "explore"
+    },
+    "intent": {
+      "kind": "navigate",
+      "target": {
+        "x": 4,
+        "y": 64,
+        "z": -8
+      }
+    },
+    "memory": {
+      "lastGoal": {
+        "kind": "explore"
+      },
+      "lastOpponent": {
+        "id": 41,
+        "position": {
+          "x": 5,
+          "y": 64,
+          "z": 0
+        },
+        "observedAt": 60
+      },
+      "failedTargets": [],
+      "knowledge": {
+        "visitedRegions": [
+          {
+            "x": 0,
+            "z": 0
+          }
+        ],
+        "trail": [
+          {
+            "x": 0,
+            "y": 64,
+            "z": 0
+          }
+        ]
+      }
+    },
+    "openingState": {
+      "cacheTakenAt": null
+    }
+  },
+  "lostTarget/scavenger": {
+    "goal": {
+      "kind": "explore"
+    },
+    "intent": {
+      "kind": "navigate",
+      "target": {
+        "x": 4,
+        "y": 64,
+        "z": -8
+      }
+    },
+    "memory": {
+      "lastGoal": {
+        "kind": "explore"
+      },
+      "lastOpponent": {
+        "id": 41,
+        "position": {
+          "x": 5,
+          "y": 64,
+          "z": 0
+        },
+        "observedAt": 60
+      },
+      "failedTargets": [],
+      "knowledge": {
+        "visitedRegions": [
+          {
+            "x": 0,
+            "z": 0
+          }
+        ],
+        "trail": [
+          {
+            "x": 0,
+            "y": 64,
+            "z": 0
+          }
+        ]
+      }
+    },
+    "openingState": {
+      "cacheTakenAt": null
+    }
+  },
+  "lostTarget/hunter": {
+    "goal": {
+      "kind": "explore"
+    },
+    "intent": {
+      "kind": "navigate",
+      "target": {
+        "x": 4,
+        "y": 64,
+        "z": -8
+      }
+    },
+    "memory": {
+      "lastGoal": {
+        "kind": "explore"
+      },
+      "lastOpponent": {
+        "id": 41,
+        "position": {
+          "x": 5,
+          "y": 64,
+          "z": 0
+        },
+        "observedAt": 60
+      },
+      "failedTargets": [],
+      "knowledge": {
+        "visitedRegions": [
+          {
+            "x": 0,
+            "z": 0
+          }
+        ],
+        "trail": [
+          {
+            "x": 0,
+            "y": 64,
+            "z": 0
+          }
+        ]
+      }
+    },
+    "openingState": {
+      "cacheTakenAt": null
+    }
+  },
+  "twoVisibleTargets": {
+    "goal": {
+      "kind": "engageVisibleOpponent",
+      "target": 30
+    },
+    "intent": {
+      "kind": "attack",
+      "target": 30
+    },
+    "memory": {
+      "lastGoal": {
+        "kind": "engageVisibleOpponent",
+        "target": 30
+      },
+      "lastOpponent": {
+        "id": 30,
+        "position": {
+          "x": -1,
+          "y": 64,
+          "z": 0
+        },
+        "observedAt": 70
+      },
+      "failedTargets": [],
+      "knowledge": {
+        "visitedRegions": [
+          {
+            "x": 0,
+            "z": 0
+          }
+        ],
+        "trail": [
+          {
+            "x": 0,
+            "y": 64,
+            "z": 0
+          }
+        ]
+      }
+    }
+  },
+  "twoVisibleTargets/explorer": {
+    "goal": {
+      "kind": "engageVisibleOpponent",
+      "target": 30
+    },
+    "intent": {
+      "kind": "attack",
+      "target": 30
+    },
+    "memory": {
+      "lastGoal": {
+        "kind": "engageVisibleOpponent",
+        "target": 30
+      },
+      "lastOpponent": {
+        "id": 30,
+        "position": {
+          "x": -1,
+          "y": 64,
+          "z": 0
+        },
+        "observedAt": 70
+      },
+      "failedTargets": [],
+      "knowledge": {
+        "visitedRegions": [
+          {
+            "x": 0,
+            "z": 0
+          }
+        ],
+        "trail": [
+          {
+            "x": 0,
+            "y": 64,
+            "z": 0
+          }
+        ]
+      }
+    },
+    "openingState": {
+      "cacheTakenAt": null
+    }
+  },
+  "twoVisibleTargets/scavenger": {
+    "goal": {
+      "kind": "engageVisibleOpponent",
+      "target": 30
+    },
+    "intent": {
+      "kind": "attack",
+      "target": 30
+    },
+    "memory": {
+      "lastGoal": {
+        "kind": "engageVisibleOpponent",
+        "target": 30
+      },
+      "lastOpponent": {
+        "id": 30,
+        "position": {
+          "x": -1,
+          "y": 64,
+          "z": 0
+        },
+        "observedAt": 70
+      },
+      "failedTargets": [],
+      "knowledge": {
+        "visitedRegions": [
+          {
+            "x": 0,
+            "z": 0
+          }
+        ],
+        "trail": [
+          {
+            "x": 0,
+            "y": 64,
+            "z": 0
+          }
+        ]
+      }
+    },
+    "openingState": {
+      "cacheTakenAt": null
+    }
+  },
+  "twoVisibleTargets/hunter": {
+    "goal": {
+      "kind": "engageVisibleOpponent",
+      "target": 30
+    },
+    "intent": {
+      "kind": "attack",
+      "target": 30
+    },
+    "memory": {
+      "lastGoal": {
+        "kind": "engageVisibleOpponent",
+        "target": 30
+      },
+      "lastOpponent": {
+        "id": 30,
+        "position": {
+          "x": -1,
+          "y": 64,
+          "z": 0
+        },
+        "observedAt": 70
+      },
+      "failedTargets": [],
+      "knowledge": {
+        "visitedRegions": [
+          {
+            "x": 0,
+            "z": 0
+          }
+        ],
+        "trail": [
+          {
+            "x": 0,
+            "y": 64,
+            "z": 0
+          }
+        ]
+      }
+    },
+    "openingState": {
+      "cacheTakenAt": null
+    }
+  },
+  "afterKnockback": {
+    "goal": {
+      "kind": "escapeBorder"
+    },
+    "intent": {
+      "kind": "navigate",
+      "target": {
+        "x": 0,
+        "y": 64,
+        "z": 0
+      }
+    },
+    "memory": {
+      "lastGoal": {
+        "kind": "escapeBorder"
+      },
+      "lastOpponent": {
+        "id": 51,
+        "position": {
+          "x": 102,
+          "y": 64,
+          "z": 0
+        },
+        "observedAt": 80
+      },
+      "failedTargets": [],
+      "knowledge": {
+        "visitedRegions": [
+          {
+            "x": 6,
+            "z": 0
+          }
+        ],
+        "trail": [
+          {
+            "x": 101,
+            "y": 64,
+            "z": 0
+          }
+        ]
+      }
+    }
+  },
+  "afterKnockback/explorer": {
+    "goal": {
+      "kind": "escapeBorder"
+    },
+    "intent": {
+      "kind": "navigate",
+      "target": {
+        "x": 0,
+        "y": 64,
+        "z": 0
+      }
+    },
+    "memory": {
+      "lastGoal": {
+        "kind": "escapeBorder"
+      },
+      "lastOpponent": {
+        "id": 51,
+        "position": {
+          "x": 102,
+          "y": 64,
+          "z": 0
+        },
+        "observedAt": 80
+      },
+      "failedTargets": [],
+      "knowledge": {
+        "visitedRegions": [
+          {
+            "x": 6,
+            "z": 0
+          }
+        ],
+        "trail": [
+          {
+            "x": 101,
+            "y": 64,
+            "z": 0
+          }
+        ]
+      }
+    },
+    "openingState": {
+      "cacheTakenAt": null
+    }
+  },
+  "afterKnockback/scavenger": {
+    "goal": {
+      "kind": "escapeBorder"
+    },
+    "intent": {
+      "kind": "navigate",
+      "target": {
+        "x": 0,
+        "y": 64,
+        "z": 0
+      }
+    },
+    "memory": {
+      "lastGoal": {
+        "kind": "escapeBorder"
+      },
+      "lastOpponent": {
+        "id": 51,
+        "position": {
+          "x": 102,
+          "y": 64,
+          "z": 0
+        },
+        "observedAt": 80
+      },
+      "failedTargets": [],
+      "knowledge": {
+        "visitedRegions": [
+          {
+            "x": 6,
+            "z": 0
+          }
+        ],
+        "trail": [
+          {
+            "x": 101,
+            "y": 64,
+            "z": 0
+          }
+        ]
+      }
+    },
+    "openingState": {
+      "cacheTakenAt": null
+    }
+  },
+  "afterKnockback/hunter": {
+    "goal": {
+      "kind": "escapeBorder"
+    },
+    "intent": {
+      "kind": "navigate",
+      "target": {
+        "x": 0,
+        "y": 64,
+        "z": 0
+      }
+    },
+    "memory": {
+      "lastGoal": {
+        "kind": "escapeBorder"
+      },
+      "lastOpponent": {
+        "id": 51,
+        "position": {
+          "x": 102,
+          "y": 64,
+          "z": 0
+        },
+        "observedAt": 80
+      },
+      "failedTargets": [],
+      "knowledge": {
+        "visitedRegions": [
+          {
+            "x": 6,
+            "z": 0
+          }
+        ],
+        "trail": [
+          {
+            "x": 101,
+            "y": 64,
+            "z": 0
+          }
+        ]
+      }
+    },
+    "openingState": {
+      "cacheTakenAt": null
+    }
+  },
+  "nearHysteresis": {
+    "goal": {
+      "kind": "loot",
+      "target": {
+        "kind": "container",
+        "position": {
+          "x": 4,
+          "y": 64,
+          "z": 0
+        }
+      }
+    },
+    "intent": {
+      "kind": "navigate",
+      "target": {
+        "x": 4,
+        "y": 64,
+        "z": 0
+      }
+    },
+    "memory": {
+      "lastGoal": {
+        "kind": "loot",
+        "target": {
+          "kind": "container",
+          "position": {
+            "x": 4,
+            "y": 64,
+            "z": 0
+          }
+        }
+      },
+      "lastOpponent": null,
+      "failedTargets": [],
+      "knowledge": {
+        "visitedRegions": [
+          {
+            "x": 0,
+            "z": 0
+          }
+        ],
+        "trail": [
+          {
+            "x": 0,
+            "y": 64,
+            "z": 0
+          }
+        ]
+      }
+    }
+  },
+  "nearHysteresis/explorer": {
+    "goal": {
+      "kind": "explore"
+    },
+    "intent": {
+      "kind": "navigate",
+      "target": {
+        "x": 4,
+        "y": 64,
+        "z": -8
+      }
+    },
+    "memory": {
+      "lastGoal": {
+        "kind": "explore"
+      },
+      "lastOpponent": null,
+      "failedTargets": [],
+      "knowledge": {
+        "visitedRegions": [
+          {
+            "x": 0,
+            "z": 0
+          }
+        ],
+        "trail": [
+          {
+            "x": 0,
+            "y": 64,
+            "z": 0
+          }
+        ]
+      }
+    },
+    "openingState": {
+      "cacheTakenAt": null
+    }
+  },
+  "nearHysteresis/scavenger": {
+    "goal": {
+      "kind": "loot",
+      "target": {
+        "kind": "container",
+        "position": {
+          "x": 4,
+          "y": 64,
+          "z": 0
+        }
+      }
+    },
+    "intent": {
+      "kind": "navigate",
+      "target": {
+        "x": 4,
+        "y": 64,
+        "z": 0
+      }
+    },
+    "memory": {
+      "lastGoal": {
+        "kind": "loot",
+        "target": {
+          "kind": "container",
+          "position": {
+            "x": 4,
+            "y": 64,
+            "z": 0
+          }
+        }
+      },
+      "lastOpponent": null,
+      "failedTargets": [],
+      "knowledge": {
+        "visitedRegions": [
+          {
+            "x": 0,
+            "z": 0
+          }
+        ],
+        "trail": [
+          {
+            "x": 0,
+            "y": 64,
+            "z": 0
+          }
+        ]
+      }
+    },
+    "openingState": {
+      "cacheTakenAt": null
+    }
+  },
+  "nearHysteresis/hunter": {
+    "goal": {
+      "kind": "loot",
+      "target": {
+        "kind": "container",
+        "position": {
+          "x": 4,
+          "y": 64,
+          "z": 0
+        }
+      }
+    },
+    "intent": {
+      "kind": "navigate",
+      "target": {
+        "x": 4,
+        "y": 64,
+        "z": 0
+      }
+    },
+    "memory": {
+      "lastGoal": {
+        "kind": "loot",
+        "target": {
+          "kind": "container",
+          "position": {
+            "x": 4,
+            "y": 64,
+            "z": 0
+          }
+        }
+      },
+      "lastOpponent": null,
+      "failedTargets": [],
+      "knowledge": {
+        "visitedRegions": [
+          {
+            "x": 0,
+            "z": 0
+          }
+        ],
+        "trail": [
+          {
+            "x": 0,
+            "y": 64,
+            "z": 0
+          }
+        ]
+      }
+    },
+    "openingState": {
+      "cacheTakenAt": null
+    }
+  },
+  "farHysteresis": {
+    "goal": {
+      "kind": "loot",
+      "target": {
+        "kind": "container",
+        "position": {
+          "x": 4,
+          "y": 64,
+          "z": 0
+        }
+      }
+    },
+    "intent": {
+      "kind": "navigate",
+      "target": {
+        "x": 4,
+        "y": 64,
+        "z": 0
+      }
+    },
+    "memory": {
+      "lastGoal": {
+        "kind": "loot",
+        "target": {
+          "kind": "container",
+          "position": {
+            "x": 4,
+            "y": 64,
+            "z": 0
+          }
+        }
+      },
+      "lastOpponent": null,
+      "failedTargets": [],
+      "knowledge": {
+        "visitedRegions": [
+          {
+            "x": 0,
+            "z": 0
+          }
+        ],
+        "trail": [
+          {
+            "x": 0,
+            "y": 64,
+            "z": 0
+          }
+        ]
+      }
+    }
+  },
+  "farHysteresis/explorer": {
+    "goal": {
+      "kind": "explore"
+    },
+    "intent": {
+      "kind": "navigate",
+      "target": {
+        "x": 4,
+        "y": 64,
+        "z": -8
+      }
+    },
+    "memory": {
+      "lastGoal": {
+        "kind": "explore"
+      },
+      "lastOpponent": null,
+      "failedTargets": [],
+      "knowledge": {
+        "visitedRegions": [
+          {
+            "x": 0,
+            "z": 0
+          }
+        ],
+        "trail": [
+          {
+            "x": 0,
+            "y": 64,
+            "z": 0
+          }
+        ]
+      }
+    },
+    "openingState": {
+      "cacheTakenAt": null
+    }
+  },
+  "farHysteresis/scavenger": {
+    "goal": {
+      "kind": "loot",
+      "target": {
+        "kind": "container",
+        "position": {
+          "x": 4,
+          "y": 64,
+          "z": 0
+        }
+      }
+    },
+    "intent": {
+      "kind": "navigate",
+      "target": {
+        "x": 4,
+        "y": 64,
+        "z": 0
+      }
+    },
+    "memory": {
+      "lastGoal": {
+        "kind": "loot",
+        "target": {
+          "kind": "container",
+          "position": {
+            "x": 4,
+            "y": 64,
+            "z": 0
+          }
+        }
+      },
+      "lastOpponent": null,
+      "failedTargets": [],
+      "knowledge": {
+        "visitedRegions": [
+          {
+            "x": 0,
+            "z": 0
+          }
+        ],
+        "trail": [
+          {
+            "x": 0,
+            "y": 64,
+            "z": 0
+          }
+        ]
+      }
+    },
+    "openingState": {
+      "cacheTakenAt": null
+    }
+  },
+  "farHysteresis/hunter": {
+    "goal": {
+      "kind": "loot",
+      "target": {
+        "kind": "container",
+        "position": {
+          "x": 4,
+          "y": 64,
+          "z": 0
+        }
+      }
+    },
+    "intent": {
+      "kind": "navigate",
+      "target": {
+        "x": 4,
+        "y": 64,
+        "z": 0
+      }
+    },
+    "memory": {
+      "lastGoal": {
+        "kind": "loot",
+        "target": {
+          "kind": "container",
+          "position": {
+            "x": 4,
+            "y": 64,
+            "z": 0
+          }
+        }
+      },
+      "lastOpponent": null,
+      "failedTargets": [],
+      "knowledge": {
+        "visitedRegions": [
+          {
+            "x": 0,
+            "z": 0
+          }
+        ],
+        "trail": [
+          {
+            "x": 0,
+            "y": 64,
+            "z": 0
+          }
+        ]
+      }
+    },
+    "openingState": {
+      "cacheTakenAt": null
+    }
+  },
+  "explorationOverflow": {
+    "goal": {
+      "kind": "explore"
+    },
+    "intent": {
+      "kind": "navigate",
+      "target": {
+        "x": 9007199254740991,
+        "y": 64,
+        "z": 8
+      }
+    },
+    "memory": {
+      "lastGoal": {
+        "kind": "explore"
+      },
+      "lastOpponent": null,
+      "failedTargets": [],
+      "knowledge": {
+        "visitedRegions": [
+          {
+            "x": 562949953421311,
+            "z": 0
+          }
+        ],
+        "trail": [
+          {
+            "x": 9007199254740991,
+            "y": 64,
+            "z": 0
+          }
+        ]
+      }
+    }
+  },
+  "explorationOverflow/explorer": {
+    "goal": {
+      "kind": "explore"
+    },
+    "intent": {
+      "kind": "navigate",
+      "target": {
+        "x": 9007199254740991,
+        "y": 64,
+        "z": 8
+      }
+    },
+    "memory": {
+      "lastGoal": {
+        "kind": "explore"
+      },
+      "lastOpponent": null,
+      "failedTargets": [],
+      "knowledge": {
+        "visitedRegions": [
+          {
+            "x": 562949953421311,
+            "z": 0
+          }
+        ],
+        "trail": [
+          {
+            "x": 9007199254740991,
+            "y": 64,
+            "z": 0
+          }
+        ]
+      }
+    },
+    "openingState": {
+      "cacheTakenAt": null
+    }
+  },
+  "explorationOverflow/scavenger": {
+    "goal": {
+      "kind": "explore"
+    },
+    "intent": {
+      "kind": "navigate",
+      "target": {
+        "x": 9007199254740991,
+        "y": 64,
+        "z": 8
+      }
+    },
+    "memory": {
+      "lastGoal": {
+        "kind": "explore"
+      },
+      "lastOpponent": null,
+      "failedTargets": [],
+      "knowledge": {
+        "visitedRegions": [
+          {
+            "x": 562949953421311,
+            "z": 0
+          }
+        ],
+        "trail": [
+          {
+            "x": 9007199254740991,
+            "y": 64,
+            "z": 0
+          }
+        ]
+      }
+    },
+    "openingState": {
+      "cacheTakenAt": null
+    }
+  },
+  "explorationOverflow/hunter": {
+    "goal": {
+      "kind": "explore"
+    },
+    "intent": {
+      "kind": "navigate",
+      "target": {
+        "x": 9007199254740991,
+        "y": 64,
+        "z": 8
+      }
+    },
+    "memory": {
+      "lastGoal": {
+        "kind": "explore"
+      },
+      "lastOpponent": null,
+      "failedTargets": [],
+      "knowledge": {
+        "visitedRegions": [
+          {
+            "x": 562949953421311,
+            "z": 0
+          }
+        ],
+        "trail": [
+          {
+            "x": 9007199254740991,
+            "y": 64,
+            "z": 0
+          }
+        ]
+      }
+    },
+    "openingState": {
+      "cacheTakenAt": null
+    }
+  }
+}

@@ -16,7 +16,7 @@ const profile = (id: string): string => readFileSync(resolve(process.cwd(), `pol
 const TACTICAL = CANDIDATE_IDS.filter((id) => id !== "baseline");
 
 test("candidate_profiles_match_the_registry_defaults_and_semantic_ids", () => {
-  assert.equal(TACTICAL.length, 4);
+  assert.equal(TACTICAL.length, 5);
   for (const id of TACTICAL) {
     const compiled = compileCandidateProfile(profile(id));
     assert.equal(compiled.id, id);

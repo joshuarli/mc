@@ -19,6 +19,14 @@ import {
   type PolicyMemory,
   type PolicyParamValues,
 } from './policy.js';
+import {
+  baselineExplanation,
+  decideOpeningV5,
+  decideV5,
+  type DecisionExplanation,
+  type ExplainedDecision,
+  type ExplainedOpeningDecision,
+} from './policy-v5.js';
 import { DeterministicRandom, RandomStream } from './random.js';
 
 export const CANDIDATE_IDS = [
@@ -27,10 +35,11 @@ export const CANDIDATE_IDS = [
   'equipment-skirmisher',
   'melee-duelist',
   'ranged-kiter',
+  'improved',
 ] as const;
 
 export type CandidateId = typeof CANDIDATE_IDS[number];
-export type CandidateImplementationId = 'policy-v4' | 'tactical-v1';
+export type CandidateImplementationId = 'policy-v4' | 'policy-v5' | 'tactical-v1';
 
 export const CANDIDATE_TUNABLES = [
   'eatAtHungerOrBelow',
@@ -72,6 +81,21 @@ const DEFINITIONS: Readonly<Record<CandidateId, CandidateDefinition>> = Object.f
   baseline: Object.freeze({
     version: 1,
     implementation: 'policy-v4' as const,
+    defaults: Object.freeze({
+      eatAtHungerOrBelow: 8,
+      retreatAtHealthHalfHeartsOrBelow: 8,
+      borderMarginBlocks: 2,
+      fightRangeBlocks: 4,
+      opponentMemoryTicks: 100,
+      lootHysteresisBlocks: 2,
+      searchRadiusBlocks: 8,
+      lootFirstRangeBlocks: 0,
+      kiteRangeBlocks: 0,
+    }),
+  }),
+  improved: Object.freeze({
+    version: 1,
+    implementation: 'policy-v5' as const,
     defaults: Object.freeze({
       eatAtHungerOrBelow: 8,
       retreatAtHealthHalfHeartsOrBelow: 8,
@@ -165,6 +189,19 @@ export interface CompiledCandidate {
     feedback: PolicyFeedbackBatch,
     context: OpeningPolicyContext,
   ): OpeningDecision;
+  explain(
+    observation: AgentObservation,
+    memory: PolicyMemory,
+    random: DeterministicRandom,
+    feedback?: PolicyFeedbackBatch,
+  ): ExplainedDecision;
+  explainOpening(
+    observation: AgentObservation,
+    memory: PolicyMemory,
+    random: DeterministicRandom,
+    feedback: PolicyFeedbackBatch,
+    context: OpeningPolicyContext,
+  ): ExplainedOpeningDecision;
 }
 
 export class InvalidCandidateError extends RangeError {
@@ -209,8 +246,8 @@ export function validateCandidateParams(
       if (merged[name] !== entry.defaults[name]) throw new InvalidCandidateError('frozen-candidate', name);
     }
   }
-  if (entry.implementation === 'policy-v4' && (merged.lootFirstRangeBlocks !== 0 || merged.kiteRangeBlocks !== 0)) {
-    throw new InvalidCandidateError('frozen-candidate', 'policy-v4 has no tactical knobs');
+  if (entry.implementation !== 'tactical-v1' && (merged.lootFirstRangeBlocks !== 0 || merged.kiteRangeBlocks !== 0)) {
+    throw new InvalidCandidateError('frozen-candidate', `${entry.implementation} has no tactical knobs`);
   }
   return Object.freeze(merged);
 }
@@ -235,6 +272,12 @@ export function compileCandidate(
     decideOpening: (observation, memory, random, feedback, context) => (
       implementation.decideOpening(observation, memory, policyParams, params, random, feedback, context)
     ),
+    explain: (observation, memory, random, feedback = []) => (
+      implementation.explain(observation, memory, policyParams, params, random, feedback)
+    ),
+    explainOpening: (observation, memory, random, feedback, context) => (
+      implementation.explainOpening(observation, memory, policyParams, params, random, feedback, context)
+    ),
   };
   return Object.freeze(compiled);
 }
@@ -257,18 +300,65 @@ interface CandidateImplementation {
     feedback: PolicyFeedbackBatch,
     context: OpeningPolicyContext,
   ): OpeningDecision;
+  explain(
+    observation: AgentObservation,
+    memory: PolicyMemory,
+    policyParams: PolicyParams,
+    params: CandidateParamValues,
+    random: DeterministicRandom,
+    feedback: PolicyFeedbackBatch,
+  ): ExplainedDecision;
+  explainOpening(
+    observation: AgentObservation,
+    memory: PolicyMemory,
+    policyParams: PolicyParams,
+    params: CandidateParamValues,
+    random: DeterministicRandom,
+    feedback: PolicyFeedbackBatch,
+    context: OpeningPolicyContext,
+  ): ExplainedOpeningDecision;
+}
+
+type PlainImplementation = Pick<CandidateImplementation, 'decide' | 'decideOpening'>;
+
+function withBaselineExplanations(plain: PlainImplementation): CandidateImplementation {
+  return {
+    ...plain,
+    explain: (observation, memory, policyParams, params, random, feedback) => {
+      const decision = plain.decide(observation, memory, policyParams, params, random, feedback);
+      return Object.freeze({ decision, explanation: baselineExplanation(observation, decision) });
+    },
+    explainOpening: (observation, memory, policyParams, params, random, feedback, context) => {
+      const decision = plain.decideOpening(observation, memory, policyParams, params, random, feedback, context);
+      return Object.freeze({ decision, explanation: baselineExplanation(observation, decision) });
+    },
+  };
 }
 
 const IMPLEMENTATIONS: Readonly<Record<CandidateImplementationId, CandidateImplementation>> = {
-  'policy-v4': {
+  'policy-v4': withBaselineExplanations({
     decide: (observation, memory, policyParams, _params, random, feedback) => (
       decide(observation, memory, policyParams, random, feedback)
     ),
     decideOpening: (observation, memory, policyParams, _params, random, feedback, context) => (
       decideOpening(observation, memory, policyParams, random, feedback, context)
     ),
+  }),
+  'policy-v5': {
+    decide: (observation, memory, policyParams, _params, random, feedback) => (
+      decideV5(observation, memory, policyParams, random, feedback).decision
+    ),
+    decideOpening: (observation, memory, policyParams, _params, random, feedback, context) => (
+      decideOpeningV5(observation, memory, policyParams, random, feedback, context).decision
+    ),
+    explain: (observation, memory, policyParams, _params, random, feedback) => (
+      decideV5(observation, memory, policyParams, random, feedback)
+    ),
+    explainOpening: (observation, memory, policyParams, _params, random, feedback, context) => (
+      decideOpeningV5(observation, memory, policyParams, random, feedback, context)
+    ),
   },
-  'tactical-v1': {
+  'tactical-v1': withBaselineExplanations({
     decide: (observation, memory, policyParams, params, random, feedback) => {
       const decision = decide(lootFirstView(observation, params), memory, policyParams, random, feedback);
       return kite(observation, decision, params, policyParams.values);
@@ -278,7 +368,7 @@ const IMPLEMENTATIONS: Readonly<Record<CandidateImplementationId, CandidateImple
       const kited = kite(observation, decision, params, policyParams.values);
       return kited === decision ? decision : Object.freeze({ ...kited, openingState: decision.openingState });
     },
-  },
+  }),
 };
 
 function lootFirstView(observation: AgentObservation, params: CandidateParamValues): AgentObservation {
@@ -436,4 +526,61 @@ function shuffled<T>(values: readonly T[], random: DeterministicRandom): T[] {
     [result[index], result[swap]] = [result[swap]!, result[index]!];
   }
   return result;
+}
+
+export interface DecisionDiffInput {
+  readonly label: string;
+  readonly observation: AgentObservation;
+  readonly memory: PolicyMemory;
+  readonly random: () => DeterministicRandom;
+  readonly feedback?: PolicyFeedbackBatch;
+}
+
+export interface DecisionDiffSide {
+  readonly goal: Goal['kind'];
+  readonly intent: Decision['intent']['kind'];
+  readonly reason: DecisionExplanation['reason'];
+  readonly explanation: DecisionExplanation;
+}
+
+export interface DecisionDiffEntry {
+  readonly label: string;
+  readonly tick: number;
+  readonly baseline: DecisionDiffSide;
+  readonly improved: DecisionDiffSide;
+}
+
+export interface DecisionDiffReport {
+  readonly compared: number;
+  readonly entries: readonly DecisionDiffEntry[];
+}
+
+export function decisionDiff(
+  baselineCandidate: CompiledCandidate,
+  improvedCandidate: CompiledCandidate,
+  inputs: readonly DecisionDiffInput[],
+): DecisionDiffReport {
+  const entries: DecisionDiffEntry[] = [];
+  for (const input of inputs) {
+    const feedback = input.feedback ?? [];
+    const first = baselineCandidate.explain(input.observation, input.memory, input.random(), feedback);
+    const second = improvedCandidate.explain(input.observation, input.memory, input.random(), feedback);
+    if (JSON.stringify(first.decision) === JSON.stringify(second.decision)) continue;
+    entries.push(Object.freeze({
+      label: input.label,
+      tick: input.observation.tick,
+      baseline: diffSide(first),
+      improved: diffSide(second),
+    }));
+  }
+  return Object.freeze({ compared: inputs.length, entries: Object.freeze(entries) });
+}
+
+function diffSide(explained: ExplainedDecision): DecisionDiffSide {
+  return Object.freeze({
+    goal: explained.decision.goal.kind,
+    intent: explained.decision.intent.kind,
+    reason: explained.explanation.reason,
+    explanation: explained.explanation,
+  });
 }

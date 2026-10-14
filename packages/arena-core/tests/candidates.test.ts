@@ -243,3 +243,24 @@ test('search proposals are deterministic, bounded, valid and never move the froz
   throws(() => coordinateSearchProposals('baseline', candidateDefaults('baseline'), 1n, 0, 4), InvalidCandidateError);
   throws(() => randomSearchProposals('baseline', 1n, 4), InvalidCandidateError);
 });
+
+test('baseline@1 decisions on every recorded scenario match the committed golden record', () => {
+  const golden = JSON.parse(readFileSync(
+    resolve(process.cwd(), 'fixtures/policy-curriculum/baseline-v1-golden.json'),
+    'utf8',
+  )) as Record<string, unknown>;
+  const baseline = compileCandidate('baseline');
+  const actual: Record<string, unknown> = {};
+  for (const [name, scenario] of Object.entries(scenarios)) {
+    const observation = fixtureObservation(scenario);
+    const seed = BigInt(scenario.randomSeed);
+    actual[name] = baseline.decide(observation, emptyPolicyMemory(), new DeterministicRandom(seed));
+    for (const style of ['explorer', 'scavenger', 'hunter'] as const) {
+      const context = { style, state: openingPolicyState({ cacheTakenAt: null }) };
+      actual[`${name}/${style}`] = baseline.decideOpening(
+        observation, emptyPolicyMemory(), new DeterministicRandom(seed), [], context,
+      );
+    }
+  }
+  deepStrictEqual(JSON.parse(JSON.stringify(actual)), golden);
+});
