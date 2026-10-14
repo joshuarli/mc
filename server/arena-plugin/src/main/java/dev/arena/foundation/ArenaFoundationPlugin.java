@@ -517,11 +517,8 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
         civilizationCountdownEliminations.clear();
         playersBySeat.clear();
         seatsByPlayer.clear();
-        for (Player player : Bukkit.getOnlinePlayers()) {
-            if (!bindBotIfExpected(player)) {
-                player.setGameMode(GameMode.SPECTATOR);
-                moveSpectatorToSpawnCenter(player);
-            }
+        for (Player player : new ArrayList<>(Bukkit.getOnlinePlayers())) {
+            admitPlanJoin(player);
         }
     }
 
@@ -551,12 +548,26 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
             player.setGameMode(GameMode.SPECTATOR);
             return;
         }
-        if (preparedMatch != null && matchController.phase() == MatchController.Phase.WAITING
-                && bindBotIfExpected(player)) {
-            return;
+        admitPlanJoin(player);
+    }
+
+    private void admitPlanJoin(Player player) {
+        List<ControlProtocol.Competitor> roster = preparedMatch == null ? List.of() : preparedMatch.roster();
+        boolean bindingOpen = preparedMatch != null && matchController != null
+                && matchController.phase() == MatchController.Phase.WAITING;
+        SeatAdmission.Decision decision = SeatAdmission.admit(
+                roster, bindingOpen, playersBySeat, player.getName(), player.getUniqueId());
+        switch (decision) {
+            case SeatAdmission.Bind bind -> bindSeat(player, bind.seat());
+            case SeatAdmission.Spectate spectate -> {
+                player.setGameMode(GameMode.SPECTATOR);
+                moveSpectatorToSpawnCenter(player);
+            }
+            case SeatAdmission.Reject reject -> {
+                getLogger().info("ARENA_REJECT|" + player.getName() + "|" + reject.reason());
+                player.kick(net.kyori.adventure.text.Component.text(reject.reason()));
+            }
         }
-        player.setGameMode(GameMode.SPECTATOR);
-        moveSpectatorToSpawnCenter(player);
     }
 
     private void moveSpectatorToSpawnCenter(Player player) {
@@ -595,23 +606,6 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
         return preparedMatch.roster().stream()
                 .map(bot -> resolvedSpawns.get(bot.seat()))
                 .toList();
-    }
-
-    private boolean bindBotIfExpected(Player player) {
-        if (preparedMatch == null || isRunningMatch()) {
-            return false;
-        }
-        for (ControlProtocol.Competitor bot : preparedMatch.roster()) {
-            if (bot.offlineUuid().equals(player.getUniqueId()) && bot.username().equals(player.getName())) {
-                UUID previous = playersBySeat.get(bot.seat());
-                if (previous != null && !previous.equals(player.getUniqueId())) {
-                    return false;
-                }
-                bindSeat(player, bot.seat());
-                return true;
-            }
-        }
-        return false;
     }
 
     private void bindSeat(Player player, int seat) {
@@ -1361,6 +1355,23 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
         }
         chest.getBlockInventory().clear();
         chest.getBlockInventory().setItem(0, new ItemStack(Material.DIAMOND, 2));
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onGameModeChange(org.bukkit.event.player.PlayerGameModeChangeEvent event) {
+        if (startupMode != StartupMode.PLAN || matchController == null || !isRunningMatch()
+                || event.getNewGameMode() == GameMode.SURVIVAL) {
+            return;
+        }
+        Integer seat = seatsByPlayer.get(event.getPlayer().getUniqueId());
+        if (seat == null || !matchController.aliveSeats().contains(seat)) {
+            return;
+        }
+        boolean eliminationPending = pendingEliminations.stream()
+                .anyMatch(elimination -> elimination.seat() == seat);
+        if (!eliminationPending) {
+            event.setCancelled(true);
+        }
     }
 
     @EventHandler(priority = EventPriority.HIGH)
