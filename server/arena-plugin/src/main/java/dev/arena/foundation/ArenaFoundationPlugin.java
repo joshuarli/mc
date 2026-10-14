@@ -143,6 +143,7 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
     private String naturalWorldIdentity;
     private CheckpointExtension checkpointExtension;
     private final List<CheckpointRecord.Elimination> eliminationLog = new ArrayList<>();
+    private final DamageAccumulator damageAccumulator = new DamageAccumulator();
 
     @Override
     public void onLoad() {
@@ -945,6 +946,13 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
         }
         boolean countdownWasRunning = matchController.phase() == MatchController.Phase.COUNTDOWN;
         BigInteger civilizationTick = countdownWasRunning ? null : matchController.matchTick().orElse(null);
+        if (civilizationTick != null && !damageAccumulator.isEmpty()) {
+            controlSession.sendEvent(ControlProtocol.Type.DAMAGE, new ControlProtocol.DamagePayload(
+                    new ControlProtocol.Tick(ControlProtocol.TickDomain.MATCH, civilizationTick),
+                    damageAccumulator.drain()));
+        } else {
+            damageAccumulator.clear();
+        }
         List<MatchController.ResolvedElimination> resolved = matchController.endServerTick(pendingEliminations);
         pendingEliminations.clear();
         for (MatchController.ResolvedElimination item : resolved) {
@@ -1777,6 +1785,56 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
         if (isPreReleaseCompetitor(event.getPlayer())) {
             event.setCancelled(true);
         }
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void recordCompetitorDamage(org.bukkit.event.entity.EntityDamageEvent event) {
+        if (startupMode != StartupMode.PLAN || preparedMatch == null || !preparedMatch.damageEvents()
+                || matchController == null || quiesced || resumeAwaitingStart
+                || (matchController.phase() != MatchController.Phase.GRACE
+                        && matchController.phase() != MatchController.Phase.ACTIVE)
+                || !(event.getEntity() instanceof Player victim)) {
+            return;
+        }
+        Integer victimSeat = seatsByPlayer.get(victim.getUniqueId());
+        double amount = event.getFinalDamage();
+        if (victimSeat == null || !matchController.aliveSeats().contains(victimSeat) || !(amount > 0.0)) {
+            return;
+        }
+        Optional<Integer> attacker = Optional.empty();
+        ControlProtocol.DamageCause cause = switch (event.getCause().name()) {
+            case "FALL" -> ControlProtocol.DamageCause.FALL;
+            case "FIRE", "FIRE_TICK", "LAVA", "HOT_FLOOR", "CAMPFIRE" -> ControlProtocol.DamageCause.FIRE;
+            case "STARVATION" -> ControlProtocol.DamageCause.STARVATION;
+            case "WORLD_BORDER" -> ControlProtocol.DamageCause.BORDER;
+            case "ENTITY_ATTACK", "ENTITY_SWEEP_ATTACK" -> ControlProtocol.DamageCause.MELEE;
+            case "PROJECTILE" -> ControlProtocol.DamageCause.PROJECTILE;
+            default -> ControlProtocol.DamageCause.OTHER;
+        };
+        if (event instanceof EntityDamageByEntityEvent byEntity) {
+            Player source = null;
+            if (byEntity.getDamager() instanceof Player player) {
+                source = player;
+            } else if (byEntity.getDamager() instanceof Projectile projectile
+                    && projectile.getShooter() instanceof Player shooter) {
+                source = shooter;
+                cause = ControlProtocol.DamageCause.PROJECTILE;
+            }
+            if (source != null) {
+                Integer attackerSeat = seatsByPlayer.get(source.getUniqueId());
+                if (attackerSeat != null) {
+                    attacker = Optional.of(attackerSeat);
+                    if (cause != ControlProtocol.DamageCause.PROJECTILE) {
+                        cause = ControlProtocol.DamageCause.MELEE;
+                    }
+                }
+            }
+        }
+        if (attacker.isPresent() && cause != ControlProtocol.DamageCause.MELEE
+                && cause != ControlProtocol.DamageCause.PROJECTILE) {
+            cause = ControlProtocol.DamageCause.OTHER;
+        }
+        damageAccumulator.add(victimSeat, attacker, cause, amount);
     }
 
     @EventHandler(priority = EventPriority.MONITOR)

@@ -37,6 +37,8 @@ final class ControlProtocol {
     private static final String EXTERNAL_USERNAME_PATTERN = "[A-Za-z0-9_]{3,16}";
     static final int LEGACY_MAX_COMPETITORS = 6;
     static final int MAX_EPOCH = 1_000_000;
+    static final int MAX_DAMAGE_ENTRIES_PER_VICTIM = 8;
+    static final int MAX_DAMAGE_ENTRIES_PER_TICK = MatchController.MAX_COMPETITORS * MAX_DAMAGE_ENTRIES_PER_VICTIM;
     static final int MAX_SEAT = MatchController.MAX_COMPETITORS - 1;
     private static final String TOKEN_PATTERN = "[A-Za-z0-9_-]+";
 
@@ -59,7 +61,8 @@ final class ControlProtocol {
         ACK("ack"),
         ERROR("error"),
         CHECKPOINT("checkpoint"),
-        CHECKPOINT_WRITTEN("checkpoint_written");
+        CHECKPOINT_WRITTEN("checkpoint_written"),
+        DAMAGE("damage");
 
         private final String wireName;
 
@@ -85,10 +88,11 @@ final class ControlProtocol {
         HUNGER_GAMES_V1("hunger_games_v1"),
         CIVILIZATION_V1("civilization_v1"),
         HUNGER_GAMES_ROSTER_V2("hunger_games_roster_v2"),
-        CHECKPOINT_V1("checkpoint_v1");
+        CHECKPOINT_V1("checkpoint_v1"),
+        DAMAGE_EVENTS_V1("damage_events_v1");
 
         static final List<Capability> SUPPORTED = List.of(
-                HUNGER_GAMES_V1, CIVILIZATION_V1, HUNGER_GAMES_ROSTER_V2, CHECKPOINT_V1);
+                HUNGER_GAMES_V1, CIVILIZATION_V1, HUNGER_GAMES_ROSTER_V2, CHECKPOINT_V1, DAMAGE_EVENTS_V1);
 
         private final String wireName;
 
@@ -337,7 +341,62 @@ final class ControlProtocol {
     sealed interface Payload permits EmptyPayload, HelloPayload, ReadyPayload, BuildProgressPayload,
             PreparePayload, AbortPayload, ClockPayload, PublicStatePayload, EliminationPayload,
             CivilizationStatePayload, Outcome, MetricsPayload, ErrorPayload, CheckpointCommand,
-            CheckpointWritten {}
+            CheckpointWritten, DamagePayload {}
+
+    enum DamageCause {
+        MELEE("melee"),
+        PROJECTILE("projectile"),
+        BORDER("border"),
+        FALL("fall"),
+        FIRE("fire"),
+        STARVATION("starvation"),
+        OTHER("other");
+
+        private final String wireName;
+
+        DamageCause(String wireName) {
+            this.wireName = wireName;
+        }
+
+        String wireName() {
+            return wireName;
+        }
+
+        static DamageCause fromWire(String value, String path) throws IOException {
+            for (DamageCause cause : values()) {
+                if (cause.wireName.equals(value)) {
+                    return cause;
+                }
+            }
+            throw invalid(path, "unknown damage cause");
+        }
+    }
+
+    record DamageEntry(int victim, Optional<Integer> attacker, DamageCause cause, double amount,
+            boolean attackerIsCompetitor) {
+        DamageEntry {
+            require(victim >= 0 && victim <= MAX_SEAT, "damage victim seat is out of range");
+            attacker = Objects.requireNonNull(attacker, "damage attacker");
+            require(attacker.isEmpty() || (attacker.get() >= 0 && attacker.get() <= MAX_SEAT),
+                    "damage attacker seat is out of range");
+            Objects.requireNonNull(cause, "damage cause");
+            require(Double.isFinite(amount) && amount > 0.0, "damage amount must be positive and finite");
+            require(attackerIsCompetitor == attacker.isPresent(),
+                    "a competitor attacker is exactly an attacker with a seat");
+            require(attacker.isEmpty() || (cause == DamageCause.MELEE || cause == DamageCause.PROJECTILE
+                            || cause == DamageCause.OTHER),
+                    "an attacker seat applies to melee, projectile, or other damage");
+        }
+    }
+
+    record DamagePayload(Tick at, List<DamageEntry> entries) implements Payload {
+        DamagePayload {
+            Objects.requireNonNull(at, "damage tick");
+            entries = List.copyOf(Objects.requireNonNull(entries, "damage entries"));
+            require(!entries.isEmpty() && entries.size() <= MAX_DAMAGE_ENTRIES_PER_TICK,
+                    "invalid damage entry count");
+        }
+    }
 
     record CheckpointCommand(String checkpointId, int epoch) implements Payload {
         CheckpointCommand {
@@ -685,6 +744,7 @@ final class ControlProtocol {
             RosterVersion rosterVersion,
             Optional<PrepareRules> rules,
             Optional<ResumeReference> resume,
+            boolean damageEvents,
             List<Competitor> roster) implements Payload {
         PreparePayload(
                 String mapSemanticId,
@@ -707,6 +767,18 @@ final class ControlProtocol {
             this(mapSemanticId, scenarioSemanticId, seed, settings, rosterVersion, rules, Optional.empty(), roster);
         }
 
+        PreparePayload(
+                String mapSemanticId,
+                String scenarioSemanticId,
+                BigInteger seed,
+                PrepareSettings settings,
+                RosterVersion rosterVersion,
+                Optional<PrepareRules> rules,
+                Optional<ResumeReference> resume,
+                List<Competitor> roster) {
+            this(mapSemanticId, scenarioSemanticId, seed, settings, rosterVersion, rules, resume, false, roster);
+        }
+
         PreparePayload {
             require(mapSemanticId != null && mapSemanticId.matches(SEMANTIC_ID_PATTERN), "invalid map semantic id");
             require(scenarioSemanticId != null && scenarioSemanticId.matches(SEMANTIC_ID_PATTERN),
@@ -718,6 +790,9 @@ final class ControlProtocol {
             resume = Objects.requireNonNull(resume, "resume reference");
             require(resume.isEmpty() || rosterVersion == RosterVersion.GENERALIZED,
                     "resume requires the generalized roster");
+            require(!damageEvents || (rosterVersion == RosterVersion.GENERALIZED
+                            && settings instanceof HungerGamesPrepareSettings),
+                    "damage events require the generalized Hunger Games roster");
             roster = List.copyOf(Objects.requireNonNull(roster, "roster"));
             validateRoster(roster, rosterVersion);
             require(rules.isEmpty() || rosterVersion == RosterVersion.GENERALIZED,
@@ -1071,6 +1146,7 @@ final class ControlProtocol {
             case ERROR -> readError(payloadValue);
             case CHECKPOINT -> readCheckpointCommand(payloadValue);
             case CHECKPOINT_WRITTEN -> readCheckpointWritten(payloadValue);
+            case DAMAGE -> readDamage(payloadValue);
         };
         return new Envelope(new Header(runId, sequence, correlation), type, payload);
     }
@@ -1113,7 +1189,7 @@ final class ControlProtocol {
     static Payload readPrepare(Object value) throws IOException {
         Map<String, Object> payload = object(value, "payload",
                 Set.of("map_semantic_id", "scenario_semantic_id", "seed", "mode", "settings", "roster",
-                        "roster_version", "rules", "resume"),
+                        "roster_version", "rules", "resume", "damage_events"),
                 Set.of("map_semantic_id", "scenario_semantic_id", "seed", "mode", "settings", "roster"));
         String mode = readString(payload.get("mode"), "payload.mode", 1, 64, null);
         RosterVersion rosterVersion = RosterVersion.BOTS_ONLY;
@@ -1138,6 +1214,13 @@ final class ControlProtocol {
         Optional<PrepareRules> rules = payload.containsKey("rules")
                 ? Optional.of(readPrepareRules(payload.get("rules")))
                 : Optional.empty();
+        boolean damageEvents = false;
+        if (payload.containsKey("damage_events")) {
+            if (rosterVersion != RosterVersion.GENERALIZED) {
+                throw invalid("payload.damage_events", "damage events require the generalized roster");
+            }
+            damageEvents = readBoolean(payload.get("damage_events"), "payload.damage_events");
+        }
         Optional<ResumeReference> resume = Optional.empty();
         if (payload.containsKey("resume")) {
             if (rosterVersion != RosterVersion.GENERALIZED) {
@@ -1158,6 +1241,7 @@ final class ControlProtocol {
                 rosterVersion,
                 rules,
                 resume,
+                damageEvents,
                 roster);
     }
 
@@ -1523,6 +1607,27 @@ final class ControlProtocol {
                 readString(payload.get("message"), "payload.message", 1, 1024, null));
     }
 
+    private static Payload readDamage(Object value) throws IOException {
+        Map<String, Object> payload = object(value, "payload", Set.of("at", "entries"), Set.of("at", "entries"));
+        List<Object> values = array(payload.get("entries"), "payload.entries", 1, MAX_DAMAGE_ENTRIES_PER_TICK);
+        List<DamageEntry> entries = new ArrayList<>(values.size());
+        for (int index = 0; index < values.size(); index++) {
+            String path = "payload.entries[" + index + "]";
+            Set<String> keys = Set.of("victim", "attacker", "cause", "amount", "attacker_is_competitor");
+            Map<String, Object> entry = object(values.get(index), path, keys, keys);
+            Optional<Integer> attacker = entry.get("attacker") == null
+                    ? Optional.empty()
+                    : Optional.of(readInteger(entry.get("attacker"), path + ".attacker", 0, MAX_SEAT));
+            entries.add(new DamageEntry(
+                    readInteger(entry.get("victim"), path + ".victim", 0, MAX_SEAT),
+                    attacker,
+                    DamageCause.fromWire(readString(entry.get("cause"), path + ".cause", 1, 16, null), path + ".cause"),
+                    readFiniteNumber(entry.get("amount"), path + ".amount"),
+                    readBoolean(entry.get("attacker_is_competitor"), path + ".attacker_is_competitor")));
+        }
+        return new DamagePayload(readTick(payload.get("at"), "payload.at"), entries);
+    }
+
     private static Payload readCheckpointCommand(Object value) throws IOException {
         Map<String, Object> payload = object(value, "payload", Set.of("checkpoint_id", "epoch"),
                 Set.of("checkpoint_id", "epoch"));
@@ -1578,6 +1683,14 @@ final class ControlProtocol {
         if (payload instanceof EmptyPayload) {
             return object();
         }
+        if (payload instanceof DamagePayload damage) {
+            return object("at", tickValue(damage.at()), "entries", damage.entries().stream().map(entry -> {
+                Map<String, Object> value = object("victim", entry.victim(),
+                        "attacker", entry.attacker().orElse(null), "cause", entry.cause().wireName(),
+                        "amount", entry.amount(), "attacker_is_competitor", entry.attackerIsCompetitor());
+                return (Object) value;
+            }).toList());
+        }
         if (payload instanceof CheckpointCommand checkpoint) {
             return object("checkpoint_id", checkpoint.checkpointId(), "epoch", checkpoint.epoch());
         }
@@ -1623,6 +1736,9 @@ final class ControlProtocol {
                 prepareValue.put("roster_version", 2);
             }
             prepare.rules().ifPresent(rules -> prepareValue.put("rules", rulesValue(rules)));
+            if (prepare.damageEvents()) {
+                prepareValue.put("damage_events", true);
+            }
             prepare.resume().ifPresent(resume -> prepareValue.put("resume",
                     object("checkpoint_digest", resume.digest(), "epoch", resume.epoch())));
             return prepareValue;
@@ -1963,6 +2079,7 @@ final class ControlProtocol {
             case ERROR -> payload instanceof ErrorPayload;
             case CHECKPOINT -> payload instanceof CheckpointCommand;
             case CHECKPOINT_WRITTEN -> payload instanceof CheckpointWritten;
+            case DAMAGE -> payload instanceof DamagePayload;
         };
     }
 

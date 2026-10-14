@@ -66,6 +66,14 @@ invulnerable and the clock is held until `start`, and a disconnect before
 `start` only unbinds the seat. Stale `checkpoint` commands from another epoch
 are rejected.
 
+When the runner enables damage events, the plugin records every positive
+final-damage event against a living bound competitor during grace and active
+play, attributes melee and projectile damage to the shooter's seat when the
+attacker is a competitor, classifies border, fall, fire, and starvation
+damage, and flushes one aggregated `damage` message at the end of each
+server tick, before eliminations. Damage cancelled by the match rules is
+never recorded.
+
 The chunk generator reads only the immutable plan and writes to the
 `ChunkData` supplied to its callback. It does not query or mutate another
 chunk. Vanilla terrain phases and populators are disabled so chunks outside the
