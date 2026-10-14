@@ -3,6 +3,7 @@ package dev.arena.foundation;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.math.BigInteger;
 import java.util.ArrayList;
@@ -60,11 +61,17 @@ final class NaturalWorldSetupTest {
 
     @Test
     void rejectsUnsafeSpawnSupportAndHeadroomBeforeChestMutation() {
-        NaturalMapPlan plan = plan(List.of(spawn(0, 100, 100)), List.of(loot(104, 100)));
+        NaturalMapPlan plan = plan(List.of(spawn(0, 100, 100), spawn(1, 200, 200)), List.of(loot(104, 100)));
         TestWorld waterSupport = new TestWorld();
         waterSupport.waterColumns.add(columnKey(100, 100));
+        waterSupport.waterColumns.add(columnKey(200, 200));
 
-        assertThrows(IllegalStateException.class, () -> NaturalWorldSetup.prepare(plan, waterSupport, 2, TEST_MATERIALS));
+        IllegalStateException unsafeSupport = assertThrows(
+                IllegalStateException.class,
+                () -> NaturalWorldSetup.prepare(plan, waterSupport, 2, TEST_MATERIALS));
+        assertTrue(unsafeSupport.getMessage().contains("seat 0 at Position[x=100, y=65, z=100]"));
+        assertTrue(unsafeSupport.getMessage().contains("seat 1 at Position[x=200, y=65, z=200]"));
+        assertTrue(unsafeSupport.getMessage().contains("support=BlockState[material=WATER"));
         assertEquals(List.of(), waterSupport.placedChests);
 
         TestWorld blockedHeadroom = new TestWorld();
@@ -84,6 +91,38 @@ final class NaturalWorldSetupTest {
         assertEquals(List.of(), waterSupport.placedChests);
 
         TestWorld blockedHeadroom = new TestWorld();
+        blockedHeadroom.blockedPositions.add(new MapPlan.Position(104, 66, 100));
+
+        assertThrows(IllegalStateException.class, () -> NaturalWorldSetup.prepare(plan, blockedHeadroom, 2, TEST_MATERIALS));
+        assertEquals(List.of(), blockedHeadroom.placedChests);
+    }
+
+    @Test
+    void reusesAnExistingCacheChestAtItsConfiguredColumn() {
+        NaturalMapPlan plan = plan(List.of(spawn(0, 100, 100)), List.of(loot(104, 100)));
+        TestWorld world = new TestWorld();
+        world.existingCacheColumns.add(columnKey(104, 100));
+
+        NaturalWorldSetup.PreparedWorld prepared = NaturalWorldSetup.prepare(plan, world, 2, TEST_MATERIALS);
+
+        assertEquals(List.of(new MapPlan.LootContainer(
+                new MapPlan.Position(104, 65, 100), List.of("minecraft:apple"))), prepared.lootContainers());
+        assertEquals(List.of(new PlacedChest(
+                new MapPlan.Position(104, 65, 100), List.of(Material.APPLE))), world.placedChests);
+    }
+
+    @Test
+    void validatesSupportAndHeadroomOfAnExistingCacheChestBeforeMutation() {
+        NaturalMapPlan plan = plan(List.of(spawn(0, 100, 100)), List.of(loot(104, 100)));
+        TestWorld unsafeSupport = new TestWorld();
+        unsafeSupport.existingCacheColumns.add(columnKey(104, 100));
+        unsafeSupport.waterColumns.add(columnKey(104, 100));
+
+        assertThrows(IllegalStateException.class, () -> NaturalWorldSetup.prepare(plan, unsafeSupport, 2, TEST_MATERIALS));
+        assertEquals(List.of(), unsafeSupport.placedChests);
+
+        TestWorld blockedHeadroom = new TestWorld();
+        blockedHeadroom.existingCacheColumns.add(columnKey(104, 100));
         blockedHeadroom.blockedPositions.add(new MapPlan.Position(104, 66, 100));
 
         assertThrows(IllegalStateException.class, () -> NaturalWorldSetup.prepare(plan, blockedHeadroom, 2, TEST_MATERIALS));
@@ -133,6 +172,19 @@ final class NaturalWorldSetupTest {
     }
 
     @Test
+    void centersNaturalBorderOnTheMeanSpawnColumn() {
+        NaturalMapPlan plan = plan(List.of(
+                spawn(0, 425, 620),
+                spawn(1, 425, 557),
+                spawn(2, 484, 598),
+                spawn(3, 380, 588),
+                spawn(4, 471, 650),
+                spawn(5, 380, 649)), List.of(loot(437, 600)));
+
+        assertEquals(new NaturalMapPlan.BorderCenter(427.5, 3662 / 6.0), plan.borderCenter());
+    }
+
+    @Test
     void rejectsSpawnColumnsThatAreTooClose() {
         assertThrows(IllegalArgumentException.class, () -> plan(
                 List.of(spawn(0, 100, 100), spawn(1, 101, 101)),
@@ -165,6 +217,7 @@ final class NaturalWorldSetupTest {
     private static final class TestWorld implements NaturalWorldSetup.SurfaceAccess {
         private final Set<NaturalMapPlan.ChunkPosition> preparedChunks = new HashSet<>();
         private final Set<String> waterColumns = new HashSet<>();
+        private final Set<String> existingCacheColumns = new HashSet<>();
         private final Set<MapPlan.Position> blockedPositions = new HashSet<>();
         private final Set<MapPlan.Position> passableSturdyPositions = new HashSet<>();
         private final List<PlacedChest> placedChests = new ArrayList<>();
@@ -188,7 +241,8 @@ final class NaturalWorldSetupTest {
 
         @Override
         public int highestBlockY(int x, int z) {
-            return surfaceByColumn.getOrDefault(columnKey(x, z), 64);
+            int surfaceY = surfaceByColumn.getOrDefault(columnKey(x, z), 64);
+            return existingCacheColumns.contains(columnKey(x, z)) ? surfaceY + 1 : surfaceY;
         }
 
         @Override
@@ -199,11 +253,15 @@ final class NaturalWorldSetupTest {
             if (passableSturdyPositions.contains(position)) {
                 return new NaturalWorldSetup.BlockState(Material.STONE, false, true, true);
             }
-            int surfaceY = highestBlockY(position.x(), position.z());
-            if (position.y() == surfaceY && waterColumns.contains(columnKey(position.x(), position.z()))) {
+            String key = columnKey(position.x(), position.z());
+            int terrainSurfaceY = surfaceByColumn.getOrDefault(key, 64);
+            if (position.y() == terrainSurfaceY + 1 && existingCacheColumns.contains(key)) {
+                return new NaturalWorldSetup.BlockState(Material.CHEST, false, false, false);
+            }
+            if (position.y() == terrainSurfaceY && waterColumns.contains(key)) {
                 return new NaturalWorldSetup.BlockState(Material.WATER, true, false, false);
             }
-            if (position.y() <= surfaceY) {
+            if (position.y() <= terrainSurfaceY) {
                 return new NaturalWorldSetup.BlockState(Material.STONE, false, false, true);
             }
             return new NaturalWorldSetup.BlockState(Material.AIR, false, true, false);

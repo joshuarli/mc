@@ -459,7 +459,12 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
             world.setGameRule(GameRule.RANDOM_TICK_SPEED, settings.naturalRandomTicks() ? 3 : 0);
             WorldBorder worldBorder = world.getWorldBorder();
             WorldPlan.Footprint dimensions = generationPlan.footprint();
-            worldBorder.setCenter(dimensions.width() / 2.0, dimensions.depth() / 2.0);
+            if (generationPlan instanceof NaturalMapPlan naturalPlan) {
+                NaturalMapPlan.BorderCenter center = naturalPlan.borderCenter();
+                worldBorder.setCenter(center.x(), center.z());
+            } else {
+                worldBorder.setCenter(dimensions.width() / 2.0, dimensions.depth() / 2.0);
+            }
             worldBorder.setSize(prepare.initialBorderDiameterBlocks());
         } catch (IllegalArgumentException invalidWorldSetting) {
             throw new CommandFailure(ControlProtocol.ErrorCode.INVALID_WORLD,

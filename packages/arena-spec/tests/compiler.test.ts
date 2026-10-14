@@ -171,6 +171,15 @@ test("scenario_v2_requires_natural_terrain_and_records_a_complete_opening_cycle"
   assert.equal(naturalUnderV1.path, "scenario.map");
 });
 
+test("natural_scenario_border_follows_the_spawn_formation", () => {
+  const shiftedMap = NATURAL_HUNGER_MAP
+    .replace("x = 512, z = 500", "x = 700, z = 700")
+    .replace("x = 512, z = 524", "x = 700, z = 724")
+    .replace("x = 510, z = 512", "x = 700, z = 712");
+
+  assert.doesNotThrow(() => compileScenario(NATURAL_HUNGER_SCENARIO, shiftedMap));
+});
+
 test("civilization_scenario_compiles_fixed_seats_goals_and_outposts", () => {
   const scenario = compileScenario(CIVILIZATION, CIVILIZATION_MAP);
   assert.equal(scenario.mode, GameMode.Civilization);

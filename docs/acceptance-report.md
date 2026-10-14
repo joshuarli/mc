@@ -31,12 +31,12 @@ After C1 passes, run civilization-six and civilization-baseline before M2. H1 fo
 
 The prior `make server` failure came from a ten-run cap and repeated work-tree capacity scan. Those gates and free-space, aggregate-byte, generic download-size, host memory, and swap thresholds are removed. A local run prepared its map, started Paper, connected six competitors and three automated spectators, and reached the external-player wait. I stopped it with Ctrl-C; the runner recorded structured cancellation, reaped Paper, and released port 25565. No external-client join or game outcome was observed. Host memory and swap measurements are unavailable.
 
-The make server feature reserves one of four spectator slots, starts six competitors and three automated spectators, and waits for an external player before match start. `RunPreparedRunOptions` includes `waitForExternalPlayer`. Cancellation and observer disconnects are handled. No external-client join has been verified.
+The make server feature reserves one of four spectator slots, starts six competitors and three automated spectators, and waits for an external player before match start. `RunPreparedRunOptions` includes `waitForExternalPlayer`. The canonical natural-terrain seed 481516 passed both Paper bootstrap and cloned-run setup: each emitted `ARENA_MAP_READY`, the cloned run prepared 359 chunks, and all six bots joined at resolved terrain positions. The top-level server is waiting for an external player on 127.0.0.1:25565; no external-client join or match outcome has been observed in this run. The remaining five natural-terrain seeds are validated as scenario inputs but have not had live terrain checks.
 
 ## Remaining work and limits
 
 - H1 still needs the deterministic disk-full publication regression, full outbound critical/optional queue behavior, and adversarial Civilization faction-isolation proof.
 - C1, live C2, and M2 remain incomplete. The server-crash cleanup and SIGINT proofs also remain open.
-- New required work: replace Hunger's stone floor with deterministic 1024×1024 natural terrain; assign seed-balanced opening styles; and add per-seat headless behavior evidence.
+- Natural-terrain Hunger acceptance remains open for the other five seeds and for six-seed gameplay evidence. The seed-481516 Paper startup verifies only that seed's terrain setup and cache placement.
 - No current-source full suite, gameplay benchmark, release-size check, fresh-checkout acceptance, or Linux run has been completed. The Effect startup comparison above does not establish gameplay performance or human competitiveness.
 - Effect 4.0.2 was added to the runner. Its final run-only boundary and cold install/build cost remain under the campaign's dependency budgets.

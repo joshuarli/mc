@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.stream.Collectors;
 import org.bukkit.Material;
 
 final class NaturalWorldSetup {
@@ -49,10 +50,21 @@ final class NaturalWorldSetup {
         world.prepareChunks(chunks);
 
         List<MapPlan.SpawnPoint> resolvedSpawns = new ArrayList<>(plan.spawns().size());
+        List<IllegalStateException> unsafeSpawns = new ArrayList<>();
         for (NaturalMapPlan.SurfaceSpawnPoint spawn : plan.spawns()) {
-            MapPlan.Position feet = resolveSurfacePosition(world, spawn.column());
-            validateSpawn(world, feet, spawn.seat(), materials);
+            MapPlan.Position feet = resolveSpawnPosition(world, spawn.column());
+            try {
+                validateSpawn(world, feet, spawn.seat(), materials);
+            } catch (IllegalStateException unsafeSpawn) {
+                unsafeSpawns.add(unsafeSpawn);
+            }
             resolvedSpawns.add(new MapPlan.SpawnPoint(spawn.seat(), feet));
+        }
+        if (!unsafeSpawns.isEmpty()) {
+            String details = unsafeSpawns.stream().map(IllegalStateException::getMessage).collect(Collectors.joining("; "));
+            IllegalStateException failure = new IllegalStateException("natural spawn validation failed: " + details, unsafeSpawns.getFirst());
+            unsafeSpawns.stream().skip(1).forEach(failure::addSuppressed);
+            throw failure;
         }
         validateSpawnSeparation(resolvedSpawns);
 
@@ -60,7 +72,7 @@ final class NaturalWorldSetup {
         List<List<Material>> contents = new ArrayList<>(plan.lootContainers().size());
         Set<MapPlan.Position> chestPositions = new HashSet<>();
         for (NaturalMapPlan.SurfaceLootContainer container : plan.lootContainers()) {
-            MapPlan.Position chestPosition = resolveSurfacePosition(world, container.column());
+            MapPlan.Position chestPosition = resolveLootPosition(world, container.column());
             validateChest(world, chestPosition, materials);
             if (!chestPositions.add(chestPosition)) {
                 throw new IllegalStateException("natural cache columns resolve to the same chest position");
@@ -85,18 +97,37 @@ final class NaturalWorldSetup {
         return new PreparedWorld(resolvedSpawns, resolvedLoot, chunks.size());
     }
 
-    private static MapPlan.Position resolveSurfacePosition(SurfaceAccess world, NaturalMapPlan.SurfaceColumn column) {
+    private static MapPlan.Position resolveSpawnPosition(SurfaceAccess world, NaturalMapPlan.SurfaceColumn column) {
+        return positionAboveSurface(world, resolveTerrainSurface(world, column));
+    }
+
+    private static MapPlan.Position resolveLootPosition(SurfaceAccess world, NaturalMapPlan.SurfaceColumn column) {
+        MapPlan.Position surface = resolveTerrainSurface(world, column);
+        if (world.blockAt(surface).material() == Material.CHEST) {
+            return surface;
+        }
+        return positionAboveSurface(world, surface);
+    }
+
+    private static MapPlan.Position resolveTerrainSurface(SurfaceAccess world, NaturalMapPlan.SurfaceColumn column) {
         int surfaceY = world.highestBlockY(column.x(), column.z());
-        int feetY;
+        if (surfaceY < world.minHeight() || surfaceY >= world.maxHeight()) {
+            throw new IllegalStateException("natural surface height is outside the loaded world's build height");
+        }
+        return new MapPlan.Position(column.x(), surfaceY, column.z());
+    }
+
+    private static MapPlan.Position positionAboveSurface(SurfaceAccess world, MapPlan.Position surface) {
+        int positionY;
         try {
-            feetY = Math.addExact(surfaceY, 1);
+            positionY = Math.addExact(surface.y(), 1);
         } catch (ArithmeticException overflow) {
             throw new IllegalStateException("natural surface height cannot contain a standing position", overflow);
         }
-        if (surfaceY < world.minHeight() || feetY >= world.maxHeight()) {
+        if (positionY >= world.maxHeight()) {
             throw new IllegalStateException("natural surface height is outside the loaded world's build height");
         }
-        return new MapPlan.Position(column.x(), feetY, column.z());
+        return new MapPlan.Position(surface.x(), positionY, surface.z());
     }
 
     private static void validateSpawn(
@@ -111,11 +142,17 @@ final class NaturalWorldSetup {
         } catch (ArithmeticException overflow) {
             throw new IllegalStateException("natural spawn headroom exceeds block coordinates for seat " + seat, overflow);
         }
-        if (headPosition.y() >= world.maxHeight()
-                || !isSafeSupport(world.blockAt(supportPosition), materials)
-                || !isClearStandingBlock(world.blockAt(feet))
-                || !isClearStandingBlock(world.blockAt(headPosition))) {
-            throw new IllegalStateException("loaded natural world has unsafe support or headroom for seat " + seat);
+        if (headPosition.y() >= world.maxHeight()) {
+            throw new IllegalStateException("loaded natural world has insufficient headroom for seat " + seat + " at " + feet);
+        }
+        BlockState support = world.blockAt(supportPosition);
+        BlockState feetState = world.blockAt(feet);
+        BlockState head = world.blockAt(headPosition);
+        if (!isSafeSupport(support, materials)
+                || !isClearStandingBlock(feetState)
+                || !isClearStandingBlock(head)) {
+            throw new IllegalStateException("loaded natural world has unsafe support or headroom for seat " + seat
+                    + " at " + feet + "; support=" + support + "; feet=" + feetState + "; head=" + head);
         }
     }
 
@@ -130,9 +167,10 @@ final class NaturalWorldSetup {
         } catch (ArithmeticException overflow) {
             throw new IllegalStateException("natural cache chest headroom exceeds block coordinates", overflow);
         }
+        BlockState existingChest = world.blockAt(chestPosition);
         if (headroom.y() >= world.maxHeight()
                 || !isSafeSupport(world.blockAt(support), materials)
-                || !isClearStandingBlock(world.blockAt(chestPosition))
+                || (existingChest.material() != Material.CHEST && !isClearStandingBlock(existingChest))
                 || !isClearStandingBlock(world.blockAt(headroom))) {
             throw new IllegalStateException("natural cache chest column has unsafe support or headroom");
         }

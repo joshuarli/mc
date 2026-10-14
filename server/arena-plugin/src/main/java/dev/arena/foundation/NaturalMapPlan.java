@@ -25,6 +25,8 @@ final class NaturalMapPlan extends WorldPlan {
 
     record SurfaceColumn(int x, int z) {}
 
+    record BorderCenter(double x, double z) {}
+
     record SurfaceSpawnPoint(int seat, SurfaceColumn column) {
         SurfaceSpawnPoint {
             if (seat < 0 || column == null) {
@@ -116,6 +118,12 @@ final class NaturalMapPlan extends WorldPlan {
 
     List<SurfaceLootContainer> lootContainers() {
         return lootContainers;
+    }
+
+    BorderCenter borderCenter() {
+        return new BorderCenter(
+                spawns.stream().mapToInt(spawn -> spawn.column().x()).average().orElseThrow(),
+                spawns.stream().mapToInt(spawn -> spawn.column().z()).average().orElseThrow());
     }
 
     List<ChunkPosition> chunksWithViewHalo(int viewDistanceChunks) {

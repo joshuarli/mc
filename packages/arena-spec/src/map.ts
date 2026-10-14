@@ -383,8 +383,11 @@ export function validateBorder(
   if (initialDiameter > Math.min(map.dimensions.width, map.dimensions.depth)) {
     throw new SpecError(SpecErrorKind.Geometry, path, "initial border diameter must fit inside the map footprint");
   }
-  const centerX = (map.dimensions.width - 1) / 2;
-  const centerZ = (map.dimensions.depth - 1) / 2;
+  const center = map.terrain === "vanilla"
+    ? naturalBorderCenter(map)
+    : { x: (map.dimensions.width - 1) / 2, z: (map.dimensions.depth - 1) / 2 };
+  const centerX = center.x;
+  const centerZ = center.z;
   const initialRadiusSquared = (initialDiameter / 2) ** 2;
   const finalRadiusSquared = (finalDiameter / 2) ** 2;
 
@@ -725,6 +728,13 @@ function validateLoot(
       throw new SpecError(SpecErrorKind.Geometry, path, "loot container is unreachable from the spawn surface");
     }
   }
+}
+
+function naturalBorderCenter(map: NaturalMapIr): { readonly x: number; readonly z: number } {
+  return {
+    x: map.spawns.reduce((sum, spawn) => sum + spawn.column.x, 0) / map.spawns.length,
+    z: map.spawns.reduce((sum, spawn) => sum + spawn.column.z, 0) / map.spawns.length,
+  };
 }
 
 function insideCircle(x: number, z: number, centerX: number, centerZ: number, radiusSquared: number): boolean {
