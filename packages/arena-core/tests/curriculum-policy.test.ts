@@ -348,7 +348,7 @@ test('seat 255 has a replayable search stream and seat 256 is rejected', () => {
   throws(() => seatId(256), RangeError);
 });
 
-test('coordinate overflow returns an explicit hold at a safe border-center position', () => {
+test('coordinate overflow skips unrepresentable exploration directions at a safe border-center position', () => {
   const fixture = scenario('explorationOverflow');
   const decision = decide(
     observation('explorationOverflow'),
@@ -357,8 +357,11 @@ test('coordinate overflow returns an explicit hold at a safe border-center posit
     new DeterministicRandom(BigInt(fixture.randomSeed)),
   );
 
-  deepStrictEqual(decision.goal, { kind: 'wait', reason: 'unrepresentableTarget' });
-  deepStrictEqual(decision.intent, { kind: 'hold', reason: 'unrepresentableTarget' });
+  deepStrictEqual(decision.goal, { kind: 'explore' });
+  deepStrictEqual(decision.intent, {
+    kind: 'navigate',
+    target: blockPosition(Number.MAX_SAFE_INTEGER, 64, 8),
+  });
 });
 
 test('observation validation rejects opponent health, inventory, and evaluator-only fields', () => {
