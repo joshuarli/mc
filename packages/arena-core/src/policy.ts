@@ -194,6 +194,7 @@ export type Intent =
   }
   | { readonly kind: 'approach'; readonly target: EntityId }
   | { readonly kind: 'attack'; readonly target: EntityId }
+  | { readonly kind: 'shoot'; readonly target: EntityId }
   | { readonly kind: 'dropCollect'; readonly entityId: EntityId }
   | { readonly kind: 'containerOpen'; readonly position: BlockPosition }
   | { readonly kind: 'hold'; readonly reason: WaitReason };
@@ -1697,6 +1698,7 @@ function cloneIntent(intent: Intent): Intent {
       });
     case 'approach':
     case 'attack':
+    case 'shoot':
       assertExactKeys(intent, ['kind', 'target']);
       return Object.freeze({ ...intent, target: entityId(intent.target) });
     case 'dropCollect':

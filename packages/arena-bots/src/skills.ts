@@ -731,6 +731,9 @@ export class SkillOwner {
       case 'approach':
         await this.#engage('closeDistance', intent.target, active);
         return;
+      case 'shoot':
+        await this.#looseArrow(intent.target, active);
+        return;
       case 'attack':
         await this.#engage('strike', intent.target, active);
         return;
@@ -1041,6 +1044,27 @@ export class SkillOwner {
       if (gap <= FRIENDLY_FIRE_CLEARANCE_BLOCKS) return true;
     }
     return false;
+  }
+
+  async #looseArrow(targetId: number, active: ActiveSkill): Promise<void> {
+    const progress: EngageProgress = { lastPassed: 'skillAdmission', eyeToBodyUnits: null, action: 'shoot' };
+    await this.#funneled(targetId, progress, active, async () => {
+      if (this.#countArrows() < 1) {
+        throw new SkillFault('preconditionsNotMet', 'no arrows remain', 'noAmmunition');
+      }
+      const bow = this.#inventoryBow();
+      if (bow === null) {
+        throw new SkillFault('preconditionsNotMet', 'no bow is in the inventory', 'noAmmunition');
+      }
+      await this.#shoot(targetId, bow, active, progress);
+    });
+  }
+
+  #inventoryBow(): MineflayerItem | null {
+    for (const item of this.#bot.inventory.slots) {
+      if (item !== null && item !== undefined && item.name === 'bow') return item;
+    }
+    return null;
   }
 
   async #shoot(targetId: number, bow: MineflayerItem, active: ActiveSkill, progress: EngageProgress): Promise<void> {

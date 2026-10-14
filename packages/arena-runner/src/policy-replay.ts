@@ -604,7 +604,8 @@ function openingActionKind(intent: Decision['intent']): OpeningActionKind | null
     case 'dropCollect': return 'loot';
     case 'eat': return 'eat';
     case 'equip': return 'equip';
-    case 'attack': return 'attack';
+    case 'attack':
+    case 'shoot': return 'attack';
     case 'hold': return null;
   }
 }

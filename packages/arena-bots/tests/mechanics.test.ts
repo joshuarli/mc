@@ -71,6 +71,44 @@ test('curriculum 8: no arrow is fired through cover', async () => {
   }
 });
 
+test('a shoot intent draws and releases once, and zero arrows fails without a swing', async () => {
+  const armed = createCombatArena({
+    self: { x: 0.5, y: 1, z: 0.5 },
+    opponents: [{ id: 2, x: -1.5, y: 1, z: -10 }],
+    inventory: [{ slot: 36, name: 'bow', count: 1 }, { slot: 37, name: 'arrow', count: 4 }],
+    heldSlot: 36,
+  });
+  try {
+    const shot = await armed.runIntent({ kind: 'shoot', target: 2 as never }, () => {
+      const target = armed.opponents.get(2);
+      if (target !== undefined) armed.setOpponent(2, { x: target.x + 0.2, y: target.y, z: target.z });
+    });
+    assert.deepEqual(shot.outcome, { kind: 'succeeded' });
+    assert.deepEqual(armed.itemUse, ['activate', 'deactivate']);
+    assert.equal(armed.arrows.length, 1);
+    assert.equal(armed.attacks.length, 0);
+  } finally {
+    await armed.close();
+  }
+
+  const dry = createCombatArena({
+    self: { x: 0.5, y: 1, z: 0.5 },
+    opponents: [{ id: 2, x: -1.5, y: 1, z: -10 }],
+    inventory: [{ slot: 36, name: 'bow', count: 1 }],
+    heldSlot: 36,
+  });
+  try {
+    const refused = await dry.runIntent({ kind: 'shoot', target: 2 as never });
+    assert.deepEqual(refused.outcome, { kind: 'failed', cause: 'preconditionsNotMet' });
+    assert.equal(dry.attacks.length, 0);
+    assert.ok(!dry.itemUse.includes('activate'));
+    const record = dry.funnel.at(-1);
+    assert.ok(record?.kind === 'stopped' && record.reason === 'noAmmunition', JSON.stringify(record));
+  } finally {
+    await dry.close();
+  }
+});
+
 test('curriculum 8: without ammunition the archer closes distance instead of drawing', async () => {
   const arena = createCombatArena({
     self: { x: 0.5, y: 1, z: 0.5 },

@@ -48,6 +48,7 @@ interface Setup {
   readonly containers?: readonly (readonly [number, number, number])[];
   readonly directions?: readonly DirectionSupport[];
   readonly border?: readonly [number, number, number];
+  readonly arrows?: number;
 }
 
 const pos = (value: readonly [number, number, number]) => blockPosition(value[0], value[1], value[2]);
@@ -83,6 +84,7 @@ function situation(setup: Setup): AgentObservation {
       equipped: { ...emptyEquipment(), weapon: setup.weapon === undefined ? null : setup.weapon },
       upgrades: [],
       ...(setup.directions === undefined ? {} : { directions: setup.directions }),
+      ...(setup.arrows === undefined ? {} : { ranged: { arrows: setup.arrows } }),
     })),
     border: currentKnowledge(worldBorder(border[0], border[1], border[2])),
     opponents: currentKnowledge((setup.opponents ?? []).map((opponent) => (
@@ -327,6 +329,50 @@ test('a pressured seat eats the food stack that restores the most', () => {
   const healing = improved.explain(wounded, emptyPolicyMemory(), stream());
   equal(healing.explanation.reason, 'eatUnderPressure');
   deepStrictEqual(healing.decision.intent, { kind: 'eat', inventorySlot: 6 });
+});
+
+test('an improved seat with arrows shoots outside melee reach and attacks inside it', () => {
+  const outside = situation({
+    at: [430, 70, 610],
+    weapon: 4,
+    foods: 2,
+    views: true,
+    arrows: 8,
+    opponents: [{ id: 5, at: [434, 70, 610], attacking: true }],
+  });
+  const shot = improved.explain(outside, emptyPolicyMemory(), stream());
+  deepStrictEqual(shot.decision.intent, { kind: 'shoot', target: 5 });
+  equal(shot.explanation.reason, 'bowOpening');
+  equal(baseline.decide(outside, emptyPolicyMemory(), stream()).intent.kind, 'approach');
+  const inside = situation({
+    at: [430, 70, 610],
+    weapon: 4,
+    foods: 2,
+    views: true,
+    arrows: 8,
+    opponents: [{ id: 5, at: [432, 70, 610], attacking: true }],
+  });
+  const strike = improved.explain(inside, emptyPolicyMemory(), stream());
+  deepStrictEqual(strike.decision.intent, { kind: 'attack', target: 5 });
+  const dry = situation({
+    at: [430, 70, 610],
+    weapon: 4,
+    foods: 2,
+    views: true,
+    arrows: 0,
+    opponents: [{ id: 5, at: [434, 70, 610], attacking: true }],
+  });
+  equal(improved.decide(dry, emptyPolicyMemory(), stream()).intent.kind, 'approach');
+  const hunted = situation({
+    at: [430, 70, 610],
+    weapon: 4,
+    foods: 2,
+    arrows: 6,
+    opponents: [{ id: 5, at: [440, 70, 610] }],
+  });
+  const hunt = improved.explain(hunted, emptyPolicyMemory(), stream());
+  deepStrictEqual(hunt.decision.intent, { kind: 'shoot', target: 5 });
+  equal(hunt.explanation.reason, 'huntVisibleOpponentArmed');
 });
 
 test('an engaged seat outside melee reach keeps attacking instead of navigating away', () => {

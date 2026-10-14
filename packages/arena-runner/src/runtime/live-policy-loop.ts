@@ -539,7 +539,7 @@ export class LivePolicyLoop {
 }
 
 function actionTarget(intent: GameplayDecision['intent']): number | null {
-  return intent.kind === 'approach' || intent.kind === 'attack' ? Number(intent.target) : null;
+  return intent.kind === 'approach' || intent.kind === 'attack' || intent.kind === 'shoot' ? Number(intent.target) : null;
 }
 
 function goalPriority(decision: GameplayDecision): number {
