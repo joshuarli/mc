@@ -204,8 +204,8 @@ test('quality seat table counts loot, distance, idle reasons, attacks, damage an
   assert.equal(seat0.attacks.rejected, 2);
   assert.deepEqual(seat0.attacks.rejected_by_cause, { cooldownNotReady: 1, targetNoLongerVisible: 1 });
   assert.equal(seat0.attacks.self_inflicted_rejected, 1);
-  assert.equal(seat0.attacks.funnel.conservation.admitted_but_not_issued
-    + seat0.attacks.funnel.conservation.issued + seat0.attacks.funnel.conservation.rejected, seat0.attacks.funnel.records);
+  assert.equal(seat0.attacks.funnel.conservation.not_admitted + seat0.attacks.funnel.conservation.admitted_but_not_issued
+    + seat0.attacks.funnel.conservation.issued, seat0.attacks.funnel.records);
   assert.deepEqual(seat0.damage, { dealt: 12, taken: 8, taken_from_competitors: 4 });
   assert.equal(seat0.pvp_share, 0.5);
   assert.equal(seat0.time_alive_ticks, 400);

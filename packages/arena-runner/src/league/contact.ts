@@ -21,6 +21,7 @@ export const CONTACT_CLASSES = [
   'policy_failure',
   'skill_failure',
   'valid_loss',
+  'valid_draw',
   'valid_win',
 ] as const;
 
@@ -46,9 +47,9 @@ export interface ContactFunnelRecord {
 }
 
 export interface AttackFunnelConservation {
+  readonly not_admitted: number;
   readonly admitted_but_not_issued: number;
   readonly issued: number;
-  readonly rejected: number;
 }
 
 export interface AttackFunnelReport {
@@ -98,8 +99,10 @@ function round3(value: number): number {
   return Math.round(value * 1000) / 1000;
 }
 
-export function validGameClass(score: 0 | 0.5 | 1): 'valid_loss' | 'valid_win' {
-  return score === 1 ? 'valid_win' : 'valid_loss';
+export function validGameClass(score: 0 | 0.5 | 1): 'valid_loss' | 'valid_draw' | 'valid_win' {
+  if (score === 1) return 'valid_win';
+  if (score === 0) return 'valid_loss';
+  return 'valid_draw';
 }
 
 export function accountAttackFunnel(records: readonly ContactFunnelRecord[]): AttackFunnelReport {
@@ -136,11 +139,11 @@ export function accountAttackFunnel(records: readonly ContactFunnelRecord[]): At
   }
   if (stages.issued !== issuedRecords) throw new TypeError('issued stage count drifted from issued records');
   const conservation = Object.freeze({
+    not_admitted: unadmitted,
     admitted_but_not_issued: admittedButNotIssued,
     issued: issuedRecords,
-    rejected: unadmitted,
   });
-  if (conservation.admitted_but_not_issued + conservation.issued + conservation.rejected !== records.length) {
+  if (conservation.not_admitted + conservation.admitted_but_not_issued + conservation.issued !== records.length) {
     throw new TypeError('attack funnel conservation drifted');
   }
   return Object.freeze({
@@ -232,6 +235,8 @@ export function classifyContact(input: ContactAssessmentInput): ContactAssessmen
     } else if (records.some(issuedIllegal) && input.pvp_hits === 0) contactClass = 'skill_failure';
     else if (input.attacks_issued === 0 && input.pvp_hits === 0 && input.funnel !== null && records.some(policyContactWithoutSwing)) {
       contactClass = 'policy_failure';
+    } else if (input.attacks_issued === 0 && input.pvp_hits === 0) {
+      contactClass = 'perception_failure';
     } else contactClass = validGameClass(input.score!);
   }
   return Object.freeze({

@@ -4,7 +4,7 @@ import { ACTION_FUNNEL_STAGES, type ActionFunnelMissReason, type ActionFunnelSta
 import type { Evidence } from '../src/evidence.js';
 import { estimateMean } from '../src/league/analysis.js';
 import {
-  accountAttackFunnel, classifyContact, validGameClass,
+  accountAttackFunnel, classifyContact,
   type ContactAssessmentInput, type ContactFunnelRecord,
 } from '../src/league/contact.js';
 import { runDuel, type DuelRunRequest } from '../src/league/duel.js';
@@ -41,14 +41,14 @@ function input(overrides: Partial<ContactAssessmentInput> & Pick<ContactAssessme
   };
 }
 
-function oracle(records: readonly ContactFunnelRecord[]): { admitted_but_not_issued: number; issued: number; rejected: number; stopped: number } {
-  const counts = { admitted_but_not_issued: 0, issued: 0, rejected: 0, stopped: 0 };
+function oracle(records: readonly ContactFunnelRecord[]): { not_admitted: number; admitted_but_not_issued: number; issued: number; stopped: number } {
+  const counts = { not_admitted: 0, admitted_but_not_issued: 0, issued: 0, stopped: 0 };
   for (const entry of records) {
     const index = ACTION_FUNNEL_STAGES.indexOf(entry.stage);
     if (entry.kind === 'stopped') counts.stopped += 1;
     if (index >= ISSUED) counts.issued += 1;
     else if (index >= ADMITTED) counts.admitted_but_not_issued += 1;
-    else counts.rejected += 1;
+    else counts.not_admitted += 1;
   }
   return counts;
 }
@@ -69,27 +69,30 @@ test('attack funnel counts conserve and campaign rejected counts stops', () => {
   assert.equal(report.confirmed, report.stages.confirmedEffect);
   assert.equal(report.rejected, expected.stopped);
   assert.deepEqual(report.conservation, {
+    not_admitted: expected.not_admitted,
     admitted_but_not_issued: expected.admitted_but_not_issued,
     issued: expected.issued,
-    rejected: expected.rejected,
   });
-  assert.equal(report.conservation.admitted_but_not_issued + report.conservation.issued + report.conservation.rejected, records.length);
-  assert.notEqual(report.rejected, report.conservation.rejected);
+  assert.equal(report.conservation.not_admitted + report.conservation.admitted_but_not_issued + report.conservation.issued, records.length);
+  assert.notEqual(report.rejected, report.conservation.not_admitted);
   assert.equal(report.deferred_count, 1);
   assert.equal(report.issued_illegal_count, 1);
   assert.equal(report.attempted, records.length);
 });
 
-test('zero contact stays a scored game and does not qualify combat skill', () => {
-  for (const score of [0, 1] as const) {
+test('zero contact is a perception failure and does not qualify combat skill', () => {
+  for (const score of [0, 0.5, 1] as const) {
     const assessment = classifyContact(input({ score, attacks_issued: 0, pvp_hits: 0, funnel: null }));
-    assert.equal(assessment.contact_class, validGameClass(score));
+    assert.equal(assessment.contact_class, 'perception_failure');
+    assert.notEqual(assessment.contact_class, 'valid_win');
+    assert.notEqual(assessment.contact_class, 'valid_loss');
+    assert.notEqual(assessment.contact_class, 'valid_draw');
     assert.equal(assessment.contact_validity, 'no_combat_demonstrated');
     assert.equal(assessment.combat_skill_qualified, false);
     assert.deepEqual(assessment.combat_opportunities, { count: null, reason: 'evidence_absent' });
   }
   const empty = classifyContact(input({ score: 0.5, attacks_issued: 0, pvp_hits: 0, funnel: [] }));
-  assert.equal(empty.contact_class, 'valid_loss');
+  assert.equal(empty.contact_class, 'perception_failure');
   assert.equal(empty.contact_validity, 'no_combat_demonstrated');
   assert.deepEqual(empty.combat_opportunities, { count: null, reason: 'evidence_absent' });
 });
@@ -154,7 +157,7 @@ test('ownershipDeferred is a scheduling deferral and stays inside the old self-i
     record('tacticalChoice', { kind: 'stopped', reason: 'ownershipDeferred', seat: 1, tick: 5 }),
   ];
   const assessment = classifyContact(input({ score: 1, attacks_issued: 0, pvp_hits: 0, funnel }));
-  assert.equal(assessment.contact_class, 'valid_win');
+  assert.equal(assessment.contact_class, 'perception_failure');
   assert.equal(assessment.contact_validity, 'no_combat_demonstrated');
   assert.equal(assessment.combat_skill_qualified, false);
   assert.equal(assessment.attack_funnel!.deferred_count, 2);
@@ -215,6 +218,9 @@ test('contact with confirmed damage is a valid win and counts a mutual opportuni
   }));
   assert.equal(fromStored.contact_class, 'valid_win');
   assert.deepEqual(fromStored.combat_opportunities, { count: 1 });
+  const draw = classifyContact(input({ score: 0.5, attacks_issued: 2, pvp_hits: 1, funnel }));
+  assert.equal(draw.contact_class, 'valid_draw');
+  assert.equal(draw.contact_validity, 'combat_demonstrated');
 });
 
 test('a completed match without combat counts is fixture invalid', () => {
@@ -263,7 +269,7 @@ test('duel schema 2 keeps a zero-contact score mean and does not qualify it', as
     combat_opportunities: { count: number | null; reason?: string };
   }[];
   assert.deepEqual(matches.map((match) => match.score), [1, 0.5]);
-  assert.deepEqual(matches.map((match) => match.contact_class), ['valid_win', 'valid_loss']);
+  assert.deepEqual(matches.map((match) => match.contact_class), ['perception_failure', 'perception_failure']);
   assert.ok(matches.every((match) => match.contact_validity === 'no_combat_demonstrated'));
   assert.ok(matches.every((match) => match.combat_skill_qualified === false));
   assert.ok(matches.every((match) => match.combat_opportunities.count === null && match.combat_opportunities.reason === 'evidence_absent'));
