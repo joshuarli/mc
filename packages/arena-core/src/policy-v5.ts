@@ -1,9 +1,12 @@
+import { isWithinMeleeReach, MELEE_REACH_BLOCKS } from './combat.js';
 import {
   blockPosition,
   borderCenter,
   isNearOrOutsideBorder,
   isOutsideBorder,
   manhattanDistance,
+  offsetBlockPosition,
+  squaredDistance,
   type BlockPosition,
   type WorldBorder,
 } from './geometry.js';
@@ -11,6 +14,7 @@ import {
   lootTarget,
   type AgentObservation,
   type AgentState,
+  type FoodStack,
   type Knowledge,
   type LootOpportunity,
   type VisibleOpponent,
@@ -32,6 +36,7 @@ import type { DeterministicRandom } from './random.js';
 export const DECISION_EXPLANATION_VERSION = 1;
 export const MAX_EXPLANATION_ALTERNATIVES = 4;
 
+const AWAY_STEP_BLOCKS = 4;
 const CACHE_INTERACTION_BLOCKS = 3n;
 const HUNT_RANGE_BLOCKS = 16n;
 const HUNT_MIN_HEALTH_HALF_HEARTS = 12;
@@ -52,6 +57,8 @@ export type DecisionReason =
   | 'lootBeforeUnarmedFight'
   | 'huntVisibleOpponentArmed'
   | 'steadyMeleeEngagement'
+  | 'disengageWhenBehind'
+  | 'eatUnderPressure'
   | 'travelToBorderCenter'
   | 'orbitBorderCenter'
   | 'confinedProbeFarTarget'
@@ -125,7 +132,7 @@ export function decideV5(
   const facts = gatherFacts(observation);
   if (facts === null) return delegated(base, null);
   const retreatAt = params.values.retreatAtHealthHalfHeartsOrBelow;
-  const override = chooseOverride(base, memory, facts, retreatAt);
+  const override = chooseOverride(base, memory, facts, retreatAt, params.values.eatAtHungerOrBelow);
   if (override === null) return delegated(base, facts);
   const goal = override.goal;
   const decision: Decision = Object.freeze({
@@ -171,7 +178,10 @@ function chooseOverride(
   priorMemory: PolicyMemory,
   facts: Facts,
   retreatAt: number,
+  eatAt: number,
 ): Override | null {
+  const pressured = underPressure(base, facts, retreatAt, eatAt);
+  if (pressured !== null) return pressured;
   const { agent, nearestCache, nearestOpponent } = facts;
   if (base.goal.kind === 'engageVisibleOpponent') {
     if (!facts.armed && facts.cacheNeeded && nearestCache !== null
@@ -181,7 +191,11 @@ function chooseOverride(
       return lootOverride(nearestCache.opportunity, facts, 'lootBeforeUnarmedFight');
     }
     if (base.intent.kind === 'approach' && agent.ranged === undefined) {
-      return { goal: base.goal, intent: { kind: 'attack', target: base.intent.target }, reason: 'steadyMeleeEngagement' };
+      const engaged = base.intent.target;
+      const target = facts.opponents.find((opponent) => opponent.id === engaged);
+      if (target === undefined || outsideMeleeReach(agent, target)) {
+        return { goal: base.goal, intent: { kind: 'attack', target: engaged }, reason: 'steadyMeleeEngagement' };
+      }
     }
     return null;
   }
@@ -227,6 +241,55 @@ function chooseOverride(
         ? 'orbitBorderCenter'
         : allBlocked ? 'directionsBlockedTravelToCenter' : 'travelToBorderCenter',
   };
+}
+
+function underPressure(base: Decision, facts: Facts, retreatAt: number, eatAt: number): Override | null {
+  if (base.goal.kind === 'escapeBorder') return null;
+  const { agent, nearestOpponent } = facts;
+  if (agent.healthHalfHearts <= retreatAt && nearestOpponent !== null) {
+    const opponent = nearestOpponent.opponent;
+    return {
+      goal: Object.freeze({ kind: 'retreatFromOpponent', target: opponent.id }),
+      intent: { kind: 'navigate', target: awayInsideBorder(agent.position, opponent.position, facts.border) },
+      reason: 'disengageWhenBehind',
+    };
+  }
+  if ((agent.hungerPoints <= eatAt || agent.healthHalfHearts <= retreatAt) && agent.foodStacks.length > 0) {
+    return {
+      goal: Object.freeze({ kind: 'recoverHunger' }),
+      intent: { kind: 'eat', inventorySlot: preferredFood(agent.foodStacks).inventorySlot },
+      reason: 'eatUnderPressure',
+    };
+  }
+  return null;
+}
+
+function preferredFood(stacks: readonly FoodStack[]): FoodStack {
+  let best = stacks[0]!;
+  for (const stack of stacks.slice(1)) {
+    const bestRestores = best.restores ?? -1;
+    const stackRestores = stack.restores ?? -1;
+    if (stackRestores > bestRestores || (stackRestores === bestRestores && stack.inventorySlot < best.inventorySlot)) {
+      best = stack;
+    }
+  }
+  return best;
+}
+
+function awayInsideBorder(agent: BlockPosition, opponent: BlockPosition, border: WorldBorder): BlockPosition {
+  let dx = Math.sign(agent.x - opponent.x);
+  const dz = Math.sign(agent.z - opponent.z);
+  if (dx === 0 && dz === 0) dx = 1;
+  const moved = offsetBlockPosition(agent, dx * AWAY_STEP_BLOCKS, 0, dz * AWAY_STEP_BLOCKS);
+  if (moved.ok === false || isOutsideBorder(border, moved.value)) return agent;
+  return moved.value;
+}
+
+function outsideMeleeReach(agent: AgentState, opponent: VisibleOpponent): boolean {
+  if (agent.combat !== undefined && opponent.combat !== undefined) {
+    return !isWithinMeleeReach(agent.combat, opponent.combat);
+  }
+  return squaredDistance(agent.position, opponent.position) > BigInt(MELEE_REACH_BLOCKS) ** 2n;
 }
 
 function isExplorationWait(reason: string): boolean {

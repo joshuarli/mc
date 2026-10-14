@@ -7,6 +7,8 @@ import {
   agentObservation,
   agentState,
   blockPosition,
+  combatBody,
+  combatSelfBody,
   compileCandidate,
   currentKnowledge,
   decisionDiff,
@@ -15,6 +17,7 @@ import {
   emptyPolicyMemory,
   entityId,
   foodStack,
+  isOutsideBorder,
   observationSequence,
   openingPolicyState,
   policyMemory,
@@ -37,7 +40,10 @@ interface Setup {
   readonly tick?: number;
   readonly weapon?: number | null;
   readonly health?: number;
+  readonly hunger?: number;
   readonly foods?: number;
+  readonly foodStacks?: readonly { readonly slot: number; readonly count: number; readonly restores?: number }[];
+  readonly views?: boolean;
   readonly opponents?: readonly { readonly id: number; readonly at: readonly [number, number, number]; readonly attacking?: boolean }[];
   readonly containers?: readonly (readonly [number, number, number])[];
   readonly directions?: readonly DirectionSupport[];
@@ -46,23 +52,46 @@ interface Setup {
 
 const pos = (value: readonly [number, number, number]) => blockPosition(value[0], value[1], value[2]);
 
+function viewMeasurement(at: readonly [number, number, number]) {
+  return {
+    position: { x: at[0], y: at[1], z: at[2] },
+    velocity: { x: 0, y: 0, z: 0 },
+    yaw: 0,
+    pitch: 0,
+    width: 0.6,
+    height: 1.8,
+  };
+}
+
 function situation(setup: Setup): AgentObservation {
   const border = setup.border ?? [440, 610, 90];
+  const at = setup.at ?? [425, 70, 620];
+  const stacks = setup.foodStacks === undefined
+    ? (setup.foods === undefined ? [] : [foodStack(9, setup.foods)])
+    : setup.foodStacks.map((stack) => (
+      stack.restores === undefined ? foodStack(stack.slot, stack.count) : foodStack(stack.slot, stack.count, stack.restores)
+    ));
   return agentObservation({
     tick: tick(setup.tick ?? 150),
     sequence: observationSequence((setup.tick ?? 150) + 1),
     agent: currentKnowledge(agentState({
-      position: pos(setup.at ?? [425, 70, 620]),
+      position: pos(at),
+      ...(setup.views === true ? { combat: combatSelfBody({ ...viewMeasurement(at), eyeHeight: 1.62 }) } : {}),
       healthHalfHearts: setup.health ?? 40,
-      hungerPoints: 20,
-      foodStacks: setup.foods === undefined ? [] : [foodStack(9, setup.foods)],
+      hungerPoints: setup.hunger ?? 20,
+      foodStacks: stacks,
       equipped: { ...emptyEquipment(), weapon: setup.weapon === undefined ? null : setup.weapon },
       upgrades: [],
       ...(setup.directions === undefined ? {} : { directions: setup.directions }),
     })),
     border: currentKnowledge(worldBorder(border[0], border[1], border[2])),
     opponents: currentKnowledge((setup.opponents ?? []).map((opponent) => (
-      visibleOpponent(entityId(opponent.id), pos(opponent.at), opponent.attacking ?? false)
+      visibleOpponent(
+        entityId(opponent.id),
+        pos(opponent.at),
+        opponent.attacking ?? false,
+        setup.views === true ? combatBody(viewMeasurement(opponent.at)) : undefined,
+      )
     ))),
     loot: currentKnowledge((setup.containers ?? []).map((container) => unopenedContainer(pos(container)))),
   });
@@ -211,6 +240,94 @@ test('improved overrides the baseline on inputs recorded from a live match', () 
     );
     equal(explained.explanation.reason, reason);
   }
+});
+
+test('a wounded seat disengages from a visible opponent and stays inside the border', () => {
+  const observation = situation({
+    health: 8,
+    at: [430, 70, 610],
+    weapon: 4,
+    foodStacks: [{ slot: 9, count: 1, restores: 6 }],
+    opponents: [{ id: 5, at: [432, 70, 610] }],
+  });
+  equal(baseline.explain(observation, emptyPolicyMemory(), stream()).explanation.reason, 'delegatedBaselineRules');
+  equal(baseline.decide(observation, emptyPolicyMemory(), stream()).goal.kind, 'retreatFromOpponent');
+  const { decision, explanation } = improved.explain(observation, emptyPolicyMemory(), stream());
+  equal(explanation.reason, 'disengageWhenBehind');
+  deepStrictEqual(decision.goal, { kind: 'retreatFromOpponent', target: 5 });
+  deepStrictEqual(decision.intent, { kind: 'navigate', target: pos([426, 70, 610]) });
+  const above = situation({
+    health: 9,
+    at: [430, 70, 610],
+    weapon: 4,
+    foods: 2,
+    opponents: [{ id: 5, at: [434, 70, 610], attacking: true }],
+  });
+  const fighting = improved.explain(above, emptyPolicyMemory(), stream());
+  equal(fighting.explanation.reason, 'steadyMeleeEngagement');
+  deepStrictEqual(fighting.decision.intent, { kind: 'attack', target: 5 });
+  const edged = situation({
+    health: 6,
+    at: [467, 70, 610],
+    border: [440, 610, 30],
+    opponents: [{ id: 5, at: [466, 70, 610] }],
+  });
+  const border = worldBorder(440, 610, 30);
+  const baselineEdge = baseline.decide(edged, emptyPolicyMemory(), stream());
+  ok(baselineEdge.intent.kind === 'navigate' && isOutsideBorder(border, baselineEdge.intent.target));
+  const edge = improved.explain(edged, emptyPolicyMemory(), stream());
+  equal(edge.explanation.reason, 'disengageWhenBehind');
+  deepStrictEqual(edge.decision.intent, { kind: 'navigate', target: pos([467, 70, 610]) });
+  ok(edge.decision.intent.kind === 'navigate' && !isOutsideBorder(border, edge.decision.intent.target));
+});
+
+test('a pressured seat eats the food stack that restores the most', () => {
+  const observation = situation({
+    hunger: 8,
+    health: 20,
+    at: [430, 70, 610],
+    weapon: 4,
+    foodStacks: [
+      { slot: 10, count: 1, restores: 2 },
+      { slot: 8, count: 1, restores: 6 },
+      { slot: 4, count: 1 },
+      { slot: 12, count: 1, restores: 6 },
+    ],
+    opponents: [{ id: 5, at: [432, 70, 610], attacking: true }],
+  });
+  equal(baseline.decide(observation, emptyPolicyMemory(), stream()).intent.kind, 'attack');
+  const { decision, explanation } = improved.explain(observation, emptyPolicyMemory(), stream());
+  equal(explanation.reason, 'eatUnderPressure');
+  deepStrictEqual(decision.goal, { kind: 'recoverHunger' });
+  deepStrictEqual(decision.intent, { kind: 'eat', inventorySlot: 8 });
+  const wounded = situation({
+    health: 8,
+    hunger: 20,
+    at: [430, 70, 610],
+    foodStacks: [
+      { slot: 3, count: 2 },
+      { slot: 6, count: 1, restores: 4 },
+    ],
+  });
+  notDeepStrictEqual(baseline.decide(wounded, emptyPolicyMemory(), stream()).intent.kind, 'eat');
+  const healing = improved.explain(wounded, emptyPolicyMemory(), stream());
+  equal(healing.explanation.reason, 'eatUnderPressure');
+  deepStrictEqual(healing.decision.intent, { kind: 'eat', inventorySlot: 6 });
+});
+
+test('an engaged seat outside melee reach keeps attacking instead of navigating away', () => {
+  const observation = situation({
+    at: [430, 70, 610],
+    weapon: 4,
+    foods: 2,
+    views: true,
+    opponents: [{ id: 5, at: [434, 70, 610], attacking: true }],
+  });
+  equal(baseline.decide(observation, emptyPolicyMemory(), stream()).intent.kind, 'approach');
+  const { decision, explanation } = improved.explain(observation, emptyPolicyMemory(), stream());
+  equal(explanation.reason, 'steadyMeleeEngagement');
+  deepStrictEqual(decision.intent, { kind: 'attack', target: 5 });
+  notDeepStrictEqual(decision.intent.kind, 'navigate');
 });
 
 test('a melee engagement keeps one attack intent across the reach boundary so knockback cannot cancel the strike', () => {
