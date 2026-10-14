@@ -51,6 +51,8 @@ export interface CombatArenaOptions {
   readonly inventory?: readonly { readonly slot: number; readonly name: string; readonly count: number }[];
   readonly heldSlot?: number;
   readonly border?: { readonly x: number; readonly z: number; readonly diameter: number };
+  readonly lookLatencyTicks?: number;
+  readonly observationLagTicks?: number;
 }
 
 export interface ArrowRecord {
@@ -83,6 +85,7 @@ export interface CombatArena {
   readonly diagnostics: ClientDiagnosticRecord[];
   readonly self: { x: number; y: number; z: number; yaw: number; pitch: number };
   readonly opponents: Map<number, { x: number; y: number; z: number; health: number; entity: Bot['entity'] }>;
+  readonly swingAims: { readonly tick: number; readonly yaw: number; readonly pitch: number }[];
   tickCount(): number;
   tick(): void;
   observe(): AgentObservation;
@@ -120,6 +123,10 @@ export function createCombatArena(options: CombatArenaOptions): CombatArena {
   let ticks = 0;
   let lastDamageTick = -1_000;
   let moving = false;
+  const lookLatencyTicks = options.lookLatencyTicks ?? 0;
+  const observationLagTicks = options.observationLagTicks ?? 0;
+  const swingAims: { tick: number; yaw: number; pitch: number }[] = [];
+  const truthHistory = new Map<number, ArenaPoint[]>();
 
   const entity = {
     id: 1,
@@ -290,6 +297,9 @@ export function createCombatArena(options: CombatArenaOptions): CombatArena {
       self.yaw = Math.atan2(-dx, -dz);
       self.pitch = Math.atan2(dy, Math.hypot(dx, dz));
       syncSelf();
+      for (let waited = 0; waited < lookLatencyTicks; waited += 1) {
+        await new Promise<void>((resolve) => bot.once('physicsTick', () => resolve()));
+      }
     },
     attack: (target: Bot['entity']) => {
       const record = opponents.get(target.id);
@@ -297,6 +307,7 @@ export function createCombatArena(options: CombatArenaOptions): CombatArena {
         attacks.push({ tick: ticks, targetId: target.id, withinServerReach: false, damaged: false });
         return;
       }
+      swingAims.push({ tick: ticks, yaw: self.yaw, pitch: self.pitch });
       const withinServerReach = serverEyeToBoxDistance(self, record) <= SERVER_REACH_BLOCKS;
       const ready = ticks - lastDamageTick >= SERVER_ATTACK_COOLDOWN_TICKS;
       const damaged = withinServerReach && ready;
@@ -336,6 +347,7 @@ export function createCombatArena(options: CombatArenaOptions): CombatArena {
     entities[String(spec.id)] = opponent;
     players[`Rival${spec.id}`] = { entity: opponent, gamemode: 0 };
     opponents.set(spec.id, { x: spec.x, y: spec.y, z: spec.z, health: 20, entity: opponent });
+    truthHistory.set(spec.id, [{ x: spec.x, y: spec.y, z: spec.z }]);
   }
   for (const spec of options.opponents) addOpponent(spec);
   (bot as unknown as { heldItem: unknown }).heldItem = heldItem;
@@ -369,9 +381,17 @@ export function createCombatArena(options: CombatArenaOptions): CombatArena {
     diagnostics,
     self,
     opponents,
+    swingAims,
     tickCount: () => ticks,
     tick: () => {
       ticks += 1;
+      for (const [id, record] of opponents) {
+        const history = truthHistory.get(id)!;
+        history.push({ x: record.x, y: record.y, z: record.z });
+        if (history.length > observationLagTicks + 2) history.shift();
+        const seen = history[Math.max(0, history.length - 1 - observationLagTicks)]!;
+        record.entity.position.set(seen.x, seen.y, seen.z);
+      }
       for (const flight of [...flights]) {
         for (let sub = 0; sub < 4; sub += 1) {
           flight.x += flight.vx / 4;
@@ -459,7 +479,7 @@ export function createCombatArena(options: CombatArenaOptions): CombatArena {
       record.x = point.x;
       record.y = point.y;
       record.z = point.z;
-      record.entity.position.set(point.x, point.y, point.z);
+      if (observationLagTicks === 0) record.entity.position.set(point.x, point.y, point.z);
     },
     close: () => client.close(),
   };
