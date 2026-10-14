@@ -389,6 +389,45 @@ final class ControlProtocol {
         }
     }
 
+    record Squad(String id, List<Integer> seats) {
+        Squad {
+            require(id != null && id.matches("[a-z][a-z0-9_-]{0,15}"), "invalid squad id");
+            seats = List.copyOf(Objects.requireNonNull(seats, "squad seats"));
+            require(!seats.isEmpty(), "a squad needs at least one seat");
+        }
+    }
+
+    sealed interface PrepareRules permits FrontierSurvivalRules, SquadsRules {}
+
+    record FrontierSurvivalRules(int editRadiusBlocks, int maxBlockEditsPerSeat) implements PrepareRules {
+        FrontierSurvivalRules {
+            require(editRadiusBlocks >= 16 && editRadiusBlocks <= 512, "invalid frontier edit radius");
+            require(maxBlockEditsPerSeat >= 1 && maxBlockEditsPerSeat <= 100_000, "invalid frontier edit budget");
+        }
+    }
+
+    record SquadsRules(List<Squad> squads) implements PrepareRules {
+        SquadsRules {
+            squads = List.copyOf(Objects.requireNonNull(squads, "squads"));
+            require(squads.size() >= 2 && squads.size() <= 64, "squads must declare 2 to 64 teams");
+            Set<String> ids = new HashSet<>();
+            Set<Integer> seats = new HashSet<>();
+            for (Squad squad : squads) {
+                require(ids.add(squad.id()), "squad ids must be unique");
+                int previous = -1;
+                for (int seat : squad.seats()) {
+                    require(seat > previous && seat <= MAX_SEAT && seats.add(seat),
+                            "squad seats must be ascending and belong to one squad");
+                    previous = seat;
+                }
+            }
+        }
+
+        Optional<String> squadOf(int seat) {
+            return squads.stream().filter(squad -> squad.seats().contains(seat)).map(Squad::id).findFirst();
+        }
+    }
+
     enum RosterVersion {
         BOTS_ONLY(LEGACY_MAX_COMPETITORS),
         GENERALIZED(MatchController.MAX_COMPETITORS);
@@ -613,6 +652,7 @@ final class ControlProtocol {
             BigInteger seed,
             PrepareSettings settings,
             RosterVersion rosterVersion,
+            Optional<PrepareRules> rules,
             List<Competitor> roster) implements Payload {
         PreparePayload(
                 String mapSemanticId,
@@ -620,7 +660,7 @@ final class ControlProtocol {
                 BigInteger seed,
                 PrepareSettings settings,
                 List<Competitor> roster) {
-            this(mapSemanticId, scenarioSemanticId, seed, settings, RosterVersion.BOTS_ONLY, roster);
+            this(mapSemanticId, scenarioSemanticId, seed, settings, RosterVersion.BOTS_ONLY, Optional.empty(), roster);
         }
 
         PreparePayload {
@@ -630,8 +670,25 @@ final class ControlProtocol {
             require(isU64(seed), "invalid prepare seed");
             Objects.requireNonNull(settings, "prepare settings");
             Objects.requireNonNull(rosterVersion, "roster version");
+            rules = Objects.requireNonNull(rules, "prepare rules");
             roster = List.copyOf(Objects.requireNonNull(roster, "roster"));
             validateRoster(roster, rosterVersion);
+            require(rules.isEmpty() || rosterVersion == RosterVersion.GENERALIZED,
+                    "rule modes require the generalized roster");
+            if (rules.isPresent() && rules.get() instanceof FrontierSurvivalRules) {
+                require(settings.match().blockBreaking() && settings.match().blockPlacing()
+                                && !settings.match().naturalMobs() && !settings.match().naturalRandomTicks(),
+                        "frontier survival requires block editing with mobs and random ticks off");
+            }
+            if (rules.isPresent() && rules.get() instanceof SquadsRules squadRules) {
+                require(!settings.match().blockBreaking() && !settings.match().blockPlacing(),
+                        "squads use the classic block rules");
+                int assigned = squadRules.squads().stream().mapToInt(squad -> squad.seats().size()).sum();
+                int competitorCount = roster.size();
+                require(assigned == competitorCount && squadRules.squads().stream()
+                                .flatMap(squad -> squad.seats().stream()).allMatch(seat -> seat < competitorCount),
+                        "squads must assign every competitor seat");
+            }
             require(!(settings instanceof CivilizationPrepareSettings)
                             || (rosterVersion == RosterVersion.BOTS_ONLY
                                     && roster.size() == CivilizationMatchController.SEAT_COUNT),
@@ -1007,7 +1064,7 @@ final class ControlProtocol {
     private static Payload readPrepare(Object value) throws IOException {
         Map<String, Object> payload = object(value, "payload",
                 Set.of("map_semantic_id", "scenario_semantic_id", "seed", "mode", "settings", "roster",
-                        "roster_version"),
+                        "roster_version", "rules"),
                 Set.of("map_semantic_id", "scenario_semantic_id", "seed", "mode", "settings", "roster"));
         String mode = readString(payload.get("mode"), "payload.mode", 1, 64, null);
         RosterVersion rosterVersion = RosterVersion.BOTS_ONLY;
@@ -1029,13 +1086,51 @@ final class ControlProtocol {
             }
             default -> throw invalid("payload.mode", "mode is unsupported by control-v1");
         };
+        Optional<PrepareRules> rules = payload.containsKey("rules")
+                ? Optional.of(readPrepareRules(payload.get("rules")))
+                : Optional.empty();
         return new PreparePayload(
                 readString(payload.get("map_semantic_id"), "payload.map_semantic_id", 64, 64, SEMANTIC_ID_PATTERN),
                 readString(payload.get("scenario_semantic_id"), "payload.scenario_semantic_id", 64, 64, SEMANTIC_ID_PATTERN),
                 readU64String(payload.get("seed"), "payload.seed", false),
                 settings,
                 rosterVersion,
+                rules,
                 roster);
+    }
+
+    private static PrepareRules readPrepareRules(Object value) throws IOException {
+        String path = "payload.rules";
+        Map<String, Object> header = object(value, path,
+                Set.of("kind", "version", "edit_radius_blocks", "max_block_edits_per_seat", "squads"),
+                Set.of("kind", "version"));
+        String kind = readString(header.get("kind"), path + ".kind", 1, 32, null);
+        readInteger(header.get("version"), path + ".version", 1, 1);
+        if ("frontier_survival".equals(kind)) {
+            object(value, path, Set.of("kind", "version", "edit_radius_blocks", "max_block_edits_per_seat"),
+                    Set.of("kind", "version", "edit_radius_blocks", "max_block_edits_per_seat"));
+            return new FrontierSurvivalRules(
+                    readInteger(header.get("edit_radius_blocks"), path + ".edit_radius_blocks", 16, 512),
+                    readInteger(header.get("max_block_edits_per_seat"), path + ".max_block_edits_per_seat", 1, 100_000));
+        }
+        if ("squads".equals(kind)) {
+            object(value, path, Set.of("kind", "version", "squads"), Set.of("kind", "version", "squads"));
+            List<Object> entries = array(header.get("squads"), path + ".squads", 2, 64);
+            List<Squad> squads = new ArrayList<>(entries.size());
+            for (int index = 0; index < entries.size(); index++) {
+                String entryPath = path + ".squads[" + index + "]";
+                Map<String, Object> squad = object(entries.get(index), entryPath, Set.of("id", "seats"),
+                        Set.of("id", "seats"));
+                List<Object> seatValues = array(squad.get("seats"), entryPath + ".seats", 1, MatchController.MAX_COMPETITORS);
+                List<Integer> seats = new ArrayList<>(seatValues.size());
+                for (int seatIndex = 0; seatIndex < seatValues.size(); seatIndex++) {
+                    seats.add(readInteger(seatValues.get(seatIndex), entryPath + ".seats[" + seatIndex + "]", 0, MAX_SEAT));
+                }
+                squads.add(new Squad(readString(squad.get("id"), entryPath + ".id", 1, 16, null), seats));
+            }
+            return new SquadsRules(squads);
+        }
+        throw invalid(path + ".kind", "unknown rule mode");
     }
 
     private static HungerGamesPrepareSettings readHungerGamesPrepareSettings(Object value) throws IOException {
@@ -1437,6 +1532,7 @@ final class ControlProtocol {
             if (prepare.rosterVersion() == RosterVersion.GENERALIZED) {
                 prepareValue.put("roster_version", 2);
             }
+            prepare.rules().ifPresent(rules -> prepareValue.put("rules", rulesValue(rules)));
             return prepareValue;
         }
         if (payload instanceof AbortPayload abort) {
@@ -1537,6 +1633,17 @@ final class ControlProtocol {
     private static List<Object> factionScoresValue(FactionScores scores) {
         return List.of(object("faction_id", FactionId.EMBER.wireName(), "points", scores.emberPoints().toString()),
                 object("faction_id", FactionId.TIDE.wireName(), "points", scores.tidePoints().toString()));
+    }
+
+    private static Object rulesValue(PrepareRules rules) {
+        if (rules instanceof FrontierSurvivalRules frontier) {
+            return object("kind", "frontier_survival", "version", 1,
+                    "edit_radius_blocks", frontier.editRadiusBlocks(),
+                    "max_block_edits_per_seat", frontier.maxBlockEditsPerSeat());
+        }
+        SquadsRules squads = (SquadsRules) rules;
+        return object("kind", "squads", "version", 1, "squads", squads.squads().stream()
+                .map(squad -> object("id", squad.id(), "seats", squad.seats())).toList());
     }
 
     private static Object competitorValue(Competitor competitor) {

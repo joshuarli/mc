@@ -32,6 +32,28 @@ entries per chest. Chunk preparation
 includes the configured view-distance halo, limited to 32 chunks in each
 direction and 8,192 total prepared chunks.
 
+For a schema-3 natural plan the plugin resolves each seat with a bounded,
+deterministic candidate search instead of requiring the declared column to
+be safe. Candidates are the declared column, then Chebyshev rings of radius
+1 through 8 ordered by x then z, at most 128 per seat. A candidate needs a
+safe full-block support, two clear blocks, no lava, fire, magma, cactus,
+campfire, berry bush, powder snow, or cobweb within one block, a safe
+adjacent escape column, and two blocks of separation from already chosen
+seats. The first passing candidate wins; if none passes, preparation fails
+and lists the per-reason rejection counts. The world seed is never
+rerolled. The recipe string and the chosen spawn and chest positions feed a
+world identity hash that the plugin logs as `ARENA_NATURAL_WORLD`. Cache
+chests in a schema-3 plan additionally reject hazards within one block.
+Schema-1 and schema-2 plans keep the declared-column checks.
+
+Frontier survival (rule mode `frontier_survival` v1) lets competitors break
+and place blocks only within the edit radius of the border center, never on a
+loot chest, and only up to the per-seat edit budget; denied edits are
+cancelled. The plugin creates no resources for the mode, and random ticks stay
+off. Squads (rule mode `squads` v1) keep the classic rules; chat from a
+competitor is delivered only to its own squad's competitors and to
+non-competitors. Last-survivor outcomes are unchanged.
+
 The chunk generator reads only the immutable plan and writes to the
 `ChunkData` supplied to its callback. It does not query or mutate another
 chunk. Vanilla terrain phases and populators are disabled so chunks outside the
@@ -61,7 +83,13 @@ six bot seats; a Hunger Games `prepare` with `roster_version` 2 accepts one to
 Civilization requires exactly six bot seats. A roster-version-2 `prepare` is
 valid only against a schema-3 world plan whose roster has the same seats,
 controller kinds, and external usernames. Each competitor binds only when both
-its offline UUID and username match. Noncompetitor joins are spectators, and
+its offline UUID and username match. Exact roster identities bind only while the match waits. A join whose
+username matches a reserved identity ignoring case, whose UUID matches a
+reserved UUID, whose identity is already held, or that uses an unreserved
+`ArenaBot` name is kicked; every other noncompetitor join is a spectator.
+An exact identity that joins after countdown, or after elimination, is a
+spectator and never re-enters competition, and a living competitor cannot
+leave survival mode before its elimination. Noncompetitor joins are spectators, and
 spectators never occupy a competitor seat.
 `start` requires every configured bot to be online before the countdown begins;
 competitive reconnects after countdown are spectators. Match configuration

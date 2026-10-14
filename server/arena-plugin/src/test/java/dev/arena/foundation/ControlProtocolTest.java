@@ -34,6 +34,8 @@ final class ControlProtocolTest {
             "control-outcome-winner-wide-seat.json",
             "control-prepare-bots.json",
             "control-prepare-roster-v2.json",
+            "control-prepare-rules-frontier.json",
+            "control-prepare-rules-squads.json",
             "control-prepare-roster-v2-256.json",
             "control-prepare-civilization.json",
             "control-public-clock.json",
@@ -53,6 +55,11 @@ final class ControlProtocolTest {
             "control-invalid-human-wait-timeout.json",
             "control-invalid-leading-zero.json",
             "control-invalid-roster-gap.json",
+            "control-invalid-rules-frontier-no-editing.json",
+            "control-invalid-rules-frontier-radius.json",
+            "control-invalid-rules-frontier-random-ticks.json",
+            "control-invalid-rules-squads-gap.json",
+            "control-invalid-rules-without-roster-version.json",
             "control-invalid-roster-v1-external.json",
             "control-invalid-roster-v1-seven-seats.json",
             "control-invalid-roster-v2-257.json",
@@ -118,6 +125,19 @@ final class ControlProtocolTest {
                 Files.readAllBytes(fixturePath("control-prepare-roster-v2-256.json"))).payload();
         assertEquals(MatchController.MAX_COMPETITORS, full.roster().size());
         assertEquals(ControllerKind.EXTERNAL, full.roster().getLast().kind());
+    }
+
+    @Test
+    void rulePrepareDecodesFrontierBudgetsAndSquadPartitions() throws IOException {
+        ControlProtocol.PreparePayload frontier = (ControlProtocol.PreparePayload) ControlProtocol.decodeBody(
+                Files.readAllBytes(fixturePath("control-prepare-rules-frontier.json"))).payload();
+        assertEquals(new ControlProtocol.FrontierSurvivalRules(96, 2000), frontier.rules().orElseThrow());
+
+        ControlProtocol.PreparePayload squads = (ControlProtocol.PreparePayload) ControlProtocol.decodeBody(
+                Files.readAllBytes(fixturePath("control-prepare-rules-squads.json"))).payload();
+        ControlProtocol.SquadsRules rules = (ControlProtocol.SquadsRules) squads.rules().orElseThrow();
+        assertEquals(java.util.Optional.of("bravo"), rules.squadOf(5));
+        assertEquals(java.util.Optional.of("alpha"), rules.squadOf(0));
     }
 
     @Test

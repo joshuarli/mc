@@ -105,6 +105,8 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
     private final Set<MapPlan.Position> placedOakPlankPositions = new HashSet<>();
     private final Map<Integer, UUID> playersBySeat = new HashMap<>();
     private final Map<UUID, Integer> seatsByPlayer = new HashMap<>();
+    private FrontierEdits frontierEdits;
+    private ControlProtocol.SquadsRules squadRules;
     private final List<MatchController.Elimination> pendingEliminations = new ArrayList<>();
     private final List<MatchController.ResolvedElimination> civilizationCountdownEliminations = new ArrayList<>();
     private final Map<ControlProtocol.FactionId, Boolean> outpostCompletion = new EnumMap<>(ControlProtocol.FactionId.class);
@@ -261,10 +263,28 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
         }
     }
 
+    private boolean frontierEditDenied(Player player, Block block) {
+        if (frontierEdits == null) {
+            return false;
+        }
+        Integer seat = seatsByPlayer.get(player.getUniqueId());
+        if (seat == null || matchController == null
+                || !matchController.aliveSeats().contains(seat)) {
+            return true;
+        }
+        return frontierEdits.tryEdit(seat, new MapPlan.Position(block.getX(), block.getY(), block.getZ()))
+                != FrontierEdits.Verdict.ALLOWED;
+    }
+
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onBlockBreak(BlockBreakEvent event) {
         if (startupMode == StartupMode.PLAN && isArenaWorld(event.getBlock().getWorld())
                 && !isMatchRuleEnabled(BlockAction.BREAK)) {
+            event.setCancelled(true);
+            return;
+        }
+        if (startupMode == StartupMode.PLAN && isArenaWorld(event.getBlock().getWorld())
+                && frontierEditDenied(event.getPlayer(), event.getBlock())) {
             event.setCancelled(true);
             return;
         }
@@ -279,6 +299,11 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
     public void onBlockPlace(BlockPlaceEvent event) {
         if (startupMode == StartupMode.PLAN && isArenaWorld(event.getBlock().getWorld())
                 && !isMatchRuleEnabled(BlockAction.PLACE)) {
+            event.setCancelled(true);
+            return;
+        }
+        if (startupMode == StartupMode.PLAN && isArenaWorld(event.getBlock().getWorld())
+                && frontierEditDenied(event.getPlayer(), event.getBlockPlaced())) {
             event.setCancelled(true);
             return;
         }
@@ -517,6 +542,19 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
         civilizationCountdownEliminations.clear();
         playersBySeat.clear();
         seatsByPlayer.clear();
+        frontierEdits = null;
+        squadRules = null;
+        if (preparedMatch.rules().isPresent()) {
+            ControlProtocol.PrepareRules rules = preparedMatch.rules().get();
+            if (rules instanceof ControlProtocol.FrontierSurvivalRules frontier) {
+                NaturalMapPlan natural = (NaturalMapPlan) generationPlan;
+                frontierEdits = new FrontierEdits(natural.borderCenter(), frontier,
+                        resolvedLootContainers.stream().map(MapPlan.LootContainer::position)
+                                .collect(java.util.stream.Collectors.toSet()));
+            } else {
+                squadRules = (ControlProtocol.SquadsRules) rules;
+            }
+        }
         for (Player player : new ArrayList<>(Bukkit.getOnlinePlayers())) {
             admitPlanJoin(player);
         }
@@ -1360,6 +1398,26 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
         }
         chest.getBlockInventory().clear();
         chest.getBlockInventory().setItem(0, new ItemStack(Material.DIAMOND, 2));
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onSquadChat(io.papermc.paper.event.player.AsyncChatEvent event) {
+        ControlProtocol.SquadsRules rules = squadRules;
+        if (rules == null) {
+            return;
+        }
+        Integer senderSeat = seatsByPlayer.get(event.getPlayer().getUniqueId());
+        if (senderSeat == null) {
+            return;
+        }
+        Optional<String> squad = rules.squadOf(senderSeat);
+        event.viewers().removeIf(viewer -> {
+            if (!(viewer instanceof Player player)) {
+                return false;
+            }
+            Integer seat = seatsByPlayer.get(player.getUniqueId());
+            return seat != null && !squad.equals(rules.squadOf(seat));
+        });
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
