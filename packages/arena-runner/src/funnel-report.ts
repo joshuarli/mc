@@ -15,7 +15,8 @@ export function actionFunnelReport(evidence: Evidence): object | undefined {
   for (const [index, record] of evidence.records.entries()) {
     if (record.schema === 'action-funnel-v1') funnelRecords.push(readActionFunnelTraceRecord(record, index + 1));
   }
-  if (funnelRecords.length === 0) return undefined;
+  const notes = evidence.records.filter((record) => record.schema === 'client-diagnostic-v1');
+  if (funnelRecords.length === 0 && notes.length === 0) return undefined;
 
   const deaths = deathEliminations(evidence.records);
   const seats = new Map<number, SeatTally>();
@@ -40,6 +41,17 @@ export function actionFunnelReport(evidence: Evidence): object | undefined {
       case 'hold': entry.decisions.held += 1; break;
       default: bump(entry.decisions.deferred, decision.disposition);
     }
+  }
+
+  for (const note of notes) {
+    if (typeof note.seat !== 'number') continue;
+    const entry = tally(note.seat);
+    entry.border_unknown.events += 1;
+    entry.border_unknown.max_consecutive_observations = Math.max(
+      entry.border_unknown.max_consecutive_observations,
+      typeof note.consecutive_observations === 'number' ? note.consecutive_observations : 0,
+    );
+    bump(entry.border_unknown.reasons, String(note.reason));
   }
 
   for (const record of funnelRecords) {
@@ -139,6 +151,7 @@ interface SeatTally {
   };
   actions: { total: number; by_intent: Record<string, number>; skill: Record<string, number> };
   funnel: Record<ActionFunnelAction, FunnelTally>;
+  border_unknown: { events: number; max_consecutive_observations: number; reasons: Record<string, number> };
 }
 
 function newTally(): SeatTally {
@@ -148,6 +161,7 @@ function newTally(): SeatTally {
   return {
     decisions: { proposed: 0, accepted: 0, continued: 0, held: 0, deferred: {}, border: {} },
     actions: { total: 0, by_intent: {}, skill: {} },
+    border_unknown: { events: 0, max_consecutive_observations: 0, reasons: {} },
     funnel: Object.fromEntries(FUNNEL_ACTIONS.map((action) => [action, funnel()])) as Record<ActionFunnelAction, FunnelTally>,
   };
 }

@@ -59,6 +59,10 @@ export class WorkerRuntime {
     this.#init = init;
     const policy = compilePolicy(init.policy_source);
     const collector = new ActionFunnelCollector(new Map(init.roster.map((entry) => [entry.username, entry.seat])));
+    collector.onDiagnostic = (seat, record) => {
+      void this.#critical('diagnostic', { seat, kind: record.kind, reason: record.reason,
+        consecutive_observations: record.consecutiveObservations }).catch((error: unknown) => this.#fail(error));
+    };
     const clientOptionsFor = (seat: number): RuntimeClientOptions => ({
       host: init.host,
       port: init.port,
@@ -71,6 +75,7 @@ export class WorkerRuntime {
       signal: this.#abort.signal,
       publicRoster: [],
       funnel: collector.sink(seat),
+      diagnostic: collector.diagnosticSink(seat),
     });
     this.#competitors = init.seats.map((entry) => this.#createCompetitor(
       entry.seat,

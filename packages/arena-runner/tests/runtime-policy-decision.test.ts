@@ -52,7 +52,7 @@ test('runtime policy replay captures the RNG state before an exploration draw', 
 
   const step = decideRuntimePolicy(observation, memory, params, random);
   const replay = rehydratePolicyReplayInput(step.input);
-  if (replay.schema !== 'policy-input-v2') throw new Error('expected v2 input');
+  if (replay.schema !== 'policy-input-v4') throw new Error('expected v4 input');
   const replayedDecision = decide(replay.observation, replay.memory, replay.params, replay.random);
 
   assert.deepEqual(step.decision.goal, { kind: 'explore' });

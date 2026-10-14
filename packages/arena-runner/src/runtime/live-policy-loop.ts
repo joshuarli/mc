@@ -2,7 +2,7 @@ import { DeterministicRandom, RandomStream, emptyPolicyMemory, openingStyleForSe
 import type { OpeningStyleCycle, compilePolicy } from '@arena/spec';
 import type { PartiallyComputedPath } from 'mineflayer-pathfinder';
 import { RunnerError } from '../errors.js';
-import { makeCivilizationPolicyEffectRecord, makeCivilizationPolicyReplayRecord, normalizeCivilizationPolicyReplayInput, makeOpeningPolicyReplayRecord, makePolicyEffectRecord, makePolicyReplayRecord, type PolicyPathUpdate, type PolicyDisposition } from '../policy-replay.js';
+import { makeCivilizationPolicyEffectRecord, makeCivilizationPolicyReplayRecord, normalizeCivilizationPolicyReplayInput, makePolicyEffectRecord, makePolicyReplayRecordV4, type PolicyPathUpdate, type PolicyDisposition } from '../policy-replay.js';
 import { canonicalJson } from '../canonical.js';
 import type { RuntimeTraceBuilder } from './trace.js';
 import { mapRuntimeFailure } from './failures.js';
@@ -177,20 +177,11 @@ export class LivePolicyLoop {
     });
     let recorded = Promise.resolve();
     if (this.#recordPolicy) {
-      let record: ReturnType<typeof makePolicyReplayRecord> | ReturnType<typeof makeOpeningPolicyReplayRecord>
-        | ReturnType<typeof makeCivilizationPolicyReplayRecord>;
+      let record: ReturnType<typeof makePolicyReplayRecordV4> | ReturnType<typeof makeCivilizationPolicyReplayRecord>;
       if (step.mode === 'hunger_games') {
-        if (step.input.schema === 'policy-input-v3') {
-          const openingStateAfter = this.#openingStates.get(seat);
-          if (openingStateAfter === undefined) {
-            throw new RunnerError('runtime_failure', 'opening policy state', { kind: 'missing_state' });
-          }
-          record = makeOpeningPolicyReplayRecord({ sequence, seat, input: step.input, decision: step.decision,
-            openingStateAfter, rngStateAfter: step.rngStateAfter, disposition });
-        } else {
-          record = makePolicyReplayRecord({ sequence, seat, input: step.input, decision: step.decision,
-            rngStateAfter: step.rngStateAfter, disposition });
-        }
+        record = makePolicyReplayRecordV4({ sequence, seat, input: step.input, decision: step.decision,
+          openingStateAfter: step.input.opening === null ? null : this.#openingStates.get(seat) ?? null,
+          rngStateAfter: step.rngStateAfter, disposition });
       } else {
         record = makeCivilizationPolicyReplayRecord({ sequence, seat, input: step.input, decision: step.decision,
           rngStateAfter: step.rngStateAfter, disposition });

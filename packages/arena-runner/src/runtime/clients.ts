@@ -5,7 +5,7 @@ import { performance } from 'node:perf_hooks';
 import { RunnerError } from '../errors.js';
 import { createCivilizationRuntimeGameplayAdapter } from './civilization-adapter.js';
 import type { ScenarioIr } from '@arena/spec';
-import type { ActionFunnelSink } from '@arena/core';
+import type { ActionFunnelSink, ClientDiagnosticSink } from '@arena/core';
 import type {
   ChunkReceipt,
   EntityReceipt,
@@ -31,6 +31,7 @@ export interface RuntimeClientOptions {
   readonly signal: AbortSignal;
   readonly publicRoster: readonly CivilizationRosterMember[];
   readonly funnel?: ActionFunnelSink;
+  readonly diagnostic?: ClientDiagnosticSink;
 }
 
 export class RuntimeCompetitorClient implements RuntimeCompetitorHandle {
@@ -370,7 +371,12 @@ async function connectRuntimeBot(
       } else {
         const client = createMineflayerArenaClient(
           bot,
-          role.kind === 'competitor' && options.funnel !== undefined ? { funnel: options.funnel } : undefined,
+          role.kind === 'competitor' && (options.funnel !== undefined || options.diagnostic !== undefined)
+            ? {
+              ...(options.funnel === undefined ? {} : { funnel: options.funnel }),
+              ...(options.diagnostic === undefined ? {} : { diagnostic: options.diagnostic }),
+            }
+            : undefined,
         );
         adapter = role.kind === 'spectator' ? { kind: 'spectator', client }
           : { kind: 'competitor', gameplay: { mode: 'hunger_games', client } };

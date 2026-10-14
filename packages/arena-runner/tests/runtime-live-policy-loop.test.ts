@@ -48,7 +48,7 @@ function fixture(competitors: ReturnType<typeof competitor>[], onActivity?: (eve
   const failures: unknown[] = [];
   const loop = new LivePolicyLoop({
     trace: {
-      recordPolicyDecision: async (record) => { assert.ok(record.schema === 'policy-replay-v1' || record.schema === 'policy-replay-v2'); decisions.push(record); },
+      recordPolicyDecision: async (record) => { assert.ok(record.schema === 'policy-replay-v1' || record.schema === 'policy-replay-v4'); decisions.push(record); },
       recordPolicyEffect: async (record) => { assert.equal(record.schema, 'policy-effect-v1'); if (record.schema !== 'policy-effect-v1') assert.fail('expected Hunger Games effect'); effects.push(record); },
       checkpoint: async (count) => { checkpoints.push({ count, decisions: decisions.length, effects: effects.length }); },
     },
@@ -141,15 +141,15 @@ test('live policy accepts a border preemption on the next cadence before cleanup
   state.loop.onTick(1);
   await settle();
   const accepted = state.decisions[1]!;
-  assert.equal(accepted.schema, 'policy-replay-v2');
-  if (accepted.schema !== 'policy-replay-v2') throw new Error('expected v2');
+  assert.equal(accepted.schema, 'policy-replay-v4');
+  if (accepted.schema !== 'policy-replay-v4') throw new Error('expected v4');
   assert.deepEqual(accepted.disposition, { kind: 'replace', action_sequence: '2', replaces_action_sequence: '1', reason: 'higherPriority' });
   assert.equal(intents.length, 1);
   assert.equal(state.effects.length, 0);
   state.loop.onTick(2);
   await settle();
   const reserved = state.decisions[2]!;
-  if (reserved.schema !== 'policy-replay-v2') throw new Error('expected v2');
+  if (reserved.schema !== 'policy-replay-v4') throw new Error('expected v4');
   assert.deepEqual(reserved.disposition, { kind: 'defer', action_sequence: '2', reason: 'cleanupPending' });
   cleanup.resolve();
   await settle();
@@ -180,7 +180,7 @@ test('live policy keeps a stable active intent and defers lower priority observa
   await settle();
   const stable = state.decisions[1]!;
   const lower = state.decisions[2]!;
-  if (stable.schema !== 'policy-replay-v2' || lower.schema !== 'policy-replay-v2') throw new Error('expected v2');
+  if (stable.schema !== 'policy-replay-v4' || lower.schema !== 'policy-replay-v4') throw new Error('expected v4');
   assert.deepEqual(stable.disposition, { kind: 'continue', action_sequence: '1' });
   assert.deepEqual(lower.disposition, { kind: 'defer', action_sequence: '1', reason: 'lowerPriority' });
   assert.equal(starts, 1);
@@ -254,7 +254,7 @@ test('live policy feeds a failed action its initiating permitted observation bef
   state.loop.onTick(1);
   await settle();
   const next = state.decisions[1]!;
-  if (next.schema !== 'policy-replay-v2') throw new Error('expected v2');
+  if (next.schema !== 'policy-replay-v4') throw new Error('expected v4');
   assert.equal(next.input.feedback.length, 1);
   assert.equal(next.input.feedback[0]?.kind, 'failed');
   assert.equal(next.decision.memory.failedTargets.length, 1);
@@ -336,7 +336,7 @@ test('live policy releases a settled action before its effect persistence finish
   const seat = competitor(0, async () => ({ kind: 'succeeded' }));
   const loop = new LivePolicyLoop({
     trace: {
-      recordPolicyDecision: async (record) => { assert.ok(record.schema === 'policy-replay-v1' || record.schema === 'policy-replay-v2'); decisions.push(record); },
+      recordPolicyDecision: async (record) => { assert.ok(record.schema === 'policy-replay-v1' || record.schema === 'policy-replay-v4'); decisions.push(record); },
       recordPolicyEffect: async (record) => { assert.equal(record.schema, 'policy-effect-v1'); if (record.schema !== 'policy-effect-v1') assert.fail('expected Hunger Games effect'); effects.push(record); await persistence.promise; },
       checkpoint: async () => {},
     },
@@ -350,7 +350,7 @@ test('live policy releases a settled action before its effect persistence finish
   loop.onTick(1);
   await settle();
   const next = decisions[1]!;
-  if (next.schema !== 'policy-replay-v2') throw new Error('expected v2');
+  if (next.schema !== 'policy-replay-v4') throw new Error('expected v4');
   assert.deepEqual(next.disposition, { kind: 'start', action_sequence: '2' });
   persistence.resolve();
   await loop.stopAndJoin();
@@ -373,7 +373,7 @@ test('live policy bounds equal priority target hysteresis to two strategy interv
   for (let value = 0; value < 3; value += 1) { state.loop.onTick(value); await settle(); }
   const first = state.decisions[1]!;
   const second = state.decisions[2]!;
-  if (first.schema !== 'policy-replay-v2' || second.schema !== 'policy-replay-v2') throw new Error('expected v2');
+  if (first.schema !== 'policy-replay-v4' || second.schema !== 'policy-replay-v4') throw new Error('expected v4');
   assert.deepEqual(first.disposition, { kind: 'defer', action_sequence: '1', reason: 'hysteresis' });
   assert.deepEqual(second.disposition, { kind: 'replace', action_sequence: '3', replaces_action_sequence: '1', reason: 'targetChanged' });
   assert.equal(starts, 2);
@@ -401,9 +401,9 @@ test('live policy preserves a pending exploration route across fresh random prop
     assert.equal(cancellations, 0);
     assert.equal(state.effects.length, 0);
     const later = state.decisions.slice(1);
-    assert.ok(later.some((record) => record.schema === 'policy-replay-v2'
+    assert.ok(later.some((record) => record.schema === 'policy-replay-v4'
       && record.disposition.kind === 'defer' && record.disposition.reason === 'goalPersistence'));
-    assert.ok(later.every((record) => record.schema === 'policy-replay-v2'
+    assert.ok(later.every((record) => record.schema === 'policy-replay-v4'
       && (record.disposition.kind === 'continue' || record.disposition.kind === 'defer')));
   } finally { await state.loop.stopAndJoin(); }
 });

@@ -1,8 +1,8 @@
 import {
   decide,
   decideOpening,
-  normalizeOpeningPolicyReplayInput,
-  normalizePolicyReplayInput,
+  normalizeOpeningPolicyReplayInputV4,
+  normalizePolicyReplayInputV4,
   type AgentObservation,
   type Decision,
   type DeterministicRandom,
@@ -12,18 +12,18 @@ import {
   type OpeningStyleCycle as CoreOpeningStyleCycle,
   type PolicyMemory,
   type PolicyParams,
-  type PolicyReplayInputV2,
+  type PolicyReplayInputV4,
   type PolicyFeedbackBatch,
 } from '@arena/core';
 
 export interface RuntimePolicyDecision {
-  readonly input: PolicyReplayInputV2;
+  readonly input: PolicyReplayInputV4;
   readonly decision: Decision;
   readonly rngStateAfter: bigint;
 }
 
 export interface RuntimeOpeningPolicyDecision {
-  readonly input: import('@arena/core').PolicyReplayInputV3;
+  readonly input: PolicyReplayInputV4;
   readonly decision: Decision;
   readonly openingState: OpeningPolicyState;
   readonly rngStateAfter: bigint;
@@ -40,7 +40,7 @@ export function decideRuntimePolicy(
   random: DeterministicRandom,
   feedback: PolicyFeedbackBatch = [],
 ): RuntimePolicyDecision {
-  const input = normalizePolicyReplayInput({ observation, memory, params, random, feedback });
+  const input = normalizePolicyReplayInputV4({ observation, memory, params, random, feedback });
   const decision = decide(observation, memory, params, random, feedback);
   return Object.freeze({ input, decision, rngStateAfter: random.snapshotState() });
 }
@@ -60,7 +60,7 @@ export function decideRuntimeOpeningPolicy(
   }>,
 ): RuntimeOpeningPolicyDecision {
   const opening: OpeningPolicyContext = { style: assignment.style, state: assignment.state };
-  const input = normalizeOpeningPolicyReplayInput({ observation, memory, feedback, params, random,
+  const input = normalizeOpeningPolicyReplayInputV4({ observation, memory, feedback, params, random,
     opening: { seed: assignment.seed, style: assignment.style, cycle: assignment.cycle, state: assignment.state } });
   const result = decideOpening(observation, memory, params, random, feedback, opening);
   const { openingState, ...decision } = result;

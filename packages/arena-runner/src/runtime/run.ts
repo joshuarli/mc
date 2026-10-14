@@ -225,7 +225,18 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
     });
     trace = runtimeTrace;
     if (recordsActionFunnel) {
-      funnel = new ActionFunnelCollector(new Map(roster.competitors.map((entry) => [entry.username, entry.seat])));
+      const collector = new ActionFunnelCollector(new Map(roster.competitors.map((entry) => [entry.username, entry.seat])));
+      collector.onDiagnostic = (seat, record) => {
+        void runtimeTrace.recordRunNote({
+          schema: 'client-diagnostic-v1',
+          seat,
+          tick: coordinator?.lastMatchTick ?? null,
+          diagnostic: record.kind,
+          reason: record.reason,
+          consecutive_observations: record.consecutiveObservations,
+        }).catch((error: unknown) => coordinator?.reportFailure(error));
+      };
+      funnel = collector;
     }
     const serverPath = Buffer.concat([options.preparedRun.runDirectoryPath, SERVER_DIRECTORY]);
     await createOwnedDirectory({
@@ -346,7 +357,9 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
     clients = (cohort !== undefined ? [] : roster.botCompetitors).map((competitor) => new RuntimeCompetitorClient(
       competitor.seat,
       roster.competitorIdentities[competitor.seat]!,
-      funnel === undefined ? clientOptions : { ...clientOptions, funnel: funnel.sink(competitor.seat) },
+      funnel === undefined ? clientOptions : {
+        ...clientOptions, funnel: funnel.sink(competitor.seat), diagnostic: funnel.diagnosticSink(competitor.seat),
+      },
     ));
     spectators = roster.spectators.map((identity) => new RuntimeSpectatorClient(identity));
     await raceWithRunState(
@@ -629,6 +642,10 @@ class ControlCoordinator {
 
   get lastMatchTick(): number | null {
     return this.#lastMatchTick;
+  }
+
+  reportFailure(error: unknown): void {
+    this.#fail(error);
   }
 
   attachCohort(cohort: WorkerCohort): void {

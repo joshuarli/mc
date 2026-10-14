@@ -21,6 +21,7 @@ import {
   type CivilizationPolicyContextInput,
   type PolicyReplayInputSource,
   type PolicyReplayInputV3,
+  type PolicyReplayInputV4,
   type OpeningPolicyState,
   decide,
   decidePolicyReplayV1,
@@ -76,6 +77,12 @@ export interface PolicyReplayRecordV3 extends Omit<PolicyReplayRecordV2, 'schema
   readonly opening_state_after: OpeningPolicyState;
 }
 
+export interface PolicyReplayRecordV4 extends Omit<PolicyReplayRecordV2, 'schema' | 'input'> {
+  readonly schema: 'policy-replay-v4';
+  readonly input: PolicyReplayInputV4;
+  readonly opening_state_after: OpeningPolicyState | null;
+}
+
 export interface CivilizationPolicyReplayInputV1 {
   readonly schema: 'civilization-policy-input-v1';
   readonly context: CivilizationPolicyContextInput;
@@ -92,7 +99,8 @@ export interface CivilizationPolicyReplayRecordV1 extends Omit<PolicyReplayRecor
   readonly decision: CivilizationDecision;
 }
 
-export type PolicyReplayRecord = PolicyReplayRecordV1 | PolicyReplayRecordV2 | PolicyReplayRecordV3 | CivilizationPolicyReplayRecordV1;
+export type PolicyReplayRecord = PolicyReplayRecordV1 | PolicyReplayRecordV2 | PolicyReplayRecordV3 | PolicyReplayRecordV4
+  | CivilizationPolicyReplayRecordV1;
 
 interface OpeningPolicyReplayTransition {
   readonly stateBefore: OpeningPolicyState;
@@ -305,6 +313,40 @@ export function makeOpeningPolicyReplayRecord(options: Readonly<{
     rng_state_after: rngStateAfter.toString(), disposition: Object.freeze(validated), opening_state_after: openingStateAfter });
 }
 
+export function makePolicyReplayRecordV4(options: Readonly<{
+  sequence: bigint;
+  seat: number;
+  input: PolicyReplayInputV4;
+  decision: Decision;
+  openingStateAfter: OpeningPolicyState | null;
+  rngStateAfter: bigint;
+  disposition: PolicyDisposition;
+}>): PolicyReplayRecordV4 {
+  const { sequence, seat, input, decision, rngStateAfter, disposition } = options;
+  assertSequence(sequence, 'sequence');
+  assertSeat(seat);
+  assertU64(rngStateAfter, 'rng_state_after');
+  if (input.schema !== 'policy-input-v4') throw new TypeError('policy replay v4 requires a policy-input-v4 input');
+  if (input.opening === null) {
+    if (options.openingStateAfter !== null) throw new TypeError('a non-opening decision has no opening state');
+  } else if (options.openingStateAfter === null
+      || openingStyleForSeat(BigInt(input.opening.seed), seat, input.opening.cycle) !== input.opening.style) {
+    throw new TypeError('opening style assignment must match the replay seed, seat, and cycle');
+  }
+  let validated: PolicyDisposition;
+  try { validated = readDisposition(disposition, undefined); }
+  catch (error) { throw new TypeError('invalid policy action disposition', { cause: error }); }
+  if ((validated.kind === 'hold') !== (decision.intent.kind === 'hold') && validated.kind !== 'defer') {
+    throw new TypeError('policy hold disposition must describe a hold intent');
+  }
+  if ((validated.kind === 'start' || validated.kind === 'replace') && validated.action_sequence !== sequence.toString()) {
+    throw new TypeError('action identity must match its initiating decision');
+  }
+  return Object.freeze({ schema: 'policy-replay-v4', sequence: sequence.toString(), seat, input, decision,
+    rng_state_after: rngStateAfter.toString(), disposition: Object.freeze(validated),
+    opening_state_after: options.openingStateAfter === null ? null : openingPolicyState(options.openingStateAfter) });
+}
+
 export function makePolicyEffectRecord(
   decisionSequence: bigint,
   skill: SkillOutcome,
@@ -340,7 +382,8 @@ export function replayPolicyJson(evidence: Evidence): PolicyReplaySummary {
   for (const [index, record] of evidence.records.entries()) {
     if (record.direction === 'plugin' && record.type === 'outcome') terminalOutcomeSeen = true;
     if (record.schema === 'policy-replay-v1' || record.schema === 'policy-replay-v2'
-        || record.schema === 'policy-replay-v3' || record.schema === 'civilization-policy-replay-v1') {
+        || record.schema === 'policy-replay-v3' || record.schema === 'policy-replay-v4'
+        || record.schema === 'civilization-policy-replay-v1') {
       const decision = readPolicyDecision(record, index + 1);
       if (decision.schema === 'civilization-policy-replay-v1' && terminalOutcomeSeen) {
         throw replayFailure('policy_decision_after_outcome', index + 1);
@@ -357,14 +400,14 @@ export function replayPolicyJson(evidence: Evidence): PolicyReplaySummary {
       firstSequence ??= decision.sequence;
       lastSequence = decision.sequence;
       const openingTransition = replayDecision(decision, index + 1, prepared?.seed);
-      if (decision.schema === 'policy-replay-v3') {
+      if (hasOpeningInput(decision)) {
         if (openingTransition === undefined) throw replayFailure('policy_opening_state_chain_mismatch', index + 1);
         const expectedState = openingStates.get(decision.seat) ?? openingPolicyState({ cacheTakenAt: null });
         if (canonicalJson(openingTransition.stateBefore) !== canonicalJson(expectedState)) {
           throw replayFailure('policy_opening_state_chain_mismatch', index + 1, 'input.opening.state');
         }
         openingStates.set(decision.seat, openingTransition.stateAfter);
-        retainOpeningDecision(openingEvidence, decision, index + 1);
+        retainOpeningDecision(openingEvidence, decision as unknown as PolicyReplayRecordV3, index + 1);
       }
       if (decision.schema !== 'policy-replay-v1') {
         validateActionDecision(decision, activeActions, actionOwners, effects, index + 1);
@@ -393,7 +436,7 @@ export function replayPolicyJson(evidence: Evidence): PolicyReplaySummary {
         throw replayFailure('policy_effect_without_action', index + 1, 'decision_sequence');
       }
       effects.add(effect.decision_sequence);
-      if (initiator.schema === 'policy-replay-v3') {
+      if (hasOpeningInput(initiator)) {
         retainOpeningEffect(openingEvidence.get(initiator.seat), initiator.decision.intent, effect.skill.kind);
       }
       if (activeActions.get(initiator.seat) === effect.decision_sequence) activeActions.delete(initiator.seat);
@@ -573,9 +616,15 @@ function replayDecision(
       const extension = strictObject(input.observation);
       if (extension === undefined) throw replayFailure('invalid_policy_input', recordNumber, 'input.observation');
       assertExactFields(extension, ['base', 'ownMaterials', 'observedResources', 'teamMessages'], recordNumber, 'input.observation');
-      const base = rehydratePolicyReplayInput({ schema: 'policy-input-v2', observation: extension.base,
-        memory: memory.policy, feedback: feedback.shared, params: input.params, rng_state: input.rng_state });
-      if (base.schema !== 'policy-input-v2') throw replayFailure('invalid_policy_input_schema', recordNumber, 'input.schema');
+      const carriesKnowledge = Object.hasOwn(strictObject(input.memory)?.policy as object ?? {}, 'knowledge');
+      const base = rehydratePolicyReplayInput(carriesKnowledge
+        ? { schema: 'policy-input-v4', observation: extension.base, memory: memory.policy, feedback: feedback.shared,
+          params: input.params, opening: null, rng_state: input.rng_state }
+        : { schema: 'policy-input-v2', observation: extension.base, memory: memory.policy, feedback: feedback.shared,
+          params: input.params, rng_state: input.rng_state });
+      if (base.schema !== (carriesKnowledge ? 'policy-input-v4' : 'policy-input-v2')) {
+        throw replayFailure('invalid_policy_input_schema', recordNumber, 'input.schema');
+      }
       const context = civilizationPolicyContext(input.context as CivilizationPolicyContextInput);
       if (context.seat !== record.seat) throw replayFailure('policy_context_seat_mismatch', recordNumber, 'input.context.seat');
       const observation = civilizationObservation({
@@ -593,6 +642,61 @@ function replayDecision(
     if (canonicalJson(actual) !== canonicalJson(record.decision)) throw replayFailure('policy_decision_mismatch', recordNumber, 'decision');
     if (state !== parseU64Decimal(record.rng_state_after, recordNumber)) throw replayFailure('policy_rng_state_mismatch', recordNumber, 'rng_state_after');
     return;
+  }
+  if (record.schema === 'policy-replay-v4') {
+    let restored: ReturnType<typeof rehydratePolicyReplayInput>;
+    try {
+      restored = rehydratePolicyReplayInput(record.input);
+    } catch (error) {
+      if (error instanceof TypeError && 'field' in error && typeof error.field === 'string') {
+        throw replayFailure('invalid_policy_input', recordNumber, error.field);
+      }
+      throw error;
+    }
+    if (restored.schema !== 'policy-input-v4') throw replayFailure('invalid_policy_input_schema', recordNumber, 'input.schema');
+    if (restored.opening === null) {
+      if (record.opening_state_after !== null) {
+        throw replayFailure('policy_opening_state_mismatch', recordNumber, 'opening_state_after');
+      }
+      const actualDecision = decide(restored.observation, restored.memory, restored.params, restored.random, restored.feedback);
+      if (canonicalJson(actualDecision) !== canonicalJson(record.decision)) {
+        throw replayFailure('policy_decision_mismatch', recordNumber, 'decision');
+      }
+      if (restored.random.snapshotState() !== parseU64Decimal(record.rng_state_after, recordNumber)) {
+        throw replayFailure('policy_rng_state_mismatch', recordNumber, 'rng_state_after');
+      }
+      return undefined;
+    }
+    if (record.opening_state_after === null) {
+      throw replayFailure('policy_opening_state_mismatch', recordNumber, 'opening_state_after');
+    }
+    if (preparedSeed !== undefined && restored.opening.seed !== preparedSeed) {
+      throw replayFailure('policy_opening_seed_mismatch', recordNumber, 'input.opening.seed');
+    }
+    if (openingStyleForSeat(restored.opening.seed, record.seat, restored.opening.cycle) !== restored.opening.style) {
+      throw replayFailure('policy_opening_style_mismatch', recordNumber, 'input.opening.style');
+    }
+    let actual: ReturnType<typeof decideOpening>;
+    try {
+      actual = decideOpening(restored.observation, restored.memory, restored.params, restored.random, restored.feedback,
+        { style: restored.opening.style, state: restored.opening.state });
+    } catch {
+      throw replayFailure('invalid_policy_input', recordNumber, 'input.opening');
+    }
+    const { openingState, ...decision } = actual;
+    if (canonicalJson(decision) !== canonicalJson(record.decision)) {
+      throw replayFailure('policy_decision_mismatch', recordNumber, 'decision');
+    }
+    let expectedOpeningState: OpeningPolicyState;
+    try { expectedOpeningState = openingPolicyState(record.opening_state_after); }
+    catch { throw replayFailure('invalid_policy_input', recordNumber, 'opening_state_after'); }
+    if (canonicalJson(openingState) !== canonicalJson(expectedOpeningState)) {
+      throw replayFailure('policy_opening_state_mismatch', recordNumber, 'opening_state_after');
+    }
+    if (restored.random.snapshotState() !== parseU64Decimal(record.rng_state_after, recordNumber)) {
+      throw replayFailure('policy_rng_state_mismatch', recordNumber, 'rng_state_after');
+    }
+    return Object.freeze({ stateBefore: restored.opening.state, stateAfter: expectedOpeningState });
   }
   if (record.schema === 'policy-replay-v3') {
     let restored: ReturnType<typeof rehydratePolicyReplayInput>;
@@ -659,10 +763,16 @@ function replayDecision(
   return undefined;
 }
 
+function hasOpeningInput(record: PolicyReplayRecord): record is PolicyReplayRecordV3 | PolicyReplayRecordV4 {
+  return record.schema === 'policy-replay-v3'
+    || (record.schema === 'policy-replay-v4' && record.input.opening !== null);
+}
+
 function readPolicyDecision(record: TraceRecord, recordNumber: number): PolicyReplayRecord {
   const isV2 = record.schema === 'policy-replay-v2' || record.schema === 'civilization-policy-replay-v1';
   const isV3 = record.schema === 'policy-replay-v3';
-  const expected = isV3 ? [...POLICY_DECISION_FIELDS, 'disposition', 'opening_state_after']
+  const isV4 = record.schema === 'policy-replay-v4';
+  const expected = isV3 || isV4 ? [...POLICY_DECISION_FIELDS, 'disposition', 'opening_state_after']
     : isV2 ? [...POLICY_DECISION_FIELDS, 'disposition'] : POLICY_DECISION_FIELDS;
   assertExactFields(record, expected, recordNumber);
   const sequence = parseSequence(record.sequence, 'sequence', recordNumber).toString(10);
@@ -685,6 +795,11 @@ function readPolicyDecision(record: TraceRecord, recordNumber: number): PolicyRe
     return { ...base, schema: 'civilization-policy-replay-v1', input: record.input as unknown as CivilizationPolicyReplayInputV1,
       decision: record.decision as unknown as CivilizationDecision, disposition: readDisposition(record.disposition, recordNumber) };
   }
+  if (isV4) {
+    return { ...base, schema: 'policy-replay-v4', input: record.input as unknown as PolicyReplayInputV4,
+      decision: record.decision as unknown as Decision, disposition: readDisposition(record.disposition, recordNumber),
+      opening_state_after: record.opening_state_after as unknown as OpeningPolicyState | null };
+  }
   if (isV3) {
     return { ...base, schema: 'policy-replay-v3', input: record.input as unknown as PolicyReplayInputV3,
       decision: record.decision as unknown as Decision, disposition: readDisposition(record.disposition, recordNumber),
@@ -694,7 +809,7 @@ function readPolicyDecision(record: TraceRecord, recordNumber: number): PolicyRe
 }
 
 function validateActionDecision(
-  record: PolicyReplayRecordV2 | PolicyReplayRecordV3 | CivilizationPolicyReplayRecordV1,
+  record: PolicyReplayRecordV2 | PolicyReplayRecordV3 | PolicyReplayRecordV4 | CivilizationPolicyReplayRecordV1,
   active: Map<number, string>,
   owners: Map<string, number>,
   effects: ReadonlySet<string>,

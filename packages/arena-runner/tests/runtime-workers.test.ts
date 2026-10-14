@@ -16,7 +16,7 @@ import { BoundedCriticalIngest, DiagnosticCoalescer } from '../src/workers/outbo
 import { MAX_WORKER_MESSAGE_BYTES, assertWorkerMessageBound, decodeWorkerMessage,
   type SupervisorToWorker, type WorkerToSupervisor } from '../src/workers/protocol.js';
 import { WorkerRuntime, type WorkerCompetitor } from '../src/workers/worker-runtime.js';
-import type { WorkerEventRecord } from '../src/worker-record.js';
+import type { RunNoteRecord } from '../src/run-note.js';
 
 const repositoryRoot = process.cwd();
 const POLICY_SOURCE = readFileSync(join(repositoryRoot, 'policies/baseline.toml'), 'utf8');
@@ -79,7 +79,7 @@ interface Collected {
   decisions: Record<string, any>[];
   effects: Record<string, any>[];
   funnels: Record<string, any>[];
-  worker: WorkerEventRecord[];
+  worker: RunNoteRecord[];
   checkpoints: number[];
 }
 
@@ -91,7 +91,7 @@ function collectingTrace(): { trace: ConstructorParameters<typeof WorkerCohort>[
       recordPolicyDecision: async (record) => { collected.decisions.push(record as never); },
       recordPolicyEffect: async (record) => { collected.effects.push(record as never); },
       recordActionFunnel: async (record) => { collected.funnels.push(record as never); },
-      recordWorkerEvent: async (record) => { collected.worker.push(record); },
+      recordRunNote: async (record) => { collected.worker.push(record); },
       checkpoint: async (count) => { collected.checkpoints.push(count); },
     },
   };

@@ -16,7 +16,7 @@ import {
   emptyPolicyMemory,
   entityId,
   normalizePolicyReplayInput,
-  normalizeOpeningPolicyReplayInput,
+  normalizeOpeningPolicyReplayInputV4,
   openingPolicyState,
   openingStyleForSeat,
   type OpeningStyleCycle,
@@ -29,7 +29,7 @@ import {
   visibleOpponent,
   worldBorder,
 } from '@arena/core';
-import { makeOpeningPolicyReplayRecord, makePolicyEffectRecord, makePolicyReplayRecord, replayPolicyJson } from '../src/policy-replay.js';
+import { makePolicyEffectRecord, makePolicyReplayRecord, makePolicyReplayRecordV4, replayPolicyJson } from '../src/policy-replay.js';
 import { canonicalJson, sha256Json } from '../src/canonical.js';
 import { runCli } from '../src/index.js';
 import { TraceError, type TraceRecord } from '../src/trace.js';
@@ -105,12 +105,12 @@ function openingPolicyRecord(sequence = 1n) {
   const random = DeterministicRandom.fromState(7n);
   const opening = { seed, style: openingStyleForSeat(seed, seat, cycle), cycle,
     state: openingPolicyState({ cacheTakenAt: null }) };
-  const input = normalizeOpeningPolicyReplayInput({ observation, memory: emptyPolicyMemory(), feedback: [],
+  const input = normalizeOpeningPolicyReplayInputV4({ observation, memory: emptyPolicyMemory(), feedback: [],
     params: PolicyParams.baseline(), random, opening });
   const actual = decideOpening(observation, emptyPolicyMemory(), PolicyParams.baseline(), random, [],
     { style: opening.style, state: opening.state });
   const { openingState, ...decision } = actual;
-  return makeOpeningPolicyReplayRecord({ sequence, seat, input, decision, openingStateAfter: openingState,
+  return makePolicyReplayRecordV4({ sequence, seat, input, decision, openingStateAfter: openingState,
     rngStateAfter: random.snapshotState(), disposition: { kind: 'start', action_sequence: sequence.toString() } });
 }
 
@@ -354,7 +354,7 @@ test('policy replay v2 producer rejects invalid action identities and dispositio
 
 test('policy replay v3 verifies style, local opportunities, and confirmed effects', () => {
   const frame = openingPolicyRecord();
-  assert.equal(frame.schema, 'policy-replay-v3');
+  assert.equal(frame.schema, 'policy-replay-v4');
   const summary = replayPolicyJson(evidence([frame, makePolicyEffectRecord(1n, { kind: 'succeeded' }, [])]));
   assert.equal(summary.schema, 2);
   if (summary.schema !== 2) throw new Error('opening evidence must use summary schema 2');
@@ -380,7 +380,7 @@ test('policy replay v3 verifies style, local opportunities, and confirmed effect
   assert.throws(() => replayPolicyJson(evidence([{ ...frame,
     input: { ...frame.input, opening: { ...frame.input.opening, style: 'stalker' } },
   }])));
-  assert.throws(() => replayPolicyJson(evidence([{ ...frame, schema: 'policy-replay-v4' } as unknown as object])),
+  assert.throws(() => replayPolicyJson(evidence([{ ...frame, schema: 'policy-replay-v5' } as unknown as object])),
     (error: unknown) => error instanceof TraceError && error.source.kind === 'unsupported_policy_schema');
 });
 

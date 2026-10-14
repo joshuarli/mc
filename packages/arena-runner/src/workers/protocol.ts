@@ -30,7 +30,7 @@ export type SupervisorToWorker =
   | Readonly<{ type: 'tick'; tick: number }>
   | Readonly<{ type: 'stop' }>;
 
-export type CriticalKind = 'decision' | 'effect' | 'funnel';
+export type CriticalKind = 'decision' | 'effect' | 'funnel' | 'diagnostic';
 
 export interface SourceStamp {
   readonly worker: number;
@@ -78,7 +78,7 @@ export function decodeWorkerMessage(value: unknown): WorkerToSupervisor {
       if (typeof value.kind !== 'string' || value.kind.length === 0 || value.kind.length > 64) throw invalid();
       return Object.freeze({ type: 'failure', worker, epoch, kind: value.kind });
     case 'critical': {
-      if (value.kind !== 'decision' && value.kind !== 'effect' && value.kind !== 'funnel') throw invalid();
+      if (value.kind !== 'decision' && value.kind !== 'effect' && value.kind !== 'funnel' && value.kind !== 'diagnostic') throw invalid();
       if (!nonNegativeInteger(value.source_sequence) || !isRecord(value.record)) throw invalid();
       if (value.source_tick !== null && !nonNegativeInteger(value.source_tick)) throw invalid();
       return Object.freeze({

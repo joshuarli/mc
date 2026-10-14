@@ -2,7 +2,7 @@ import { fork, type ChildProcess } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { RunnerError } from '../errors.js';
 import type { ActionFunnelTraceRecordV1 } from '../funnel-record.js';
-import type { WorkerEventRecord } from '../worker-record.js';
+import type { RunNoteRecord } from '../run-note.js';
 import type { PolicyEffectRecord, PolicyReplayRecord } from '../policy-replay.js';
 import type { ActionFunnelCollector } from '../runtime/funnel.js';
 import { BoundedCriticalIngest } from './outbox.js';
@@ -34,7 +34,7 @@ export interface CohortTrace {
   recordPolicyDecision(record: PolicyReplayRecord): Promise<void>;
   recordPolicyEffect(record: PolicyEffectRecord): Promise<void>;
   recordActionFunnel(record: ActionFunnelTraceRecordV1): Promise<void>;
-  recordWorkerEvent(record: WorkerEventRecord): Promise<void>;
+  recordRunNote(record: RunNoteRecord): Promise<void>;
   checkpoint(globalObservationCount: number): Promise<void>;
 }
 
@@ -135,7 +135,7 @@ export class WorkerCohort {
       channel.onMessage((message) => this.#onMessage(state, message));
       channel.onExit(() => this.#onExit(state));
     }
-    await this.#trace.recordWorkerEvent({
+    await this.#trace.recordRunNote({
       schema: 'worker-topology-v1',
       worker_count: this.#workerCount,
       assignments: assignments.map((entry) => ({ worker: entry.worker, epoch: entry.epoch, seats: [...entry.seats] })),
@@ -239,7 +239,7 @@ export class WorkerCohort {
       worker: state.worker, epoch: state.epoch, seats: Object.freeze(state.seats.map(({ seat }) => seat)), reason,
     });
     this.#losses.push(loss);
-    this.#ingest.push(() => this.#trace.recordWorkerEvent({
+    this.#ingest.push(() => this.#trace.recordRunNote({
       schema: 'worker-loss-v1',
       worker: loss.worker,
       epoch: loss.epoch,
@@ -279,6 +279,15 @@ export class WorkerCohort {
       });
       this.#decisionCount += 1;
       if (this.#decisionCount % CHECKPOINT_INTERVAL === 0) await this.#trace.checkpoint(this.#decisionCount);
+    } else if (message.kind === 'diagnostic') {
+      await this.#trace.recordRunNote({
+        schema: 'client-diagnostic-v1',
+        seat: record.seat,
+        tick: message.source_tick,
+        diagnostic: 'borderUnknown',
+        reason: record.reason,
+        consecutive_observations: record.consecutive_observations,
+      });
     } else if (message.kind === 'effect') {
       record.decision_sequence = resolve(record.decision_sequence);
       await this.#trace.recordPolicyEffect(record as unknown as PolicyEffectRecord);

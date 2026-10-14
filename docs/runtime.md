@@ -27,3 +27,11 @@ The Paper plugin owns match state and outcomes. The runner gives policy code onl
 After the terminal outcome, the runner stops policy decisions, joins active skills, closes clients, stops and reaps Paper, closes the control connection, finalizes trace segments, reads stopped player statistics, and releases the run lease.
 
 On failure or cancellation, cleanup preserves the primary error and reports cleanup errors separately. The runner retains partial evidence and does not invent a terminal match outcome.
+
+## Worker cohorts
+
+`--workers <n>` (1 to 16; default 1, the in-process loop) runs the bot clients and the policy loop in child processes. Seat `s` belongs to worker `s mod n`; seeds, identities, opening styles and policy memory are keyed by the seat alone, so one and two workers decide identically from identical observations. The supervisor keeps Paper, the roster, admission, the trace, and the spectators.
+
+Workers send size-bounded typed messages (at most 256 KiB), each stamped with worker, epoch, source sequence and source tick. Decisions, effects, funnel records and client diagnostics are critical: the supervisor ingests them in order through a bounded queue and fails the run with `critical_backlog_exceeded` or `critical_writer_stalled` instead of dropping one. Per-worker counters are optional and coalesced with a drop count.
+
+A worker that exits or reports a failure takes its seats down through the ordinary disconnect rule; the plugin eliminates them at the next tick boundary. The run continues, is marked `degraded` in the result, records `worker-loss-v1`, and the worker is never relaunched or its seats reconnected. Workers need an unattended hunger games run that records policy replay; evaluator-driven runs and civilization stay in-process.

@@ -98,3 +98,15 @@ test('funnel trace records are strict and older trace schemas reject them', () =
       error instanceof TraceError && error.source.kind === 'unsupported_funnel_schema');
   }
 });
+
+test('report counts client border-unknown diagnostics per seat', () => {
+  const notes = [
+    { schema: 'client-diagnostic-v1', seat: 2, tick: 100, diagnostic: 'borderUnknown', reason: 'noPacketReceived', consecutive_observations: 100 },
+    { schema: 'client-diagnostic-v1', seat: 2, tick: 400, diagnostic: 'borderUnknown', reason: 'fractionalCenter', consecutive_observations: 100 },
+  ] as unknown as TraceRecord[];
+  const report = actionFunnelReport(evidence(notes)) as { seats: { seat: number; border_unknown: any }[] };
+  assert.deepEqual(report.seats.map((entry) => entry.seat), [2]);
+  assert.deepEqual(report.seats[0]!.border_unknown, {
+    events: 2, max_consecutive_observations: 100, reasons: { fractionalCenter: 1, noPacketReceived: 1 },
+  });
+});

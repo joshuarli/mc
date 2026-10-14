@@ -159,7 +159,7 @@ test('reconstructs authoritative evidence with v2 policy decisions while rejecti
   const current = withPolicy(policy);
   assert.deepEqual(reconstructRunEvidence(current), reconstructRunEvidence(original));
   assert.equal(replayPolicyJson(current).decision_count, 1);
-  const unsupported = withPolicy({ ...policy, schema: 'policy-replay-v4' });
+  const unsupported = withPolicy({ ...policy, schema: 'policy-replay-v5' });
   assert.throws(() => reconstructRunEvidence(unsupported), (error: unknown) =>
     error instanceof TraceError && error.source.kind === 'invalid_event_direction');
   assert.throws(() => replayPolicyJson(unsupported), TraceError);

@@ -384,7 +384,7 @@ test('runtime trace cannot finalize while a policy skill result is still pending
 
 test('live runtime persists exact decision watermarks with a pending effect and keeps outcome private until join', async (t) => {
   const { session, client } = await authenticatedSession(t);
-  const { trace, ownedRoot } = await createTrace(t);
+  const { trace, ownedRoot } = await createTrace(t, Buffer.from('run', 'ascii'), true);
   const messages = await beginOneSeatRun(trace, session, client, 6);
   let finish!: (outcome: import('@arena/core').SkillOutcome) => void;
   const skill = new Promise<import('@arena/core').SkillOutcome>((resolve) => { finish = resolve; });
@@ -418,12 +418,12 @@ test('live runtime persists exact decision watermarks with a pending effect and 
   const readSegment = async (index: number) => parseSegment(await readOwnedFile({ helperPath, ownedRoot,
     relativePath: Buffer.from(`run/trace-v2-${String(index).padStart(6, '0')}.json`), maxBytes: 1024 * 1024 }));
   const first = await readSegment(1);
-  assert.equal(first.records.filter((record) => record.schema === 'policy-replay-v2').length, 200);
+  assert.equal(first.records.filter((record) => record.schema === 'policy-replay-v4').length, 200);
   assert.equal(first.records.some((record) => record.schema === 'policy-effect-v1'), false);
   for (let value = 34; value < 68; value += 1) loop.onTick(value);
   await flush(8n);
   const second = await readSegment(2);
-  assert.equal(second.records.filter((record) => record.schema === 'policy-replay-v2').length, 200);
+  assert.equal(second.records.filter((record) => record.schema === 'policy-replay-v4').length, 200);
   assert.equal(second.records.some((record) => record.schema === 'policy-effect-v1' && record.decision_sequence === '1'), false);
   loop.stopLaunching();
   await endOneSeatRun(trace, session, client, messages, 9n, [0, 1, 2, 3, 4, 5]);
@@ -515,7 +515,7 @@ test('runtime trace stages schema-4 action funnel records only for a matched sta
   const { trace, ownedRoot } = await createTrace(t, Buffer.from('run', 'ascii'), true);
   const messages = await beginOneSeatRun(trace, session, client);
   const base = policyDecisionRecord(1n);
-  const decision = { ...base, schema: 'policy-replay-v2' as const, disposition: { kind: 'start' as const, action_sequence: '1' } };
+  const decision = { ...base, schema: 'policy-replay-v4' as const, disposition: { kind: 'start' as const, action_sequence: '1' } };
   await trace.recordPolicyDecision(decision as never);
   const funnel = makeActionFunnelTraceRecord({
     seat: 0, actionSequence: '1', tick: 12, intent: 'attack', targetEntity: 7, targetSeat: 1, border: 'current',
@@ -540,7 +540,7 @@ test('runtime trace refuses unmatched and duplicate action funnel records', asyn
     const { session, client } = await authenticatedSession(t);
     const { trace } = await createTrace(t, Buffer.from('run', 'ascii'), true);
     await beginOneSeatRun(trace, session, client);
-    const decision = { ...policyDecisionRecord(1n), schema: 'policy-replay-v2' as const,
+    const decision = { ...policyDecisionRecord(1n), schema: 'policy-replay-v4' as const,
       disposition: { kind: 'start' as const, action_sequence: '1' } };
     await trace.recordPolicyDecision(decision as never);
     const record = makeActionFunnelTraceRecord({ seat: 0, actionSequence: sequence, tick: 1, intent: 'attack', targetEntity: null,

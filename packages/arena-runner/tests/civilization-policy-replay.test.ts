@@ -145,9 +145,10 @@ test('civilization craft progress survives record reading and following-decision
   if (!isCivilizationMaterialAction(first.decision)) throw new Error('material craft required');
   const skill = { kind: 'progress' as const, progress: { completedSteps: 4, totalSteps: 16 } };
   const effect = makeCivilizationPolicyEffectRecord(1n, skill, []);
-  const base = rehydratePolicyReplayInput({ schema: 'policy-input-v2', observation: first.input.observation.base,
-    memory: first.decision.memory.policy, feedback: [], params: first.input.params, rng_state: first.rng_state_after });
-  if (base.schema !== 'policy-input-v2') throw new Error('v2 survival input required');
+  const base = rehydratePolicyReplayInput({ schema: 'policy-input-v4', observation: first.input.observation.base,
+    memory: first.decision.memory.policy, feedback: [], params: first.input.params, opening: null,
+    rng_state: first.rng_state_after });
+  if (base.schema !== 'policy-input-v4') throw new Error('v4 survival input required');
   const context = civilizationPolicyContext(first.input.context);
   const observation = civilizationObservation({ ...first.input.observation, base: base.observation }, context);
   const feedback = civilizationPolicyFeedbackBatch({ shared: [], actions: [{

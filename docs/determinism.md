@@ -47,3 +47,7 @@ Runs that record policy replay with the baseline policy write trace schema 4. Sc
 `./arena explain --run-id <id> --seat <n>` lists that seat's decisions with the permitted observation kinds recorded in the input, the resulting actions with skill outcome, funnel stage, confirmed effect, and failures. It reads only recorded evidence.
 
 On failure the runtime writes `diagnostic-rings.json` into the run directory: per seat, the last 128 decisions and action results, with a count of entries dropped by overflow.
+
+Schema 4 also carries `policy-replay-v4` decisions. A v4 input is `policy-input-v4` with a nullable opening block and per-client exploration knowledge in memory; `opening_state_after` is null when the opening is null. Schema 2 and 3 segments reject `policy-replay-v4`. `policy-replay-v1` to `policy-replay-v3` records keep their historical replay semantics, and the frozen fixtures still replay.
+
+Schema 4 notes: `worker-topology-v1` (worker count and the seat assignment per worker and epoch, written once when `--workers` is greater than one), `worker-loss-v1` (worker, epoch, seats, reason, tick), and `client-diagnostic-v1` (a client's `borderUnknown` diagnostic with its reason and consecutive observation count; `report` summarises these per seat under `border_unknown`). With workers, policy decision sequences are assigned in ingest order across workers; each worker's own order is preserved and funnel records carry `source: {worker, epoch, sequence, tick}`.

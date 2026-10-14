@@ -16,7 +16,7 @@ import {
   TRACE_SCHEMA_VERSION,
   type TraceRecord,
 } from '../trace.js';
-import { WORKER_RECORD_SCHEMAS, type WorkerEventRecord } from '../worker-record.js';
+import { RUN_NOTE_SCHEMAS, type RunNoteRecord } from '../run-note.js';
 import { ACTION_FUNNEL_RECORD_SCHEMA, type ActionFunnelTraceRecordV1 } from '../funnel-record.js';
 import { isAuthenticatedControlMessage, type RunnerCommandEnvelope } from './session.js';
 import {
@@ -103,14 +103,14 @@ export class RuntimeTraceBuilder {
     this.#schemaVersion = options.actionFunnel === true ? FUNNEL_TRACE_SCHEMA_VERSION : TRACE_SCHEMA_VERSION;
   }
 
-  recordWorkerEvent(record: WorkerEventRecord): Promise<void> {
+  recordRunNote(record: RunNoteRecord): Promise<void> {
     return this.#enqueue(async () => {
       this.#assertMutable();
-      if (this.#schemaVersion !== FUNNEL_TRACE_SCHEMA_VERSION || !WORKER_RECORD_SCHEMAS.includes(record.schema)) {
-        throw new RunnerError('runtime_failure', 'run trace', { kind: 'worker_record_not_enabled' });
+      if (this.#schemaVersion !== FUNNEL_TRACE_SCHEMA_VERSION || !RUN_NOTE_SCHEMAS.includes(record.schema)) {
+        throw new RunnerError('runtime_failure', 'run trace', { kind: 'run_note_not_enabled' });
       }
       if (!this.#hasReady || !this.#hasPrepare) {
-        throw new RunnerError('runtime_failure', 'run trace', { kind: 'worker_record_out_of_order' });
+        throw new RunnerError('runtime_failure', 'run trace', { kind: 'run_note_out_of_order' });
       }
       await this.#append(toTraceRecord(undefined, record));
     });
@@ -255,8 +255,12 @@ export class RuntimeTraceBuilder {
         throw new RunnerError('runtime_failure', 'run trace', { kind: 'policy_decision_after_outcome' });
       }
       if (record.schema !== 'policy-replay-v1' && record.schema !== 'policy-replay-v2'
-          && record.schema !== 'policy-replay-v3' && record.schema !== 'civilization-policy-replay-v1') {
+          && record.schema !== 'policy-replay-v3' && record.schema !== 'policy-replay-v4'
+          && record.schema !== 'civilization-policy-replay-v1') {
         throw new RunnerError('runtime_failure', 'run trace', { kind: 'invalid_policy_decision' });
+      }
+      if (record.schema === 'policy-replay-v4' && this.#schemaVersion !== FUNNEL_TRACE_SCHEMA_VERSION) {
+        throw new RunnerError('runtime_failure', 'run trace', { kind: 'policy_schema_requires_trace_schema_4' });
       }
       if ((record.schema === 'civilization-policy-replay-v1') !== (this.#mode === 'civilization')) {
         throw new RunnerError('runtime_failure', 'run trace', { kind: 'policy_namespace_mode_mismatch' });

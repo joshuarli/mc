@@ -1,4 +1,4 @@
-import type { ActionFunnelRecord, ActionFunnelSink } from '@arena/core';
+import type { ActionFunnelRecord, ActionFunnelSink, ClientDiagnosticRecord, ClientDiagnosticSink } from '@arena/core';
 import { canonicalJson } from '../canonical.js';
 import { stageOwnedFile, type FileIdentity } from '../owned-files/index.js';
 import type { BorderKnowledgeKind } from '../funnel-record.js';
@@ -31,6 +31,7 @@ export class ActionFunnelCollector {
   readonly #pending = new Map<number, ActionFunnelRecord>();
   readonly #rings = new Map<number, DiagnosticEntry[]>();
   #dropped = 0;
+  onDiagnostic: ((seat: number, record: ClientDiagnosticRecord) => void) | undefined;
 
   constructor(usernameSeats: ReadonlyMap<string, number>) {
     this.#usernameSeats = usernameSeats;
@@ -38,6 +39,10 @@ export class ActionFunnelCollector {
 
   sink(seat: number): ActionFunnelSink {
     return (record) => { this.#pending.set(seat, record); };
+  }
+
+  diagnosticSink(seat: number): ClientDiagnosticSink {
+    return (record) => { this.onDiagnostic?.(seat, record); };
   }
 
   take(seat: number): ActionFunnelRecord | null {
