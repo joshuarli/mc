@@ -12,6 +12,7 @@ import {
   entityId,
   equipmentUpgrade,
   foodStack,
+  knownAmmunition,
   observationSequence,
   staleKnowledge,
   tick,
@@ -23,6 +24,7 @@ import {
   type AgentState,
   type BlockPosition,
   type ClientDiagnosticSink,
+  type DirectionSupport,
   type Knowledge,
   type LootOpportunity,
   type Tick,
@@ -37,6 +39,12 @@ import { ClientWorldBorder } from './world-border.js';
 
 const MAX_ENTITY_RANGE_BLOCKS = 40;
 const MAX_LOOT_CANDIDATES = 64;
+const DIRECTION_RING = [[8, 0], [8, 4], [0, 8], [-4, 8], [-8, 0], [-8, -4], [0, -8], [4, -8]] as const;
+const DIRECTION_STEP_UP_BLOCKS = 1;
+const DIRECTION_STEP_DOWN_BLOCKS = 3;
+const HAZARD_BLOCKS: ReadonlySet<string> = new Set([
+  'lava', 'fire', 'soul_fire', 'magma_block', 'cactus', 'campfire', 'soul_campfire', 'sweet_berry_bush', 'cobweb', 'powder_snow',
+]);
 const ATTACKING_RECENCY_MS = 1_500;
 const packageRequire = createRequire(import.meta.url);
 const mineflayerRequire = createRequire(packageRequire.resolve('mineflayer'));
@@ -177,7 +185,7 @@ export class MineflayerObserver {
     return drained;
   }
 
-  #arrowCount(): number {
+  #arrowCount(): number | null {
     let count = 0;
     let hasBow = false;
     for (const item of this.#bot.inventory.slots) {
@@ -185,7 +193,38 @@ export class MineflayerObserver {
       if (item.name === 'bow') hasBow = true;
       else if (item.name === 'arrow' || item.name === 'tipped_arrow' || item.name === 'spectral_arrow') count += item.count;
     }
-    return hasBow ? Math.min(count, MAX_ARROW_COUNT) : 0;
+    return hasBow ? Math.min(count, MAX_ARROW_COUNT) : null;
+  }
+
+  #hasBow(): boolean {
+    return this.#arrowCount() !== null;
+  }
+
+  #directionSupport(entity: MineflayerEntity): readonly DirectionSupport[] {
+    const baseX = Math.floor(entity.position.x);
+    const baseY = Math.floor(entity.position.y);
+    const baseZ = Math.floor(entity.position.z);
+    const at = (x: number, y: number, z: number): MineflayerBlock | null => this.#bot.blockAt(
+      entity.position.offset(x + 0.5 - entity.position.x, y + 0.5 - entity.position.y, z + 0.5 - entity.position.z),
+    );
+    return DIRECTION_RING.map(([dx, dz]): DirectionSupport => {
+      const x = baseX + dx;
+      const z = baseZ + dz;
+      for (let y = baseY + DIRECTION_STEP_UP_BLOCKS; y >= baseY - DIRECTION_STEP_DOWN_BLOCKS; y -= 1) {
+        const ground = at(x, y - 1, z);
+        const feet = at(x, y, z);
+        const head = at(x, y + 1, z);
+        if (ground === null || feet === null || head === null) return Object.freeze({ kind: 'unloaded' as const });
+        if (ground.boundingBox !== 'block' || feet.boundingBox !== 'empty' || head.boundingBox !== 'empty') continue;
+        if (HAZARD_BLOCKS.has(head.name) || HAZARD_BLOCKS.has(feet.name)) continue;
+        return Object.freeze({
+          kind: 'supported' as const,
+          support: blockPosition(x, y, z),
+          hazard: HAZARD_BLOCKS.has(ground.name),
+        });
+      }
+      return Object.freeze({ kind: 'blocked' as const });
+    });
   }
 
   #trackBorderKnowledge(border: Knowledge<WorldBorder>): void {
@@ -285,8 +324,13 @@ export class MineflayerObserver {
       if (item === null || item === undefined) continue;
       const known = classifyItem(this.#bot, item);
       if (known === null) continue;
+      if (known.kind === 'ammunition') continue;
       if (known.kind === 'food') {
-        foods.push(foodStack(slot, item.count));
+        const points = this.#bot.registry.foodsByName[item.name]?.foodPoints;
+        const restores = typeof points === 'number' && Number.isSafeInteger(points) && points >= 1 && points <= 20
+          ? points
+          : undefined;
+        foods.push(foodStack(slot, item.count, restores));
       } else {
         const equipmentSlot = known.kind === 'weapon' ? 'weapon' : known.equipmentSlot;
         upgrades.push(equipmentUpgrade(slot, equipmentSlot, known.rating));
@@ -294,11 +338,13 @@ export class MineflayerObserver {
     }
 
     const arrows = this.#arrowCount();
+    const directions = this.#directionSupport(entity);
     const terrainChanges = this.#drainTerrainChanges();
     return agentState({
       position: toBlockPosition(entity.position),
       combat: readCombatSelfBody(entity),
-      ...(arrows > 0 ? { ranged: { arrows } } : {}),
+      ...(arrows === null ? {} : { ranged: { arrows } }),
+      directions,
       ...(terrainChanges === undefined ? {} : { terrainChanges }),
       healthHalfHearts,
       hungerPoints: this.#bot.food,
@@ -335,7 +381,9 @@ export class MineflayerObserver {
     for (const entity of Object.values(this.#bot.entities)) {
       const item = entity.getDroppedItem();
       if (item === null || !isVisibleEntity(this.#bot, entity)) continue;
-      const known = classifyItem(this.#bot, item);
+      const known = classifyItem(this.#bot, item) ?? (
+        this.#hasBow() && isArrowName(item.name) ? knownAmmunition() : null
+      );
       if (known === null) continue;
       loot.push(visibleDrop(
         entityId(entity.id),
@@ -447,6 +495,10 @@ function prepareLootSearchPalettes(bot: Bot): void {
     }
     next = iterator.next();
   }
+}
+
+function isArrowName(name: string): boolean {
+  return name === 'arrow' || name === 'tipped_arrow' || name === 'spectral_arrow';
 }
 
 function compareLoot(first: LootOpportunity, second: LootOpportunity): number {

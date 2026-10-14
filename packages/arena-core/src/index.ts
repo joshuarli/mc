@@ -60,7 +60,12 @@ export type {
 } from './combat.js';
 
 export {
+  DIRECTION_COUNT,
   MAX_ARROW_COUNT,
+  OBSERVED_DIRECTION_RADIUS_BLOCKS,
+  isLegacyReplayObservation,
+  knownAmmunition,
+  legacyAgentObservation,
   MAX_TERRAIN_CHANGES,
   ObservationValidationError,
   agentObservation,
@@ -90,6 +95,7 @@ export type {
   AgentState,
   AgentStateInput,
   ArmorSlot,
+  DirectionSupport,
   EntityId,
   EquipmentSlot,
   EquipmentSnapshot,
@@ -116,6 +122,8 @@ export {
   decide,
   decideOpening,
   decidePolicyReplayV1,
+  MAX_TRAIL_POSITIONS,
+  MAX_VISITED_REGIONS,
   emptyPolicyMemory,
   openingPolicyContext,
   openingPolicyState,
@@ -137,7 +145,9 @@ export type {
   OpeningPolicyState,
   OpeningStyle,
   OpeningStyleCycle,
+  ExplorationKnowledge,
   PolicyMemory,
+  VisitedRegion,
   PolicyMemoryInput,
   PolicyMemoryInputV1,
   PolicyFeedback,
@@ -155,7 +165,9 @@ export { DeterministicRandom, RandomStream } from './random.js';
 export {
   PolicyReplayInputError,
   normalizeOpeningPolicyReplayInput,
+  normalizeOpeningPolicyReplayInputV4,
   normalizePolicyReplayInput,
+  normalizePolicyReplayInputV4,
   rehydratePolicyReplayInput,
 } from './replay.js';
 export type {
@@ -165,10 +177,12 @@ export type {
   PolicyReplayInputV1,
   PolicyReplayInputV2,
   PolicyReplayInputV3,
+  PolicyReplayInputV4,
   RehydratedPolicyReplayInput,
   RehydratedPolicyReplayInputV1,
   RehydratedPolicyReplayInputV2,
   RehydratedPolicyReplayInputV3,
+  RehydratedPolicyReplayInputV4,
 } from './replay.js';
 
 export { skillProgress } from './outcome.js';

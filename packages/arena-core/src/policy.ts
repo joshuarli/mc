@@ -31,6 +31,7 @@ import {
   type EntityId,
   type EquipmentSlot,
   type EquipmentUpgrade,
+  type FoodStack,
   type InventorySlot,
   type KnownItem,
   type Knowledge,
@@ -38,6 +39,7 @@ import {
   type LootTarget,
   type Tick,
   type VisibleOpponent,
+  isLegacyReplayObservation,
   unopenedContainer,
   visibleDrop,
 } from './observation.js';
@@ -59,6 +61,9 @@ const CACHE_DEPARTURE_DISTANCE_BLOCKS = 8n;
 const MAX_CACHE_DEPARTURE_RADIUS_BLOCKS = 16;
 const MAX_HUNTER_PURSUE_BLOCKS = 12;
 const BOW_ENGAGEMENT_RANGE_BLOCKS = 16;
+const LOW_AMMUNITION_ARROWS = 16;
+const EXPLORER_EQUIP_DEADLINE_TICKS = 200;
+const HUNTER_MAX_OPPONENTS = 1;
 const OUTNUMBERED_OPPONENT_COUNT = 2;
 const OUTNUMBERED_RETREAT_HEALTH_FACTOR = 2;
 
@@ -158,7 +163,8 @@ export type WaitReason =
   | 'borderUnknown'
   | 'borderStale'
   | 'unrepresentableTarget'
-  | 'failedTargetsExhausted';
+  | 'failedTargetsExhausted'
+  | 'noReachableFrontier';
 
 export type Goal =
   | { readonly kind: 'escapeBorder' }
@@ -236,16 +242,33 @@ export type SearchOpponentEvidence =
     readonly position: BlockPosition;
   };
 
+export const MAX_VISITED_REGIONS = 64;
+export const MAX_TRAIL_POSITIONS = 8;
+const REGION_SIZE_BLOCKS = 16;
+const TRAIL_SPACING_BLOCKS = 8n;
+
+export interface VisitedRegion {
+  readonly x: number;
+  readonly z: number;
+}
+
+export interface ExplorationKnowledge {
+  readonly visitedRegions: readonly VisitedRegion[];
+  readonly trail: readonly BlockPosition[];
+}
+
 export interface PolicyMemory {
   readonly lastGoal: Goal | null;
   readonly lastOpponent: RememberedOpponent | null;
   readonly failedTargets: readonly FailedTargetEvidence[];
+  readonly knowledge?: ExplorationKnowledge;
 }
 
 export interface PolicyMemoryInput {
   readonly lastGoal: Goal | null;
   readonly lastOpponent: RememberedOpponent | null;
   readonly failedTargets: readonly FailedTargetEvidence[];
+  readonly knowledge?: ExplorationKnowledge;
 }
 
 export interface PolicyMemoryInputV1 {
@@ -259,14 +282,19 @@ export interface DecisionV1 {
   readonly memory: PolicyMemoryInputV1;
 }
 
-type DecisionSemantics = 'policy-input-v1' | 'policy-input-v2';
+type DecisionSemantics = 'policy-input-v1' | 'policy-input-v2' | 'policy-input-v4';
 
 export function emptyPolicyMemory(): PolicyMemory {
   return Object.freeze({ lastGoal: null, lastOpponent: null, failedTargets: Object.freeze([]) });
 }
 
 export function policyMemory(input: PolicyMemoryInput): PolicyMemory {
-  assertExactKeys(input, ['lastGoal', 'lastOpponent', 'failedTargets']);
+  const withKnowledge = Object.hasOwn(input, 'knowledge');
+  assertExactKeys(
+    input,
+    withKnowledge ? ['lastGoal', 'lastOpponent', 'failedTargets', 'knowledge'] : ['lastGoal', 'lastOpponent', 'failedTargets'],
+  );
+  const knowledge = withKnowledge && input.knowledge !== undefined ? cloneKnowledge(input.knowledge) : undefined;
   const lastGoal = input.lastGoal === null ? null : cloneGoal(input.lastGoal);
   let lastOpponent: RememberedOpponent | null = null;
   if (input.lastOpponent !== null) {
@@ -288,7 +316,61 @@ export function policyMemory(input: PolicyMemoryInput): PolicyMemory {
       throw new TypeError('policy memory cannot contain duplicate failed targets');
     }
   }
-  return Object.freeze({ lastGoal, lastOpponent, failedTargets: Object.freeze(failedTargets) });
+  return Object.freeze({
+    lastGoal,
+    lastOpponent,
+    failedTargets: Object.freeze(failedTargets),
+    ...(knowledge === undefined ? {} : { knowledge }),
+  });
+}
+
+function cloneKnowledge(value: ExplorationKnowledge): ExplorationKnowledge {
+  assertExactKeys(value, ['visitedRegions', 'trail']);
+  if (!Array.isArray(value.visitedRegions) || value.visitedRegions.length > MAX_VISITED_REGIONS) {
+    throw new RangeError(`policy memory can hold at most ${MAX_VISITED_REGIONS} visited regions`);
+  }
+  if (!Array.isArray(value.trail) || value.trail.length > MAX_TRAIL_POSITIONS) {
+    throw new RangeError(`policy memory can hold at most ${MAX_TRAIL_POSITIONS} trail positions`);
+  }
+  const visitedRegions = value.visitedRegions.map((region) => {
+    assertExactKeys(region, ['x', 'z']);
+    if (!Number.isSafeInteger(region.x) || !Number.isSafeInteger(region.z)) {
+      throw new RangeError('visited region coordinates must be safe integers');
+    }
+    return Object.freeze({ x: region.x, z: region.z });
+  });
+  return Object.freeze({
+    visitedRegions: Object.freeze(visitedRegions),
+    trail: Object.freeze(value.trail.map(freezePosition)),
+  });
+}
+
+function regionOf(position: BlockPosition): VisitedRegion {
+  return Object.freeze({
+    x: Math.floor(position.x / REGION_SIZE_BLOCKS),
+    z: Math.floor(position.z / REGION_SIZE_BLOCKS),
+  });
+}
+
+function isRegionVisited(memory: PolicyMemory, position: BlockPosition): boolean {
+  const region = regionOf(position);
+  return memory.knowledge?.visitedRegions.some((visited) => visited.x === region.x && visited.z === region.z) === true;
+}
+
+function withVisit(memory: PolicyMemory, position: BlockPosition): PolicyMemory {
+  const region = regionOf(position);
+  const visitedRegions = [...(memory.knowledge?.visitedRegions ?? [])];
+  if (!visitedRegions.some((visited) => visited.x === region.x && visited.z === region.z)) {
+    visitedRegions.push(region);
+    if (visitedRegions.length > MAX_VISITED_REGIONS) visitedRegions.shift();
+  }
+  const trail = [...(memory.knowledge?.trail ?? [])];
+  const last = trail[trail.length - 1];
+  if (last === undefined || manhattanDistance(last, position) >= TRAIL_SPACING_BLOCKS) {
+    trail.push(position);
+    if (trail.length > MAX_TRAIL_POSITIONS) trail.shift();
+  }
+  return policyMemory({ ...memory, knowledge: { visitedRegions, trail } });
 }
 
 /** Rehydrates the old memory shape only for historical policy-input-v1 replay. */
@@ -413,7 +495,7 @@ export function decide(
   random: DeterministicRandom,
   feedback: PolicyFeedbackBatch = [],
 ): Decision {
-  return decideWithSemantics(observation, memory, params, random, feedback, 'policy-input-v2');
+  return decideWithSemantics(observation, memory, params, random, feedback, 'policy-input-v4');
 }
 
 export function decideOpening(
@@ -433,7 +515,7 @@ export function decideOpening(
     params,
     random,
     feedbackBatch,
-    'policy-input-v2',
+    'policy-input-v4',
     opening.style,
     openingState,
   );
@@ -460,18 +542,22 @@ function decideWithSemantics(
   params: PolicyParams,
   random: DeterministicRandom,
   feedback: PolicyFeedbackBatch,
-  semantics: DecisionSemantics,
-  openingStyle?: OpeningStyle,
+  requestedSemantics: DecisionSemantics,
+  declaredStyle?: OpeningStyle,
   openingState?: OpeningPolicyState,
 ): Decision {
   assertValidatedAgentObservation(observation);
+  const semantics: DecisionSemantics = requestedSemantics === 'policy-input-v4' && isLegacyReplayObservation(observation)
+    ? 'policy-input-v2'
+    : requestedSemantics;
   let nextMemory = applyPolicyFeedback(policyMemory(memory), policyFeedbackBatch(feedback));
-  nextMemory = pruneChangedFailedTargets(observation, nextMemory);
+  nextMemory = pruneChangedFailedTargets(observation, nextMemory, semantics);
   const agent = currentValue(observation.agent);
   if (agent === null) {
     const reason = observation.agent.kind === 'unknown' ? 'agentStateUnknown' : 'agentStateStale';
     return waitDecision(reason, nextMemory);
   }
+  if (semantics === 'policy-input-v4') nextMemory = withVisit(nextMemory, agent.position);
   if (agent.healthHalfHearts === 0) {
     return waitDecision('agentEliminated', nextMemory);
   }
@@ -484,6 +570,9 @@ function decideWithSemantics(
 
   let currentMemory = nextMemory;
   const currentOpponents = currentValue(observation.opponents);
+  const openingStyle = declaredStyle === undefined
+    ? undefined
+    : effectiveOpeningStyle(declaredStyle, agent, observation.tick, semantics, currentOpponents?.length ?? 0);
   if (currentOpponents !== null && currentOpponents.length > 0) {
     const nearest = nearestOpponent(agent.position, currentOpponents);
     currentMemory = policyMemory({
@@ -501,7 +590,7 @@ function decideWithSemantics(
   }
 
   const nearestThreat = nearestKnownThreat(observation, currentMemory, params.values, agent);
-  const outnumbered = semantics !== 'policy-input-v1'
+  const outnumbered = semantics === 'policy-input-v4'
     && agent.combat !== undefined
     && currentOpponents !== null
     && agent.healthHalfHearts <= params.values.retreatAtHealthHalfHeartsOrBelow * OUTNUMBERED_RETREAT_HEALTH_FACTOR
@@ -525,7 +614,7 @@ function decideWithSemantics(
     });
   }
 
-  const food = lowestInventorySlot(agent.foodStacks);
+  const food = chooseFood(agent, semantics);
   if (isSafeToEat(observation, currentMemory, params.values, agent)
       && agent.hungerPoints <= params.values.eatAtHungerOrBelow
       && food !== null) {
@@ -565,7 +654,8 @@ function decideWithSemantics(
     return finish(goal, intent, { ...currentMemory, lastGoal: goal });
   }
 
-  const shooter = currentOpponents === null || agent.ranged === undefined || agent.combat === undefined
+  const shooter = semantics !== 'policy-input-v4' || currentOpponents === null
+    || agent.ranged === undefined || agent.ranged.arrows < 1 || agent.combat === undefined
     ? null
     : rangedOpponent(agent, currentOpponents);
   if (shooter !== null
@@ -632,14 +722,7 @@ function decideWithSemantics(
     });
   }
 
-  const exploration = explorationTarget(
-    agent.position,
-    params.values.searchRadiusBlocks,
-    currentMemory,
-    random,
-    semantics,
-    agent.combat !== undefined,
-  );
+  const exploration = exploreFrom(agent, params.values.searchRadiusBlocks, currentMemory, random, semantics);
   if (exploration.ok === false) {
     return waitDecision(exploration.reason, currentMemory);
   }
@@ -671,14 +754,7 @@ function openingExploration(
     const goal: Goal = Object.freeze({ kind: 'explore' });
     return finish(goal, { kind: 'navigate', target: departure.value }, { ...memory, lastGoal: goal });
   }
-  const exploration = explorationTarget(
-    agent.position,
-    params.values.searchRadiusBlocks,
-    memory,
-    random,
-    semantics,
-    agent.combat !== undefined,
-  );
+  const exploration = exploreFrom(agent, params.values.searchRadiusBlocks, memory, random, semantics);
   if (exploration.ok === false) return waitDecision(exploration.reason, memory);
   const goal: Goal = Object.freeze({ kind: 'explore' });
   return finish(goal, { kind: 'navigate', target: exploration.value }, { ...memory, lastGoal: goal });
@@ -948,14 +1024,24 @@ function applyPolicyFeedback(memory: PolicyMemory, feedback: PolicyFeedbackBatch
   return policyMemory({ ...memory, failedTargets });
 }
 
-function pruneChangedFailedTargets(observation: AgentObservation, memory: PolicyMemory): PolicyMemory {
-  const failedTargets = memory.failedTargets.filter((entry) => !failedTargetEvidenceChanged(observation, entry));
+function pruneChangedFailedTargets(
+  observation: AgentObservation,
+  memory: PolicyMemory,
+  semantics: DecisionSemantics,
+): PolicyMemory {
+  const failedTargets = memory.failedTargets.filter((entry) => (
+    !failedTargetEvidenceChanged(observation, entry, semantics)
+  ));
   return failedTargets.length === memory.failedTargets.length
     ? memory
     : policyMemory({ ...memory, failedTargets });
 }
 
-function failedTargetEvidenceChanged(observation: AgentObservation, failed: FailedTargetEvidence): boolean {
+function failedTargetEvidenceChanged(
+  observation: AgentObservation,
+  failed: FailedTargetEvidence,
+  semantics: DecisionSemantics,
+): boolean {
   switch (failed.kind) {
     case 'loot': {
       if (observation.loot.kind === 'unknown') return false;
@@ -970,7 +1056,7 @@ function failedTargetEvidenceChanged(observation: AgentObservation, failed: Fail
     case 'explore': {
       const agent = currentValue(observation.agent);
       if (agent === null) return false;
-      if (agent.terrainChanges?.some((change) => isInsideRouteCorridor(change, failed.origin, failed.target)) === true) {
+      if (semantics === 'policy-input-v4' && agent.terrainChanges?.some((change) => isInsideRouteCorridor(change, failed.origin, failed.target)) === true) {
         return true;
       }
       return manhattanDistance(agent.position, failed.origin) >= FAILED_EXPLORATION_APPROACH_BLOCKS;
@@ -1078,7 +1164,7 @@ function rangedOpponent(agent: AgentState, opponents: readonly VisibleOpponent[]
 }
 
 function isWithinMeleeReachOf(agent: AgentState, opponent: VisibleOpponent, semantics: DecisionSemantics): boolean {
-  if (semantics !== 'policy-input-v1' && agent.combat !== undefined && opponent.combat !== undefined) {
+  if (semantics === 'policy-input-v4' && agent.combat !== undefined && opponent.combat !== undefined) {
     return isWithinMeleeReach(agent.combat, opponent.combat);
   }
   return squaredDistance(agent.position, opponent.position) <= BigInt(MELEE_REACH_BLOCKS) ** 2n;
@@ -1090,7 +1176,7 @@ function isWithinFightRange(
   fightRangeBlocks: number,
   semantics: DecisionSemantics,
 ): boolean {
-  if (semantics !== 'policy-input-v1' && agent.combat !== undefined && opponent.combat !== undefined) {
+  if (semantics === 'policy-input-v4' && agent.combat !== undefined && opponent.combat !== undefined) {
     const range = BigInt(fightRangeBlocks) * BigInt(FIXED_UNITS_PER_BLOCK);
     return feetSquaredDistanceUnits(agent.combat, opponent.combat) <= range * range;
   }
@@ -1103,7 +1189,7 @@ function engagementOpponent(
   fightRangeBlocks: number,
   semantics: DecisionSemantics,
 ): VisibleOpponent {
-  if (semantics === 'policy-input-v1' || agent.combat === undefined) {
+  if (semantics !== 'policy-input-v4' || agent.combat === undefined) {
     return nearestOpponent(agent.position, opponents);
   }
   const inRange = opponents.filter((opponent) => isWithinFightRange(agent, opponent, fightRangeBlocks, semantics));
@@ -1121,6 +1207,91 @@ function engagementOpponent(
   const selected = ordered[0];
   if (selected === undefined) throw new RangeError('engagement opponent requires a nonempty opponent list');
   return selected;
+}
+
+function effectiveOpeningStyle(
+  declared: OpeningStyle,
+  agent: AgentState,
+  observationTick: number,
+  semantics: DecisionSemantics,
+  visibleOpponents: number,
+): OpeningStyle {
+  if (semantics !== 'policy-input-v4') return declared;
+  const armed = agent.equipped.weapon !== null;
+  if (declared === 'explorer') {
+    return !armed && observationTick >= EXPLORER_EQUIP_DEADLINE_TICKS ? 'scavenger' : 'explorer';
+  }
+  if (declared === 'hunter') {
+    if (!armed) return 'scavenger';
+    return visibleOpponents > HUNTER_MAX_OPPONENTS ? 'explorer' : 'hunter';
+  }
+  return declared;
+}
+
+function chooseFood(agent: AgentState, semantics: DecisionSemantics): FoodStack | null {
+  if (semantics !== 'policy-input-v4') return lowestInventorySlot(agent.foodStacks) as FoodStack | null;
+  const deficit = 20 - agent.hungerPoints;
+  const known = agent.foodStacks.filter((stack) => stack.restores !== undefined);
+  const fitting = known.filter((stack) => stack.restores! <= deficit);
+  const pool = fitting.length > 0 ? fitting : known;
+  if (pool.length === 0) return lowestInventorySlot(agent.foodStacks) as FoodStack | null;
+  const preferred = [...pool].sort((first, second) => {
+    const firstRestores = first.restores!;
+    const secondRestores = second.restores!;
+    if (firstRestores !== secondRestores) {
+      return fitting.length > 0 ? secondRestores - firstRestores : firstRestores - secondRestores;
+    }
+    return first.inventorySlot - second.inventorySlot;
+  });
+  return preferred[0] ?? null;
+}
+
+const EXPLORATION_RING = [[8, 0], [8, 4], [0, 8], [-4, 8], [-8, 0], [-8, -4], [0, -8], [4, -8]] as const;
+
+function exploreFrom(
+  agent: AgentState,
+  radius: number,
+  memory: PolicyMemory,
+  random: DeterministicRandom,
+  semantics: DecisionSemantics,
+): { readonly ok: true; readonly value: BlockPosition }
+  | { readonly ok: false; readonly reason: 'unrepresentableTarget' | 'failedTargetsExhausted' | 'noReachableFrontier' } {
+  if (semantics !== 'policy-input-v4' || agent.directions === undefined) {
+    return explorationTarget(agent.position, radius, memory, random, semantics, semantics === 'policy-input-v4');
+  }
+  const start = random.nextEightWay();
+  const fresh: BlockPosition[] = [];
+  const visited: BlockPosition[] = [];
+  let oldestFailure: { readonly index: number; readonly value: BlockPosition } | null = null;
+  let supported = 0;
+  let unloaded = 0;
+  for (let offset = 0; offset < EXPLORATION_RING.length; offset += 1) {
+    const direction = agent.directions[(start + offset) % EXPLORATION_RING.length]!;
+    if (direction.kind === 'unloaded') unloaded += 1;
+    if (direction.kind !== 'supported' || direction.hazard) continue;
+    supported += 1;
+    const target = direction.support;
+    const failedIndex = memory.failedTargets.findIndex((failed) => (
+      failed.kind === 'explore' && samePosition(failed.target, target)
+    ));
+    if (failedIndex >= 0) {
+      if (oldestFailure === null || failedIndex < oldestFailure.index) oldestFailure = { index: failedIndex, value: target };
+      continue;
+    }
+    (isRegionVisited(memory, target) ? visited : fresh).push(target);
+  }
+  const chosen = fresh[0] ?? visited[0];
+  if (chosen !== undefined) return { ok: true, value: chosen };
+  const trail = memory.knowledge?.trail ?? [];
+  for (let index = trail.length - 1; index >= 0; index -= 1) {
+    const point = trail[index]!;
+    if (manhattanDistance(agent.position, point) >= TRAIL_SPACING_BLOCKS) return { ok: true, value: point };
+  }
+  if (oldestFailure !== null) return { ok: true, value: oldestFailure.value };
+  if (supported === 0 && unloaded > 0) {
+    return explorationTarget(agent.position, radius, memory, random, semantics, true);
+  }
+  return { ok: false, reason: supported === 0 ? 'noReachableFrontier' : 'failedTargetsExhausted' };
 }
 
 function nearestOpponent(position: BlockPosition, opponents: readonly VisibleOpponent[]): VisibleOpponent {
@@ -1297,6 +1468,8 @@ function lootUtility(opportunity: LootOpportunity, agent: AgentState): number {
   switch (opportunity.item.kind) {
     case 'food':
       return agent.foodStacks.length === 0 ? 2 : 0;
+    case 'ammunition':
+      return agent.ranged !== undefined && agent.ranged.arrows < LOW_AMMUNITION_ARROWS ? 2 : 0;
     case 'weapon':
       return opportunity.item.rating > (agent.equipped.weapon ?? 0) ? 3 : 0;
     case 'armor':
@@ -1562,7 +1735,8 @@ function validateWaitReason(value: WaitReason): WaitReason {
       && value !== 'borderUnknown'
       && value !== 'borderStale'
       && value !== 'unrepresentableTarget'
-      && value !== 'failedTargetsExhausted') {
+      && value !== 'failedTargetsExhausted'
+      && value !== 'noReachableFrontier') {
     throw new TypeError(`unknown wait reason: ${String(value)}`);
   }
   return value;

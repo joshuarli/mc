@@ -14,6 +14,8 @@ import {
   PolicyParams,
   PolicyReplayInputError,
   normalizeOpeningPolicyReplayInput,
+  normalizeOpeningPolicyReplayInputV4,
+  normalizePolicyReplayInputV4,
   normalizePolicyReplayInput,
   openingPolicyState,
   openingStyleForSeat,
@@ -82,25 +84,70 @@ test('policy replay input rehydrates validated state and preserves the full u64 
   const memory = emptyPolicyMemory();
   const params = PolicyParams.baseline();
   const random = DeterministicRandom.fromState(MAX_U64);
-  const wire = normalizePolicyReplayInput({ observation, memory, feedback: [], params, random });
+  const wire = normalizePolicyReplayInputV4({ observation, memory, feedback: [], params, random });
 
-  equal(wire.schema, 'policy-input-v2');
+  equal(wire.schema, 'policy-input-v4');
   equal(wire.rng_state, MAX_U64.toString());
 
   const restored = rehydratePolicyReplayInput(JSON.parse(JSON.stringify(wire)) as unknown);
-  if (restored.schema !== 'policy-input-v2') throw new Error('normalization must create policy-input-v2');
+  if (restored.schema !== 'policy-input-v4') throw new Error('normalization must create policy-input-v4');
   const expected = decide(observation, memory, params, random, []);
   const actual = decide(restored.observation, restored.memory, restored.params, restored.random, restored.feedback);
 
   deepStrictEqual(actual, expected);
   equal(restored.random.snapshotState(), random.snapshotState());
-  deepStrictEqual(JSON.parse(JSON.stringify(normalizePolicyReplayInput({
+  deepStrictEqual(JSON.parse(JSON.stringify(normalizePolicyReplayInputV4({
     observation: restored.observation,
     memory: restored.memory,
     feedback: restored.feedback,
     params: restored.params,
     random: DeterministicRandom.fromState(MAX_U64),
   }))), wire);
+});
+
+test('policy-input-v2 and v3 stay strict and replay with their historical semantics', () => {
+  const wire = serializedInput();
+  const restored = rehydratePolicyReplayInput(wire);
+  if (restored.schema !== 'policy-input-v2') throw new Error('historical input must stay policy-input-v2');
+  const decision = decide(restored.observation, restored.memory, restored.params, restored.random, restored.feedback);
+  equal(decision.memory.knowledge, undefined);
+
+  const withKnowledge = serializedInput();
+  (withKnowledge.memory as Record<string, unknown>).knowledge = { visitedRegions: [], trail: [] };
+  throws(() => rehydratePolicyReplayInput(withKnowledge), (error) => error instanceof PolicyReplayInputError
+    && error.code === 'invalid-memory');
+
+  const withView = serializedInput();
+  const agent = ((withView.observation as Record<string, unknown>).agent as { value: Record<string, unknown> }).value;
+  agent.ranged = { arrows: 4 };
+  throws(() => rehydratePolicyReplayInput(withView), (error) => error instanceof PolicyReplayInputError
+    && error.code === 'invalid-observation');
+});
+
+test('policy-input-v4 carries modern state and an optional opening', () => {
+  const observation = makeObservation();
+  const v4 = normalizeOpeningPolicyReplayInputV4({
+    observation,
+    memory: emptyPolicyMemory(),
+    feedback: [],
+    params: PolicyParams.baseline(),
+    random: DeterministicRandom.fromState(MAX_U64),
+    opening: {
+      seed: 5n,
+      style: 'explorer',
+      cycle: ['explorer', 'scavenger', 'hunter'],
+      state: openingPolicyState({ cacheTakenAt: null }),
+    },
+  });
+  const restored = rehydratePolicyReplayInput(JSON.parse(JSON.stringify(v4)) as unknown);
+  if (restored.schema !== 'policy-input-v4' || restored.opening === null) throw new Error('v4 opening lost');
+  equal(restored.opening.seed, 5n);
+  const plain = normalizePolicyReplayInputV4({
+    observation, memory: emptyPolicyMemory(), feedback: [], params: PolicyParams.baseline(), random: DeterministicRandom.fromState(1n),
+  });
+  const plainRestored = rehydratePolicyReplayInput(JSON.parse(JSON.stringify(plain)) as unknown);
+  if (plainRestored.schema !== 'policy-input-v4') throw new Error('v4 plain lost');
+  equal(plainRestored.opening, null);
 });
 
 test('policy-input-v3 preserves opening assignment and rejects unknown styles and versions', () => {
@@ -120,7 +167,7 @@ test('policy-input-v3 preserves opening assignment and rejects unknown styles an
     && error.code === 'invalid-opening' && error.field === 'opening.style');
 
   const unknownVersion = serializedOpeningInput();
-  unknownVersion.schema = 'policy-input-v4';
+  unknownVersion.schema = 'policy-input-v5';
   throws(() => rehydratePolicyReplayInput(unknownVersion), (error) => error instanceof PolicyReplayInputError
     && error.code === 'unsupported-schema');
 });

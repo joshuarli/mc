@@ -22,6 +22,8 @@ const Vec3 = pinned('vec3').Vec3 as new (x: number, y: number, z: number) => Bot
 const injectBlocks = pinned('mineflayer/lib/plugins/blocks') as (bot: Bot, options: { version: string; hideErrors: boolean }) => void;
 const injectHealth = pinned('mineflayer/lib/plugins/health') as (bot: Bot, options: { respawn: boolean }) => void;
 
+const DIRECTION_SCAN_READS = 8 * 5 * 3;
+
 function clientWorld(position = new Vec3(8, 1, 8), height = 16, minY = 0): {
   readonly bot: Bot;
   readonly observer: MineflayerObserver;
@@ -195,11 +197,11 @@ test('observer skips uniform air sections without changing current empty loot kn
   try {
     const observation = client.observer.observe(0);
     assert.deepEqual(observation.loot, { kind: 'current', value: [] });
-    assert.equal(client.reads(), 0, 'uniform air sections must not construct blocks for chest search');
+    assert.equal(client.reads(), DIRECTION_SCAN_READS, 'uniform air sections must not construct blocks for chest search');
     client.bot.world.setBlockStateId(new Vec3(8, 1, 8), registry.blocksByName.air!.minStateId);
     client.resetReads();
     assert.deepEqual(client.observer.observe(1).loot, observation.loot);
-    assert.equal(client.reads(), 0, 'writing the same single value must refresh derived metadata');
+    assert.equal(client.reads(), DIRECTION_SCAN_READS, 'writing the same single value must refresh derived metadata');
   } finally {
     client.observer.close();
   }
@@ -258,7 +260,7 @@ test('observer handles single-value solid and chest sections without suppressing
       const observation = client.observer.observe(0);
       if (name === 'stone') {
         assert.deepEqual(observation.loot, { kind: 'current', value: [] });
-        assert.equal(client.reads(), 0, 'uniform nonchest sections must also skip block construction');
+        assert.equal(client.reads(), DIRECTION_SCAN_READS, 'uniform nonchest sections must also skip block construction');
       } else {
         assert.equal(observation.loot.kind, 'unknown');
         assert.equal(reference.length, 65);

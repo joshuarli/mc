@@ -63,6 +63,14 @@ An agent state may also carry a ranged loadout (a bow plus a positive arrow coun
 
 Eating checks for a visible opponent within 8 blocks before starting and again every physics tick; a threat or damage releases the item and fails the action. A shield in the offhand is raised during the weapon cooldown and lowered before the swing. A block change inside the corridor of a failed exploration route clears only that failure. When every exploration direction has failed, the policy retries the oldest failure instead of idling, so a stale failure never holds the agent in place.
 
+## Knowledge, loadout and versions
+
+`policy-input-v4` is the schema for decisions that use the data below. `policy-input-v1` to `v3` remain strict and replay with their historical semantics: they reject a combat view, ranged loadout, terrain changes, direction support, food restoration, ammunition loot and `memory.knowledge`, and `decide` treats their observations as historical.
+
+Policy memory may carry exploration knowledge: up to 64 visited 16-block regions and up to 8 trail positions at least 8 blocks apart, both derived only from the agent's own positions. Agent state may carry the observed support in each of the eight exploration directions at radius 8: a standable block within one block up or three down with two clear blocks above it, `blocked` (cliff, obstruction, no support), or `unloaded` (a chunk the client has not received), plus a hazard flag for lava, fire, cactus and similar ground. Exploration then targets observed support, prefers an unvisited region, skips hazards and failed targets, and when every target has failed backtracks to the newest trail position, then retries the oldest failure, and holds with `noReachableFrontier` only when every direction is known to be blocked. Fully unloaded terrain falls back to the plain ring.
+
+Opening styles transition by state: an unarmed hunter scavenges until armed and turns to exploring when more than one opponent is visible; an explorer without a weapon scavenges after tick 200. Food choice picks the stack that restores the most hunger without exceeding the current deficit, else the smallest restoration, else the lowest slot. An archer below 16 arrows treats arrow drops as useful loot.
+
 ## Opening styles
 
 Schema-v2 Hunger Games scenarios assign each seat a style from their explicit `openingStyleCycle`. The policy maps `(seed mod 3 + seat) mod 3` to that cycle, so each fixed seat receives all three styles across any three consecutive seeds.

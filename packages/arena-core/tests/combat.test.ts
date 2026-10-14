@@ -17,7 +17,7 @@ import {
   FIXED_UNITS_PER_BLOCK,
   isCrosshairOnBody,
   isWithinMeleeReach,
-  normalizePolicyReplayInput,
+  normalizePolicyReplayInputV4,
   policyMemory,
   observationSequence,
   PolicyParams,
@@ -185,7 +185,7 @@ test('a wounded agent outnumbered inside fight range retreats instead of engagin
 test('fractional combat views survive the strict replay encoding unchanged', () => {
   const self = selfAt(0.2, 1, 0.5, -0.0001, 0.3);
   const observation = observationOf(self, [{ id: 7, body: bodyAt(0.2, 1, -2.9) }]);
-  const wire = normalizePolicyReplayInput({
+  const wire = normalizePolicyReplayInputV4({
     observation,
     memory: emptyPolicyMemory(),
     feedback: [],

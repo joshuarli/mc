@@ -98,7 +98,14 @@ test('core residual craft decision spends two oak logs for the remaining eight p
   const planks = item('oak_planks', 11, 8, 10);
   harness.inventory.slots[9] = logs;
   harness.inventory.slots[10] = planks;
-  Object.assign(harness.bot, { food: 20, getEquipmentDestSlot: () => 5 });
+  const nativeBlockAt = harness.bot.blockAt.bind(harness.bot);
+  Object.assign(harness.bot, {
+    food: 20,
+    getEquipmentDestSlot: () => 5,
+    blockAt: (position: { readonly x: number; readonly y: number; readonly z: number }) => (
+      position.y < 64 ? { name: 'stone', boundingBox: 'block', position } : nativeBlockAt(position as never)
+    ),
+  });
   harness.bot.emit('spawn');
   harness.bot.emit('health');
   harness.bot._client.emit('window_items', { windowId: 0 });

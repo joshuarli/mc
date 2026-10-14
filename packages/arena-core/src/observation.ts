@@ -25,6 +25,7 @@ export type EntityId = number & { readonly [entityIdBrand]: 'EntityId' };
 export type InventorySlot = number & { readonly [inventorySlotBrand]: 'InventorySlot' };
 
 const validatedAgentObservation: unique symbol = Symbol('validated-agent-observation');
+const legacyReplayObservation: unique symbol = Symbol('legacy-replay-observation');
 
 export function tick(value: number): Tick {
   if (!Number.isSafeInteger(value) || value < 0) {
@@ -104,14 +105,22 @@ export function emptyEquipment(): EquipmentSnapshot {
 export interface FoodStack {
   readonly inventorySlot: InventorySlot;
   readonly count: number;
+  readonly restores?: number;
 }
 
-export function foodStack(slot: number, count: number): FoodStack {
+export function foodStack(slot: number, count: number, restores?: number): FoodStack {
   const inventorySlotValue = inventorySlot(slot);
   if (!Number.isSafeInteger(count) || count <= 0) {
     throw new RangeError(`food stack count must be a positive safe integer, received ${count}`);
   }
-  return Object.freeze({ inventorySlot: inventorySlotValue, count });
+  if (restores !== undefined && (!Number.isSafeInteger(restores) || restores < 1 || restores > 20)) {
+    throw new RangeError(`food restoration must be between 1 and 20 hunger points, received ${restores}`);
+  }
+  return Object.freeze({
+    inventorySlot: inventorySlotValue,
+    count,
+    ...(restores === undefined ? {} : { restores }),
+  });
 }
 
 export interface EquipmentUpgrade {
@@ -134,6 +143,14 @@ export function equipmentUpgrade(
 export const MAX_TERRAIN_CHANGES = 32;
 export const MAX_ARROW_COUNT = 2304;
 
+export const DIRECTION_COUNT = 8;
+export const OBSERVED_DIRECTION_RADIUS_BLOCKS = 8;
+
+export type DirectionSupport =
+  | { readonly kind: 'supported'; readonly support: BlockPosition; readonly hazard: boolean }
+  | { readonly kind: 'blocked' }
+  | { readonly kind: 'unloaded' };
+
 export interface RangedLoadout {
   readonly arrows: number;
 }
@@ -143,6 +160,7 @@ export interface AgentState {
   readonly combat?: CombatSelfBody;
   readonly ranged?: RangedLoadout;
   readonly terrainChanges?: readonly BlockPosition[];
+  readonly directions?: readonly DirectionSupport[];
   readonly healthHalfHearts: number;
   readonly hungerPoints: number;
   readonly foodStacks: readonly FoodStack[];
@@ -155,6 +173,7 @@ export interface AgentStateInput {
   readonly combat?: CombatSelfBody;
   readonly ranged?: RangedLoadout;
   readonly terrainChanges?: readonly BlockPosition[];
+  readonly directions?: readonly DirectionSupport[];
   readonly healthHalfHearts: number;
   readonly hungerPoints: number;
   readonly foodStacks: readonly FoodStack[];
@@ -170,7 +189,7 @@ export function agentState(input: AgentStateInput): AgentState {
     'foodStacks',
     'equipped',
     'upgrades',
-  ], 'agent state', ['combat', 'ranged', 'terrainChanges']);
+  ], 'agent state', ['combat', 'ranged', 'terrainChanges', 'directions']);
 
   if (!Number.isSafeInteger(input.healthHalfHearts) || input.healthHalfHearts < 0 || input.healthHalfHearts > 40) {
     throw new RangeError(`health must be between 0 and 40 half-hearts, received ${input.healthHalfHearts}`);
@@ -184,6 +203,7 @@ export function agentState(input: AgentStateInput): AgentState {
   if (combat !== undefined) assertBlockIdentity(position, combat, 'agent state');
   const ranged = input.ranged === undefined ? undefined : cloneRangedLoadout(input.ranged);
   const terrainChanges = input.terrainChanges === undefined ? undefined : cloneTerrainChanges(input.terrainChanges);
+  const directions = input.directions === undefined ? undefined : cloneDirections(input.directions);
   const equipped = cloneEquipmentSnapshot(input.equipped);
   const foodStacks = input.foodStacks.map(cloneFoodStack);
   const upgrades = input.upgrades.map(cloneEquipmentUpgrade);
@@ -206,6 +226,7 @@ export function agentState(input: AgentStateInput): AgentState {
     ...(combat === undefined ? {} : { combat }),
     ...(ranged === undefined ? {} : { ranged }),
     ...(terrainChanges === undefined ? {} : { terrainChanges }),
+    ...(directions === undefined ? {} : { directions }),
     healthHalfHearts: input.healthHalfHearts,
     hungerPoints: input.hungerPoints,
     foodStacks: Object.freeze(foodStacks),
@@ -240,11 +261,16 @@ export function visibleOpponent(
 
 export type KnownItem =
   | { readonly kind: 'food' }
+  | { readonly kind: 'ammunition' }
   | { readonly kind: 'weapon'; readonly rating: number }
   | { readonly kind: 'armor'; readonly equipmentSlot: ArmorSlot; readonly rating: number };
 
 export function knownFood(): KnownItem {
   return Object.freeze({ kind: 'food' });
+}
+
+export function knownAmmunition(): KnownItem {
+  return Object.freeze({ kind: 'ammunition' });
 }
 
 export function knownWeapon(rating: number): KnownItem {
@@ -332,6 +358,42 @@ export interface AgentObservation {
 }
 
 export function agentObservation(input: AgentObservationInput): AgentObservation {
+  return buildAgentObservation(input, false);
+}
+
+export function legacyAgentObservation(input: AgentObservationInput): AgentObservation {
+  return buildAgentObservation(input, true);
+}
+
+export function isLegacyReplayObservation(observation: AgentObservation): boolean {
+  return Object.getOwnPropertyDescriptor(observation, legacyReplayObservation)?.value === true;
+}
+
+function assertLegacyObservationShape(observation: {
+  readonly agent: Knowledge<AgentState>;
+  readonly opponents: Knowledge<readonly VisibleOpponent[]>;
+  readonly loot: Knowledge<readonly LootOpportunity[]>;
+}): void {
+  const reject = (field: string): never => {
+    throw new TypeError(`historical policy inputs cannot carry ${field}`);
+  };
+  if (observation.agent.kind !== 'unknown') {
+    const agent = observation.agent.value;
+    if (agent.combat !== undefined) reject('a combat view');
+    if (agent.ranged !== undefined) reject('a ranged loadout');
+    if (agent.terrainChanges !== undefined) reject('terrain changes');
+    if (agent.directions !== undefined) reject('direction support');
+    if (agent.foodStacks.some((stack) => stack.restores !== undefined)) reject('food restoration');
+  }
+  if (observation.opponents.kind !== 'unknown' && observation.opponents.value.some((value) => value.combat !== undefined)) {
+    reject('an opponent combat view');
+  }
+  if (observation.loot.kind !== 'unknown' && observation.loot.value.some((value) => (
+    value.kind === 'visibleDrop' && value.item.kind === 'ammunition'
+  ))) reject('ammunition');
+}
+
+function buildAgentObservation(input: AgentObservationInput, legacy: boolean): AgentObservation {
   assertObjectKeys(input, ['tick', 'sequence', 'agent', 'border', 'opponents', 'loot'], 'agent observation');
   const currentTick = tick(input.tick);
   const sequence = observationSequence(input.sequence);
@@ -370,6 +432,10 @@ export function agentObservation(input: AgentObservationInput): AgentObservation
   }
 
   const observation = { tick: currentTick, sequence, agent, border, opponents, loot };
+  if (legacy) {
+    assertLegacyObservationShape(observation);
+    Object.defineProperty(observation, legacyReplayObservation, { value: true });
+  }
   Object.defineProperty(observation, validatedAgentObservation, { value: true });
   return Object.freeze(observation) as AgentObservation;
 }
@@ -454,8 +520,8 @@ function cloneEquipmentSnapshot(value: EquipmentSnapshot): EquipmentSnapshot {
 }
 
 function cloneFoodStack(value: FoodStack): FoodStack {
-  assertObjectKeys(value, ['inventorySlot', 'count'], 'food stack');
-  return foodStack(value.inventorySlot, value.count);
+  assertObjectKeys(value, ['inventorySlot', 'count'], 'food stack', ['restores']);
+  return foodStack(value.inventorySlot, value.count, value.restores);
 }
 
 function cloneEquipmentUpgrade(value: EquipmentUpgrade): EquipmentUpgrade {
@@ -467,6 +533,10 @@ function cloneKnownItem(value: KnownItem): KnownItem {
   if (value.kind === 'food') {
     assertObjectKeys(value, ['kind'], 'known food');
     return knownFood();
+  }
+  if (value.kind === 'ammunition') {
+    assertObjectKeys(value, ['kind'], 'known ammunition');
+    return knownAmmunition();
   }
   if (value.kind === 'weapon') {
     assertObjectKeys(value, ['kind', 'rating'], 'known weapon');
@@ -504,10 +574,31 @@ function assertBoolean(value: boolean, field: string): boolean {
   return value;
 }
 
+function cloneDirections(values: readonly DirectionSupport[]): readonly DirectionSupport[] {
+  if (!Array.isArray(values) || values.length !== DIRECTION_COUNT) {
+    throw new RangeError(`direction support must hold exactly ${DIRECTION_COUNT} entries`);
+  }
+  return Object.freeze(values.map((value): DirectionSupport => {
+    if (value.kind === 'supported') {
+      assertObjectKeys(value, ['kind', 'support', 'hazard'], 'supported direction');
+      return Object.freeze({
+        kind: 'supported',
+        support: cloneBlockPosition(value.support),
+        hazard: assertBoolean(value.hazard, 'hazard'),
+      });
+    }
+    if (value.kind === 'blocked' || value.kind === 'unloaded') {
+      assertObjectKeys(value, ['kind'], 'direction support');
+      return Object.freeze({ kind: value.kind });
+    }
+    throw new TypeError(`unknown direction support kind: ${String((value as { kind?: unknown }).kind)}`);
+  }));
+}
+
 function cloneRangedLoadout(value: RangedLoadout): RangedLoadout {
   assertObjectKeys(value, ['arrows'], 'ranged loadout');
-  if (!Number.isSafeInteger(value.arrows) || value.arrows < 1 || value.arrows > MAX_ARROW_COUNT) {
-    throw new RangeError(`arrow count must be between 1 and ${MAX_ARROW_COUNT}, received ${value.arrows}`);
+  if (!Number.isSafeInteger(value.arrows) || value.arrows < 0 || value.arrows > MAX_ARROW_COUNT) {
+    throw new RangeError(`arrow count must be between 0 and ${MAX_ARROW_COUNT}, received ${value.arrows}`);
   }
   return Object.freeze({ arrows: value.arrows });
 }

@@ -16,6 +16,7 @@ import {
   foodStack,
   inventorySlot,
   InvalidPolicyParamsError,
+  legacyAgentObservation,
   lootTarget,
   manhattanDistance,
   PolicyParams,
@@ -149,6 +150,7 @@ test('scavenger opens one useful cache and navigates out of its local area', () 
 test('hunter approaches a visible isolated opponent before observed caches', () => {
   const target = entityId(42);
   const observation = makeObservation({
+    agent: currentKnowledge(makeAgent({ equipped: { ...emptyEquipment(), weapon: 1 } })),
     opponents: currentKnowledge([visibleOpponent(target, blockPosition(10, 64, 0), false)]),
     loot: currentKnowledge([unopenedContainer(blockPosition(1, 64, 0))]),
   });
@@ -158,6 +160,43 @@ test('hunter approaches a visible isolated opponent before observed caches', () 
 
   deepStrictEqual(decision.goal, { kind: 'engageVisibleOpponent', target });
   deepStrictEqual(decision.intent, { kind: 'approach', target });
+});
+
+test('an unarmed hunter does not charge a visible opponent and a crowd turns it away', () => {
+  const target = entityId(42);
+  const unarmed = makeObservation({
+    opponents: currentKnowledge([visibleOpponent(target, blockPosition(10, 64, 0), false)]),
+    loot: currentKnowledge([unopenedContainer(blockPosition(1, 64, 0))]),
+  });
+  const context = { style: 'hunter' as const, state: openingPolicyState({ cacheTakenAt: null }) };
+  const cautious = decideOpening(unarmed, emptyPolicyMemory(), params(), policyRandom(), [], context);
+  notDeepStrictEqual(cautious.goal, { kind: 'engageVisibleOpponent', target });
+  deepStrictEqual(cautious.goal.kind, 'loot');
+
+  const armedCrowd = makeObservation({
+    agent: currentKnowledge(makeAgent({ equipped: { ...emptyEquipment(), weapon: 1 } })),
+    opponents: currentKnowledge([
+      visibleOpponent(target, blockPosition(10, 64, 0), false),
+      visibleOpponent(entityId(43), blockPosition(-10, 64, 0), false),
+    ]),
+  });
+  const wary = decideOpening(armedCrowd, emptyPolicyMemory(), params(), policyRandom(), [], context);
+  notDeepStrictEqual(wary.goal.kind, 'engageVisibleOpponent');
+});
+
+test('an unequipped explorer acquires loot once the opening phase has passed', () => {
+  const drop = unopenedContainer(blockPosition(3, 64, 0));
+  const context = { style: 'explorer' as const, state: openingPolicyState({ cacheTakenAt: null }) };
+  const early = decideOpening(
+    makeObservation({ at: 10, loot: currentKnowledge([drop]) }),
+    emptyPolicyMemory(), params(), policyRandom(), [], context,
+  );
+  deepStrictEqual(early.goal, { kind: 'explore' });
+  const late = decideOpening(
+    makeObservation({ at: 400, loot: currentKnowledge([drop]) }),
+    emptyPolicyMemory(), params(), policyRandom(), [], context,
+  );
+  deepStrictEqual(late.goal.kind, 'loot');
 });
 
 test('baseline exits the border before eating', () => {
@@ -485,7 +524,7 @@ test('failed exploration retries after sufficient movement, not unrelated eviden
   equal(evidenceChanged.memory.failedTargets.length, 1);
 });
 
-test('failed exploration targets exhaust to a stable hold and remembered searches reopen on movement', () => {
+test('failed exploration targets retry the oldest failure while historical inputs hold, and remembered searches reopen on movement', () => {
   const explorationObservation = makeObservation();
   const random = new DeterministicRandom(0n);
   let explorationDecision = decide(explorationObservation, emptyPolicyMemory(), params(), random);
@@ -505,8 +544,22 @@ test('failed exploration targets exhaust to a stable hold and remembered searche
       policyFeedbackBatch([feedback]),
     );
   }
-  deepStrictEqual(explorationDecision.goal, { kind: 'wait', reason: 'failedTargetsExhausted' });
+  deepStrictEqual(explorationDecision.goal, { kind: 'explore' });
   equal(explorationDecision.memory.failedTargets.length, 8);
+  const historical = decide(
+    legacyAgentObservation({
+      tick: explorationObservation.tick,
+      sequence: explorationObservation.sequence,
+      agent: explorationObservation.agent,
+      border: explorationObservation.border,
+      opponents: explorationObservation.opponents,
+      loot: explorationObservation.loot,
+    }),
+    explorationDecision.memory,
+    params(),
+    random,
+  );
+  deepStrictEqual(historical.goal, { kind: 'wait', reason: 'failedTargetsExhausted' });
 
   const target = entityId(35);
   const searchObservation = makeObservation({

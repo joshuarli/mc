@@ -1,6 +1,7 @@
 import {
   agentObservation,
   assertValidatedAgentObservation,
+  legacyAgentObservation,
   type AgentObservation,
   type AgentObservationInput,
 } from './observation.js';
@@ -58,6 +59,26 @@ export interface PolicyReplayInputV3 {
   readonly rng_state: string;
 }
 
+export interface PolicyReplayInputV4 {
+  readonly schema: 'policy-input-v4';
+  readonly observation: AgentObservationInput;
+  readonly memory: PolicyMemoryInput;
+  readonly feedback: readonly PolicyFeedback[];
+  readonly params: PolicyParamValues;
+  readonly opening: PolicyReplayInputV3['opening'] | null;
+  readonly rng_state: string;
+}
+
+export interface RehydratedPolicyReplayInputV4 {
+  readonly schema: 'policy-input-v4';
+  readonly observation: AgentObservation;
+  readonly memory: PolicyMemory;
+  readonly feedback: readonly PolicyFeedback[];
+  readonly params: PolicyParams;
+  readonly opening: RehydratedPolicyReplayInputV3['opening'] | null;
+  readonly random: DeterministicRandom;
+}
+
 export interface RehydratedPolicyReplayInputV1 {
   readonly schema: 'policy-input-v1';
   readonly observation: AgentObservation;
@@ -90,7 +111,11 @@ export interface RehydratedPolicyReplayInputV3 {
   readonly random: DeterministicRandom;
 }
 
-export type RehydratedPolicyReplayInput = RehydratedPolicyReplayInputV1 | RehydratedPolicyReplayInputV2 | RehydratedPolicyReplayInputV3;
+export type RehydratedPolicyReplayInput =
+  | RehydratedPolicyReplayInputV1
+  | RehydratedPolicyReplayInputV2
+  | RehydratedPolicyReplayInputV3
+  | RehydratedPolicyReplayInputV4;
 
 export type PolicyReplayInputErrorCode =
   | 'invalid-shape'
@@ -161,6 +186,32 @@ export function normalizePolicyReplayInput(source: PolicyReplayInputSource): Pol
   });
 }
 
+export function normalizePolicyReplayInputV4(source: PolicyReplayInputSource): PolicyReplayInputV4 {
+  const base = normalizePolicyReplayInput(source);
+  return Object.freeze({
+    schema: 'policy-input-v4',
+    observation: base.observation,
+    memory: base.memory,
+    feedback: base.feedback,
+    params: base.params,
+    opening: null,
+    rng_state: base.rng_state,
+  });
+}
+
+export function normalizeOpeningPolicyReplayInputV4(source: OpeningPolicyReplayInputSource): PolicyReplayInputV4 {
+  const base = normalizeOpeningPolicyReplayInput(source);
+  return Object.freeze({
+    schema: 'policy-input-v4',
+    observation: base.observation,
+    memory: base.memory,
+    feedback: base.feedback,
+    params: base.params,
+    opening: base.opening,
+    rng_state: base.rng_state,
+  });
+}
+
 export function normalizeOpeningPolicyReplayInput(source: OpeningPolicyReplayInputSource): PolicyReplayInputV3 {
   const base = normalizePolicyReplayInput(source);
   const opening = parseSection('invalid-opening', 'opening', () => normalizeOpening(source.opening));
@@ -184,15 +235,20 @@ export function rehydratePolicyReplayInput(value: unknown): RehydratedPolicyRepl
     assertExactFields(input, ['schema', 'observation', 'memory', 'params', 'rng_state'], 'input');
   } else if (schema === 'policy-input-v2') {
     assertExactFields(input, ['schema', 'observation', 'memory', 'feedback', 'params', 'rng_state'], 'input');
-  } else if (schema === 'policy-input-v3') {
+  } else if (schema === 'policy-input-v3' || schema === 'policy-input-v4') {
     assertExactFields(input, ['schema', 'observation', 'memory', 'feedback', 'params', 'opening', 'rng_state'], 'input');
   } else {
     throw new PolicyReplayInputError('unsupported-schema', 'input.schema');
   }
 
   const observation = parseSection('invalid-observation', 'observation', () => (
-    agentObservation(input.observation as AgentObservationInput)
+    schema === 'policy-input-v4'
+      ? agentObservation(input.observation as AgentObservationInput)
+      : legacyAgentObservation(input.observation as AgentObservationInput)
   ));
+  if (schema !== 'policy-input-v4' && Object.hasOwn(readRecord(input.memory, 'memory'), 'knowledge')) {
+    throw new PolicyReplayInputError('invalid-memory', 'memory.knowledge');
+  }
   const memory = schema === 'policy-input-v1'
     ? parseSection('invalid-memory', 'memory', () => policyMemoryV1(input.memory as PolicyMemoryInputV1))
     : parseSection('invalid-memory', 'memory', () => policyMemory(input.memory as PolicyMemoryInput));
@@ -209,6 +265,11 @@ export function rehydratePolicyReplayInput(value: unknown): RehydratedPolicyRepl
   ));
   if (schema === 'policy-input-v2') {
     return Object.freeze({ schema, observation, memory: memory as PolicyMemory, feedback, params, random });
+  }
+  if (schema === 'policy-input-v4' && input.opening === null) {
+    return Object.freeze({
+      schema, observation, memory: memory as PolicyMemory, feedback, params, opening: null, random,
+    });
   }
   const opening = parseSection('invalid-opening', 'opening', () => parseOpening(input.opening));
   return Object.freeze({ schema, observation, memory: memory as PolicyMemory, feedback, params, opening, random });
