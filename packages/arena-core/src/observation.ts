@@ -131,9 +131,18 @@ export function equipmentUpgrade(
   return Object.freeze({ inventorySlot: inventorySlotValue, equipmentSlot, rating });
 }
 
+export const MAX_TERRAIN_CHANGES = 32;
+export const MAX_ARROW_COUNT = 2304;
+
+export interface RangedLoadout {
+  readonly arrows: number;
+}
+
 export interface AgentState {
   readonly position: BlockPosition;
   readonly combat?: CombatSelfBody;
+  readonly ranged?: RangedLoadout;
+  readonly terrainChanges?: readonly BlockPosition[];
   readonly healthHalfHearts: number;
   readonly hungerPoints: number;
   readonly foodStacks: readonly FoodStack[];
@@ -144,6 +153,8 @@ export interface AgentState {
 export interface AgentStateInput {
   readonly position: BlockPosition;
   readonly combat?: CombatSelfBody;
+  readonly ranged?: RangedLoadout;
+  readonly terrainChanges?: readonly BlockPosition[];
   readonly healthHalfHearts: number;
   readonly hungerPoints: number;
   readonly foodStacks: readonly FoodStack[];
@@ -159,7 +170,7 @@ export function agentState(input: AgentStateInput): AgentState {
     'foodStacks',
     'equipped',
     'upgrades',
-  ], 'agent state', ['combat']);
+  ], 'agent state', ['combat', 'ranged', 'terrainChanges']);
 
   if (!Number.isSafeInteger(input.healthHalfHearts) || input.healthHalfHearts < 0 || input.healthHalfHearts > 40) {
     throw new RangeError(`health must be between 0 and 40 half-hearts, received ${input.healthHalfHearts}`);
@@ -171,6 +182,8 @@ export function agentState(input: AgentStateInput): AgentState {
   const position = cloneBlockPosition(input.position);
   const combat = input.combat === undefined ? undefined : cloneCombatSelfBody(input.combat);
   if (combat !== undefined) assertBlockIdentity(position, combat, 'agent state');
+  const ranged = input.ranged === undefined ? undefined : cloneRangedLoadout(input.ranged);
+  const terrainChanges = input.terrainChanges === undefined ? undefined : cloneTerrainChanges(input.terrainChanges);
   const equipped = cloneEquipmentSnapshot(input.equipped);
   const foodStacks = input.foodStacks.map(cloneFoodStack);
   const upgrades = input.upgrades.map(cloneEquipmentUpgrade);
@@ -191,6 +204,8 @@ export function agentState(input: AgentStateInput): AgentState {
   return Object.freeze({
     position,
     ...(combat === undefined ? {} : { combat }),
+    ...(ranged === undefined ? {} : { ranged }),
+    ...(terrainChanges === undefined ? {} : { terrainChanges }),
     healthHalfHearts: input.healthHalfHearts,
     hungerPoints: input.hungerPoints,
     foodStacks: Object.freeze(foodStacks),
@@ -487,6 +502,21 @@ function assertBoolean(value: boolean, field: string): boolean {
     throw new TypeError(`${field} must be a boolean`);
   }
   return value;
+}
+
+function cloneRangedLoadout(value: RangedLoadout): RangedLoadout {
+  assertObjectKeys(value, ['arrows'], 'ranged loadout');
+  if (!Number.isSafeInteger(value.arrows) || value.arrows < 1 || value.arrows > MAX_ARROW_COUNT) {
+    throw new RangeError(`arrow count must be between 1 and ${MAX_ARROW_COUNT}, received ${value.arrows}`);
+  }
+  return Object.freeze({ arrows: value.arrows });
+}
+
+function cloneTerrainChanges(values: readonly BlockPosition[]): readonly BlockPosition[] {
+  if (!Array.isArray(values) || values.length > MAX_TERRAIN_CHANGES) {
+    throw new RangeError(`terrain changes can hold at most ${MAX_TERRAIN_CHANGES} positions`);
+  }
+  return Object.freeze(values.map(cloneBlockPosition));
 }
 
 function assertBlockIdentity(position: BlockPosition, combat: CombatBody, label: string): void {

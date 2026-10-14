@@ -26,23 +26,27 @@ export const ACTION_FUNNEL_MISS_REASONS = [
   'timeout',
   'agentEliminated',
   'runShutdown',
+  'abortedUnderThreat',
+  'friendlyFireRisk',
+  'noAmmunition',
+  'shotMissed',
 ] as const;
 
 export type ActionFunnelMissReason = typeof ACTION_FUNNEL_MISS_REASONS[number];
 
-export type ActionFunnelAction = 'approach' | 'attack';
+export type ActionFunnelAction = 'approach' | 'attack' | 'shoot' | 'eat';
 
 export type ActionFunnelRecord =
   | {
     readonly kind: 'reached';
     readonly action: ActionFunnelAction;
-    readonly target: EntityId;
+    readonly target: EntityId | null;
     readonly stage: ActionFunnelStage;
   }
   | {
     readonly kind: 'stopped';
     readonly action: ActionFunnelAction;
-    readonly target: EntityId;
+    readonly target: EntityId | null;
     readonly lastPassed: ActionFunnelStage;
     readonly reason: ActionFunnelMissReason;
     readonly eyeToBodyUnits: number | null;
@@ -58,7 +62,7 @@ export function nextActionFunnelStage(stage: ActionFunnelStage): ActionFunnelSta
 
 export function reachedActionFunnelRecord(
   action: ActionFunnelAction,
-  target: EntityId,
+  target: EntityId | null,
   stage: ActionFunnelStage,
 ): ActionFunnelRecord {
   if (!ACTION_FUNNEL_STAGES.includes(stage)) throw new TypeError(`unknown action funnel stage: ${String(stage)}`);
@@ -67,7 +71,7 @@ export function reachedActionFunnelRecord(
 
 export function stoppedActionFunnelRecord(input: {
   readonly action: ActionFunnelAction;
-  readonly target: EntityId;
+  readonly target: EntityId | null;
   readonly lastPassed: ActionFunnelStage;
   readonly reason: ActionFunnelMissReason;
   readonly eyeToBodyUnits?: number | null;

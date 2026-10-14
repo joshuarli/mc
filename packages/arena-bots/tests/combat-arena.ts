@@ -48,7 +48,16 @@ export interface CombatArenaOptions {
   readonly self: ArenaPoint & { readonly yaw?: number };
   readonly opponents: readonly ArenaOpponent[];
   readonly health?: number;
+  readonly inventory?: readonly { readonly slot: number; readonly name: string; readonly count: number }[];
+  readonly heldSlot?: number;
   readonly border?: { readonly x: number; readonly z: number; readonly diameter: number };
+}
+
+export interface ArrowRecord {
+  readonly firedAtTick: number;
+  readonly chargeTicks: number;
+  hitTargetId: number | null;
+  readonly aim: { readonly yaw: number; readonly pitch: number };
 }
 
 export interface AttackRecord {
@@ -68,6 +77,8 @@ export interface CombatArena {
   readonly client: MineflayerArenaClient;
   readonly attacks: AttackRecord[];
   readonly goals: ArenaPoint[];
+  readonly arrows: ArrowRecord[];
+  readonly itemUse: string[];
   readonly funnel: ActionFunnelRecord[];
   readonly diagnostics: ClientDiagnosticRecord[];
   readonly self: { x: number; y: number; z: number; yaw: number; pitch: number };
@@ -78,6 +89,8 @@ export interface CombatArena {
   decide(memory?: PolicyMemory, feedback?: PolicyFeedbackBatch): Decision;
   runIntent(intent: Parameters<MineflayerArenaClient['run']>[0], onTick?: (tick: number) => void): Promise<SettledRun>;
   placeSolid(x: number, y: number, z: number): void;
+  addOpponent(spec: ArenaOpponent): void;
+  addDrop(id: number, point: ArenaPoint, name: string): Bot['entity'];
   removeOpponent(id: number): void;
   setOpponent(id: number, point: ArenaPoint): void;
   close(): Promise<void>;
@@ -97,6 +110,11 @@ export function createCombatArena(options: CombatArenaOptions): CombatArena {
   const opponents = new Map<number, { x: number; y: number; z: number; health: number; entity: Bot['entity'] }>();
   const attacks: AttackRecord[] = [];
   const goals: ArenaPoint[] = [];
+  const arrows: ArrowRecord[] = [];
+  const itemUse: string[] = [];
+  const flights: { x: number; y: number; z: number; vx: number; vy: number; vz: number; record: ArrowRecord }[] = [];
+  let drawStartedAt: number | null = null;
+  let pendingConsume: { reject: (error: Error) => void } | null = null;
   const funnel: ActionFunnelRecord[] = [];
   const diagnostics: ClientDiagnosticRecord[] = [];
   let ticks = 0;
@@ -118,10 +136,13 @@ export function createCombatArena(options: CombatArenaOptions): CombatArena {
 
   const pathfinder = {
     goal: null as unknown,
+    movements: null as unknown,
     thinkTimeout: 0,
     tickTimeout: 0,
     searchRadius: -1,
-    setMovements: (_movements: unknown) => undefined,
+    setMovements: (movements: unknown) => {
+      pathfinder.movements = movements;
+    },
     setGoal: (goal: unknown) => {
       pathfinder.goal = goal;
       if (goal === null) return;
@@ -153,7 +174,19 @@ export function createCombatArena(options: CombatArenaOptions): CombatArena {
     },
   };
 
-  const slots = new Array(46).fill(null);
+  const slots: (Record<string, unknown> | null)[] = new Array(46).fill(null);
+  for (const entry of options.inventory ?? []) {
+    const definition = registry.itemsByName[entry.name];
+    slots[entry.slot] = {
+      name: entry.name,
+      type: definition?.id ?? 0,
+      metadata: 0,
+      count: entry.count,
+      slot: entry.slot,
+      stackSize: 64,
+    };
+  }
+  let heldItem: Record<string, unknown> | null = options.heldSlot === undefined ? null : slots[options.heldSlot] ?? null;
   const bot = Object.assign(new EventEmitter(), {
     _client: new EventEmitter(),
     registry,
@@ -166,7 +199,7 @@ export function createCombatArena(options: CombatArenaOptions): CombatArena {
     players,
     health: options.health ?? 20,
     food: 20,
-    heldItem: null,
+    heldItem: null as unknown,
     quickBarSlot: 0,
     currentWindow: null,
     usingHeldItem: false,
@@ -177,16 +210,78 @@ export function createCombatArena(options: CombatArenaOptions): CombatArena {
       selectedItem: null,
       inventoryStart: 9,
       inventoryEnd: 45,
-      items: () => [],
+      items: () => slots.filter((item) => item !== null),
       firstEmptySlotRange: () => null,
     },
     getEquipmentDestSlot: () => 5,
     hasPlugin: () => true,
     loadPlugin: () => undefined,
     clearControlStates: () => undefined,
+    equip: async (item: Record<string, unknown>, destination: string) => {
+      if (destination === 'hand') {
+        heldItem = item;
+        (bot as unknown as { heldItem: unknown }).heldItem = item;
+      }
+    },
+    consume: () => new Promise<void>((resolve, reject) => {
+      itemUse.push('consume');
+      pendingConsume = { reject };
+      let waited = 0;
+      const onTick = () => {
+        waited += 1;
+        if (waited < 32) return;
+        bot.removeListener('physicsTick', onTick);
+        pendingConsume = null;
+        if (heldItem !== null) {
+          heldItem.count = (heldItem.count as number) - 1;
+          if (heldItem.count === 0) slots[heldItem.slot as number] = null;
+        }
+        (bot as unknown as { food: number }).food = 20;
+        resolve();
+      };
+      bot.on('physicsTick', onTick);
+    }),
+    activateItem: (offhand?: boolean) => {
+      itemUse.push(offhand === true ? 'activate:offhand' : 'activate');
+      (bot as unknown as { usingHeldItem: boolean }).usingHeldItem = true;
+      if (offhand !== true) drawStartedAt = ticks;
+    },
     setControlState: () => undefined,
     setQuickBarSlot: () => undefined,
-    deactivateItem: () => undefined,
+    deactivateItem: () => {
+      itemUse.push('deactivate');
+      (bot as unknown as { usingHeldItem: boolean }).usingHeldItem = false;
+      const consume = pendingConsume;
+      pendingConsume = null;
+      consume?.reject(new Error('Consuming cancelled due to calling bot.deactivateItem()'));
+      if (drawStartedAt !== null && heldItem?.name === 'bow') {
+        const chargeTicks = ticks - drawStartedAt;
+        drawStartedAt = null;
+        const arrowSlot = slots.findIndex((item) => item !== null && item.name === 'arrow');
+        if (arrowSlot >= 0 && chargeTicks >= 3) {
+          const stack = slots[arrowSlot]!;
+          stack.count = (stack.count as number) - 1;
+          if (stack.count === 0) slots[arrowSlot] = null;
+          const speed = 3 * Math.min(1, chargeTicks / 20);
+          const record: ArrowRecord = {
+            firedAtTick: ticks,
+            chargeTicks,
+            hitTargetId: null,
+            aim: { yaw: self.yaw, pitch: self.pitch },
+          };
+          arrows.push(record);
+          flights.push({
+            x: self.x,
+            y: self.y + PLAYER_EYE_HEIGHT,
+            z: self.z,
+            vx: -Math.sin(self.yaw) * Math.cos(self.pitch) * speed,
+            vy: Math.sin(self.pitch) * speed,
+            vz: -Math.cos(self.yaw) * Math.cos(self.pitch) * speed,
+            record,
+          });
+        }
+      }
+    },
     look: async () => undefined,
     lookAt: async (point: ArenaPoint) => {
       const dx = point.x - self.x;
@@ -243,6 +338,7 @@ export function createCombatArena(options: CombatArenaOptions): CombatArena {
     opponents.set(spec.id, { x: spec.x, y: spec.y, z: spec.z, health: 20, entity: opponent });
   }
   for (const spec of options.opponents) addOpponent(spec);
+  (bot as unknown as { heldItem: unknown }).heldItem = heldItem;
   syncSelf();
 
   const client = createMineflayerArenaClient(bot, { funnel: (record) => funnel.push(record), diagnostic: (record) => diagnostics.push(record) });
@@ -267,6 +363,8 @@ export function createCombatArena(options: CombatArenaOptions): CombatArena {
     client,
     attacks,
     goals,
+    arrows,
+    itemUse,
     funnel,
     diagnostics,
     self,
@@ -274,6 +372,35 @@ export function createCombatArena(options: CombatArenaOptions): CombatArena {
     tickCount: () => ticks,
     tick: () => {
       ticks += 1;
+      for (const flight of [...flights]) {
+        for (let sub = 0; sub < 4; sub += 1) {
+          flight.x += flight.vx / 4;
+          flight.y += flight.vy / 4;
+          flight.z += flight.vz / 4;
+          for (const [id, target] of opponents) {
+            const inside = Math.abs(flight.x - target.x) <= PLAYER_WIDTH / 2
+              && Math.abs(flight.z - target.z) <= PLAYER_WIDTH / 2
+              && flight.y >= target.y && flight.y <= target.y + PLAYER_HEIGHT;
+            if (inside && flight.record.hitTargetId === null) {
+              flight.record.hitTargetId = id;
+              target.health -= 3;
+              flights.splice(flights.indexOf(flight), 1);
+              bot.emit('entityHurt', target.entity, entity);
+              break;
+            }
+          }
+          if (flight.record.hitTargetId !== null) break;
+          if (world.getBlock(new Vec3(Math.floor(flight.x), Math.floor(flight.y), Math.floor(flight.z)))?.boundingBox === 'block') {
+            flights.splice(flights.indexOf(flight), 1);
+            break;
+          }
+        }
+        flight.vy -= 0.05;
+        flight.vx *= 0.99;
+        flight.vy *= 0.99;
+        flight.vz *= 0.99;
+        if (flight.y < -10 && flights.includes(flight)) flights.splice(flights.indexOf(flight), 1);
+      }
       bot.emit('physicsTick');
     },
     observe: () => {
@@ -299,6 +426,24 @@ export function createCombatArena(options: CombatArenaOptions): CombatArena {
     },
     placeSolid: (x, y, z) => {
       world.setBlockStateId(new Vec3(x, y, z), registry.blocksByName.stone!.minStateId);
+    },
+    addOpponent,
+    addDrop: (id, point, name) => {
+      const definition = registry.itemsByName[name];
+      const drop = Object.assign(new EventEmitter(), {
+        id,
+        type: 'other',
+        name: 'item',
+        position: new Vec3(point.x, point.y, point.z),
+        velocity: new Vec3(0, 0, 0),
+        height: 0.25,
+        width: 0.25,
+        yaw: 0,
+        pitch: 0,
+        getDroppedItem: () => ({ name, type: definition?.id ?? 0, metadata: 0, count: 1, slot: 0, stackSize: 64 }),
+      }) as unknown as Bot['entity'];
+      entities[String(id)] = drop;
+      return drop;
     },
     removeOpponent: (id) => {
       const record = opponents.get(id);

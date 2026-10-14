@@ -14,6 +14,7 @@ export interface SkillResources {
   navigationActive: boolean;
   digging: { readonly settlement: Promise<void>; stopRequested: boolean } | null;
   eating: boolean;
+  itemInUse: boolean;
   inventoryTouched: boolean;
   window: MineflayerChest | null;
   quickBarSlotToRestore: number | null;

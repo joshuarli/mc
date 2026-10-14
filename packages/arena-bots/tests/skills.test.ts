@@ -1654,6 +1654,7 @@ function makeHarness(
     pathfinder,
     inventory,
     entity: { id: 1, position: { x: 0, y: 64, z: 0 } },
+    entities: {},
     world: makeSkillWorld(),
     health: 20,
     food: 10,

@@ -1,6 +1,7 @@
 import { performance } from 'node:perf_hooks';
 import { createRequire } from 'node:module';
 import {
+  FIXED_UNITS_PER_BLOCK,
   blockPosition,
   eyeToBodyDistance,
   entityId,
@@ -34,6 +35,7 @@ import {
 } from './civilization-skills.js';
 import { MineflayerObserver } from './observer.js';
 import { recordPathDiagnostic } from './path-diagnostics.js';
+import { leadAimPoint, observedVelocity, type Point3 } from './ballistics.js';
 import { readCombatBody, readCombatSelfBody } from './combat-view.js';
 import { classifyEntityVisibility, isTargetablePlayer, isVisibleEntity, toBlockPosition } from './perception.js';
 import type { ArenaSkillIntent } from './skill-intent.js';
@@ -52,7 +54,7 @@ import {
   type MineflayerItem,
   type MineflayerWindow,
 } from './skill-support.js';
-import { hasLocalVoxelLineOfSight } from './visibility.js';
+import { hasLocalVoxelLineOfSight, hasLocalVoxelRayToTarget } from './visibility.js';
 
 const { Movements, goals, pathfinder } = createRequire(import.meta.url)('mineflayer-pathfinder') as typeof import('mineflayer-pathfinder');
 const AStar = createRequire(import.meta.url)('mineflayer-pathfinder/lib/astar') as AStarConstructor;
@@ -68,6 +70,14 @@ const PINNED_PATHFINDER_VERSION = '2.4.5';
 const PATH_TIMEOUT_MS = 20_000;
 const PICKUP_RANGE_BLOCKS = 0.9;
 const PURSUIT_STANDOFF_BLOCKS = 2;
+const EATING_THREAT_RANGE_BLOCKS = 8;
+const BOW_DRAW_TICKS = 20;
+const BOW_MIN_RANGE_BLOCKS = 4.5;
+const BOW_MAX_RANGE_BLOCKS = 16;
+const ARROW_FLIGHT_RESPONSE_TICKS = 40;
+const ARROW_ACCOUNTING_TICKS = 4;
+const FRIENDLY_FIRE_CLEARANCE_BLOCKS = 1;
+const OFFHAND_SLOT = 45;
 const ATTACK_COOLDOWN_TICKS = 13;
 const ATTACK_RESPONSE_TICKS = 10;
 const MAX_TARGET_REPLANS = 8;
@@ -75,6 +85,7 @@ const MAX_TARGET_REPLANS = 8;
 type EngageObjective = 'closeDistance' | 'strike';
 
 interface EngageProgress {
+  action: ActionFunnelAction;
   lastPassed: ActionFunnelStage;
   eyeToBodyUnits: number | null;
 }
@@ -549,6 +560,7 @@ export class SkillOwner {
           navigationActive: false,
           digging: null,
           eating: false,
+          itemInUse: false,
           inventoryTouched: false,
           window: null,
           quickBarSlotToRestore: this.#bot.quickBarSlot,
@@ -604,7 +616,7 @@ export class SkillOwner {
     const active = this.#active;
     if (active === null) return;
     active.cancellation ??= reason;
-    if (active.resources.eating && this.#bot.usingHeldItem) this.#bot.deactivateItem();
+    if ((active.resources.eating || active.resources.itemInUse) && this.#bot.usingHeldItem) this.#bot.deactivateItem();
     if (active.resources.digging !== null) {
       try {
         await this.#stopActiveDigging(active);
@@ -824,20 +836,32 @@ export class SkillOwner {
   }
 
   async #engage(objective: EngageObjective, targetId: number, active: ActiveSkill): Promise<void> {
-    const action: ActionFunnelAction = objective === 'strike' ? 'attack' : 'approach';
-    const progress: EngageProgress = { lastPassed: 'skillAdmission', eyeToBodyUnits: null };
+    const progress: EngageProgress = { lastPassed: 'skillAdmission', eyeToBodyUnits: null, action: objective === 'strike' ? 'attack' : 'approach' };
+    await this.#funneled(targetId, progress, active, () => this.#pursueAndStrike(objective, targetId, active, progress));
+  }
+
+  async #funneled(
+    targetId: number | null,
+    progress: EngageProgress,
+    active: ActiveSkill,
+    run: () => Promise<void>,
+  ): Promise<void> {
     try {
-      await this.#pursueAndStrike(objective, targetId, active, progress);
+      await run();
     } catch (error) {
-      this.#recordStopped(action, targetId, progress, error, active);
+      this.#recordStopped(progress.action, targetId, progress, error, active);
       throw error;
     }
-    this.#funnel?.(reachedActionFunnelRecord(action, entityId(targetId), progress.lastPassed));
+    this.#funnel?.(reachedActionFunnelRecord(
+      progress.action,
+      targetId === null ? null : entityId(targetId),
+      progress.lastPassed,
+    ));
   }
 
   #recordStopped(
     action: ActionFunnelAction,
-    targetId: number,
+    targetId: number | null,
     progress: EngageProgress,
     error: unknown,
     active: ActiveSkill,
@@ -855,7 +879,7 @@ export class SkillOwner {
     }
     this.#funnel(stoppedActionFunnelRecord({
       action,
-      target: entityId(targetId),
+      target: targetId === null ? null : entityId(targetId),
       lastPassed: progress.lastPassed,
       reason,
       eyeToBodyUnits: progress.eyeToBodyUnits,
@@ -874,6 +898,15 @@ export class SkillOwner {
       throwIfInterrupted(signal);
       let view = this.#engagementView(targetId, progress);
       if (!isWithinMeleeReach(view.self, view.target)) {
+        const separation = eyeToBodyDistance(view.self, view.target) / FIXED_UNITS_PER_BLOCK;
+        if (objective === 'closeDistance' && separation > BOW_MIN_RANGE_BLOCKS && separation <= BOW_MAX_RANGE_BLOCKS) {
+          const bow = this.#readyBow();
+          if (bow !== null) {
+            progress.action = 'shoot';
+            await this.#shoot(targetId, bow, active, progress);
+            return;
+          }
+        }
         if (replans >= MAX_TARGET_REPLANS) {
           throw new SkillFault(
             'noProgress',
@@ -914,12 +947,122 @@ export class SkillOwner {
     }
   }
 
+  #readyBow(): MineflayerItem | null {
+    let bow: MineflayerItem | null = null;
+    let arrows = 0;
+    for (const item of this.#bot.inventory.slots) {
+      if (item === null || item === undefined) continue;
+      if (item.name === 'bow') bow = item;
+      else if (isArrowItem(item.name)) arrows += item.count;
+    }
+    return arrows > 0 ? bow : null;
+  }
+
+  #countArrows(): number {
+    let arrows = 0;
+    for (const item of this.#bot.inventory.slots) {
+      if (item !== null && item !== undefined && isArrowItem(item.name)) arrows += item.count;
+    }
+    return arrows;
+  }
+
+  #teammateNearShot(from: Point3, to: Point3, targetId: number): boolean {
+    const observer = this.#civilizationObserver;
+    if (observer === null) return false;
+    const dx = to.x - from.x;
+    const dy = to.y - from.y;
+    const dz = to.z - from.z;
+    const lengthSquared = dx * dx + dy * dy + dz * dz;
+    for (const entity of Object.values(this.#bot.entities)) {
+      if (entity.id === this.#bot.entity.id || entity.id === targetId || entity.type !== 'player') continue;
+      if (observer.isRosteredOpponent(entity.id)) continue;
+      const along = lengthSquared === 0 ? 0 : Math.max(0, Math.min(1, (
+        (entity.position.x - from.x) * dx + (entity.position.y + entity.height / 2 - from.y) * dy
+        + (entity.position.z - from.z) * dz
+      ) / lengthSquared));
+      const gap = Math.hypot(
+        from.x + dx * along - entity.position.x,
+        from.y + dy * along - (entity.position.y + entity.height / 2),
+        from.z + dz * along - entity.position.z,
+      );
+      if (gap <= FRIENDLY_FIRE_CLEARANCE_BLOCKS) return true;
+    }
+    return false;
+  }
+
+  async #shoot(targetId: number, bow: MineflayerItem, active: ActiveSkill, progress: EngageProgress): Promise<void> {
+    const signal = active.controller.signal;
+    const arrowsBefore = this.#countArrows();
+    if (arrowsBefore === 0) throw new SkillFault('preconditionsNotMet', 'no arrows remain', 'noAmmunition');
+    try {
+      await this.#awaitInventoryOperation(active, 'equip bow', () => this.#bot.equip(bow, 'hand'));
+    } catch (error) {
+      if (error instanceof SkillInterrupted) throw error;
+      throw new SkillFault('serverRejected', errorMessage(error));
+    }
+    throwIfInterrupted(signal);
+
+    const samples: Point3[] = [];
+    this.#engagementView(targetId, progress);
+    this.#bot.activateItem();
+    active.resources.itemInUse = true;
+    for (let tickIndex = 0; tickIndex < BOW_DRAW_TICKS; tickIndex += 1) {
+      await waitForPhysicsTicks(this.#bot, 1, signal);
+      const entity = this.#visibleOpponent(targetId);
+      samples.push({ x: entity.position.x, y: entity.position.y, z: entity.position.z });
+    }
+    const view = this.#engagementView(targetId, progress);
+    const self = this.#bot.entity;
+    const eyeHeight = (self as MineflayerEntity & { readonly eyeHeight?: number }).eyeHeight ?? 0;
+    const eye: Point3 = { x: self.position.x, y: self.position.y + eyeHeight, z: self.position.z };
+    const center: Point3 = {
+      x: view.entity.position.x,
+      y: view.entity.position.y + view.entity.height * 0.5,
+      z: view.entity.position.z,
+    };
+    const lead = leadAimPoint(eye, center, observedVelocity(samples));
+    if (this.#teammateNearShot(eye, lead.point, targetId)) {
+      throw new SkillFault('preconditionsNotMet', 'a teammate is near the shot line', 'friendlyFireRisk');
+    }
+    const aim = this.#bot.entity.position.offset(
+      lead.point.x - self.position.x,
+      lead.point.y - self.position.y,
+      lead.point.z - self.position.z,
+    );
+    if (!hasLocalVoxelRayToTarget(this.#bot, { blockPosition: aim, rayTarget: aim })) {
+      throw new SkillFault('preconditionsNotMet', 'the shot line is occluded', 'blockedLineOfSight');
+    }
+    await this.#lookAt(active, 'aim bow', aim);
+    throwIfInterrupted(signal);
+    this.#visibleOpponent(targetId);
+    progress.lastPassed = 'localValidation';
+
+    const response = waitForAttackResponse(this.#bot, targetId, signal, ARROW_FLIGHT_RESPONSE_TICKS, 'shotMissed');
+    response.catch(() => undefined);
+    this.#bot.deactivateItem();
+    active.resources.itemInUse = false;
+    progress.lastPassed = 'issued';
+    for (let waited = 0; this.#countArrows() >= arrowsBefore; waited += 1) {
+      if (waited >= ARROW_ACCOUNTING_TICKS) {
+        throw new SkillFault('noProgress', 'the bow release consumed no arrow', 'serverRejection');
+      }
+      await waitForPhysicsTicks(this.#bot, 1, signal);
+    }
+    progress.lastPassed = 'clientResponse';
+    await response;
+  }
+
   async #awaitAttackCooldown(active: ActiveSkill): Promise<void> {
     const lastSwing = this.#lastSwingTick;
     if (lastSwing === null) return;
     const remaining = ATTACK_COOLDOWN_TICKS - (this.#physicsTicks - lastSwing);
     if (remaining <= 0) return;
     const readyAt = this.#physicsTicks + remaining;
+    const offhand = this.#bot.inventory.slots[OFFHAND_SLOT];
+    if (offhand !== null && offhand !== undefined && offhand.name === 'shield') {
+      this.#bot.activateItem(true);
+      active.resources.itemInUse = true;
+    }
     try {
       await waitForCondition(
         this.#bot,
@@ -932,6 +1075,11 @@ export class SkillOwner {
         throw new SkillFault(error.failure, error.message, 'cooldownNotReady');
       }
       throw error;
+    } finally {
+      if (active.resources.itemInUse) {
+        active.resources.itemInUse = false;
+        if (this.#bot.usingHeldItem) this.#bot.deactivateItem();
+      }
     }
   }
 
@@ -1129,6 +1277,58 @@ export class SkillOwner {
   }
 
   async #eat(slot: number, active: ActiveSkill): Promise<void> {
+    const progress: EngageProgress = { action: 'eat', lastPassed: 'skillAdmission', eyeToBodyUnits: null };
+    await this.#funneled(null, progress, active, () => this.#eatWhileSafe(slot, active, progress));
+  }
+
+  #threatNearby(): boolean {
+    const self = this.#bot.entity;
+    for (const entity of Object.values(this.#bot.entities)) {
+      if (entity.id === self.id || !isTargetablePlayer(this.#bot, entity)) continue;
+      const gap = Math.hypot(
+        entity.position.x - self.position.x,
+        entity.position.y - self.position.y,
+        entity.position.z - self.position.z,
+      );
+      if (gap > EATING_THREAT_RANGE_BLOCKS) continue;
+      if (classifyEntityVisibility(this.#bot, entity) === 'visible') return true;
+    }
+    return false;
+  }
+
+  async #consumeUnlessThreatened(healthAtStart: number): Promise<void> {
+    let stopWatching = (): void => undefined;
+    const threatened = new Promise<never>((_resolve, reject) => {
+      const check = () => {
+        if (this.#bot.health < healthAtStart || this.#threatNearby()) {
+          stopWatching();
+          reject(new SkillFault('preconditionsNotMet', 'eating abandoned because a threat appeared', 'abortedUnderThreat'));
+        }
+      };
+      const onHurt = (entity?: MineflayerEntity) => {
+        if (entity?.id === this.#bot.entity.id) check();
+      };
+      this.#bot.on('physicsTick', check);
+      this.#bot.on('entityHurt', onHurt);
+      stopWatching = () => {
+        this.#bot.removeListener('physicsTick', check);
+        this.#bot.removeListener('entityHurt', onHurt);
+      };
+    });
+    threatened.catch(() => undefined);
+    const consumption = Promise.resolve(this.#bot.consume());
+    consumption.catch(() => undefined);
+    try {
+      await Promise.race([consumption, threatened]);
+    } catch (error) {
+      if (error instanceof SkillFault && error.miss === 'abortedUnderThreat') this.#bot.deactivateItem();
+      throw error;
+    } finally {
+      stopWatching();
+    }
+  }
+
+  async #eatWhileSafe(slot: number, active: ActiveSkill, progress: EngageProgress): Promise<void> {
     const item = inventoryItem(this.#bot, slot);
     if (item === null || classifyItem(this.#bot, item)?.kind !== 'food') {
       throw new SkillFault('preconditionsNotMet', `inventory slot ${slot} does not contain known food`);
@@ -1136,8 +1336,13 @@ export class SkillOwner {
     if (this.#bot.inventory.selectedItem !== null) {
       throw new SkillFault('preconditionsNotMet', 'inventory cursor is occupied before eating');
     }
+    if (this.#threatNearby()) {
+      throw new SkillFault('preconditionsNotMet', 'a visible opponent is near; eating is not safe', 'abortedUnderThreat');
+    }
     const beforeFood = this.#bot.food;
     const beforeCount = item.count;
+    const healthAtStart = this.#bot.health;
+    progress.lastPassed = 'localValidation';
     try {
       await this.#awaitInventoryOperation(active, 'equip food', () => this.#bot.equip(item, 'hand'));
     } catch (error) {
@@ -1151,16 +1356,18 @@ export class SkillOwner {
     }
     const heldSlot = heldItem.slot;
     active.resources.eating = true;
+    progress.lastPassed = 'issued';
     try {
       await this.#awaitInventoryOperation(
         active,
         'consume held food',
-        () => this.#bot.consume(),
+        () => this.#consumeUnlessThreatened(healthAtStart),
         ACTION_TIMEOUT_MS,
         null,
       );
     } catch (error) {
       if (active.controller.signal.aborted) throw new SkillInterrupted();
+      if (error instanceof SkillFault) throw error;
       throw new SkillFault('serverRejected', errorMessage(error));
     } finally {
       active.resources.eating = false;
@@ -1175,6 +1382,7 @@ export class SkillOwner {
       active.controller.signal,
       ACTION_TIMEOUT_MS,
     );
+    progress.lastPassed = 'clientResponse';
   }
 
   async #equip(slot: number, equipmentSlot: EquipmentSlot, rating: number, active: ActiveSkill): Promise<void> {
@@ -1294,6 +1502,8 @@ export class SkillOwner {
       }
     }
     try {
+      if (active.resources.itemInUse && this.#bot.usingHeldItem) this.#bot.deactivateItem();
+      active.resources.itemInUse = false;
       if (this.#cleanupFailure === null
         && active.resources.quickBarSlotToRestore !== null
         && this.#bot.quickBarSlot !== active.resources.quickBarSlotToRestore) {
@@ -1549,6 +1759,30 @@ async function waitForPathStop(bot: Bot, timeoutMs: number): Promise<void> {
   });
 }
 
+function isArrowItem(name: string): boolean {
+  return name === 'arrow' || name === 'tipped_arrow' || name === 'spectral_arrow';
+}
+
+async function waitForPhysicsTicks(bot: Bot, count: number, signal: AbortSignal): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    let remaining = count;
+    const onAbort = () => finish(new SkillInterrupted());
+    const onTick = () => {
+      remaining -= 1;
+      if (remaining <= 0) finish();
+    };
+    const finish = (error?: Error) => {
+      bot.removeListener('physicsTick', onTick);
+      signal.removeEventListener('abort', onAbort);
+      if (error === undefined) resolve();
+      else reject(error);
+    };
+    bot.on('physicsTick', onTick);
+    signal.addEventListener('abort', onAbort, { once: true });
+    if (signal.aborted) onAbort();
+  });
+}
+
 function aimPoint(entity: MineflayerEntity): MineflayerEntity['position'] {
   return entity.position.offset(0, entity.height * 0.65, 0);
 }
@@ -1558,6 +1792,7 @@ async function waitForAttackResponse(
   targetId: number,
   signal: AbortSignal,
   maxTicks: number,
+  missReason: ActionFunnelMissReason = 'ambiguousConfirmation',
 ): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     let ticks = 0;
@@ -1573,7 +1808,7 @@ async function waitForAttackResponse(
     const onTick = () => {
       ticks += 1;
       if (ticks >= maxTicks) {
-        finish(new SkillFault('timedOut', `attack on entity ${targetId} had no observed damage`, 'ambiguousConfirmation'));
+        finish(new SkillFault('timedOut', `attack on entity ${targetId} had no observed damage`, missReason));
       }
     };
     const finish = (error?: Error) => {

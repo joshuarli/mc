@@ -3,6 +3,8 @@ import { createRequire } from 'node:module';
 import {
   agentObservation,
   BORDER_UNKNOWN_DIAGNOSTIC_THRESHOLD,
+  MAX_ARROW_COUNT,
+  MAX_TERRAIN_CHANGES,
   agentState,
   blockPosition,
   currentKnowledge,
@@ -75,6 +77,7 @@ export class MineflayerObserver {
   readonly #onEntityHurt: (entity?: MineflayerEntity, source?: MineflayerEntity) => void;
   readonly #diagnostics: ClientDiagnosticSink | null;
   #unknownBorderObservations = 0;
+  #pendingTerrainChanges: BlockPosition[] = [];
   #sequence = 0;
   #lastTick: Tick | null = null;
   #spawned = false;
@@ -107,7 +110,8 @@ export class MineflayerObserver {
     };
     this.#onRespawn = () => this.#resetWorldKnowledge();
     this.#onEnd = () => this.#resetWorldKnowledge();
-    this.#onBlockUpdate = (_oldBlock, newBlock) => {
+    this.#onBlockUpdate = (oldBlock, newBlock) => {
+      if (oldBlock === null || oldBlock.stateId !== newBlock.stateId) this.#recordTerrainChange(newBlock);
       const key = positionKey(newBlock.position.x, newBlock.position.y, newBlock.position.z);
       if (newBlock.name !== 'chest' && newBlock.name !== 'trapped_chest') {
         this.#openedContainers.delete(key);
@@ -154,6 +158,34 @@ export class MineflayerObserver {
       opponents,
       loot,
     });
+  }
+
+  #recordTerrainChange(block: MineflayerBlock): void {
+    const entity = this.#bot.entity;
+    if (entity === undefined || entity === null || !isFinitePosition(entity.position)) return;
+    const { x, y, z } = block.position;
+    if (!Number.isSafeInteger(x) || !Number.isSafeInteger(y) || !Number.isSafeInteger(z)) return;
+    if (Math.hypot(x - entity.position.x, y - entity.position.y, z - entity.position.z) > MAX_ENTITY_RANGE_BLOCKS) return;
+    this.#pendingTerrainChanges.push(blockPosition(x, y, z));
+    if (this.#pendingTerrainChanges.length > MAX_TERRAIN_CHANGES) this.#pendingTerrainChanges.shift();
+  }
+
+  #drainTerrainChanges(): readonly BlockPosition[] | undefined {
+    if (this.#pendingTerrainChanges.length === 0) return undefined;
+    const drained = this.#pendingTerrainChanges;
+    this.#pendingTerrainChanges = [];
+    return drained;
+  }
+
+  #arrowCount(): number {
+    let count = 0;
+    let hasBow = false;
+    for (const item of this.#bot.inventory.slots) {
+      if (item === null || item === undefined) continue;
+      if (item.name === 'bow') hasBow = true;
+      else if (item.name === 'arrow' || item.name === 'tipped_arrow' || item.name === 'spectral_arrow') count += item.count;
+    }
+    return hasBow ? Math.min(count, MAX_ARROW_COUNT) : 0;
   }
 
   #trackBorderKnowledge(border: Knowledge<WorldBorder>): void {
@@ -261,9 +293,13 @@ export class MineflayerObserver {
       }
     }
 
+    const arrows = this.#arrowCount();
+    const terrainChanges = this.#drainTerrainChanges();
     return agentState({
       position: toBlockPosition(entity.position),
       combat: readCombatSelfBody(entity),
+      ...(arrows > 0 ? { ranged: { arrows } } : {}),
+      ...(terrainChanges === undefined ? {} : { terrainChanges }),
       healthHalfHearts,
       hungerPoints: this.#bot.food,
       foodStacks: foods,

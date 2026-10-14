@@ -60,6 +60,8 @@ export type {
 } from './combat.js';
 
 export {
+  MAX_ARROW_COUNT,
+  MAX_TERRAIN_CHANGES,
   ObservationValidationError,
   agentObservation,
   agentState,
@@ -101,6 +103,7 @@ export type {
   ObservationField,
   ObservationSequence,
   ObservationValidationCode,
+  RangedLoadout,
   SeatId,
   Tick,
   VisibleOpponent,

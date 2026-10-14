@@ -58,6 +58,7 @@ const FAILED_EXPLORATION_APPROACH_BLOCKS = 8n;
 const CACHE_DEPARTURE_DISTANCE_BLOCKS = 8n;
 const MAX_CACHE_DEPARTURE_RADIUS_BLOCKS = 16;
 const MAX_HUNTER_PURSUE_BLOCKS = 12;
+const BOW_ENGAGEMENT_RANGE_BLOCKS = 16;
 const OUTNUMBERED_OPPONENT_COUNT = 2;
 const OUTNUMBERED_RETREAT_HEALTH_FACTOR = 2;
 
@@ -564,6 +565,16 @@ function decideWithSemantics(
     return finish(goal, intent, { ...currentMemory, lastGoal: goal });
   }
 
+  const shooter = currentOpponents === null || agent.ranged === undefined || agent.combat === undefined
+    ? null
+    : rangedOpponent(agent, currentOpponents);
+  if (shooter !== null
+      && agent.healthHalfHearts > params.values.retreatAtHealthHalfHeartsOrBelow
+      && !isOutsideBorder(border, shooter.position)) {
+    const goal: Goal = Object.freeze({ kind: 'engageVisibleOpponent', target: shooter.id });
+    return finish(goal, { kind: 'approach', target: shooter.id }, { ...currentMemory, lastGoal: goal });
+  }
+
   if (openingStyle === 'hunter' && currentOpponents?.length === 1
       && agent.healthHalfHearts > params.values.retreatAtHealthHalfHeartsOrBelow
       && squaredDistance(agent.position, currentOpponents[0]!.position) <= BigInt(MAX_HUNTER_PURSUE_BLOCKS) ** 2n) {
@@ -627,6 +638,7 @@ function decideWithSemantics(
     currentMemory,
     random,
     semantics,
+    agent.combat !== undefined,
   );
   if (exploration.ok === false) {
     return waitDecision(exploration.reason, currentMemory);
@@ -659,7 +671,14 @@ function openingExploration(
     const goal: Goal = Object.freeze({ kind: 'explore' });
     return finish(goal, { kind: 'navigate', target: departure.value }, { ...memory, lastGoal: goal });
   }
-  const exploration = explorationTarget(agent.position, params.values.searchRadiusBlocks, memory, random, semantics);
+  const exploration = explorationTarget(
+    agent.position,
+    params.values.searchRadiusBlocks,
+    memory,
+    random,
+    semantics,
+    agent.combat !== undefined,
+  );
   if (exploration.ok === false) return waitDecision(exploration.reason, memory);
   const goal: Goal = Object.freeze({ kind: 'explore' });
   return finish(goal, { kind: 'navigate', target: exploration.value }, { ...memory, lastGoal: goal });
@@ -950,10 +969,19 @@ function failedTargetEvidenceChanged(observation: AgentObservation, failed: Fail
       return !sameSearchOpponentEvidence(failed.opponent, searchOpponentEvidence(observation, failed.target));
     case 'explore': {
       const agent = currentValue(observation.agent);
-      return agent !== null
-        && manhattanDistance(agent.position, failed.origin) >= FAILED_EXPLORATION_APPROACH_BLOCKS;
+      if (agent === null) return false;
+      if (agent.terrainChanges?.some((change) => isInsideRouteCorridor(change, failed.origin, failed.target)) === true) {
+        return true;
+      }
+      return manhattanDistance(agent.position, failed.origin) >= FAILED_EXPLORATION_APPROACH_BLOCKS;
     }
   }
+}
+
+function isInsideRouteCorridor(change: BlockPosition, origin: BlockPosition, target: BlockPosition): boolean {
+  return change.x >= Math.min(origin.x, target.x) - 1 && change.x <= Math.max(origin.x, target.x) + 1
+    && change.y >= Math.min(origin.y, target.y) - 2 && change.y <= Math.max(origin.y, target.y) + 2
+    && change.z >= Math.min(origin.z, target.z) - 1 && change.z <= Math.max(origin.z, target.z) + 1;
 }
 
 function searchOpponentEvidence(observation: AgentObservation, target: EntityId): SearchOpponentEvidence {
@@ -1031,6 +1059,22 @@ function validateSkillCancellation(value: string): void {
 
 function currentValue<T>(knowledge: Knowledge<T>): T | null {
   return knowledge.kind === 'current' ? knowledge.value : null;
+}
+
+function rangedOpponent(agent: AgentState, opponents: readonly VisibleOpponent[]): VisibleOpponent | null {
+  const self = agent.combat;
+  if (self === undefined) return null;
+  const limit = BigInt(BOW_ENGAGEMENT_RANGE_BLOCKS * FIXED_UNITS_PER_BLOCK) ** 2n;
+  const candidates = opponents.filter((opponent) => (
+    opponent.combat !== undefined && feetSquaredDistanceUnits(self, opponent.combat) <= limit
+  ));
+  candidates.sort((first, second) => {
+    const firstDistance = feetSquaredDistanceUnits(self, first.combat!);
+    const secondDistance = feetSquaredDistanceUnits(self, second.combat!);
+    if (firstDistance !== secondDistance) return firstDistance < secondDistance ? -1 : 1;
+    return compareNumbers(first.id, second.id);
+  });
+  return candidates[0] ?? null;
 }
 
 function isWithinMeleeReachOf(agent: AgentState, opponent: VisibleOpponent, semantics: DecisionSemantics): boolean {
@@ -1319,6 +1363,7 @@ function explorationTarget(
   memory: PolicyMemory,
   random: DeterministicRandom,
   semantics: DecisionSemantics,
+  retryOldestFailure = false,
 ): { readonly ok: true; readonly value: BlockPosition }
   | { readonly ok: false; readonly reason: 'unrepresentableTarget' | 'failedTargetsExhausted' } {
   const half = Math.max(1, Math.floor(radius / 2));
@@ -1340,6 +1385,7 @@ function explorationTarget(
   }
 
   let representableTargets = 0;
+  let oldestFailure: { readonly index: number; readonly value: BlockPosition } | null = null;
   for (let offset = 0; offset < offsets.length; offset += 1) {
     const [dx, dz] = offsets[(start + offset) % offsets.length]!;
     const candidate = offsetBlockPosition(position, dx, 0, dz);
@@ -1347,12 +1393,15 @@ function explorationTarget(
       continue;
     }
     representableTargets += 1;
-    if (!memory.failedTargets.some((failed) => (
+    const failedIndex = memory.failedTargets.findIndex((failed) => (
       failed.kind === 'explore' && samePosition(failed.target, candidate.value)
-    ))) {
-      return candidate;
+    ));
+    if (failedIndex < 0) return candidate;
+    if (oldestFailure === null || failedIndex < oldestFailure.index) {
+      oldestFailure = { index: failedIndex, value: candidate.value };
     }
   }
+  if (retryOldestFailure && oldestFailure !== null) return { ok: true, value: oldestFailure.value };
   return {
     ok: false,
     reason: representableTargets === 0 ? 'unrepresentableTarget' : 'failedTargetsExhausted',

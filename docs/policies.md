@@ -57,6 +57,12 @@ The adapter runs `approach` and `attack` as one engagement under the exclusive s
 
 Each engagement reports one action funnel record through the optional `funnel` sink of `createMineflayerArenaClient`. A record names the last passed stage of opportunity, tactical choice, skill admission, local validation, issued, client response and confirmed effect, and for a stop one typed reason: `outOfGeometricReach`, `targetNoLongerVisible`, `targetDespawnedOrEliminated`, `cooldownNotReady`, `aimNotReady`, `blockedLineOfSight`, `ownershipDeferred`, `clientOperationFailed`, `serverRejection`, `ambiguousConfirmation`, `timeout`, `agentEliminated` or `runShutdown`. The adapter can pass at most client response; evaluator confirmation and the stages before skill admission belong to the runner and the plugin.
 
+## Ranged, defensive and recovery behavior
+
+An agent state may also carry a ranged loadout (a bow plus a positive arrow count, read from the client's own inventory) and up to 32 block positions the client saw change since its previous observation. With a ranged loadout and a visible opponent within 16 blocks and outside fight range, the policy keeps the `approach` intent and the adapter shoots instead of closing: it equips the bow, draws for 20 ticks while sampling the target's received positions, derives velocity only from those samples (bounded to one block per tick), leads and drops the aim for arrow flight, refuses when the line is occluded or a rostered teammate is within one block of it, releases, and accounts the arrow from the inventory. A hit is the client observing damage from this client; an unobserved hit is reported as a miss.
+
+Eating checks for a visible opponent within 8 blocks before starting and again every physics tick; a threat or damage releases the item and fails the action. A shield in the offhand is raised during the weapon cooldown and lowered before the swing. A block change inside the corridor of a failed exploration route clears only that failure. When every exploration direction has failed, the policy retries the oldest failure instead of idling, so a stale failure never holds the agent in place.
+
 ## Opening styles
 
 Schema-v2 Hunger Games scenarios assign each seat a style from their explicit `openingStyleCycle`. The policy maps `(seed mod 3 + seat) mod 3` to that cycle, so each fixed seat receives all three styles across any three consecutive seeds.

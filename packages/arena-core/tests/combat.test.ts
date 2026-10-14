@@ -18,6 +18,7 @@ import {
   isCrosshairOnBody,
   isWithinMeleeReach,
   normalizePolicyReplayInput,
+  policyMemory,
   observationSequence,
   PolicyParams,
   RandomStream,
@@ -61,6 +62,7 @@ const observationOf = (
   self: CombatSelfBody,
   opponents: readonly { readonly id: number; readonly body: CombatBody; readonly attacking?: boolean }[],
   health = 40,
+  extras: { readonly ranged?: { readonly arrows: number }; readonly terrainChanges?: readonly ReturnType<typeof blockPosition>[]; readonly border?: ReturnType<typeof worldBorder> } = {},
 ) => agentObservation({
   tick: tick(10),
   sequence: observationSequence(11),
@@ -71,13 +73,15 @@ const observationOf = (
       floorBlock(self.position.z / FIXED_UNITS_PER_BLOCK),
     ),
     combat: self,
+    ...(extras.ranged === undefined ? {} : { ranged: extras.ranged }),
+    ...(extras.terrainChanges === undefined ? {} : { terrainChanges: extras.terrainChanges }),
     healthHalfHearts: health,
     hungerPoints: 20,
     foodStacks: [],
     equipped: emptyEquipment(),
     upgrades: [],
   })),
-  border: currentKnowledge(worldBorder(0, 0, 100)),
+  border: currentKnowledge(extras.border ?? worldBorder(0, 0, 100)),
   opponents: currentKnowledge(opponents.map(({ id, body, attacking }) => visibleOpponent(
     entityId(id),
     blockPosition(
@@ -91,9 +95,12 @@ const observationOf = (
   loot: unknownKnowledge(),
 });
 
-const decideOn = (observation: ReturnType<typeof observationOf>) => decide(
+const decideOn = (
+  observation: ReturnType<typeof observationOf>,
+  memory = emptyPolicyMemory(),
+) => decide(
   observation,
-  emptyPolicyMemory(),
+  memory,
   PolicyParams.baseline(),
   DeterministicRandom.forStream(1n, RandomStream.search(seatId(0))),
 );
@@ -217,3 +224,64 @@ test('funnel records require a missing transition after the last passed stage', 
     eyeToBodyUnits: 3100,
   });
 });
+
+const EXPLORE_OFFSETS = [[8, 0], [8, 4], [0, 8], [-4, 8], [-8, 0], [-8, -4], [0, -8], [4, -8]] as const;
+
+const exhaustedMemory = (origin: ReturnType<typeof blockPosition>) => policyMemory({
+  lastGoal: null,
+  lastOpponent: null,
+  failedTargets: EXPLORE_OFFSETS.map(([dx, dz]) => ({
+    kind: 'explore' as const,
+    target: blockPosition(origin.x + dx, origin.y, origin.z + dz),
+    origin,
+  })),
+});
+
+test('curriculum 14: exhausted exploration memory retries the oldest failure instead of idling', () => {
+  const self = selfAt(0.5, 64, 0.5);
+  const origin = blockPosition(0, 64, 0);
+  const decision = decideOn(observationOf(self, []), exhaustedMemory(origin));
+  equal(decision.goal.kind, 'explore');
+  deepStrictEqual(decision.intent, { kind: 'navigate', target: blockPosition(8, 64, 0) });
+});
+
+test('curriculum 13: a changed block invalidates only the failed route it touches', () => {
+  const self = selfAt(0.5, 64, 0.5);
+  const origin = blockPosition(0, 64, 0);
+  const memory = policyMemory({
+    lastGoal: null,
+    lastOpponent: null,
+    failedTargets: [
+      { kind: 'explore', target: blockPosition(8, 64, 0), origin },
+      { kind: 'explore', target: blockPosition(-8, 64, 0), origin },
+    ],
+  });
+  const decision = decideOn(observationOf(self, [], 40, { terrainChanges: [blockPosition(4, 64, 0)] }), memory);
+  equal(decision.goal.kind, 'explore');
+  const kept = decision.memory.failedTargets.map((entry) => entry.kind === 'explore' ? entry.target.x : null);
+  deepStrictEqual(kept, [-8]);
+});
+
+test('curriculum 8: an archer engages a visible opponent beyond fight range and others explore', () => {
+  const self = selfAt(0.5, 64, 0.5);
+  const far = bodyAt(0.5, 64, -10.5);
+  const armed = decideOn(observationOf(self, [{ id: 3, body: far }], 40, { ranged: { arrows: 12 } }));
+  deepStrictEqual(armed.goal, { kind: 'engageVisibleOpponent', target: 3 });
+  deepStrictEqual(armed.intent, { kind: 'approach', target: 3 });
+  const unarmed = decideOn(observationOf(self, [{ id: 3, body: far }]));
+  notEqualGoal(unarmed.goal.kind);
+});
+
+test('curriculum 10: border escape preempts engagement even with an attacker in reach', () => {
+  const self = selfAt(99.5, 64, 0.5);
+  const attacker = bodyAt(98.5, 64, 0.5);
+  const decision = decideOn(observationOf(self, [{ id: 4, body: attacker, attacking: true }], 40, {
+    border: worldBorder(0, 0, 100),
+  }));
+  equal(decision.goal.kind, 'escapeBorder');
+  deepStrictEqual(decision.intent, { kind: 'navigate', target: blockPosition(0, 64, 0) });
+});
+
+function notEqualGoal(kind: string): void {
+  ok(kind !== 'engageVisibleOpponent', `unexpected goal ${kind}`);
+}
