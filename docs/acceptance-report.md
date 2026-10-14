@@ -1,6 +1,6 @@
 # Acceptance report
 
-**Status: campaign execution continues. M1 passes at `296c3c9`: all six Hunger Games seeds passed, with five winners and one draw. The complete legal-player chain also passes. Civilization source is merged with 180 focused TypeScript and 52 Java cases independently covered; live Civilization acceptance is next. Hardening, policy comparison, benchmarks, and delivery remain pending.** Historical proofs below apply to their recorded revisions.
+**Status: campaign execution continues. M1 passes at `296c3c9`: all six Hunger Games seeds passed, with five winners and one draw. The complete legal-player chain also passes. Civilization source is merged with 180 focused TypeScript and 52 Java cases independently covered. Its first live rules attempt exposed a startup capability mismatch, now fixed at `508d5da`; live acceptance remains pending. Hardening, policy comparison, benchmarks, and delivery remain pending.** Historical proofs below apply to their recorded revisions.
 
 ## Environment and selected stack
 
@@ -300,3 +300,11 @@ jaq '{seed,outcome,pvp_engagements,looted_seats,resources:.measurements.resource
 Across the six runs, 1,039 active resource samples had zero failures; the highest summed Node/Java RSS was 2,155,675,648 bytes and the lowest available-memory observation across startup/active was 14,623,080,448 bytes. Every reported swap-out delta was zero. One startup sample for seed 481517 was cancelled and remains recorded. Summed RSS is not unique physical memory. These are functional safety observations, not comparative performance results. General event-loop delay, authoritative server tick duration, and diagnostic overhead remain unavailable, and no 20-TPS performance claim is made.
 
 Civilization is merged at `ae0aade` after M1. The merge preserves the pending-abort state allowance and ACK-gated terminal events. Root's independent stack check passes, previously covered production source is preserved, and shell syntax plus registered-selector syntax checks pass. The 180 focused TypeScript and 52 Java cases do not substitute for the upcoming live `civilization-rules`, `civilization-six`, and `civilization-baseline` cases.
+
+### Civilization startup capability correction
+
+The first live `civilization-rules` attempt, `civilization-rules-f3216fb9-478a-478f-bef3-8cd0fcd932dc`, failed before gameplay with `unsupported_capability`; cleanup succeeded and no trace checkpoint was published. The full TAP and original failure/log/world remain retained locally. The Java plugin advertised both implemented modes, while runtime startup supplied only the selected mode as the codec's supported set. The strict codec correctly rejected the other advertised capability.
+
+At `508d5da`, both bootstrap and normal startup use the immutable closed known-capability set and separately require the selected mode on authenticated readiness before prepare. Unknown capabilities, hello/ready set mismatches, authentication, and plugin identity remain strict. The additive `CONTROL_CAPABILITIES` export is documented; existing wire formats and listener signatures are unchanged. The exact loopback rejection was reproduced before the fix; the provider's 30 focused checks pass, and root's independent runtime/control compilations plus all 30 session, identity, and wire-guard cases pass. The main stack also compiles. This source correction is not live Civilization acceptance.
+
+Normal eligible GC removed only the older resource-diagnostic run `hunger-six-seed-4815-642b2f17-b770-4b15-ab39-2fae08ab99f2`, after preserving its world plan, operational failure, failed resource sample, full log, ten stats files, and complete trace. All fifteen archive files matched the originals before and after removal, and the archived trace passed `report`. Nine full runs remain; the new startup failure and all protected failures are intact.
