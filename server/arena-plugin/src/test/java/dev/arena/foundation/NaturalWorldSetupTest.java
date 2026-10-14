@@ -60,6 +60,70 @@ final class NaturalWorldSetupTest {
     }
 
     @Test
+    void searchPlanMovesAnUnsafeDeclaredSpawnToTheFirstSafeRingColumn() {
+        NaturalMapPlan plan = searchPlan(List.of(spawn(0, 100, 100)), List.of(loot(120, 100)));
+        TestWorld world = new TestWorld();
+        world.waterColumns.add(columnKey(100, 100));
+
+        NaturalWorldSetup.PreparedWorld prepared = NaturalWorldSetup.prepare(plan, world, 2, TEST_MATERIALS);
+
+        assertEquals(List.of(new MapPlan.SpawnPoint(0, new MapPlan.Position(99, 65, 99))), prepared.spawns());
+        assertEquals(NaturalWorldSetup.BOUNDED_SEARCH_RECIPE, prepared.spawnRecipe());
+        TestWorld repeat = new TestWorld();
+        repeat.waterColumns.add(columnKey(100, 100));
+        NaturalWorldSetup.PreparedWorld again = NaturalWorldSetup.prepare(plan, repeat, 2, TEST_MATERIALS);
+        assertEquals(prepared.worldIdentity(), again.worldIdentity());
+        NaturalWorldSetup.PreparedWorld unmoved = NaturalWorldSetup.prepare(plan, new TestWorld(), 2, TEST_MATERIALS);
+        assertEquals(new MapPlan.Position(100, 65, 100), unmoved.spawns().getFirst().position());
+        assertFalse(prepared.worldIdentity().equals(unmoved.worldIdentity()));
+    }
+
+    @Test
+    void searchPlanReportsDiagnosticsInsteadOfRerollingWhenNoCandidateIsSafe() {
+        NaturalMapPlan plan = searchPlan(List.of(spawn(0, 100, 100)), List.of(loot(120, 100)));
+        TestWorld world = new TestWorld();
+        for (int x = 90; x <= 110; x++) {
+            for (int z = 90; z <= 110; z++) {
+                world.waterColumns.add(columnKey(x, z));
+            }
+        }
+
+        IllegalStateException failure = assertThrows(IllegalStateException.class,
+                () -> NaturalWorldSetup.prepare(plan, world, 2, TEST_MATERIALS));
+
+        assertTrue(failure.getMessage().contains("seat 0 declared at (100,100) examined 128 candidates"));
+        assertTrue(failure.getMessage().contains("unsafe-support=128"));
+        assertEquals(List.of(), world.placedChests);
+    }
+
+    @Test
+    void searchPlanRejectsHazardsAndSpawnsWithoutAnEscapeColumn() {
+        NaturalMapPlan plan = searchPlan(List.of(spawn(0, 100, 100)), List.of(loot(120, 100)));
+        TestWorld hazard = new TestWorld();
+        hazard.hazardPositions.add(new MapPlan.Position(101, 65, 100));
+        assertEquals(new MapPlan.Position(99, 65, 99),
+                NaturalWorldSetup.prepare(plan, hazard, 2, TEST_MATERIALS).spawns().getFirst().position());
+
+        TestWorld boxed = new TestWorld();
+        boxed.blockedPositions.addAll(List.of(
+                new MapPlan.Position(99, 65, 100), new MapPlan.Position(101, 65, 100),
+                new MapPlan.Position(100, 65, 99), new MapPlan.Position(100, 65, 101)));
+        assertEquals("no-escape", NaturalWorldSetup.spawnRejection(boxed, new MapPlan.Position(100, 65, 100), TEST_MATERIALS));
+    }
+
+    @Test
+    void searchCandidatesAreBoundedAndOrderedDeterministically() {
+        List<NaturalMapPlan.SurfaceColumn> candidates = NaturalWorldSetup.searchCandidates(
+                new NaturalMapPlan.SurfaceColumn(0, 0), new WorldPlan.Footprint(1024, 1024));
+
+        assertEquals(new NaturalMapPlan.SurfaceColumn(0, 0), candidates.getFirst());
+        assertEquals(new NaturalMapPlan.SurfaceColumn(0, 0), candidates.get(0));
+        assertEquals(new NaturalMapPlan.SurfaceColumn(0, 1), candidates.get(1));
+        assertTrue(candidates.size() <= NaturalWorldSetup.SEARCH_MAX_CANDIDATES_PER_SEAT);
+        assertTrue(candidates.stream().allMatch(column -> column.x() >= 0 && column.z() >= 0));
+    }
+
+    @Test
     void rejectsUnsafeSpawnSupportAndHeadroomBeforeChestMutation() {
         NaturalMapPlan plan = plan(List.of(spawn(0, 100, 100), spawn(1, 200, 200)), List.of(loot(104, 100)));
         TestWorld waterSupport = new TestWorld();
@@ -199,6 +263,17 @@ final class NaturalWorldSetupTest {
         return new NaturalMapPlan("natural-test", BigInteger.ONE, semanticId, footprint, spawns, loot);
     }
 
+    private static NaturalMapPlan searchPlan(
+            List<NaturalMapPlan.SurfaceSpawnPoint> spawns,
+            List<NaturalMapPlan.SurfaceLootContainer> loot) {
+        WorldPlan.Footprint footprint = new WorldPlan.Footprint(1024, 1024);
+        String semanticId = NaturalMapPlan.computeSemanticId(footprint, spawns, loot);
+        List<NaturalMapPlan.RosterSeat> roster = spawns.stream()
+                .map(spawn -> NaturalMapPlan.RosterSeat.bot(spawn.seat())).toList();
+        return new NaturalMapPlan(NaturalMapPlan.SCHEMA_VERSION_GENERALIZED_ROSTER, "natural-test", BigInteger.ONE,
+                semanticId, footprint, spawns, loot, roster);
+    }
+
     private static NaturalMapPlan.SurfaceSpawnPoint spawn(int seat, int x, int z) {
         return new NaturalMapPlan.SurfaceSpawnPoint(seat, new NaturalMapPlan.SurfaceColumn(x, z));
     }
@@ -220,6 +295,7 @@ final class NaturalWorldSetupTest {
         private final Set<String> existingCacheColumns = new HashSet<>();
         private final Set<MapPlan.Position> blockedPositions = new HashSet<>();
         private final Set<MapPlan.Position> passableSturdyPositions = new HashSet<>();
+        private final Set<MapPlan.Position> hazardPositions = new HashSet<>();
         private final List<PlacedChest> placedChests = new ArrayList<>();
         private final Map<String, Integer> surfaceByColumn = new HashMap<>();
         private MapPlan.Position worldSpawn;
@@ -249,6 +325,9 @@ final class NaturalWorldSetupTest {
         public NaturalWorldSetup.BlockState blockAt(MapPlan.Position position) {
             if (blockedPositions.contains(position)) {
                 return new NaturalWorldSetup.BlockState(Material.DIRT, false, false, true);
+            }
+            if (hazardPositions.contains(position)) {
+                return new NaturalWorldSetup.BlockState(Material.LAVA, true, true, false);
             }
             if (passableSturdyPositions.contains(position)) {
                 return new NaturalWorldSetup.BlockState(Material.STONE, false, true, true);

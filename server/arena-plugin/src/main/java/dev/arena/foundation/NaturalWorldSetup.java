@@ -1,13 +1,29 @@
 package dev.arena.foundation;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.HexFormat;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 import org.bukkit.Material;
 
 final class NaturalWorldSetup {
+    static final String DECLARED_COLUMN_RECIPE = "declared-columns-v1";
+    static final int SEARCH_RING_RADIUS_BLOCKS = 8;
+    static final int SEARCH_MAX_CANDIDATES_PER_SEAT = 128;
+    static final String BOUNDED_SEARCH_RECIPE = "spawn-search-v1;ring-radius=" + SEARCH_RING_RADIUS_BLOCKS
+            + ";max-candidates=" + SEARCH_MAX_CANDIDATES_PER_SEAT + ";order=declared,chebyshev-ring,x-then-z";
+    private static final Set<Material> HAZARDS = Set.of(
+            Material.LAVA, Material.FIRE, Material.SOUL_FIRE, Material.MAGMA_BLOCK, Material.CACTUS,
+            Material.CAMPFIRE, Material.SOUL_CAMPFIRE, Material.SWEET_BERRY_BUSH, Material.WITHER_ROSE,
+            Material.POWDER_SNOW, Material.COBWEB);
+
     record BlockState(Material material, boolean liquid, boolean passable, boolean sturdyTop) {}
 
     interface SurfaceAccess {
@@ -29,7 +45,9 @@ final class NaturalWorldSetup {
     record PreparedWorld(
             List<MapPlan.SpawnPoint> spawns,
             List<MapPlan.LootContainer> lootContainers,
-            int preparedChunkCount) {
+            int preparedChunkCount,
+            String spawnRecipe,
+            String worldIdentity) {
         PreparedWorld {
             spawns = List.copyOf(spawns);
             lootContainers = List.copyOf(lootContainers);
@@ -49,24 +67,10 @@ final class NaturalWorldSetup {
         List<NaturalMapPlan.ChunkPosition> chunks = plan.chunksWithViewHalo(viewDistanceChunks);
         world.prepareChunks(chunks);
 
-        List<MapPlan.SpawnPoint> resolvedSpawns = new ArrayList<>(plan.spawns().size());
-        List<IllegalStateException> unsafeSpawns = new ArrayList<>();
-        for (NaturalMapPlan.SurfaceSpawnPoint spawn : plan.spawns()) {
-            MapPlan.Position feet = resolveSpawnPosition(world, spawn.column());
-            try {
-                validateSpawn(world, feet, spawn.seat(), materials);
-            } catch (IllegalStateException unsafeSpawn) {
-                unsafeSpawns.add(unsafeSpawn);
-            }
-            resolvedSpawns.add(new MapPlan.SpawnPoint(spawn.seat(), feet));
-        }
-        if (!unsafeSpawns.isEmpty()) {
-            String details = unsafeSpawns.stream().map(IllegalStateException::getMessage).collect(Collectors.joining("; "));
-            IllegalStateException failure = new IllegalStateException("natural spawn validation failed: " + details, unsafeSpawns.getFirst());
-            unsafeSpawns.stream().skip(1).forEach(failure::addSuppressed);
-            throw failure;
-        }
-        validateSpawnSeparation(resolvedSpawns);
+        boolean searching = plan.schemaVersion() == NaturalMapPlan.SCHEMA_VERSION_GENERALIZED_ROSTER;
+        List<MapPlan.SpawnPoint> resolvedSpawns = searching
+                ? searchSpawns(plan, world, materials)
+                : resolveDeclaredSpawns(plan, world, materials);
 
         List<MapPlan.LootContainer> resolvedLoot = new ArrayList<>(plan.lootContainers().size());
         List<List<Material>> contents = new ArrayList<>(plan.lootContainers().size());
@@ -74,6 +78,9 @@ final class NaturalWorldSetup {
         for (NaturalMapPlan.SurfaceLootContainer container : plan.lootContainers()) {
             MapPlan.Position chestPosition = resolveLootPosition(world, container.column());
             validateChest(world, chestPosition, materials);
+            if (searching && hazardNear(world, chestPosition)) {
+                throw new IllegalStateException("natural cache chest is adjacent to a hazard at " + chestPosition);
+            }
             if (!chestPositions.add(chestPosition)) {
                 throw new IllegalStateException("natural cache columns resolve to the same chest position");
             }
@@ -94,7 +101,185 @@ final class NaturalWorldSetup {
 
         MapPlan.Position firstSpawn = resolvedSpawns.getFirst().position();
         world.setWorldSpawn(firstSpawn);
-        return new PreparedWorld(resolvedSpawns, resolvedLoot, chunks.size());
+        String recipe = searching ? BOUNDED_SEARCH_RECIPE : DECLARED_COLUMN_RECIPE;
+        return new PreparedWorld(resolvedSpawns, resolvedLoot, chunks.size(), recipe,
+                worldIdentity(plan, recipe, resolvedSpawns, resolvedLoot));
+    }
+
+    private static List<MapPlan.SpawnPoint> resolveDeclaredSpawns(
+            NaturalMapPlan plan,
+            SurfaceAccess world,
+            ArenaChunkGenerator.MaterialCatalog materials) {
+        List<MapPlan.SpawnPoint> resolvedSpawns = new ArrayList<>(plan.spawns().size());
+        List<IllegalStateException> unsafeSpawns = new ArrayList<>();
+        for (NaturalMapPlan.SurfaceSpawnPoint spawn : plan.spawns()) {
+            MapPlan.Position feet = resolveSpawnPosition(world, spawn.column());
+            try {
+                validateSpawn(world, feet, spawn.seat(), materials);
+            } catch (IllegalStateException unsafeSpawn) {
+                unsafeSpawns.add(unsafeSpawn);
+            }
+            resolvedSpawns.add(new MapPlan.SpawnPoint(spawn.seat(), feet));
+        }
+        if (!unsafeSpawns.isEmpty()) {
+            String details = unsafeSpawns.stream().map(IllegalStateException::getMessage).collect(Collectors.joining("; "));
+            IllegalStateException failure = new IllegalStateException("natural spawn validation failed: " + details, unsafeSpawns.getFirst());
+            unsafeSpawns.stream().skip(1).forEach(failure::addSuppressed);
+            throw failure;
+        }
+        validateSpawnSeparation(resolvedSpawns);
+        return resolvedSpawns;
+    }
+
+    static List<NaturalMapPlan.SurfaceColumn> searchCandidates(
+            NaturalMapPlan.SurfaceColumn declared,
+            WorldPlan.Footprint footprint) {
+        List<NaturalMapPlan.SurfaceColumn> candidates = new ArrayList<>();
+        candidates.add(declared);
+        for (int ring = 1; ring <= SEARCH_RING_RADIUS_BLOCKS
+                && candidates.size() < SEARCH_MAX_CANDIDATES_PER_SEAT; ring++) {
+            for (int dx = -ring; dx <= ring && candidates.size() < SEARCH_MAX_CANDIDATES_PER_SEAT; dx++) {
+                for (int dz = -ring; dz <= ring && candidates.size() < SEARCH_MAX_CANDIDATES_PER_SEAT; dz++) {
+                    if (Math.max(Math.abs(dx), Math.abs(dz)) != ring) {
+                        continue;
+                    }
+                    long x = (long) declared.x() + dx;
+                    long z = (long) declared.z() + dz;
+                    if (footprint.contains((int) x, (int) z) && x >= 0 && z >= 0) {
+                        candidates.add(new NaturalMapPlan.SurfaceColumn((int) x, (int) z));
+                    }
+                }
+            }
+        }
+        return candidates;
+    }
+
+    private static List<MapPlan.SpawnPoint> searchSpawns(
+            NaturalMapPlan plan,
+            SurfaceAccess world,
+            ArenaChunkGenerator.MaterialCatalog materials) {
+        Set<NaturalMapPlan.SurfaceColumn> cacheColumns = plan.lootContainers().stream()
+                .map(NaturalMapPlan.SurfaceLootContainer::column)
+                .collect(Collectors.toSet());
+        List<MapPlan.SpawnPoint> chosen = new ArrayList<>(plan.spawns().size());
+        List<String> failures = new ArrayList<>();
+        for (NaturalMapPlan.SurfaceSpawnPoint spawn : plan.spawns()) {
+            Map<String, Integer> rejections = new LinkedHashMap<>();
+            MapPlan.SpawnPoint found = null;
+            List<NaturalMapPlan.SurfaceColumn> candidates = searchCandidates(spawn.column(), plan.footprint());
+            for (NaturalMapPlan.SurfaceColumn candidate : candidates) {
+                String rejection = cacheColumns.contains(candidate) ? "cache-column" : null;
+                MapPlan.Position feet = null;
+                if (rejection == null) {
+                    try {
+                        feet = resolveSpawnPosition(world, candidate);
+                    } catch (IllegalStateException outsideHeight) {
+                        rejection = "outside-build-height";
+                    }
+                }
+                if (rejection == null) {
+                    rejection = spawnRejection(world, feet, materials);
+                }
+                if (rejection == null) {
+                    for (MapPlan.SpawnPoint other : chosen) {
+                        if (Math.abs((long) feet.x() - other.position().x()) < 2
+                                && Math.abs((long) feet.z() - other.position().z()) < 2) {
+                            rejection = "separation";
+                            break;
+                        }
+                    }
+                }
+                if (rejection == null) {
+                    found = new MapPlan.SpawnPoint(spawn.seat(), feet);
+                    break;
+                }
+                rejections.merge(rejection, 1, Integer::sum);
+            }
+            if (found == null) {
+                failures.add("seat " + spawn.seat() + " declared at (" + spawn.column().x() + "," + spawn.column().z()
+                        + ") examined " + candidates.size() + " candidates, rejections " + rejections);
+            } else {
+                chosen.add(found);
+            }
+        }
+        if (!failures.isEmpty()) {
+            throw new IllegalStateException("natural spawn search failed with recipe " + BOUNDED_SEARCH_RECIPE
+                    + " for world seed " + plan.worldSeed() + ": " + String.join("; ", failures));
+        }
+        return chosen;
+    }
+
+    static String spawnRejection(
+            SurfaceAccess world,
+            MapPlan.Position feet,
+            ArenaChunkGenerator.MaterialCatalog materials) {
+        if (feet.y() + 2 >= world.maxHeight()) {
+            return "insufficient-headroom";
+        }
+        MapPlan.Position support = new MapPlan.Position(feet.x(), feet.y() - 1, feet.z());
+        BlockState supportState = world.blockAt(support);
+        if (!isSafeSupport(supportState, materials)) {
+            return "unsafe-support";
+        }
+        if (!isClearStandingBlock(world.blockAt(feet))
+                || !isClearStandingBlock(world.blockAt(new MapPlan.Position(feet.x(), feet.y() + 1, feet.z())))) {
+            return "blocked-headroom";
+        }
+        if (hazardNear(world, feet)) {
+            return "hazard";
+        }
+        int[][] steps = {{-1, 0}, {1, 0}, {0, -1}, {0, 1}};
+        for (int[] step : steps) {
+            MapPlan.Position side = new MapPlan.Position(feet.x() + step[0], feet.y(), feet.z() + step[1]);
+            MapPlan.Position sideSupport = new MapPlan.Position(side.x(), side.y() - 1, side.z());
+            MapPlan.Position sideHead = new MapPlan.Position(side.x(), side.y() + 1, side.z());
+            if (isSafeSupport(world.blockAt(sideSupport), materials)
+                    && isClearStandingBlock(world.blockAt(side))
+                    && isClearStandingBlock(world.blockAt(sideHead))) {
+                return null;
+            }
+        }
+        return "no-escape";
+    }
+
+    private static boolean hazardNear(SurfaceAccess world, MapPlan.Position center) {
+        for (int dx = -1; dx <= 1; dx++) {
+            for (int dz = -1; dz <= 1; dz++) {
+                for (int dy = -1; dy <= 1; dy++) {
+                    BlockState near = world.blockAt(
+                            new MapPlan.Position(center.x() + dx, center.y() + dy, center.z() + dz));
+                    if (HAZARDS.contains(near.material())) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    private static String worldIdentity(
+            NaturalMapPlan plan,
+            String recipe,
+            List<MapPlan.SpawnPoint> spawns,
+            List<MapPlan.LootContainer> loot) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            StringBuilder text = new StringBuilder("arena.world.identity.v1\n")
+                    .append(plan.mapSemanticId()).append('\n')
+                    .append(plan.worldSeed()).append('\n')
+                    .append(recipe).append('\n');
+            for (MapPlan.SpawnPoint spawn : spawns) {
+                text.append("s:").append(spawn.seat()).append(',').append(spawn.position().x()).append(',')
+                        .append(spawn.position().y()).append(',').append(spawn.position().z()).append('\n');
+            }
+            for (MapPlan.LootContainer container : loot) {
+                text.append("c:").append(container.position().x()).append(',').append(container.position().y())
+                        .append(',').append(container.position().z()).append('\n');
+            }
+            return HexFormat.of().formatHex(digest.digest(text.toString().getBytes(StandardCharsets.UTF_8)));
+        } catch (NoSuchAlgorithmException impossible) {
+            throw new IllegalStateException("SHA-256 is unavailable", impossible);
+        }
     }
 
     private static MapPlan.Position resolveSpawnPosition(SurfaceAccess world, NaturalMapPlan.SurfaceColumn column) {

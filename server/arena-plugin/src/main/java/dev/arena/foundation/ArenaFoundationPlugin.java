@@ -1245,6 +1245,11 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
                 resolvedSpawns = naturalWorld.spawns();
                 resolvedLootContainers = naturalWorld.lootContainers();
                 preparedChunks = naturalWorld.preparedChunkCount();
+                getLogger().info("ARENA_NATURAL_WORLD|recipe=" + naturalWorld.spawnRecipe()
+                        + "|world_identity=" + naturalWorld.worldIdentity()
+                        + "|spawns=" + naturalWorld.spawns().stream()
+                                .map(spawn -> spawn.seat() + ":" + spawn.position().x() + "," + spawn.position().z())
+                                .collect(java.util.stream.Collectors.joining(";")));
             } else {
                 throw new IllegalStateException("staged world plan variant is unsupported");
             }
