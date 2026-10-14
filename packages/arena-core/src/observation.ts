@@ -262,6 +262,7 @@ export function visibleOpponent(
 export type KnownItem =
   | { readonly kind: 'food' }
   | { readonly kind: 'ammunition' }
+  | { readonly kind: 'rangedWeapon' }
   | { readonly kind: 'weapon'; readonly rating: number }
   | { readonly kind: 'armor'; readonly equipmentSlot: ArmorSlot; readonly rating: number };
 
@@ -271,6 +272,10 @@ export function knownFood(): KnownItem {
 
 export function knownAmmunition(): KnownItem {
   return Object.freeze({ kind: 'ammunition' });
+}
+
+export function knownRangedWeapon(): KnownItem {
+  return Object.freeze({ kind: 'rangedWeapon' });
 }
 
 export function knownWeapon(rating: number): KnownItem {
@@ -389,8 +394,8 @@ function assertLegacyObservationShape(observation: {
     reject('an opponent combat view');
   }
   if (observation.loot.kind !== 'unknown' && observation.loot.value.some((value) => (
-    value.kind === 'visibleDrop' && value.item.kind === 'ammunition'
-  ))) reject('ammunition');
+    value.kind === 'visibleDrop' && (value.item.kind === 'ammunition' || value.item.kind === 'rangedWeapon')
+  ))) reject('ranged supplies');
 }
 
 function buildAgentObservation(input: AgentObservationInput, legacy: boolean): AgentObservation {
@@ -537,6 +542,10 @@ function cloneKnownItem(value: KnownItem): KnownItem {
   if (value.kind === 'ammunition') {
     assertObjectKeys(value, ['kind'], 'known ammunition');
     return knownAmmunition();
+  }
+  if (value.kind === 'rangedWeapon') {
+    assertObjectKeys(value, ['kind'], 'known ranged weapon');
+    return knownRangedWeapon();
   }
   if (value.kind === 'weapon') {
     assertObjectKeys(value, ['kind', 'rating'], 'known weapon');

@@ -51,6 +51,8 @@ export function classifyItem(bot: Bot, item: MineflayerItem): KnownItem | null {
     return { kind: 'weapon', rating };
   }
   if (item.name === 'trident') return { kind: 'weapon', rating: 5 };
+  if (item.name === 'bow') return { kind: 'rangedWeapon' };
+  if (item.name === 'arrow' || item.name === 'tipped_arrow' || item.name === 'spectral_arrow') return { kind: 'ammunition' };
   return null;
 }
 

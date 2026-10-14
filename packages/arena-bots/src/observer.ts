@@ -12,7 +12,6 @@ import {
   entityId,
   equipmentUpgrade,
   foodStack,
-  knownAmmunition,
   observationSequence,
   staleKnowledge,
   tick,
@@ -196,10 +195,6 @@ export class MineflayerObserver {
     return hasBow ? Math.min(count, MAX_ARROW_COUNT) : null;
   }
 
-  #hasBow(): boolean {
-    return this.#arrowCount() !== null;
-  }
-
   #directionSupport(entity: MineflayerEntity): readonly DirectionSupport[] {
     const baseX = Math.floor(entity.position.x);
     const baseY = Math.floor(entity.position.y);
@@ -324,7 +319,7 @@ export class MineflayerObserver {
       if (item === null || item === undefined) continue;
       const known = classifyItem(this.#bot, item);
       if (known === null) continue;
-      if (known.kind === 'ammunition') continue;
+      if (known.kind === 'ammunition' || known.kind === 'rangedWeapon') continue;
       if (known.kind === 'food') {
         const points = this.#bot.registry.foodsByName[item.name]?.foodPoints;
         const restores = typeof points === 'number' && Number.isSafeInteger(points) && points >= 1 && points <= 20
@@ -381,9 +376,7 @@ export class MineflayerObserver {
     for (const entity of Object.values(this.#bot.entities)) {
       const item = entity.getDroppedItem();
       if (item === null || !isVisibleEntity(this.#bot, entity)) continue;
-      const known = classifyItem(this.#bot, item) ?? (
-        this.#hasBow() && isArrowName(item.name) ? knownAmmunition() : null
-      );
+      const known = classifyItem(this.#bot, item);
       if (known === null) continue;
       loot.push(visibleDrop(
         entityId(entity.id),
@@ -495,10 +488,6 @@ function prepareLootSearchPalettes(bot: Bot): void {
     }
     next = iterator.next();
   }
-}
-
-function isArrowName(name: string): boolean {
-  return name === 'arrow' || name === 'tipped_arrow' || name === 'spectral_arrow';
 }
 
 function compareLoot(first: LootOpportunity, second: LootOpportunity): number {

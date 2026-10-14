@@ -65,6 +65,7 @@ export {
   OBSERVED_DIRECTION_RADIUS_BLOCKS,
   isLegacyReplayObservation,
   knownAmmunition,
+  knownRangedWeapon,
   legacyAgentObservation,
   MAX_TERRAIN_CHANGES,
   ObservationValidationError,

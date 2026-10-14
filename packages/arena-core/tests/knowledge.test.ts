@@ -163,3 +163,19 @@ test('ammunition drops matter only to an archer running low', () => {
   const noBow = run(observationAt({ loot: [arrows] }));
   ok(noBow.goal.kind !== 'loot');
 });
+
+test('a remembered opponent at the agent position is not searched again', () => {
+  const memory = policyMemory({
+    lastGoal: null,
+    lastOpponent: { id: entityId(4), position: blockPosition(0, 64, 0), observedAt: tick(8) },
+    failedTargets: [],
+  });
+  const decision = run(observationAt({ at: 10 }), memory);
+  ok(decision.goal.kind !== 'searchLastKnown', `unexpected goal ${decision.goal.kind}`);
+  const far = policyMemory({
+    lastGoal: null,
+    lastOpponent: { id: entityId(4), position: blockPosition(9, 64, 0), observedAt: tick(8) },
+    failedTargets: [],
+  });
+  equal(run(observationAt({ at: 10 }), far).goal.kind, 'searchLastKnown');
+});

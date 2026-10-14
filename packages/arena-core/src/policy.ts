@@ -62,6 +62,7 @@ const MAX_CACHE_DEPARTURE_RADIUS_BLOCKS = 16;
 const MAX_HUNTER_PURSUE_BLOCKS = 12;
 const BOW_ENGAGEMENT_RANGE_BLOCKS = 16;
 const LOW_AMMUNITION_ARROWS = 16;
+const SEARCH_ARRIVAL_BLOCKS = 1n;
 const EXPLORER_EQUIP_DEADLINE_TICKS = 200;
 const HUNTER_MAX_OPPONENTS = 1;
 const OUTNUMBERED_OPPONENT_COUNT = 2;
@@ -714,7 +715,9 @@ function decideWithSemantics(
   }
 
   const remembered = rememberedOpponent(observation, currentMemory, params.values.opponentMemoryTicks);
-  if (remembered !== null && !isFailedSearchTarget(currentMemory, remembered)) {
+  if (remembered !== null && !isFailedSearchTarget(currentMemory, remembered)
+      && !(semantics === 'policy-input-v4'
+        && manhattanDistance(agent.position, remembered.position) <= SEARCH_ARRIVAL_BLOCKS)) {
     const goal: Goal = Object.freeze({ kind: 'searchLastKnown', target: remembered.id });
     return finish(goal, { kind: 'navigate', target: remembered.position }, {
       ...currentMemory,
@@ -1468,6 +1471,8 @@ function lootUtility(opportunity: LootOpportunity, agent: AgentState): number {
   switch (opportunity.item.kind) {
     case 'food':
       return agent.foodStacks.length === 0 ? 2 : 0;
+    case 'rangedWeapon':
+      return agent.ranged === undefined ? 2 : 0;
     case 'ammunition':
       return agent.ranged !== undefined && agent.ranged.arrows < LOW_AMMUNITION_ARROWS ? 2 : 0;
     case 'weapon':
