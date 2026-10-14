@@ -69,7 +69,8 @@ const MAX_PATH_SLICE_PER_CLIENT_MS = 3;
 const MAX_WORKER_PATH_SLICE_MS = 10;
 const PINNED_PATHFINDER_VERSION = '2.4.5';
 const PATH_TIMEOUT_MS = 20_000;
-const PURSUIT_STANDOFF_BLOCKS = 2;
+const PURSUIT_FOLLOW_RANGE_BLOCKS = 2;
+const PURSUIT_LEG_MS = 2_000;
 const EATING_THREAT_RANGE_BLOCKS = 8;
 const BOW_DRAW_TICKS = 20;
 const BOW_MIN_RANGE_BLOCKS = 4.5;
@@ -126,7 +127,8 @@ interface DropCollectionReceipt {
 type NavigationArrival =
   | { readonly kind: 'withinRange'; readonly range: number }
   | { readonly kind: 'exactBlock' }
-  | { readonly kind: 'pickupReach' };
+  | { readonly kind: 'pickupReach' }
+  | { readonly kind: 'meleeReach'; readonly target: Bot['entity'] };
 type NavigationPosition = Readonly<{ x: number; y: number; z: number }>;
 
 
@@ -773,13 +775,17 @@ export class SkillOwner {
     await this.#navigate(position, { kind: 'exactBlock' }, active);
   }
 
+  #inMeleeReach(target: MineflayerEntity): boolean {
+    return isWithinMeleeReach(readCombatSelfBody(this.#bot.entity), readCombatBody(target));
+  }
+
   async #navigate(
     position: NavigationPosition,
     arrival: NavigationArrival,
     active: ActiveSkill,
     signal: AbortSignal = active.controller.signal,
   ): Promise<void> {
-    const deadline = performance.now() + PATH_TIMEOUT_MS;
+    const deadline = performance.now() + (arrival.kind === 'meleeReach' ? PURSUIT_LEG_MS : PATH_TIMEOUT_MS);
     for (let leg = 0; leg < MAX_NAVIGATION_LEGS; leg += 1) {
       throwIfInterrupted(signal);
       const border = this.#observer.currentBorder();
@@ -790,7 +796,7 @@ export class SkillOwner {
 
       const current = this.#bot.entity.position;
       const remainingDistance = distance(current, position);
-      if (hasArrived(current, position, arrival)) return;
+      if (arrival.kind === 'meleeReach' ? this.#inMeleeReach(arrival.target) : hasArrived(current, position, arrival)) return;
       const remainingMs = deadline - performance.now();
       if (remainingMs <= 0) throw new SkillFault('timedOut', 'bounded navigation exceeded its deadline');
 
@@ -800,7 +806,9 @@ export class SkillOwner {
       const waypoint = remainingDistance <= MAX_PATH_LEG_BLOCKS + finalLegAllowance
         ? position
         : waypointToward(current, position, MAX_PATH_LEG_BLOCKS);
-      const goal = waypoint === position && arrival.kind === 'exactBlock'
+      const goal = arrival.kind === 'meleeReach'
+        ? new goals.GoalFollow(arrival.target, PURSUIT_FOLLOW_RANGE_BLOCKS)
+        : waypoint === position && arrival.kind === 'exactBlock'
         ? new goals.GoalBlock(waypoint.x, waypoint.y, waypoint.z)
         : waypoint === position && arrival.kind === 'pickupReach'
           ? new PickupReachGoal(position)
@@ -822,7 +830,7 @@ export class SkillOwner {
         this.#bot.pathfinder.setGoal(goal, false);
         await Promise.race([reached, pathFailure]);
         throwIfInterrupted(signal);
-        if (hasArrived(this.#bot.entity.position, position, arrival)) return;
+        if (arrival.kind === 'meleeReach' ? this.#inMeleeReach(arrival.target) : hasArrived(this.#bot.entity.position, position, arrival)) return;
         if (leg === MAX_NAVIGATION_LEGS - 1) {
           throw new SkillFault('noProgress', `navigation exceeded ${MAX_NAVIGATION_LEGS} bounded path segments`);
         }
@@ -921,7 +929,11 @@ export class SkillOwner {
           );
         }
         replans += 1;
-        await this.#navigateTo(toBlockPosition(view.entity.position), PURSUIT_STANDOFF_BLOCKS, active);
+        try {
+          await this.#navigate(view.entity.position, { kind: 'meleeReach', target: view.entity }, active);
+        } catch (error) {
+          if (!(error instanceof SkillFault) || error.failure !== 'timedOut') throw error;
+        }
         continue;
       }
       if (objective === 'closeDistance') {
@@ -2041,6 +2053,7 @@ function hasArrived(
     const dz = Math.floor(current.z) - Math.floor(target.z);
     return dx * dx + dy * dy + dz * dz <= arrival.range * arrival.range;
   }
+  if (arrival.kind === 'meleeReach') return false;
   return Math.floor(current.x) === Math.floor(target.x)
     && Math.floor(current.y) === Math.floor(target.y)
     && Math.floor(current.z) === Math.floor(target.z);

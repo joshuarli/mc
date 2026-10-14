@@ -41,7 +41,10 @@ const integrationCases = new Map([
   ["civilization-six", "civilization-six.js"],
   ["civilization-rules", "civilization-rules.js"],
   ["external-seat", "external-seat.js"],
-  ["checkpoint-resume", "checkpoint-resume.js"]
+  ["checkpoint-resume", "checkpoint-resume.js"],
+  ["curriculum-melee", "curriculum-melee.js"],
+  ["curriculum-ranged", "curriculum-ranged.js"],
+  ["curriculum-survival", "curriculum-survival.js"]
 ]);
 const acceptanceCases = new Map([
   ["hunger-six", "hunger.js"],

@@ -1,0 +1,92 @@
+schema = 1
+name = "curriculum-arena"
+
+[dimensions]
+width = 64
+depth = 64
+min_y = 0
+max_y = 128
+
+[[operations]]
+kind = "cuboid"
+from = { x = 0, y = 64, z = 0 }
+to = { x = 63, y = 64, z = 63 }
+block = "minecraft:stone"
+
+[[operations]]
+kind = "cuboid"
+from = { x = 44, y = 65, z = 44 }
+to = { x = 44, y = 67, z = 52 }
+block = "minecraft:stone"
+
+[[operations]]
+kind = "cuboid"
+from = { x = 52, y = 65, z = 10 }
+to = { x = 56, y = 65, z = 14 }
+block = "minecraft:stone"
+
+[[operations]]
+kind = "spawn"
+seat = 0
+position = { x = 10, y = 65, z = 10 }
+
+[[operations]]
+kind = "spawn"
+seat = 1
+position = { x = 14, y = 65, z = 10 }
+
+[[operations]]
+kind = "spawn"
+seat = 2
+position = { x = 28, y = 65, z = 10 }
+
+[[operations]]
+kind = "loot_container"
+position = { x = 10, y = 65, z = 50 }
+inventory = [
+  "minecraft:bow", "minecraft:arrow", "minecraft:arrow", "minecraft:arrow", "minecraft:arrow",
+  "minecraft:arrow", "minecraft:arrow", "minecraft:arrow", "minecraft:arrow", "minecraft:arrow",
+  "minecraft:arrow", "minecraft:arrow", "minecraft:arrow", "minecraft:arrow", "minecraft:arrow",
+  "minecraft:arrow", "minecraft:arrow", "minecraft:arrow", "minecraft:arrow", "minecraft:arrow",
+  "minecraft:arrow", "minecraft:arrow", "minecraft:arrow", "minecraft:arrow", "minecraft:arrow",
+]
+
+[[operations]]
+kind = "loot_container"
+position = { x = 14, y = 65, z = 50 }
+inventory = ["minecraft:shield", "minecraft:stone_sword", "minecraft:bread", "minecraft:golden_apple"]
+
+[[operations]]
+kind = "loot_container"
+position = { x = 30, y = 65, z = 30 }
+inventory = ["minecraft:bread", "minecraft:iron_sword"]
+
+[[operations]]
+kind = "cuboid"
+from = { x = 26, y = 65, z = 8 }
+to = { x = 30, y = 67, z = 8 }
+block = "minecraft:stone"
+
+[[operations]]
+kind = "cuboid"
+from = { x = 26, y = 65, z = 12 }
+to = { x = 30, y = 67, z = 12 }
+block = "minecraft:stone"
+
+[[operations]]
+kind = "cuboid"
+from = { x = 26, y = 65, z = 9 }
+to = { x = 26, y = 67, z = 11 }
+block = "minecraft:stone"
+
+[[operations]]
+kind = "cuboid"
+from = { x = 30, y = 65, z = 9 }
+to = { x = 30, y = 67, z = 9 }
+block = "minecraft:stone"
+
+[[operations]]
+kind = "cuboid"
+from = { x = 30, y = 65, z = 11 }
+to = { x = 30, y = 67, z = 11 }
+block = "minecraft:stone"
