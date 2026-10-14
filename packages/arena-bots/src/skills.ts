@@ -2017,7 +2017,13 @@ function hasArrived(
   target: NavigationPosition,
   arrival: NavigationArrival,
 ): boolean {
-  if (arrival.kind === 'withinRange') return distance(current, target) <= arrival.range;
+  if (arrival.kind === 'withinRange') {
+    if (distance(current, target) <= arrival.range) return true;
+    const dx = Math.floor(current.x) - Math.floor(target.x);
+    const dy = Math.floor(current.y) - Math.floor(target.y);
+    const dz = Math.floor(current.z) - Math.floor(target.z);
+    return dx * dx + dy * dy + dz * dz <= arrival.range * arrival.range;
+  }
   return Math.floor(current.x) === Math.floor(target.x)
     && Math.floor(current.y) === Math.floor(target.y)
     && Math.floor(current.z) === Math.floor(target.z);

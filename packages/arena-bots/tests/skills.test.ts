@@ -73,6 +73,27 @@ test('cancellation stops the owned path and clears client controls before settli
   }
 });
 
+test('navigate succeeds when the pathfinder ends on the cell its goal range accepts', async () => {
+  const harness = makeHarness();
+  const target = blockPosition(20, 67, 30);
+  const setGoal = harness.pathfinder.setGoal;
+
+  try {
+    harness.pathfinder.setGoal = (goal) => {
+      setGoal(goal);
+      if (goal === null) return;
+      harness.bot.entity.position.x = 20.5;
+      harness.bot.entity.position.y = 65;
+      harness.bot.entity.position.z = 30.5;
+      queueMicrotask(() => harness.bot.emit('goal_reached', goal));
+    };
+    assert.deepEqual(await harness.owner.run({ kind: 'navigate', target }), { kind: 'succeeded' });
+  } finally {
+    await harness.owner.close();
+    harness.observer.close();
+  }
+});
+
 test('eat waits for the consumed slot update after an early food update', async () => {
   const eating = prepareEating();
 
