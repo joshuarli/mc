@@ -636,6 +636,51 @@ test('drop collection succeeds when movement picks up the item before arrival', 
   }
 });
 
+test('drop collection replans after the item settles when the first search found no path', async () => {
+  const harness = makeHarness();
+  Object.assign(harness.bot.entity, {
+    position: new TestVector(0, 65, 0),
+    yaw: 0,
+    pitch: -Math.PI / 4,
+  });
+  const droppedLog = Object.assign(new EventEmitter(), {
+    id: 2,
+    type: 'other',
+    name: 'item',
+    position: new TestVector(0, 66.3, -3),
+    height: 0.25,
+    getDroppedItem: () => item('oak_log', 10, 1, 0),
+  }) as unknown as Bot['entity'];
+  Object.assign(harness.bot.entities, { 2: droppedLog });
+  const pathfinder = harness.bot.pathfinder;
+  const goals: unknown[] = [];
+  Object.assign(pathfinder, {
+    setGoal: (goal: unknown) => {
+      Object.assign(pathfinder, { goal });
+      if (goal === null) return;
+      goals.push(goal);
+      if (goals.length === 1) {
+        droppedLog.position = new TestVector(0, 65.5, -3);
+        harness.bot.emit('path_update', { status: 'timeout' } as never);
+        return;
+      }
+      Object.assign(harness.bot.entity, { position: new TestVector(0, 65, -2.4) });
+      delete harness.bot.entities['2'];
+      harness.bot.emit('playerCollect', harness.bot.entity, droppedLog);
+      harness.bot.emit('goal_reached', goal);
+    },
+  });
+
+  try {
+    assert.deepEqual(await harness.owner.run({ kind: 'dropCollect', entityId: entityId(2) }), { kind: 'succeeded' });
+    assert.equal(goals.length, 2);
+  } finally {
+    await harness.owner.close();
+    harness.civilization.close();
+    harness.observer.close();
+  }
+});
+
 test('skill cancellation wins when a drop arrives in the same event', async () => {
   const harness = makeHarness();
   Object.assign(harness.bot.entity, {

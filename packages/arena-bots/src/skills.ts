@@ -80,6 +80,7 @@ const FRIENDLY_FIRE_CLEARANCE_BLOCKS = 1;
 const OFFHAND_SLOT = 45;
 const ATTACK_COOLDOWN_TICKS = 13;
 const ATTACK_RESPONSE_TICKS = 10;
+const DROP_SETTLED_TOLERANCE_BLOCKS = 0.25;
 const MAX_TARGET_REPLANS = 8;
 
 type EngageObjective = 'closeDistance' | 'strike';
@@ -1113,6 +1114,7 @@ export class SkillOwner {
         const drop = currentDrop(attempt === 0);
         if (drop === null) return;
         if (withinPickupReach(this.#bot.entity.position, drop.position)) break;
+        const plannedDropPosition = drop.position.clone();
         const approach = new AbortController();
         const stopApproachOnSkillCancellation = () => approach.abort();
         active.controller.signal.addEventListener('abort', stopApproachOnSkillCancellation, { once: true });
@@ -1136,7 +1138,12 @@ export class SkillOwner {
           }
           if (result.kind === 'failed') {
             if (receipt.collected && !active.controller.signal.aborted) return;
-            throw result.error;
+            const latest = currentDrop(false);
+            if (latest === null) return;
+            const planned = plannedDropPosition;
+            if (!isPathSearchFault(result.error) || distance(latest.position, planned) <= DROP_SETTLED_TOLERANCE_BLOCKS) {
+              throw result.error;
+            }
           }
         } finally {
           active.controller.signal.removeEventListener('abort', stopApproachOnSkillCancellation);
@@ -2015,6 +2022,10 @@ function slotCount(bot: Bot, slot: number, target: MineflayerItem): number {
   return item !== null && item !== undefined && item.type === target.type && item.metadata === target.metadata
     ? item.count
     : 0;
+}
+
+function isPathSearchFault(error: unknown): boolean {
+  return error instanceof SkillFault && (error.failure === 'noProgress' || error.failure === 'timedOut');
 }
 
 function hasArrived(
