@@ -78,7 +78,8 @@ final class ControlSession implements AutoCloseable {
     void sendEvent(ControlProtocol.Type type, ControlProtocol.Payload payload) {
         if (type == ControlProtocol.Type.HELLO || type == ControlProtocol.Type.READY
                 || type == ControlProtocol.Type.PREPARE || type == ControlProtocol.Type.START
-                || type == ControlProtocol.Type.ABORT || type == ControlProtocol.Type.ACK) {
+                || type == ControlProtocol.Type.ABORT || type == ControlProtocol.Type.ACK
+                || type == ControlProtocol.Type.CHECKPOINT) {
             throw new IllegalArgumentException("message type is not a plugin event");
         }
         enqueue(new Outbound(type, payload, Optional.empty(), false));
@@ -235,7 +236,8 @@ final class ControlSession implements AutoCloseable {
                     continue;
                 }
                 if (message.type() != ControlProtocol.Type.PREPARE && message.type() != ControlProtocol.Type.START
-                        && message.type() != ControlProtocol.Type.ABORT) {
+                        && message.type() != ControlProtocol.Type.ABORT
+                        && message.type() != ControlProtocol.Type.CHECKPOINT) {
                     throw new IOException("runner sent a plugin-only control event");
                 }
                 if (!inbound.offer(message)) {

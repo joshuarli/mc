@@ -232,6 +232,27 @@ final class MatchController {
         }
     }
 
+    static MatchController resumed(
+            Settings settings,
+            int competitorCount,
+            BigInteger matchTick,
+            Collection<Integer> aliveSeats) {
+        if (matchTick == null || matchTick.signum() < 0
+                || matchTick.compareTo(settings.authoritativeMaxTicks()) >= 0) {
+            throw new IllegalArgumentException("resumed match tick must precede the tick limit");
+        }
+        MatchController match = new MatchController(settings, competitorCount, OutcomeAuthority.LAST_SURVIVOR);
+        if (aliveSeats == null || aliveSeats.size() < 2
+                || aliveSeats.stream().anyMatch(seat -> seat == null || seat < 0 || seat >= competitorCount)) {
+            throw new IllegalArgumentException("a resumed match needs at least two living roster seats");
+        }
+        match.aliveSeats.clear();
+        match.aliveSeats.addAll(aliveSeats);
+        match.matchTick = matchTick;
+        match.phase = matchTick.compareTo(settings.graceTicks()) < 0 ? Phase.GRACE : Phase.ACTIVE;
+        return match;
+    }
+
     Phase phase() {
         return phase;
     }

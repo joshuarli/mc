@@ -132,6 +132,17 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
     private boolean generatorRequested;
     private boolean worldInitialized;
     private boolean civilizationEvaluatorEnabled;
+    private static final String RESUME_CHECKPOINT_PROPERTY = "arena.resume-checkpoint";
+    private CheckpointRecord.Stored loadedCheckpoint;
+    private ResumeSession resumeSession;
+    private boolean resumeAwaitingStart;
+    private int runtimeEpoch;
+    private boolean quiesced;
+    private ControlProtocol.CheckpointCommand pendingCheckpoint;
+    private BigInteger pendingCheckpointSequence;
+    private String naturalWorldIdentity;
+    private CheckpointExtension checkpointExtension;
+    private final List<CheckpointRecord.Elimination> eliminationLog = new ArrayList<>();
 
     @Override
     public void onLoad() {
@@ -158,6 +169,15 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
                         + " and -D" + RUN_ID_PROPERTY);
             }
             runId = configuredRunId;
+            String resumePath = System.getProperty(RESUME_CHECKPOINT_PROPERTY);
+            if (resumePath != null) {
+                try {
+                    loadedCheckpoint = CheckpointRecord.read(java.nio.file.Path.of(resumePath));
+                } catch (IOException incompleteCheckpoint) {
+                    throw new IllegalStateException("could not load a complete checkpoint to resume", incompleteCheckpoint);
+                }
+                runtimeEpoch = loadedCheckpoint.record().epoch() + 1;
+            }
             if (!generationPlan.runId().equals(runId)) {
                 throw new IllegalStateException("the configured run id does not match the staged world plan");
             }
@@ -248,6 +268,9 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
                 handleControlCommand(command);
             }
             advanceMatchAtTickEnd();
+            if (pendingCheckpoint != null) {
+                completeCheckpoint();
+            }
             if (!outcomeEmitted) {
                 long now = System.nanoTime();
                 if (controlSession.isReady() && now - lastHeartbeatNanos >= 1_000_000_000L) {
@@ -397,6 +420,14 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
                         publishClock();
                     }
                 }
+                case CHECKPOINT -> {
+                    ControlProtocol.CheckpointCommand checkpoint =
+                            (ControlProtocol.CheckpointCommand) command.payload();
+                    requireCheckpointAllowed(checkpoint);
+                    controlSession.acknowledge(command.header().sequence());
+                    pendingCheckpoint = checkpoint;
+                    pendingCheckpointSequence = command.header().sequence();
+                }
                 case ABORT -> {
                     ControlProtocol.AbortReason reason = ((ControlProtocol.AbortPayload) command.payload()).reason();
                     ensureCanAbort();
@@ -407,6 +438,31 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
             }
         } catch (CommandFailure invalidCommand) {
             controlSession.reject(command.header().sequence(), invalidCommand.code, invalidCommand.getMessage());
+        }
+    }
+
+    private void requireResumeMatchesCheckpoint(ControlProtocol.PreparePayload prepare) {
+        if (loadedCheckpoint == null) {
+            if (prepare.resume().isPresent()) {
+                throw new CommandFailure(ControlProtocol.ErrorCode.INVALID_STATE,
+                        "resume prepare requires a server started with a checkpoint");
+            }
+            return;
+        }
+        CheckpointRecord record = loadedCheckpoint.record();
+        ControlProtocol.ResumeReference reference = prepare.resume().orElseThrow(() -> new CommandFailure(
+                ControlProtocol.ErrorCode.INVALID_STATE,
+                "a server started with a checkpoint accepts only a resume prepare"));
+        if (!reference.digest().equals(loadedCheckpoint.digest()) || reference.epoch() != runtimeEpoch) {
+            throw new CommandFailure(ControlProtocol.ErrorCode.INVALID_STATE,
+                    "resume digest or runtime epoch does not match the loaded checkpoint");
+        }
+        ControlProtocol.PreparePayload withoutResume = new ControlProtocol.PreparePayload(
+                prepare.mapSemanticId(), prepare.scenarioSemanticId(), prepare.seed(), prepare.settings(),
+                prepare.rosterVersion(), prepare.rules(), Optional.empty(), prepare.roster());
+        if (!ControlProtocol.payloadValue(withoutResume).equals(ControlProtocol.payloadValue(record.prepare()))) {
+            throw new CommandFailure(ControlProtocol.ErrorCode.INVALID_WORLD,
+                    "resume prepare does not match the checkpointed match configuration");
         }
     }
 
@@ -499,7 +555,14 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
         }
         MatchController.Settings matchSettings = new MatchController.Settings(settings.countdownTicks(),
                 settings.graceTicks(), settings.authoritativeMaxTicks(), borderPolicy);
-        MatchController controller = new MatchController(matchSettings, prepare.roster().size(), outcomeAuthority);
+        requireResumeMatchesCheckpoint(prepare);
+        MatchController controller = loadedCheckpoint == null
+                ? new MatchController(matchSettings, prepare.roster().size(), outcomeAuthority)
+                : MatchController.resumed(matchSettings, prepare.roster().size(),
+                        loadedCheckpoint.record().matchTick(),
+                        loadedCheckpoint.record().seats().stream()
+                                .filter(CheckpointRecord.SeatState::alive)
+                                .map(CheckpointRecord.SeatState::seat).toList());
 
         World world = Bukkit.getWorld(ARENA_WORLD);
         if (world == null) {
@@ -524,6 +587,17 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
 
         preparedMatch = prepare;
         matchController = controller;
+        eliminationLog.clear();
+        resumeSession = null;
+        resumeAwaitingStart = false;
+        if (loadedCheckpoint != null) {
+            resumeSession = new ResumeSession(loadedCheckpoint.record(), runtimeEpoch);
+            resumeAwaitingStart = true;
+            eliminationLog.addAll(loadedCheckpoint.record().eliminations());
+            if (checkpointExtension != null) {
+                checkpointExtension.restore(loadedCheckpoint.record().extension());
+            }
+        }
         civilizationMatchController = nextCivilizationController;
         civilizationMaterialCensus = civilizationEvaluatorEnabled
                 ? new CivilizationMaterialCensus.Recorder(runId, marker -> getLogger().info(marker))
@@ -561,6 +635,21 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
     }
 
     private void requestMatchStart() {
+        if (resumeAwaitingStart) {
+            if (!resumeSession.allLivingSeatsRestored()) {
+                throw new CommandFailure(ControlProtocol.ErrorCode.INVALID_STATE,
+                        "every living checkpoint seat must rejoin before the resumed match continues");
+            }
+            resumeAwaitingStart = false;
+            for (UUID playerId : seatsByPlayer.keySet()) {
+                Player player = Bukkit.getPlayer(playerId);
+                if (player != null) {
+                    player.setInvulnerable(false);
+                }
+            }
+            skipMatchAdvanceThisTick = true;
+            return;
+        }
         if (matchController == null || preparedMatch == null
                 || matchController.phase() != MatchController.Phase.WAITING) {
             throw new CommandFailure(ControlProtocol.ErrorCode.INVALID_STATE,
@@ -573,6 +662,87 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
         matchController.startCountdown();
         recordInitialCivilizationMaterialCheckpointIfReleased();
         skipMatchAdvanceThisTick = true;
+    }
+
+    private void requireCheckpointAllowed(ControlProtocol.CheckpointCommand checkpoint) {
+        if (preparedMatch == null || matchController == null
+                || preparedMatch.rosterVersion() != ControlProtocol.RosterVersion.GENERALIZED
+                || preparedMatch.settings() instanceof ControlProtocol.CivilizationPrepareSettings) {
+            throw new CommandFailure(ControlProtocol.ErrorCode.INVALID_STATE,
+                    "checkpoint requires a prepared generalized-roster Hunger Games match");
+        }
+        MatchController.Phase phase = matchController.phase();
+        if ((phase != MatchController.Phase.GRACE && phase != MatchController.Phase.ACTIVE)
+                || quiesced || resumeAwaitingStart || pendingCheckpoint != null) {
+            throw new CommandFailure(ControlProtocol.ErrorCode.INVALID_STATE,
+                    "checkpoint is accepted only once, during grace or active play");
+        }
+        if (checkpoint.epoch() != runtimeEpoch) {
+            throw new CommandFailure(ControlProtocol.ErrorCode.INVALID_STATE,
+                    "checkpoint command belongs to a different runtime epoch");
+        }
+    }
+
+    private void completeCheckpoint() {
+        ControlProtocol.CheckpointCommand command = pendingCheckpoint;
+        BigInteger sequence = pendingCheckpointSequence;
+        pendingCheckpoint = null;
+        pendingCheckpointSequence = null;
+        quiesced = true;
+        try {
+            if (outcomeEmitted || matchController.outcome().isPresent()) {
+                throw new IllegalStateException("the match ended before the checkpoint barrier");
+            }
+            List<CheckpointRecord.SeatState> seats = new ArrayList<>();
+            Set<Integer> alive = new java.util.HashSet<>(matchController.aliveSeats());
+            for (ControlProtocol.Competitor competitor : preparedMatch.roster()) {
+                int seat = competitor.seat();
+                Optional<CheckpointRecord.LivingState> living = Optional.empty();
+                if (alive.contains(seat)) {
+                    UUID playerId = playersBySeat.get(seat);
+                    Player player = playerId == null ? null : Bukkit.getPlayer(playerId);
+                    if (player == null || !player.isOnline()) {
+                        throw new IllegalStateException("living seat " + seat + " is offline at the checkpoint barrier");
+                    }
+                    living = Optional.of(captureLivingState(player));
+                }
+                seats.add(new CheckpointRecord.SeatState(seat, alive.contains(seat), competitor.offlineUuid(),
+                        competitor.username(), living));
+            }
+            ControlProtocol.PreparePayload original = new ControlProtocol.PreparePayload(
+                    preparedMatch.mapSemanticId(), preparedMatch.scenarioSemanticId(), preparedMatch.seed(),
+                    preparedMatch.settings(), preparedMatch.rosterVersion(), preparedMatch.rules(),
+                    Optional.empty(), preparedMatch.roster());
+            CheckpointRecord record = new CheckpointRecord(command.checkpointId(), runId, runtimeEpoch,
+                    naturalWorldIdentity, original, matchController.matchTick().orElseThrow(),
+                    matchController.borderDiameterBlocks(), eliminationLog, seats,
+                    checkpointExtension == null ? Optional.empty() : checkpointExtension.capture());
+            java.nio.file.Path directory = getDataFolder().toPath().resolve("checkpoints");
+            java.nio.file.Files.createDirectories(directory);
+            CheckpointRecord.Stored stored = record.write(directory.resolve(command.checkpointId() + ".json"));
+            controlSession.sendEvent(ControlProtocol.Type.CHECKPOINT_WRITTEN, new ControlProtocol.CheckpointWritten(
+                    command.checkpointId(), runtimeEpoch, record.matchTick(), stored.digest(), stored.byteLength()));
+        } catch (IOException | RuntimeException failure) {
+            getLogger().severe("ARENA_CHECKPOINT_FAILED|" + failure.getMessage());
+            controlSession.reject(sequence, ControlProtocol.ErrorCode.INTERNAL,
+                    "checkpoint failed and left no complete record");
+        }
+    }
+
+    private CheckpointRecord.LivingState captureLivingState(Player player) {
+        List<CheckpointRecord.InventoryItem> items = new ArrayList<>();
+        ItemStack[] contents = player.getInventory().getContents();
+        for (int slot = 0; slot < contents.length; slot++) {
+            ItemStack stack = contents[slot];
+            if (stack != null && !stack.getType().isAir()) {
+                items.add(new CheckpointRecord.InventoryItem(slot,
+                        java.util.Base64.getEncoder().encodeToString(stack.serializeAsBytes())));
+            }
+        }
+        Location location = player.getLocation();
+        return new CheckpointRecord.LivingState(location.getX(), location.getY(), location.getZ(),
+                location.getYaw(), location.getPitch(), player.getHealth(), player.getFoodLevel(),
+                player.getSaturation(), player.getInventory().getHeldItemSlot(), items);
     }
 
     private void ensureCanAbort() {
@@ -593,10 +763,19 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
         List<ControlProtocol.Competitor> roster = preparedMatch == null ? List.of() : preparedMatch.roster();
         boolean bindingOpen = preparedMatch != null && matchController != null
                 && matchController.phase() == MatchController.Phase.WAITING;
-        SeatAdmission.Decision decision = SeatAdmission.admit(
-                roster, bindingOpen, playersBySeat, player.getName(), player.getUniqueId());
+        SeatAdmission.Decision decision = resumeSession != null && resumeAwaitingStart
+                ? resumeSession.admit(player.getName(), player.getUniqueId())
+                : SeatAdmission.admit(roster, bindingOpen, playersBySeat,
+                        resumeSession == null ? java.util.Set.of() : resumeSession.deadSeats(),
+                        player.getName(), player.getUniqueId());
         switch (decision) {
-            case SeatAdmission.Bind bind -> bindSeat(player, bind.seat());
+            case SeatAdmission.Bind bind -> {
+                if (resumeSession != null) {
+                    bindResumedSeat(player, bind.seat());
+                } else {
+                    bindSeat(player, bind.seat());
+                }
+            }
             case SeatAdmission.Spectate spectate -> {
                 player.setGameMode(GameMode.SPECTATOR);
                 moveSpectatorToSpawnCenter(player);
@@ -644,6 +823,31 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
         return preparedMatch.roster().stream()
                 .map(bot -> resolvedSpawns.get(bot.seat()))
                 .toList();
+    }
+
+    private void bindResumedSeat(Player player, int seat) {
+        if (resumeSession.planFor(seat) != ResumeSession.BindingPlan.RESTORE_SAVED_STATE) {
+            throw new IllegalStateException("resumed seats restore saved state only");
+        }
+        CheckpointRecord.LivingState saved = resumeSession.markRestored(seat, player.getUniqueId());
+        org.bukkit.inventory.PlayerInventory inventory = player.getInventory();
+        inventory.clear();
+        for (CheckpointRecord.InventoryItem item : saved.inventory()) {
+            inventory.setItem(item.slot(), ItemStack.deserializeBytes(
+                    java.util.Base64.getDecoder().decode(item.itemBase64())));
+        }
+        inventory.setHeldItemSlot(saved.selectedSlot());
+        player.setGameMode(GameMode.SURVIVAL);
+        player.setHealth(Math.min(saved.health(), player.getMaxHealth()));
+        player.setFoodLevel(saved.food());
+        player.setSaturation((float) saved.saturation());
+        player.setInvulnerable(true);
+        if (!player.teleport(new Location(Bukkit.getWorld(ARENA_WORLD), saved.x(), saved.y(), saved.z(),
+                (float) saved.yaw(), (float) saved.pitch()))) {
+            throw new IllegalStateException("could not restore a competitor to its checkpointed position");
+        }
+        playersBySeat.put(seat, player.getUniqueId());
+        seatsByPlayer.put(player.getUniqueId(), seat);
     }
 
     private void bindSeat(Player player, int seat) {
@@ -735,13 +939,19 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
     }
 
     private void advanceMatchAtTickEnd() {
-        if (matchController == null || outcomeEmitted || skipMatchAdvanceThisTick || !isRunningMatch()) {
+        if (matchController == null || outcomeEmitted || skipMatchAdvanceThisTick || !isRunningMatch()
+                || quiesced || resumeAwaitingStart) {
             return;
         }
         boolean countdownWasRunning = matchController.phase() == MatchController.Phase.COUNTDOWN;
         BigInteger civilizationTick = countdownWasRunning ? null : matchController.matchTick().orElse(null);
         List<MatchController.ResolvedElimination> resolved = matchController.endServerTick(pendingEliminations);
         pendingEliminations.clear();
+        for (MatchController.ResolvedElimination item : resolved) {
+            eliminationLog.add(new CheckpointRecord.Elimination(item.seat(),
+                    ControlProtocol.EliminationCause.valueOf(item.cause().name()),
+                    controlTick(item.at()).value()));
+        }
         if (countdownWasRunning) {
             recordInitialCivilizationMaterialCheckpointIfReleased();
         }
@@ -1279,7 +1489,10 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
                 }
                 NaturalWorldSetup.PreparedWorld naturalWorld = NaturalWorldSetup.prepare(
                         naturalPlan, new PaperNaturalWorldAccess(world), world.getViewDistance(),
-                        ArenaChunkGenerator.paperMaterialCatalog());
+                        ArenaChunkGenerator.paperMaterialCatalog(), loadedCheckpoint == null);
+                naturalWorldIdentity = loadedCheckpoint == null
+                        ? naturalWorld.worldIdentity()
+                        : loadedCheckpoint.record().worldIdentity();
                 resolvedSpawns = naturalWorld.spawns();
                 resolvedLootContainers = naturalWorld.lootContainers();
                 preparedChunks = naturalWorld.preparedChunkCount();
@@ -1595,6 +1808,12 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
         UUID playerId = event.getPlayer().getUniqueId();
         Integer seat = seatsByPlayer.get(playerId);
         if (seat == null) {
+            return;
+        }
+        if (resumeAwaitingStart) {
+            resumeSession.markDisconnected(seat);
+            seatsByPlayer.remove(playerId);
+            playersBySeat.remove(seat);
             return;
         }
         if (matchController != null && isRunningMatch()) {

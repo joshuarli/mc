@@ -24,12 +24,22 @@ final class SeatAdmission {
             Map<Integer, UUID> boundPlayersBySeat,
             String username,
             UUID playerId) {
+        return admit(roster, bindingOpen, boundPlayersBySeat, java.util.Set.of(), username, playerId);
+    }
+
+    static Decision admit(
+            List<ControlProtocol.Competitor> roster,
+            boolean bindingOpen,
+            Map<Integer, UUID> boundPlayersBySeat,
+            java.util.Set<Integer> closedSeats,
+            String username,
+            UUID playerId) {
         String folded = username.toLowerCase(Locale.ROOT);
         for (ControlProtocol.Competitor competitor : roster) {
             boolean sameName = competitor.username().equals(username);
             boolean sameId = competitor.offlineUuid().equals(playerId);
             if (sameName && sameId) {
-                if (!bindingOpen) {
+                if (!bindingOpen || closedSeats.contains(competitor.seat())) {
                     return new Spectate();
                 }
                 UUID holder = boundPlayersBySeat.get(competitor.seat());

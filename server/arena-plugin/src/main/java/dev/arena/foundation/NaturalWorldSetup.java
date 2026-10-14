@@ -61,6 +61,15 @@ final class NaturalWorldSetup {
             SurfaceAccess world,
             int viewDistanceChunks,
             ArenaChunkGenerator.MaterialCatalog materials) {
+        return prepare(plan, world, viewDistanceChunks, materials, true);
+    }
+
+    static PreparedWorld prepare(
+            NaturalMapPlan plan,
+            SurfaceAccess world,
+            int viewDistanceChunks,
+            ArenaChunkGenerator.MaterialCatalog materials,
+            boolean placeCaches) {
         if (plan == null || world == null || materials == null) {
             throw new IllegalArgumentException("natural world plan, loaded world access, and material catalog are required");
         }
@@ -95,12 +104,12 @@ final class NaturalWorldSetup {
             MapPlan.LootContainer container = resolvedLoot.get(index);
             validateChestAccess(world, container.position(), chestPositions, materials);
         }
-        for (int index = 0; index < resolvedLoot.size(); index++) {
-            world.placeLootChest(resolvedLoot.get(index).position(), contents.get(index));
+        if (placeCaches) {
+            for (int index = 0; index < resolvedLoot.size(); index++) {
+                world.placeLootChest(resolvedLoot.get(index).position(), contents.get(index));
+            }
+            world.setWorldSpawn(resolvedSpawns.getFirst().position());
         }
-
-        MapPlan.Position firstSpawn = resolvedSpawns.getFirst().position();
-        world.setWorldSpawn(firstSpawn);
         String recipe = searching ? BOUNDED_SEARCH_RECIPE : DECLARED_COLUMN_RECIPE;
         return new PreparedWorld(resolvedSpawns, resolvedLoot, chunks.size(), recipe,
                 worldIdentity(plan, recipe, resolvedSpawns, resolvedLoot));

@@ -54,6 +54,18 @@ off. Squads (rule mode `squads` v1) keep the classic rules; chat from a
 competitor is delivered only to its own squad's competitors and to
 non-competitors. Last-survivor outcomes are unchanged.
 
+A checkpointed match resumes in a new runtime epoch. The plugin loads the
+complete record at startup and skips the loot-chest placement and world-spawn
+mutation of a fresh world, so the copied world keeps its looted chests. On
+resume it restores the saved clock, border, and eliminations, rebinds living
+seats through the same admission rules with the saved roster, and restores
+each seat's saved inventory, position, health, and hunger. It never runs the
+new-match inventory reset or starter-kit path. Dead seats stay dead: their
+exact identities join as spectators and cannot bind. Living seats are
+invulnerable and the clock is held until `start`, and a disconnect before
+`start` only unbinds the seat. Stale `checkpoint` commands from another epoch
+are rejected.
+
 The chunk generator reads only the immutable plan and writes to the
 `ChunkData` supplied to its callback. It does not query or mutate another
 chunk. Vanilla terrain phases and populators are disabled so chunks outside the

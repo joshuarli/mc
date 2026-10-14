@@ -36,6 +36,7 @@ final class ControlProtocol {
     private static final String USERNAME_PATTERN = "[A-Za-z0-9_]{1,16}";
     private static final String EXTERNAL_USERNAME_PATTERN = "[A-Za-z0-9_]{3,16}";
     static final int LEGACY_MAX_COMPETITORS = 6;
+    static final int MAX_EPOCH = 1_000_000;
     static final int MAX_SEAT = MatchController.MAX_COMPETITORS - 1;
     private static final String TOKEN_PATTERN = "[A-Za-z0-9_-]+";
 
@@ -56,7 +57,9 @@ final class ControlProtocol {
         OUTCOME("outcome"),
         METRICS("metrics"),
         ACK("ack"),
-        ERROR("error");
+        ERROR("error"),
+        CHECKPOINT("checkpoint"),
+        CHECKPOINT_WRITTEN("checkpoint_written");
 
         private final String wireName;
 
@@ -81,9 +84,11 @@ final class ControlProtocol {
     enum Capability {
         HUNGER_GAMES_V1("hunger_games_v1"),
         CIVILIZATION_V1("civilization_v1"),
-        HUNGER_GAMES_ROSTER_V2("hunger_games_roster_v2");
+        HUNGER_GAMES_ROSTER_V2("hunger_games_roster_v2"),
+        CHECKPOINT_V1("checkpoint_v1");
 
-        static final List<Capability> SUPPORTED = List.of(HUNGER_GAMES_V1, CIVILIZATION_V1, HUNGER_GAMES_ROSTER_V2);
+        static final List<Capability> SUPPORTED = List.of(
+                HUNGER_GAMES_V1, CIVILIZATION_V1, HUNGER_GAMES_ROSTER_V2, CHECKPOINT_V1);
 
         private final String wireName;
 
@@ -331,7 +336,33 @@ final class ControlProtocol {
 
     sealed interface Payload permits EmptyPayload, HelloPayload, ReadyPayload, BuildProgressPayload,
             PreparePayload, AbortPayload, ClockPayload, PublicStatePayload, EliminationPayload,
-            CivilizationStatePayload, Outcome, MetricsPayload, ErrorPayload {}
+            CivilizationStatePayload, Outcome, MetricsPayload, ErrorPayload, CheckpointCommand,
+            CheckpointWritten {}
+
+    record CheckpointCommand(String checkpointId, int epoch) implements Payload {
+        CheckpointCommand {
+            require(checkpointId != null && checkpointId.matches(RUN_ID_PATTERN), "invalid checkpoint id");
+            require(epoch >= 0 && epoch <= MAX_EPOCH, "invalid runtime epoch");
+        }
+    }
+
+    record CheckpointWritten(String checkpointId, int epoch, BigInteger matchTick, String digest, long byteLength)
+            implements Payload {
+        CheckpointWritten {
+            require(checkpointId != null && checkpointId.matches(RUN_ID_PATTERN), "invalid checkpoint id");
+            require(epoch >= 0 && epoch <= MAX_EPOCH, "invalid runtime epoch");
+            require(isU64(matchTick), "invalid checkpoint tick");
+            require(digest != null && digest.matches(SEMANTIC_ID_PATTERN), "invalid checkpoint digest");
+            require(byteLength > 0 && byteLength <= MAX_SAFE_INTEGER_LONG, "invalid checkpoint length");
+        }
+    }
+
+    record ResumeReference(String digest, int epoch) {
+        ResumeReference {
+            require(digest != null && digest.matches(SEMANTIC_ID_PATTERN), "invalid checkpoint digest");
+            require(epoch >= 1 && epoch <= MAX_EPOCH, "resume requires a positive runtime epoch");
+        }
+    }
 
     record EmptyPayload() implements Payload {}
 
@@ -653,6 +684,7 @@ final class ControlProtocol {
             PrepareSettings settings,
             RosterVersion rosterVersion,
             Optional<PrepareRules> rules,
+            Optional<ResumeReference> resume,
             List<Competitor> roster) implements Payload {
         PreparePayload(
                 String mapSemanticId,
@@ -660,7 +692,19 @@ final class ControlProtocol {
                 BigInteger seed,
                 PrepareSettings settings,
                 List<Competitor> roster) {
-            this(mapSemanticId, scenarioSemanticId, seed, settings, RosterVersion.BOTS_ONLY, Optional.empty(), roster);
+            this(mapSemanticId, scenarioSemanticId, seed, settings, RosterVersion.BOTS_ONLY, Optional.empty(),
+                    Optional.empty(), roster);
+        }
+
+        PreparePayload(
+                String mapSemanticId,
+                String scenarioSemanticId,
+                BigInteger seed,
+                PrepareSettings settings,
+                RosterVersion rosterVersion,
+                Optional<PrepareRules> rules,
+                List<Competitor> roster) {
+            this(mapSemanticId, scenarioSemanticId, seed, settings, rosterVersion, rules, Optional.empty(), roster);
         }
 
         PreparePayload {
@@ -671,6 +715,9 @@ final class ControlProtocol {
             Objects.requireNonNull(settings, "prepare settings");
             Objects.requireNonNull(rosterVersion, "roster version");
             rules = Objects.requireNonNull(rules, "prepare rules");
+            resume = Objects.requireNonNull(resume, "resume reference");
+            require(resume.isEmpty() || rosterVersion == RosterVersion.GENERALIZED,
+                    "resume requires the generalized roster");
             roster = List.copyOf(Objects.requireNonNull(roster, "roster"));
             validateRoster(roster, rosterVersion);
             require(rules.isEmpty() || rosterVersion == RosterVersion.GENERALIZED,
@@ -1022,6 +1069,8 @@ final class ControlProtocol {
             case OUTCOME -> readOutcome(payloadValue);
             case METRICS -> readMetrics(payloadValue);
             case ERROR -> readError(payloadValue);
+            case CHECKPOINT -> readCheckpointCommand(payloadValue);
+            case CHECKPOINT_WRITTEN -> readCheckpointWritten(payloadValue);
         };
         return new Envelope(new Header(runId, sequence, correlation), type, payload);
     }
@@ -1061,10 +1110,10 @@ final class ControlProtocol {
                 readInteger(payload.get("total"), "payload.total", 0, Integer.MAX_VALUE));
     }
 
-    private static Payload readPrepare(Object value) throws IOException {
+    static Payload readPrepare(Object value) throws IOException {
         Map<String, Object> payload = object(value, "payload",
                 Set.of("map_semantic_id", "scenario_semantic_id", "seed", "mode", "settings", "roster",
-                        "roster_version", "rules"),
+                        "roster_version", "rules", "resume"),
                 Set.of("map_semantic_id", "scenario_semantic_id", "seed", "mode", "settings", "roster"));
         String mode = readString(payload.get("mode"), "payload.mode", 1, 64, null);
         RosterVersion rosterVersion = RosterVersion.BOTS_ONLY;
@@ -1089,6 +1138,18 @@ final class ControlProtocol {
         Optional<PrepareRules> rules = payload.containsKey("rules")
                 ? Optional.of(readPrepareRules(payload.get("rules")))
                 : Optional.empty();
+        Optional<ResumeReference> resume = Optional.empty();
+        if (payload.containsKey("resume")) {
+            if (rosterVersion != RosterVersion.GENERALIZED) {
+                throw invalid("payload.resume", "resume requires the generalized roster");
+            }
+            Map<String, Object> reference = object(payload.get("resume"), "payload.resume",
+                    Set.of("checkpoint_digest", "epoch"), Set.of("checkpoint_digest", "epoch"));
+            resume = Optional.of(new ResumeReference(
+                    readString(reference.get("checkpoint_digest"), "payload.resume.checkpoint_digest", 64, 64,
+                            SEMANTIC_ID_PATTERN),
+                    readInteger(reference.get("epoch"), "payload.resume.epoch", 1, MAX_EPOCH)));
+        }
         return new PreparePayload(
                 readString(payload.get("map_semantic_id"), "payload.map_semantic_id", 64, 64, SEMANTIC_ID_PATTERN),
                 readString(payload.get("scenario_semantic_id"), "payload.scenario_semantic_id", 64, 64, SEMANTIC_ID_PATTERN),
@@ -1096,6 +1157,7 @@ final class ControlProtocol {
                 settings,
                 rosterVersion,
                 rules,
+                resume,
                 roster);
     }
 
@@ -1461,6 +1523,26 @@ final class ControlProtocol {
                 readString(payload.get("message"), "payload.message", 1, 1024, null));
     }
 
+    private static Payload readCheckpointCommand(Object value) throws IOException {
+        Map<String, Object> payload = object(value, "payload", Set.of("checkpoint_id", "epoch"),
+                Set.of("checkpoint_id", "epoch"));
+        return new CheckpointCommand(
+                readString(payload.get("checkpoint_id"), "payload.checkpoint_id", 1, 64, RUN_ID_PATTERN),
+                readInteger(payload.get("epoch"), "payload.epoch", 0, MAX_EPOCH));
+    }
+
+    private static Payload readCheckpointWritten(Object value) throws IOException {
+        Map<String, Object> payload = object(value, "payload",
+                Set.of("checkpoint_id", "epoch", "match_tick", "digest", "byte_length"),
+                Set.of("checkpoint_id", "epoch", "match_tick", "digest", "byte_length"));
+        return new CheckpointWritten(
+                readString(payload.get("checkpoint_id"), "payload.checkpoint_id", 1, 64, RUN_ID_PATTERN),
+                readInteger(payload.get("epoch"), "payload.epoch", 0, MAX_EPOCH),
+                readU64String(payload.get("match_tick"), "payload.match_tick", false),
+                readString(payload.get("digest"), "payload.digest", 64, 64, SEMANTIC_ID_PATTERN),
+                readIntegerLong(payload.get("byte_length"), "payload.byte_length", 1, MAX_SAFE_INTEGER_LONG));
+    }
+
     private static Payload readEmpty(Object value) throws IOException {
         object(value, "payload", Set.of(), Set.of());
         return new EmptyPayload();
@@ -1492,9 +1574,17 @@ final class ControlProtocol {
         return distinctList(capabilities, path);
     }
 
-    private static Object payloadValue(Payload payload) {
+    static Object payloadValue(Payload payload) {
         if (payload instanceof EmptyPayload) {
             return object();
+        }
+        if (payload instanceof CheckpointCommand checkpoint) {
+            return object("checkpoint_id", checkpoint.checkpointId(), "epoch", checkpoint.epoch());
+        }
+        if (payload instanceof CheckpointWritten written) {
+            return object("checkpoint_id", written.checkpointId(), "epoch", written.epoch(),
+                    "match_tick", written.matchTick().toString(), "digest", written.digest(),
+                    "byte_length", written.byteLength());
         }
         if (payload instanceof HelloPayload hello) {
             return object("token", hello.token(), "capabilities", hello.capabilities().stream().map(Capability::wireName).toList());
@@ -1533,6 +1623,8 @@ final class ControlProtocol {
                 prepareValue.put("roster_version", 2);
             }
             prepare.rules().ifPresent(rules -> prepareValue.put("rules", rulesValue(rules)));
+            prepare.resume().ifPresent(resume -> prepareValue.put("resume",
+                    object("checkpoint_digest", resume.digest(), "epoch", resume.epoch())));
             return prepareValue;
         }
         if (payload instanceof AbortPayload abort) {
@@ -1656,7 +1748,7 @@ final class ControlProtocol {
         return object("domain", tick.domain().wireName(), "value", tick.value().toString());
     }
 
-    private static byte[] encodeJson(Object value) throws IOException {
+    static byte[] encodeJson(Object value) throws IOException {
         ByteArrayOutputStream bytes = new ByteArrayOutputStream();
         try (JsonWriter writer = new JsonWriter(new OutputStreamWriter(bytes, StandardCharsets.UTF_8))) {
             writer.setLenient(false);
@@ -1706,7 +1798,7 @@ final class ControlProtocol {
         }
     }
 
-    private static Object readJsonValue(JsonReader reader, int depth) throws IOException {
+    static Object readJsonValue(JsonReader reader, int depth) throws IOException {
         JsonToken token = reader.peek();
         return switch (token) {
             case BEGIN_OBJECT -> {
@@ -1764,7 +1856,7 @@ final class ControlProtocol {
         };
     }
 
-    private static Map<String, Object> object(Object value, String path, Set<String> allowed, Set<String> required)
+    static Map<String, Object> object(Object value, String path, Set<String> allowed, Set<String> required)
             throws IOException {
         if (!(value instanceof Map<?, ?> raw)) {
             throw invalid(path, "must be an object");
@@ -1784,14 +1876,14 @@ final class ControlProtocol {
         return object;
     }
 
-    private static List<Object> array(Object value, String path, int min, int max) throws IOException {
+    static List<Object> array(Object value, String path, int min, int max) throws IOException {
         if (!(value instanceof List<?> values) || values.size() < min || values.size() > max) {
             throw invalid(path, "must be an array with " + min + " to " + max + " entries");
         }
         return new ArrayList<>(values);
     }
 
-    private static String readString(Object value, String path, int min, int max, String pattern) throws IOException {
+    static String readString(Object value, String path, int min, int max, String pattern) throws IOException {
         if (!(value instanceof String string) || !wellFormedUnicode(string)
                 || codePointLength(string) < min || codePointLength(string) > max
                 || (pattern != null && !string.matches(pattern))) {
@@ -1800,14 +1892,14 @@ final class ControlProtocol {
         return string;
     }
 
-    private static boolean readBoolean(Object value, String path) throws IOException {
+    static boolean readBoolean(Object value, String path) throws IOException {
         if (!(value instanceof Boolean result)) {
             throw invalid(path, "must be a boolean");
         }
         return result;
     }
 
-    private static int readInteger(Object value, String path, int min, int max) throws IOException {
+    static int readInteger(Object value, String path, int min, int max) throws IOException {
         long number = readIntegerLong(value, path, min, max);
         if (number < Integer.MIN_VALUE || number > Integer.MAX_VALUE) {
             throw invalid(path, "must be an integer in range");
@@ -1815,7 +1907,7 @@ final class ControlProtocol {
         return (int) number;
     }
 
-    private static long readIntegerLong(Object value, String path, long min, long max) throws IOException {
+    static long readIntegerLong(Object value, String path, long min, long max) throws IOException {
         if (!(value instanceof BigDecimal decimal)) {
             throw invalid(path, "must be an integer in range");
         }
@@ -1832,7 +1924,7 @@ final class ControlProtocol {
         return integer.longValueExact();
     }
 
-    private static double readFiniteNumber(Object value, String path) throws IOException {
+    static double readFiniteNumber(Object value, String path) throws IOException {
         if (!(value instanceof BigDecimal decimal)) {
             throw invalid(path, "must be a finite number");
         }
@@ -1843,7 +1935,7 @@ final class ControlProtocol {
         return number;
     }
 
-    private static BigInteger readU64String(Object value, String path, boolean positive) throws IOException {
+    static BigInteger readU64String(Object value, String path, boolean positive) throws IOException {
         if (!(value instanceof String text) || text.length() > 20 || !text.matches("0|[1-9][0-9]*")) {
             throw invalid(path, positive ? "must be a positive canonical u64 decimal string" : "must be a canonical u64 decimal string");
         }
@@ -1869,6 +1961,8 @@ final class ControlProtocol {
             case OUTCOME -> payload instanceof Outcome;
             case METRICS -> payload instanceof MetricsPayload;
             case ERROR -> payload instanceof ErrorPayload;
+            case CHECKPOINT -> payload instanceof CheckpointCommand;
+            case CHECKPOINT_WRITTEN -> payload instanceof CheckpointWritten;
         };
     }
 
@@ -1901,6 +1995,10 @@ final class ControlProtocol {
         }
     }
 
+    static void requireSeat(int seat) {
+        require(seat >= 0 && seat <= MAX_SEAT, "seat is out of range");
+    }
+
     static UUID offlineUuid(String username) {
         return UUID.nameUUIDFromBytes(("OfflinePlayer:" + username).getBytes(StandardCharsets.UTF_8));
     }
@@ -1924,7 +2022,7 @@ final class ControlProtocol {
         return copy;
     }
 
-    private static Map<String, Object> object(Object... entries) {
+    static Map<String, Object> object(Object... entries) {
         if (entries.length % 2 != 0) {
             throw new IllegalArgumentException("object entries must be key/value pairs");
         }
@@ -1967,7 +2065,7 @@ final class ControlProtocol {
         return true;
     }
 
-    private static IOException invalid(String path, String message) {
+    static IOException invalid(String path, String message) {
         return new IOException(path + ": " + message);
     }
 
