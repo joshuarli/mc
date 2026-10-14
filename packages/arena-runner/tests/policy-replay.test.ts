@@ -383,6 +383,33 @@ test('policy replay v3 verifies style, local opportunities, and confirmed effect
     (error: unknown) => error instanceof TraceError && error.source.kind === 'unsupported_policy_schema');
 });
 
+test('policy replay v3 requires each seat to carry its opening state across decisions', () => {
+  const initial = openingPolicyRecord(1n);
+  const carried = openingPolicyState({ cacheTakenAt: blockPosition(2, 64, 0) });
+  const forgedInitial = {
+    ...initial,
+    input: { ...initial.input, opening: { ...initial.input.opening, state: carried } },
+    opening_state_after: carried,
+  };
+  assert.throws(() => replayPolicyJson(evidence([forgedInitial])), (error: unknown) => error instanceof TraceError
+    && error.source.kind === 'policy_opening_state_chain_mismatch'
+    && error.source.field === 'input.opening.state');
+
+  const next = openingPolicyRecord(2n);
+  const skipped = {
+    ...next,
+    input: { ...next.input, opening: { ...next.input.opening, state: carried } },
+    opening_state_after: carried,
+  };
+  assert.throws(() => replayPolicyJson(evidence([
+    initial,
+    makePolicyEffectRecord(1n, { kind: 'succeeded' }, []),
+    skipped,
+  ])), (error: unknown) => error instanceof TraceError
+    && error.source.kind === 'policy_opening_state_chain_mismatch'
+    && error.source.field === 'input.opening.state');
+});
+
 test('policy replay v2 accepts goal persistence without claiming another action effect', () => {
   const first = actionRecord(1n, { kind: 'start', action_sequence: '1' });
   const deferred = actionRecord(2n, { kind: 'defer', action_sequence: '1', reason: 'goalPersistence' });

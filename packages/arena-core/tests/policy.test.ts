@@ -111,8 +111,10 @@ test('scavenger opens one useful cache and navigates out of its local area', () 
   const feedback = createPolicyFeedback({ initiatingObservation, goal: first.goal, intent: first.intent,
     outcome: { kind: 'succeeded' } });
   ok(feedback !== null);
+  const departureRandom = policyRandom();
+  const departureRandomState = departureRandom.snapshotState();
   const next = decideOpening(makeObservation({ at: 11, loot: currentKnowledge([cache, otherCache]) }), first.memory,
-    params(), policyRandom(), policyFeedbackBatch([feedback]), {
+    params(), departureRandom, policyFeedbackBatch([feedback]), {
       style: 'scavenger', state: first.openingState,
     });
 
@@ -120,17 +122,28 @@ test('scavenger opens one useful cache and navigates out of its local area', () 
   deepStrictEqual(next.goal, { kind: 'explore' });
   ok(next.intent.kind === 'navigate');
   ok(manhattanDistance(next.intent.target, cache.position) >= 8n);
+  equal(departureRandom.snapshotState(), departureRandomState);
 
-  const laterObservation = makeObservation({
-    at: 12,
+  const stillNear = decideOpening(makeObservation({ at: 12, loot: currentKnowledge([cache, otherCache]) }), next.memory,
+    params(), departureRandom, [], {
+      style: 'scavenger', state: next.openingState,
+    });
+  deepStrictEqual(stillNear.intent, next.intent);
+  equal(departureRandom.snapshotState(), departureRandomState);
+
+  const movedAway = makeObservation({
+    at: 13,
     agent: currentKnowledge(makeAgent({ position: next.intent.target })),
     loot: currentKnowledge([cache, otherCache]),
   });
-  const later = decideOpening(laterObservation, next.memory, params(), policyRandom(), [], {
-    style: 'scavenger', state: next.openingState,
+  const later = decideOpening(movedAway, stillNear.memory, params(), departureRandom, [], {
+    style: 'scavenger', state: stillNear.openingState,
   });
   ok(later.intent.kind === 'navigate');
-  ok(manhattanDistance(later.intent.target, cache.position) >= 8n);
+  ok(Math.max(Math.abs(later.intent.target.x - next.intent.target.x), Math.abs(later.intent.target.z - next.intent.target.z))
+    <= params().values.searchRadiusBlocks);
+  notDeepStrictEqual(later.intent, next.intent);
+  ok(departureRandom.snapshotState() !== departureRandomState);
 });
 
 test('hunter approaches a visible isolated opponent before observed caches', () => {

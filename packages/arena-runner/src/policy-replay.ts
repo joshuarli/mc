@@ -95,6 +95,11 @@ export interface CivilizationPolicyReplayRecordV1 extends Omit<PolicyReplayRecor
 
 export type PolicyReplayRecord = PolicyReplayRecordV1 | PolicyReplayRecordV2 | PolicyReplayRecordV3 | CivilizationPolicyReplayRecordV1;
 
+interface OpeningPolicyReplayTransition {
+  readonly stateBefore: OpeningPolicyState;
+  readonly stateAfter: OpeningPolicyState;
+}
+
 export interface PolicyPathPoint {
   /** Pathfinder may place a waypoint at a fractional block coordinate. */
   readonly x: number;
@@ -335,6 +340,7 @@ export function replayPolicyJson(evidence: Evidence): PolicyReplaySummary {
   let pathUpdateCount = 0;
   const effects = new Set<string>();
   const openingEvidence = new Map<number, MutableOpeningEvidence>();
+  const openingStates = new Map<number, OpeningPolicyState>();
   let terminalOutcomeSeen = false;
 
   for (const [index, record] of evidence.records.entries()) {
@@ -356,8 +362,14 @@ export function replayPolicyJson(evidence: Evidence): PolicyReplaySummary {
       previousSequence = sequence;
       firstSequence ??= decision.sequence;
       lastSequence = decision.sequence;
-      replayDecision(decision, index + 1, prepared?.seed);
+      const openingTransition = replayDecision(decision, index + 1, prepared?.seed);
       if (decision.schema === 'policy-replay-v3') {
+        if (openingTransition === undefined) throw replayFailure('policy_opening_state_chain_mismatch', index + 1);
+        const expectedState = openingStates.get(decision.seat) ?? openingPolicyState({ cacheTakenAt: null });
+        if (canonicalJson(openingTransition.stateBefore) !== canonicalJson(expectedState)) {
+          throw replayFailure('policy_opening_state_chain_mismatch', index + 1, 'input.opening.state');
+        }
+        openingStates.set(decision.seat, openingTransition.stateAfter);
         retainOpeningDecision(openingEvidence, decision, index + 1);
       }
       if (decision.schema !== 'policy-replay-v1') {
@@ -548,7 +560,11 @@ function freezePosition(position: Readonly<{ x: number; y: number; z: number }>)
   return Object.freeze({ x: position.x, y: position.y, z: position.z });
 }
 
-function replayDecision(record: PolicyReplayRecord, recordNumber: number, preparedSeed?: bigint): void {
+function replayDecision(
+  record: PolicyReplayRecord,
+  recordNumber: number,
+  preparedSeed?: bigint,
+): OpeningPolicyReplayTransition | undefined {
   if (record.schema === 'civilization-policy-replay-v1') {
     const input = strictObject(record.input);
     if (input === undefined || input.schema !== 'civilization-policy-input-v1') {
@@ -621,7 +637,7 @@ function replayDecision(record: PolicyReplayRecord, recordNumber: number, prepar
     if (restored.random.snapshotState() !== parseU64Decimal(record.rng_state_after, recordNumber)) {
       throw replayFailure('policy_rng_state_mismatch', recordNumber, 'rng_state_after');
     }
-    return;
+    return Object.freeze({ stateBefore: restored.opening.state, stateAfter: expectedOpeningState });
   }
   let restored: ReturnType<typeof rehydratePolicyReplayInput>;
   try {
@@ -646,6 +662,7 @@ function replayDecision(record: PolicyReplayRecord, recordNumber: number, prepar
   if (restored.random.snapshotState() !== expectedRngState) {
     throw replayFailure('policy_rng_state_mismatch', recordNumber, 'rng_state_after');
   }
+  return undefined;
 }
 
 function readPolicyDecision(record: TraceRecord, recordNumber: number): PolicyReplayRecord {

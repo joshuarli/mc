@@ -634,8 +634,8 @@ function openingExploration(
   const border = currentValue(observation.border);
   if (border === null) return waitDecision('borderUnknown', memory);
   const cacheTakenAt = openingStyle === 'scavenger' ? openingState?.cacheTakenAt ?? null : null;
-  if (cacheTakenAt !== null) {
-    const departure = cacheDepartureTarget(agent.position, cacheTakenAt, border, memory, random, semantics,
+  if (cacheTakenAt !== null && manhattanDistance(agent.position, cacheTakenAt) < CACHE_DEPARTURE_DISTANCE_BLOCKS) {
+    const departure = cacheDepartureTarget(cacheTakenAt, border, memory,
       Math.max(params.values.searchRadiusBlocks, MAX_CACHE_DEPARTURE_RADIUS_BLOCKS));
     if (departure.ok === false) return waitDecision(departure.reason, memory);
     const goal: Goal = Object.freeze({ kind: 'explore' });
@@ -674,12 +674,9 @@ function hasCacheNeed(agent: AgentState): boolean {
 }
 
 function cacheDepartureTarget(
-  position: BlockPosition,
   cachePosition: BlockPosition,
   border: WorldBorder,
   memory: PolicyMemory,
-  random: DeterministicRandom,
-  semantics: DecisionSemantics,
   radius: number,
 ): { readonly ok: true; readonly value: BlockPosition }
   | { readonly ok: false; readonly reason: 'unrepresentableTarget' | 'failedTargetsExhausted' } {
@@ -694,11 +691,13 @@ function cacheDepartureTarget(
     [0, -radius],
     [half, -radius],
   ] as const;
-  const start = random.nextEightWay();
+  const cycleLength = BigInt(offsets.length);
+  const cacheHash = BigInt(cachePosition.x) + 3n * BigInt(cachePosition.y) + 5n * BigInt(cachePosition.z);
+  const start = Number(((cacheHash % cycleLength) + cycleLength) % cycleLength);
   let representableTargets = 0;
   for (let offset = 0; offset < offsets.length; offset += 1) {
     const [dx, dz] = offsets[(start + offset) % offsets.length]!;
-    const candidate = offsetBlockPosition(position, dx, 0, dz);
+    const candidate = offsetBlockPosition(cachePosition, dx, 0, dz);
     if (!candidate.ok) continue;
     if (isOutsideBorder(border, candidate.value)
         || manhattanDistance(candidate.value, cachePosition) < CACHE_DEPARTURE_DISTANCE_BLOCKS) continue;
@@ -710,9 +709,7 @@ function cacheDepartureTarget(
   if (representableTargets === 0) {
     return { ok: false, reason: 'unrepresentableTarget' };
   }
-  return semantics === 'policy-input-v1'
-    ? { ok: false, reason: 'unrepresentableTarget' }
-    : { ok: false, reason: 'failedTargetsExhausted' };
+  return { ok: false, reason: 'failedTargetsExhausted' };
 }
 
 /** Replays the former decision contract without feeding skill results into policy. */
