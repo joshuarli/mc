@@ -16,6 +16,9 @@ export function assertEventSeatsInRoster(event: RuntimeAuthorityEvent, rosterSiz
       assertSeats(event.payload.entries.flatMap((entry) => entry.attacker === null ? [] : [entry.attacker]),
         rosterSize, 'damage_attackers');
       return;
+    case 'mechanics_receipt':
+      assertSeats(event.payload.receipts.map((receipt) => receipt.seat), rosterSize, 'mechanics_receipts');
+      return;
     case 'elimination':
       assertSeats(event.payload.eliminations.map((entry) => entry.seat), rosterSize, 'eliminations');
       return;

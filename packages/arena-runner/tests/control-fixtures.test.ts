@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
-import { decodeCheckpoint, decodeControlEnvelope, encodeControlEnvelope } from "../src/control/index.js";
+import { CONTROL_CAPABILITIES, ControlCodecError, ControlReceiver, decodeCheckpoint, decodeControlEnvelope,
+  encodeControlEnvelope, encodeControlFrame } from "../src/control/index.js";
 import type { HungerGamesV2PreparePayload } from "../src/control/index.js";
 
 const fixtureDirectory = join(process.cwd(), "fixtures", "protocol");
@@ -28,6 +29,36 @@ test("control fixtures reject every invalid cross-language message", () => {
   for (const name of invalid) {
     assert.throws(() => decodeControlEnvelope(fixture(name)), name);
   }
+});
+
+test("mechanics receipts are strict, bounded, and capability gated", () => {
+  const mechanics = fixture("control-mechanics-receipt.json");
+  const message = decodeControlEnvelope(mechanics);
+  assert.equal(message.type, "mechanics_receipt");
+  if (message.type !== "mechanics_receipt") assert.fail("mechanics receipt expected");
+  assert.equal(message.payload.receipts.length, 6);
+  assert.deepEqual(message.payload.receipts[1], {
+    seat: 0, kind: "distance_maintained", duration_ticks: 10, minimum_blocks: 5.25, maximum_blocks: 6.5,
+  });
+
+  assert.throws(() => decodeControlEnvelope(fixture("control-invalid-mechanics-receipt-duplicate.json")));
+  const receiver = new ControlReceiver("mechanics-test", "test-token", CONTROL_CAPABILITIES);
+  receiver.acceptFrame(encodeControlFrame({
+    protocol: 1, run_id: "mechanics-test", sequence: 1n, type: "hello",
+    payload: { token: "test-token", capabilities: ["hunger_games_v1"] },
+  }));
+  receiver.expectReadyAfter(2n);
+  receiver.acceptFrame(encodeControlFrame({
+    protocol: 1, run_id: "mechanics-test", sequence: 2n, correlation: 2n, type: "ready",
+    payload: {
+      server: { name: "Paper", version: "test", minecraft_version: "test", protocol_version: 1 },
+      plugin: { name: "Arena", version: "test" }, capabilities: ["hunger_games_v1"],
+    },
+  }));
+  assert.throws(() => receiver.acceptFrame(encodeControlFrame({
+    protocol: 1, run_id: "mechanics-test", sequence: 3n, type: "mechanics_receipt",
+    payload: { at: { domain: "match", value: 1n }, receipts: [{ seat: 0, kind: "ranged_projectile_release" }] },
+  })), (error: unknown) => error instanceof ControlCodecError && error.code === "unsupported_capability");
 });
 
 test("control roster v2 admits external seats up to 256 competitors", () => {

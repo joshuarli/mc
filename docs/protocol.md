@@ -30,12 +30,11 @@ are positive u64 decimal strings. Each direction maintains its own strictly
 increasing sequence. Gaps are permitted; repeats and lower values fail. A
 response correlation equals the initiating message's sequence.
 
-The plugin's first message is authenticated `hello`, advertising its supported
-capabilities. `CONTROL_CAPABILITIES` exposes the runner's closed supported wire
-set, currently `hunger_games_v1`, `civilization_v1`, and
-`hunger_games_roster_v2`; the capability type and
-codec validation derive from that immutable tuple. A plugin may advertise both
-regardless of the selected match mode. The runner acknowledges that sequence, then the plugin sends
+The plugin's first message is an authenticated `hello` that lists its supported
+capabilities. The runner validates these names against the closed
+`CONTROL_CAPABILITIES` set. That set includes mode, roster, checkpoint, damage,
+tick-metric, and duel-mechanics capabilities. The plugin may announce all its
+supported capabilities in any match mode. The runner acknowledges that sequence, then the plugin sends
 `ready` with the acknowledgment sequence as its correlation and the Paper,
 Minecraft, protocol, plugin, and capability identities. The runner accepts no
 commands until this handshake completes. The plugin sends a heartbeat every
@@ -86,6 +85,20 @@ under `fixtures/protocol/control-*.json`.
   message.
 - `metrics` contains bounded public operational counters. `error` contains a
   closed code and a non-secret message.
+- `mechanics_receipt` carries evaluator-only UHC duel observations. The runner
+  accepts it only when the plugin advertises `duel_mechanics_v1`. Each payload
+  has one match tick and at most six receipts per seat.
+  - `lateral_movement` records once after the player moves at least one block
+    sideways relative to its heading. The plugin does not stream positions.
+  - `distance_maintained` records ten consecutive server ticks with opponent
+    distance greater than four and at most 40 blocks.
+  - `ranged_projectile_release` records an arrow launch by a competitor.
+  - `shield_blocking_transition` records the blocking state Paper reports at
+    server tick end.
+  - `golden_apple_consume` distinguishes ordinary and enchanted golden apples.
+  - Competitor contact uses the existing `damage` event. Its attacker seat and
+    match tick identify the contact. Evaluators pair server events with client
+    action records by seat and match tick. Policies do not receive these events.
 
 The command acknowledgment marks processing on the plugin's server thread. It
 precedes the authority effects caused by that command. While an `abort` awaits

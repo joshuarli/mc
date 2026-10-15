@@ -33,3 +33,15 @@ test('elimination and outcome seats are bounded by the prepared roster', () => {
   assertEventSeatsInRoster(
     { ...envelope, type: 'outcome', payload: { kind: 'winner', winner_seat: 7, survivors: [7], at } }, 8);
 });
+
+test('mechanics receipt seats are bounded by the prepared roster', () => {
+  assertEventSeatsInRoster({ ...envelope, type: 'mechanics_receipt', payload: {
+    at,
+    receipts: [{ seat: 7, kind: 'distance_maintained', duration_ticks: 10,
+      minimum_blocks: 5, maximum_blocks: 8 }],
+  } }, 8);
+  rejectsSeat({ ...envelope, type: 'mechanics_receipt', payload: {
+    at,
+    receipts: [{ seat: 8, kind: 'ranged_projectile_release' }],
+  } }, 8, 'mechanics_receipts');
+});

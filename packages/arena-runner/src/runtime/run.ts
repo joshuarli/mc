@@ -1058,7 +1058,8 @@ class ControlCoordinator {
           this.#events.push(message);
           if (message.type === 'outcome') {
             try {
-              reconstructEventResult(this.#runId, this.#prepare, this.#events.filter((event) => event.type !== 'damage'));
+              reconstructEventResult(this.#runId, this.#prepare,
+                this.#events.filter((event) => event.type !== 'damage' && event.type !== 'mechanics_receipt'));
             } catch (error) {
               throw new RunnerError('corrupt_evidence', 'authoritative match events', {
                 kind: traceFailureKind(error),
@@ -1371,7 +1372,8 @@ async function cleanupOwnedRun(options: Readonly<{
 
 function isAuthorityEvent(message: ControlMessage): message is RuntimeAuthorityEvent {
   return message.type === 'public_clock' || message.type === 'public_state' || message.type === 'civilization_state'
-    || message.type === 'elimination' || message.type === 'outcome' || message.type === 'damage';
+    || message.type === 'elimination' || message.type === 'outcome' || message.type === 'damage'
+    || message.type === 'mechanics_receipt';
 }
 
 async function processExitObserved(process: OwnedServerProcess): Promise<boolean> {

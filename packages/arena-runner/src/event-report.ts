@@ -43,7 +43,7 @@ export function reconstructEventResult(
     }
     lastSequence = event.sequence;
     if (outcome !== undefined) throw reportFailure('event_after_outcome', record);
-    if (pendingEliminationStateTick !== undefined && event.type !== 'public_state') {
+    if (pendingEliminationStateTick !== undefined && event.type !== 'public_state' && event.type !== 'mechanics_receipt') {
       throw reportFailure('elimination_state_missing', record);
     }
 
@@ -134,6 +134,8 @@ export function reconstructEventResult(
       case 'outcome':
         outcome = event.payload;
         validateOutcome(outcome, prepare, initialSeats, alive, lastEliminationTick, terminalClock, lastPublicState, lastCivilizationState, record);
+        break;
+      case 'mechanics_receipt':
         break;
       default:
         throw reportFailure('non_authoritative_event', record);

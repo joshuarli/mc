@@ -219,6 +219,10 @@ export function reconstructRunEvidence(evidence: Evidence): ReconstructedRunEvid
       if (!startSeen) throw eventRecordFailure('event_before_start', recordNumber);
       continue;
     }
+    if (message.type === 'mechanics_receipt') {
+      if (!startSeen) throw eventRecordFailure('event_before_start', recordNumber);
+      continue;
+    }
     const authoritativeEvent = message.type === 'public_clock' || message.type === 'public_state'
       || message.type === 'elimination' || message.type === 'civilization_state' || message.type === 'outcome';
     if (authoritativeEvent && pendingRunnerCommand !== undefined) {

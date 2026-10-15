@@ -45,6 +45,8 @@ import type {
   DamageCause,
   DamageEntry,
   DamagePayload,
+  MechanicsReceipt,
+  MechanicsReceiptPayload,
   ControlMessage,
   EmberFaction,
   FactionId,
@@ -252,6 +254,11 @@ export class ControlReceiver {
       throw new ControlCodecError("unsupported_capability", "plugin sent a damage event without advertising damage_events_v1");
     }
 
+    if (this.handshake === "complete" && message.type === "mechanics_receipt"
+        && !this.helloCapabilities.includes("duel_mechanics_v1")) {
+      throw new ControlCodecError("unsupported_capability", "plugin sent mechanics receipts without advertising duel_mechanics_v1");
+    }
+
     if (this.handshake === "complete" && requiresCivilizationCapability(message)
         && !this.helloCapabilities.includes("civilization_v1")) {
       throw new ControlCodecError("unsupported_capability", "plugin sent a civilization event without advertising civilization_v1");
@@ -291,7 +298,7 @@ function isPluginEvent(message: ControlMessage): boolean {
   return message.type === "heartbeat" || message.type === "build_progress" || message.type === "public_clock"
     || message.type === "public_state" || message.type === "elimination" || message.type === "outcome"
     || message.type === "civilization_state" || message.type === "metrics" || message.type === "ack"
-    || message.type === "checkpoint_written" || message.type === "damage"
+    || message.type === "checkpoint_written" || message.type === "damage" || message.type === "mechanics_receipt"
     || message.type === "error";
 }
 
@@ -338,6 +345,8 @@ function readEnvelope(value: StrictJsonValue): ControlMessage {
       return { ...fields, type, payload: readEmpty(payload, "payload") };
     case "damage":
       return { ...fields, type, payload: readDamage(payload) };
+    case "mechanics_receipt":
+      return { ...fields, type, payload: readMechanicsReceipt(payload) };
     case "checkpoint":
       return { ...fields, type, payload: readCheckpointCommand(payload) };
     case "checkpoint_written":
@@ -507,6 +516,62 @@ function readDamage(value: StrictJsonValue): DamagePayload {
     return { victim, attacker, cause, amount, attacker_is_competitor: competitor };
   });
   return { at: readTick(payload.at, "payload.at"), entries };
+}
+
+function readMechanicsReceipt(value: StrictJsonValue): MechanicsReceiptPayload {
+  const payload = readObject(value, "payload", ["at", "receipts"], ["at", "receipts"]);
+  const tick = readTick(payload.at, "payload.at");
+  if (tick.domain !== "match") invalid("payload.at.domain", "mechanics receipts require a match tick");
+  const seen = new Set<string>();
+  const receipts = readArray(payload.receipts, "payload.receipts", 1, MAX_COMPETITORS * 6)
+    .map((value, index): MechanicsReceipt => {
+      const path = `payload.receipts[${index}]`;
+      const item = readObject(value, path,
+        ["seat", "kind", "blocks", "duration_ticks", "minimum_blocks", "maximum_blocks", "blocking", "enchanted"], ["seat", "kind"]);
+      const seat = readSafeInteger(item.seat, `${path}.seat`, 0, MAX_SEAT, item, "seat");
+      const kind = readString(item.kind, `${path}.kind`, 1, 64);
+      let receipt: MechanicsReceipt;
+      if (kind === "lateral_movement") {
+        if (Object.hasOwn(item, "duration_ticks") || Object.hasOwn(item, "minimum_blocks") || Object.hasOwn(item, "maximum_blocks")
+            || Object.hasOwn(item, "blocking") || Object.hasOwn(item, "enchanted")) invalid(path, "lateral movement has invalid fields");
+        const blocks = readFiniteNumber(item.blocks, `${path}.blocks`);
+        if (blocks < 1 || blocks > 1_000_000) invalid(`${path}.blocks`, "lateral movement must meet the one block threshold");
+        receipt = { seat, kind, blocks };
+      } else if (kind === "distance_maintained") {
+        if (Object.hasOwn(item, "blocks") || Object.hasOwn(item, "blocking") || Object.hasOwn(item, "enchanted")) {
+          invalid(path, "distance maintained has invalid fields");
+        }
+        const duration_ticks = readSafeInteger(item.duration_ticks, `${path}.duration_ticks`, 10, 10, item, "duration_ticks");
+        const minimum_blocks = readFiniteNumber(item.minimum_blocks, `${path}.minimum_blocks`);
+        const maximum_blocks = readFiniteNumber(item.maximum_blocks, `${path}.maximum_blocks`);
+        if (minimum_blocks <= 4 || maximum_blocks > 40 || minimum_blocks > maximum_blocks) {
+          invalid(path, "maintained distance must stay above four and within forty blocks");
+        }
+        receipt = { seat, kind, duration_ticks, minimum_blocks, maximum_blocks };
+      } else if (kind === "ranged_projectile_release") {
+        if (Object.hasOwn(item, "blocks") || Object.hasOwn(item, "duration_ticks") || Object.hasOwn(item, "minimum_blocks")
+            || Object.hasOwn(item, "maximum_blocks") || Object.hasOwn(item, "blocking") || Object.hasOwn(item, "enchanted")) {
+          invalid(path, "ranged projectile release has invalid fields");
+        }
+        receipt = { seat, kind };
+      } else if (kind === "shield_blocking_transition") {
+        if (Object.hasOwn(item, "blocks") || Object.hasOwn(item, "duration_ticks") || Object.hasOwn(item, "minimum_blocks")
+            || Object.hasOwn(item, "maximum_blocks") || Object.hasOwn(item, "enchanted")) invalid(path, "shield transition has invalid fields");
+        receipt = { seat, kind, blocking: readBoolean(item.blocking, `${path}.blocking`) };
+      } else if (kind === "golden_apple_consume") {
+        if (Object.hasOwn(item, "blocks") || Object.hasOwn(item, "duration_ticks") || Object.hasOwn(item, "minimum_blocks")
+            || Object.hasOwn(item, "maximum_blocks") || Object.hasOwn(item, "blocking")) invalid(path, "golden apple consume has invalid fields");
+        receipt = { seat, kind, enchanted: readBoolean(item.enchanted, `${path}.enchanted`) };
+      } else {
+        invalid(`${path}.kind`, "unknown mechanics receipt kind");
+      }
+      const transition = receipt.kind === "shield_blocking_transition" ? String(receipt.blocking) : "";
+      const identity = `${seat}:${receipt.kind}:${transition}`;
+      if (seen.has(identity)) invalid(path, "mechanics receipts must be unique by seat and action");
+      seen.add(identity);
+      return receipt;
+    });
+  return { at: tick, receipts };
 }
 
 function readCheckpointCommand(value: StrictJsonValue): CheckpointCommandPayload {

@@ -62,7 +62,8 @@ final class ControlProtocol {
         ERROR("error"),
         CHECKPOINT("checkpoint"),
         CHECKPOINT_WRITTEN("checkpoint_written"),
-        DAMAGE("damage");
+        DAMAGE("damage"),
+        MECHANICS_RECEIPT("mechanics_receipt");
 
         private final String wireName;
 
@@ -90,11 +91,12 @@ final class ControlProtocol {
         HUNGER_GAMES_ROSTER_V2("hunger_games_roster_v2"),
         CHECKPOINT_V1("checkpoint_v1"),
         DAMAGE_EVENTS_V1("damage_events_v1"),
-        TICK_METRICS_V1("tick_metrics_v1");
+        TICK_METRICS_V1("tick_metrics_v1"),
+        DUEL_MECHANICS_V1("duel_mechanics_v1");
 
         static final List<Capability> SUPPORTED = List.of(
                 HUNGER_GAMES_V1, CIVILIZATION_V1, HUNGER_GAMES_ROSTER_V2, CHECKPOINT_V1, DAMAGE_EVENTS_V1,
-                TICK_METRICS_V1);
+                TICK_METRICS_V1, DUEL_MECHANICS_V1);
 
         private final String wireName;
 
@@ -343,7 +345,67 @@ final class ControlProtocol {
     sealed interface Payload permits EmptyPayload, HelloPayload, ReadyPayload, BuildProgressPayload,
             PreparePayload, AbortPayload, ClockPayload, PublicStatePayload, EliminationPayload,
             CivilizationStatePayload, Outcome, MetricsPayload, ErrorPayload, CheckpointCommand,
-            CheckpointWritten, DamagePayload {}
+            CheckpointWritten, DamagePayload, MechanicsReceiptPayload {}
+
+    sealed interface MechanicsReceipt permits LateralMovementReceipt, DistanceMaintainedReceipt, RangedProjectileReleaseReceipt,
+            ShieldBlockingTransitionReceipt, GoldenAppleConsumeReceipt {
+        int seat();
+    }
+
+    record LateralMovementReceipt(int seat, double blocks) implements MechanicsReceipt {
+        LateralMovementReceipt {
+            require(seat >= 0 && seat <= MAX_SEAT, "mechanics receipt seat is out of range");
+            require(Double.isFinite(blocks) && blocks >= 1.0 && blocks <= 1_000_000.0,
+                    "lateral movement receipt must meet the one block threshold");
+        }
+    }
+
+    record DistanceMaintainedReceipt(int seat, int durationTicks, double minimumBlocks, double maximumBlocks)
+            implements MechanicsReceipt {
+        DistanceMaintainedReceipt {
+            require(seat >= 0 && seat <= MAX_SEAT, "mechanics receipt seat is out of range");
+            require(durationTicks == 10, "maintained distance receipt requires ten consecutive ticks");
+            require(Double.isFinite(minimumBlocks) && Double.isFinite(maximumBlocks)
+                            && minimumBlocks > 4.0 && maximumBlocks <= 40.0 && minimumBlocks <= maximumBlocks,
+                    "maintained distance receipt is outside its range");
+        }
+    }
+
+    record RangedProjectileReleaseReceipt(int seat) implements MechanicsReceipt {
+        RangedProjectileReleaseReceipt {
+            require(seat >= 0 && seat <= MAX_SEAT, "mechanics receipt seat is out of range");
+        }
+    }
+
+    record ShieldBlockingTransitionReceipt(int seat, boolean blocking) implements MechanicsReceipt {
+        ShieldBlockingTransitionReceipt {
+            require(seat >= 0 && seat <= MAX_SEAT, "mechanics receipt seat is out of range");
+        }
+    }
+
+    record GoldenAppleConsumeReceipt(int seat, boolean enchanted) implements MechanicsReceipt {
+        GoldenAppleConsumeReceipt {
+            require(seat >= 0 && seat <= MAX_SEAT, "mechanics receipt seat is out of range");
+        }
+    }
+
+    record MechanicsReceiptPayload(Tick at, List<MechanicsReceipt> receipts) implements Payload {
+        MechanicsReceiptPayload {
+            Objects.requireNonNull(at, "mechanics receipt tick");
+            require(at.domain() == TickDomain.MATCH, "mechanics receipts require a match tick");
+            receipts = List.copyOf(Objects.requireNonNull(receipts, "mechanics receipts"));
+            require(!receipts.isEmpty() && receipts.size() <= MatchController.MAX_COMPETITORS * 6,
+                    "invalid mechanics receipt count");
+            Set<String> identities = new HashSet<>();
+            for (MechanicsReceipt receipt : receipts) {
+                Objects.requireNonNull(receipt, "mechanics receipt");
+                String transition = receipt instanceof ShieldBlockingTransitionReceipt shield
+                        ? Boolean.toString(shield.blocking()) : "";
+                require(identities.add(receipt.seat() + ":" + receipt.getClass().getSimpleName() + ":" + transition),
+                        "mechanics receipts must be unique by seat and action");
+            }
+        }
+    }
 
     enum DamageCause {
         MELEE("melee"),
@@ -1262,6 +1324,7 @@ final class ControlProtocol {
             case CHECKPOINT -> readCheckpointCommand(payloadValue);
             case CHECKPOINT_WRITTEN -> readCheckpointWritten(payloadValue);
             case DAMAGE -> readDamage(payloadValue);
+            case MECHANICS_RECEIPT -> readMechanicsReceipt(payloadValue);
         };
         return new Envelope(new Header(runId, sequence, correlation), type, payload);
     }
@@ -1775,6 +1838,55 @@ final class ControlProtocol {
         return new DamagePayload(readTick(payload.get("at"), "payload.at"), entries);
     }
 
+    private static Payload readMechanicsReceipt(Object value) throws IOException {
+        Map<String, Object> payload = object(value, "payload", Set.of("at", "receipts"), Set.of("at", "receipts"));
+        Tick at = readTick(payload.get("at"), "payload.at");
+        if (at.domain() != TickDomain.MATCH) {
+            throw invalid("payload.at.domain", "mechanics receipts require a match tick");
+        }
+        List<Object> values = array(payload.get("receipts"), "payload.receipts", 1,
+                MatchController.MAX_COMPETITORS * 6);
+        List<MechanicsReceipt> receipts = new ArrayList<>(values.size());
+        for (int index = 0; index < values.size(); index++) {
+            String path = "payload.receipts[" + index + "]";
+            Map<String, Object> receipt = object(values.get(index), path,
+                    Set.of("seat", "kind", "blocks", "duration_ticks", "minimum_blocks", "maximum_blocks",
+                            "blocking", "enchanted"), Set.of("seat", "kind"));
+            int seat = readInteger(receipt.get("seat"), path + ".seat", 0, MAX_SEAT);
+            String kind = readString(receipt.get("kind"), path + ".kind", 1, 64, null);
+            switch (kind) {
+                case "lateral_movement" -> {
+                    requireOnly(receipt, Set.of("seat", "kind", "blocks"), path);
+                    receipts.add(new LateralMovementReceipt(seat,
+                            readFiniteNumber(receipt.get("blocks"), path + ".blocks")));
+                }
+                case "ranged_projectile_release" -> {
+                    requireOnly(receipt, Set.of("seat", "kind"), path);
+                    receipts.add(new RangedProjectileReleaseReceipt(seat));
+                }
+                case "distance_maintained" -> {
+                    requireOnly(receipt, Set.of("seat", "kind", "duration_ticks", "minimum_blocks", "maximum_blocks"), path);
+                    receipts.add(new DistanceMaintainedReceipt(seat,
+                            readInteger(receipt.get("duration_ticks"), path + ".duration_ticks", 10, 10),
+                            readFiniteNumber(receipt.get("minimum_blocks"), path + ".minimum_blocks"),
+                            readFiniteNumber(receipt.get("maximum_blocks"), path + ".maximum_blocks")));
+                }
+                case "shield_blocking_transition" -> {
+                    requireOnly(receipt, Set.of("seat", "kind", "blocking"), path);
+                    receipts.add(new ShieldBlockingTransitionReceipt(seat,
+                            readBoolean(receipt.get("blocking"), path + ".blocking")));
+                }
+                case "golden_apple_consume" -> {
+                    requireOnly(receipt, Set.of("seat", "kind", "enchanted"), path);
+                    receipts.add(new GoldenAppleConsumeReceipt(seat,
+                            readBoolean(receipt.get("enchanted"), path + ".enchanted")));
+                }
+                default -> throw invalid(path + ".kind", "unknown mechanics receipt kind");
+            }
+        }
+        return new MechanicsReceiptPayload(at, receipts);
+    }
+
     private static Payload readCheckpointCommand(Object value) throws IOException {
         Map<String, Object> payload = object(value, "payload", Set.of("checkpoint_id", "epoch"),
                 Set.of("checkpoint_id", "epoch"));
@@ -1836,6 +1948,26 @@ final class ControlProtocol {
                         "attacker", entry.attacker().orElse(null), "cause", entry.cause().wireName(),
                         "amount", entry.amount(), "attacker_is_competitor", entry.attackerIsCompetitor());
                 return (Object) value;
+            }).toList());
+        }
+        if (payload instanceof MechanicsReceiptPayload mechanics) {
+            return object("at", tickValue(mechanics.at()), "receipts", mechanics.receipts().stream().map(receipt -> {
+                if (receipt instanceof LateralMovementReceipt lateral) {
+                    return object("seat", lateral.seat(), "kind", "lateral_movement", "blocks", lateral.blocks());
+                }
+                if (receipt instanceof DistanceMaintainedReceipt distance) {
+                    return object("seat", distance.seat(), "kind", "distance_maintained",
+                            "duration_ticks", distance.durationTicks(), "minimum_blocks", distance.minimumBlocks(),
+                            "maximum_blocks", distance.maximumBlocks());
+                }
+                if (receipt instanceof RangedProjectileReleaseReceipt ranged) {
+                    return object("seat", ranged.seat(), "kind", "ranged_projectile_release");
+                }
+                if (receipt instanceof ShieldBlockingTransitionReceipt shield) {
+                    return object("seat", shield.seat(), "kind", "shield_blocking_transition", "blocking", shield.blocking());
+                }
+                GoldenAppleConsumeReceipt apple = (GoldenAppleConsumeReceipt) receipt;
+                return object("seat", apple.seat(), "kind", "golden_apple_consume", "enchanted", apple.enchanted());
             }).toList());
         }
         if (payload instanceof CheckpointCommand checkpoint) {
@@ -2156,6 +2288,12 @@ final class ControlProtocol {
         return object;
     }
 
+    private static void requireOnly(Map<String, Object> object, Set<String> expected, String path) throws IOException {
+        if (!object.keySet().equals(expected)) {
+            throw invalid(path, "receipt fields do not match its kind");
+        }
+    }
+
     static List<Object> array(Object value, String path, int min, int max) throws IOException {
         if (!(value instanceof List<?> values) || values.size() < min || values.size() > max) {
             throw invalid(path, "must be an array with " + min + " to " + max + " entries");
@@ -2244,6 +2382,7 @@ final class ControlProtocol {
             case CHECKPOINT -> payload instanceof CheckpointCommand;
             case CHECKPOINT_WRITTEN -> payload instanceof CheckpointWritten;
             case DAMAGE -> payload instanceof DamagePayload;
+            case MECHANICS_RECEIPT -> payload instanceof MechanicsReceiptPayload;
         };
     }
 
