@@ -1,35 +1,26 @@
 # Arena Frontier: from a six-bot experiment to competitive worlds
 
-**Status:** winding down 2026-10-15. Integration branch `campaign/frontier`; consolidate current work and preserve an honest handoff. Do not push.
+**Status:** paused 2026-10-15. Integration branch `campaign/frontier`. Start no new work until the owner resumes the campaign.
+
+## Handoff (paused 2026-10-15)
+
+**Resume.** Resume at S7 and decide whether to finish the `improved` pool set. No candidate passed the development quality gates, so held-out seeds stay untouched. Continue with S8 and S9 only after S7 is closed.
+
+**State.** The integration changes and the S2 receipt and S3 API histories are committed on `campaign/frontier`. [The S7 evaluation](../evaluation/frontier-s7.md) records the failed quality gates and partial pool results. The latest observed `origin/campaign/frontier` update is a push to `8532188` at 08:11:49 on 2026-10-15. This winddown issued no push. The push actor is unknown.
+
+**Open lanes.** None. The S2 receipt and S3 API branches are merged, then deleted.
+
+**Retained worktrees.** None. I removed the two registered lane worktrees and the historical copied trees. Those copies had no Git metadata. Their unintegrated resource-monitor prototypes reintroduced memory and swap limits that [the acceptance report](acceptance-report.md) says were removed. Their old campaign draft was superseded. No implementation work remains only in `.work`.
+
+**Not started.** `frontier-v1` did not run against the pool. The `improved` batch for seeds `510009..510012` stopped after 44 of 48 starts. Held-out seeds `600001..600024`, S8, S9, and an ordinary external-client playtest remain untouched.
+
+**Verified.** The worktree list contains only the integration checkout, and `git branch --no-merged campaign/frontier` is empty. `.work` is ignored through `.git/info/exclude`. The reviewed `/hooks` Stop entry invokes `codex-campaign-closeout.py hook`; the guard removed its marker after the lane worktrees were gone. The remaining `.work` contents are generated outputs, logs, toolchains, and caches. No source change or handoff data needed for resuming remains there. You can delete `.work`. This winddown ran no tests or builds.
 
 ## Runner implementation boundary (2026-10-14)
 
 The S3 runner slice is implemented in the working tree and retains `frontier-v1` tasks per seat. Hunger Games decisions write `policy-replay-v6` with `policy-input-v5` observations and task transitions; checkpoint bot-state schema 2 preserves task intention, and `resume-v2` seeds replay continuity. Resume cancels in-flight actions and requires a fresh observation before the task is revalidated. Replay readers for policy-replay-v1 through v4 and resume-v1 remain supported.
 
 The bounded S2 duel change propagates pool version 2 through duel reports and candidate metadata. Live receipt run `d09a034` on UHC bow seed `710121` completed all 12 assignments, qualified all five scoring members, and scored 0.1 over those matches; eligibility is established, promotion is not. S4 now scans on independent client-owned view actions and keeps pathfinder routes bounded to observed terrain. Its offline route, terrain, border, occlusion, and fall tests pass. S3 task persistence is connected to the live runner and has a verified replay from both seat assignments on seed `710123`.
-
-## Handoff (active 2026-10-14)
-
-**Current work.** S7's quality screens and two-assignment league are complete for frozen `improved` and default `frontier-v1` on development seeds `500001..500012`. Neither candidate passed the quality gates. The league report is `.work/arena/league/frontier-s7/report-0001.json`; 40 completed traces replay-verified, with eight failures preserved. Qualified-pool duels on seeds `510001..510012` remain for both candidates. Held-out seeds remain untouched. See [the S7 evaluation](../evaluation/frontier-s7.md). Keep this branch uncommitted and never push. Set `TMPDIR` to `/Users/josh/d/mc/.work/tmp`.
-
-S0, the pure S3 module, and S1 lab damage proof are present in branch history. Do not edit `skills.ts` to chase seed `260114` or restore the rejected hidden-coordinate search and expanded-drop method. S2 qualification has a live receipt report. S3 runner task persistence has a replay-verified live trace. S4 has passed its offline terrain matrix. S5's reciprocal duel completed. S6's `eatAtHungerOrBelow=10` screen winner failed the natural hunger transfer check, so it is not eligible for S7 or held-out evaluation.
-
-**State.** Branch `campaign/frontier`, not pushed, with uncommitted integration edits. S2 report 0016 completed all 12 pool matches and all 10 scoring matches; `strafer`, `aggressive-rusher`, `bow-kiter`, `shield-user`, and `baseline` qualified. The candidate score mean was 0.1, below promotion requirements. S3's two UHC bow assignments completed on seed `710123`; `policy-replay-v6` records retain non-null tasks and selected goal explanations, and `replay-policy` verified each run. A separate `hunger-six` attempt on seed `710122` stopped before bot admission because natural-world cache resolution returned `invalid_world`; it is not a policy result. S4's safe routing and scan changes passed the terrain and fall-avoidance regressions, the 136-test bots suite, lint, and bots/runner TypeScript builds. S7 reports `0003` through `0006` record the three quality screens. Neither candidate passed. Baseline matches `500011` and `500012` also failed with an unexplained Mineflayer `client_error`.
-
-S5's seed `710123` duel scored 1–1 against `baseline`, with PvP in both assignments and 16 total hits. The candidate dealt 24.5 and took 22.7 damage across the pair. It had one self-inflicted rejection per ten issued attacks at `skillAdmission` (`ownershipDeferred`), so the 5% duel gate still fails. S6's ten-match screen completed on seed `710124`; `eatAtHungerOrBelow=10` won both assignments, while the default and border-margin proposals lost both and `eatAtHungerOrBelow=6` split its pair. The winner dealt 45.9 and took 9.3 damage, with 3 self-inflicted rejections per 20 issued attacks. On natural `hunger-six` seed `481516`, the tuned candidate scored 0.25 with one draw and one loss. It failed the loot and self-inflicted rejection gates and had a survival regression. See `evaluation/frontier-s6.md`.
-
-**Open lanes.** Do not carry the S6 tuning result into S7. Its natural transfer failed. The civilization policy does not read `frontier-v1` parameters, so no faction transfer run was made. The S7 two-assignment league is complete; run the qualified-pool duels on seeds `510001..510012`. Do not consume held-out seeds: both S7 candidates fail the development quality gates and cannot be promoted. S2 opponent eligibility is complete. S4 is verified offline; it has no dedicated live terrain matrix. No ordinary external client playtest has been performed.
-
-**Retained worktrees.** No registered worktree besides `/Users/josh/d/mc` on `campaign/frontier`. These directories are not registered worktrees and are left in place because earlier campaign text says not to reuse their names: `.work/wt/civ-acceptance-prep`, `civ-client-align`, `civ-feedback`, `civ-independent`, `civ-integration`, `civ-java-live`, `civ-runtime-live`, `civ-wire-evidence`, `natural-map-config`, `natural-world-runtime`, `opening-style-evidence`. `codex-campaign-closeout.py allow` does not apply to them.
-
-**Remaining.**
-1. Duel default `frontier-v1` and frozen `improved` against the qualified pool on seeds `510001..510012`, both seat assignments. These seeds are disjoint from `260114`.
-2. Use held-out seeds once only if a frozen candidate set passes development gates. The tuned `eatAtHungerOrBelow=10` candidate failed S6 transfer and is excluded.
-3. S8, then S9: C0, C1 through C5, R1 and R1c with a headless surrogate, hunger-24, S12, M4, the H items, O1, Z1.
-
-**Owner decisions owed.** None blocking. Logged calls to review: `[rules]` table in scenario 3; squads outcome last-survivor by seat; `hunger-six` on scenario schema 3; v5 ships as candidate `improved`, and baseline stays frozen until a league verdict.
-
-**Verified.** The latest `frontier-v1` duel on seed `710123` completed both seat assignments and replayed successfully: run `duel-d5f6509-s710123-r0-a0` verified 680 decisions and 175 effects; `duel-d5f6509-s710123-r0-a1` verified 198 decisions and 90 effects. Both runs have `policy-replay-v6` task transitions and score explanations. S2 report 0016 records 12/12 completed matches, five qualified scoring members, and a mean score of 0.1. The S6 screen completed 10/10 live matches with engagement in every assignment; `eatAtHungerOrBelow=10` scored 2–0. S4's focused route regressions and full bots suite passed (136/136); `./arena check lint` and the bots/runner TypeScript builds passed. The seed `710122` `hunger-six` attempt failed before bots joined because the plugin rejected natural world resolution (`invalid_world`). The existing campaign changes remain uncommitted and unpushed. No workspace-wide build or ordinary-client playtest was run.
 
 ## Steering order (2026-10-14, owner)
 
@@ -148,7 +139,7 @@ Merged means on `campaign/frontier` and verified at least offline. Partial and p
 
 ## Stop record (resumed 2026-10-14, superseded)
 
-This section is the stop before steering S0. It does not restart the campaign. Resume from `## Handoff (paused 2026-10-14)` under the status line. Start at S2.
+This superseded 2026-10-14 stop record documents the pause before steering S0. The current handoff is at the top of this file.
 
 **State.** Branch `campaign/frontier` at the commit that contains this handoff; `master` untouched. Everything from the first pause (see Decision and Campaign logs) plus this sprint is merged: runner wiring of per-seat candidates, `baseline@1` frozen with `improved` (policy-v5) and `decisionDiff`/`explain` introspection, `./arena quality` (ephemeral ports, `--concurrency 1-4`, per-seat quality table, reason histograms, gates), `decision-diff`, seat timelines in `explain`, S8b duplicate-login fix, S9 tick metrics, S10/S11/S13 spawn and cache search with reachability and whole-formation translation (`world-search-v6`), `steadyMeleeEngagement`, observed-support travel targets, feedback-contract fix, combat-arena latency options for tests.
 
@@ -638,9 +629,11 @@ Do not spend a research phase rediscovering launchers, server replacements, bot 
 - 2026-10-14 steering S3 merged at `4ae4b07`. `frontier-v1` selects from scored proposals in `policy-v6.ts`. `policies/candidates/frontier-v1.toml` matches the registry defaults. A live match still passes `task: null` into `stepAgent`, so the task does not persist until the runner arm lands.
 - 2026-10-14 paused. Bow, cover, and elevation on seed 710114, `improved` against `baseline`, one round, both assignments, after `5d67c66`. Score means 0.5, 0, and 0.5. Every match is `combat_demonstrated` and `combat_skill_qualified`. The quality report records one melee PvP elimination in each match. Bow `d1772a8`: scores 1 and 0, opportunities 17 and 6, PvP hits 10 and 11, end ticks 556 and 416. Cover `df4b457`: scores 0 and 0, opportunities 10 and 13, hits 9 and 10, end ticks 377 and 356. Elevation `ddb4753`: scores 0 and 1, opportunities 31 and 3, hits 14 and 9, end ticks 920 and 584. `improved` is not promoted. No start-to-first-contact distribution was published. Next item is S2. No lanes are open.
 
+- 2026-10-15 winddown: stopped the partial `improved` pool batch after 44 of 48 starts, committed the integration changes, merged the S2 and S3 lane histories, and removed the lane worktrees and historical copies. See Handoff and [the S7 evaluation](../evaluation/frontier-s7.md).
+
 ## 13. For the owner afterwards
 
-While the campaign is paused, resume from `## Handoff (paused 2026-10-14)`. After it finishes, read the reports below. Do not start again from G0.
+While the campaign is paused, resume from `## Handoff (paused 2026-10-15)`. After it finishes, read the reports below. Do not start again from G0.
 
 - Read `docs/acceptance-report.md`, the league report, the capacity summaries and the list of parked items in the campaign log.
 - Cherry-pick from `campaign/frontier`; nothing is pushed.
