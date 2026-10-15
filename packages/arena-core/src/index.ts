@@ -292,10 +292,13 @@ export type {
   CandidateParamValues,
   CandidateTunable,
   CompiledCandidate,
+  CompiledFrontierCandidate,
   DecisionDiffEntry,
   DecisionDiffInput,
   DecisionDiffReport,
   DecisionDiffSide,
+  FrontierOpeningStepInput,
+  FrontierStepInput,
 } from './candidates.js';
 export {
   DUEL_POOL_IDS,
