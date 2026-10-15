@@ -164,6 +164,53 @@ test('frontier-v1 diverges across opening styles that improved ignores', () => {
   equal(scavenging.intent.kind, 'containerOpen');
 });
 
+test('compiled frontier steps carry task and opening state while legacy decisions stay stateless', () => {
+  const frontier = compileCandidate('frontier-v1');
+  const observation = observe({ hunger: 20, health: 40 });
+  const first = frontier.step({ observation, memory, random: stream(), feedback: [], task: null });
+  equal(first.task?.goal, 'explore');
+
+  const continued = frontier.step({
+    observation: observe({ tick: 301, hunger: 20, health: 40 }),
+    memory: first.decision.memory,
+    random: stream(19n),
+    feedback: [],
+    task: first.task,
+  });
+  equal(continued.restarted, false);
+  equal(continued.task?.goal, first.task?.goal);
+  equal(continued.task?.startedAtTick, first.task?.startedAtTick);
+
+  const opening = frontier.stepOpening({
+    observation,
+    memory,
+    random: stream(23n),
+    feedback: foreignLoot,
+    task: null,
+    style: 'scavenger',
+    openingState: openingPolicyState({ cacheTakenAt: null }),
+  });
+  deepStrictEqual(opening.openingState.cacheTakenAt, blockPosition(9000, 64, 9000));
+
+  ok(!('step' in compileCandidate('baseline')));
+  const legacy = frontier.decide(observation, memory, stream());
+  deepStrictEqual(legacy, frontier.step({ observation, memory, random: stream(), feedback: [], task: null }).decision);
+  const legacyOpening = frontier.decideOpening(observation, memory, stream(), [], {
+    style: 'scavenger',
+    state: openingPolicyState({ cacheTakenAt: null }),
+  });
+  const openingStep = frontier.stepOpening({
+    observation,
+    memory,
+    random: stream(),
+    feedback: [],
+    task: null,
+    style: 'scavenger',
+    openingState: openingPolicyState({ cacheTakenAt: null }),
+  });
+  deepStrictEqual(legacyOpening, { ...openingStep.decision, openingState: openingStep.openingState });
+});
+
 test('frontier-v1 selects the scored proposal', () => {
   const border = act(observe({ at: [120, 64, 0], hunger: 1, health: 40 }));
   equal(selected(border).goal, 'escapeBorder');

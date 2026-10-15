@@ -15,6 +15,8 @@ import {
   type Goal,
   type OpeningDecision,
   type OpeningPolicyContext,
+  type OpeningPolicyState,
+  type OpeningStyle,
   type PolicyFeedbackBatch,
   type PolicyMemory,
   type PolicyParamValues,
@@ -27,7 +29,7 @@ import {
   type ExplainedDecision,
   type ExplainedOpeningDecision,
 } from './policy-v5.js';
-import { frontierDecisionExplanation, stepAgent } from './policy-v6.js';
+import { frontierDecisionExplanation, stepAgent, type AgentStep, type AgentStepInput } from './policy-v6.js';
 import { DeterministicRandom, RandomStream } from './random.js';
 
 export const CANDIDATE_IDS = [
@@ -221,6 +223,19 @@ export interface CompiledCandidate {
   ): ExplainedOpeningDecision;
 }
 
+export interface CompiledFrontierCandidate extends CompiledCandidate {
+  readonly id: 'frontier-v1';
+  step(input: FrontierStepInput): AgentStep;
+  stepOpening(input: FrontierOpeningStepInput): AgentStep;
+}
+
+export type FrontierStepInput = Pick<AgentStepInput, 'observation' | 'memory' | 'random' | 'feedback' | 'task'>;
+
+export interface FrontierOpeningStepInput extends FrontierStepInput {
+  readonly style: OpeningStyle;
+  readonly openingState: OpeningPolicyState;
+}
+
 export class InvalidCandidateError extends RangeError {
   constructor(readonly code: 'unknown-candidate' | 'unknown-parameter' | 'parameter-out-of-range' | 'frozen-candidate', detail: string) {
     super(`invalid candidate: ${code}: ${detail}`);
@@ -270,6 +285,14 @@ export function validateCandidateParams(
 }
 
 export function compileCandidate(
+  id: 'frontier-v1',
+  overrides?: Readonly<Partial<Record<string, number>>>,
+): CompiledFrontierCandidate;
+export function compileCandidate(
+  id: CandidateId,
+  overrides?: Readonly<Partial<Record<string, number>>>,
+): CompiledCandidate;
+export function compileCandidate(
   id: CandidateId,
   overrides: Readonly<Partial<Record<string, number>>> = {},
 ): CompiledCandidate {
@@ -296,7 +319,12 @@ export function compileCandidate(
       implementation.explainOpening(observation, memory, policyParams, params, random, feedback, context)
     ),
   };
-  return Object.freeze(compiled);
+  if (id !== 'frontier-v1') return Object.freeze(compiled);
+  return Object.freeze({
+    ...compiled,
+    step: (input: FrontierStepInput) => stepAgent({ ...input, params: policyParams }),
+    stepOpening: (input: FrontierOpeningStepInput) => stepAgent({ ...input, params: policyParams }),
+  });
 }
 
 interface CandidateImplementation {
