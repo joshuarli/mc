@@ -63,12 +63,10 @@ const { version: PATHFINDER_VERSION } = createRequire(import.meta.url)('mineflay
 
 const MAX_PATH_SEARCH_RADIUS_BLOCKS = 16;
 const MAX_PATH_LEG_BLOCKS = 8;
-const TRAVEL_SIGHT_AHEAD_BLOCKS = 8;
-const TRAVEL_SIGHT_BELOW_EYE_BLOCKS = 12;
-const SIGHT_EDGE_INSET_BLOCKS = 0.3;
-const SIGHT_EDGE_TOLERANCE_BLOCKS = 0.05;
-const SIGHT_EDGE_WALK_TICKS = 8;
-const MAX_BLOCKED_DROP_DOWN = 24;
+const SCAN_INTERVAL_TICKS = 10;
+const SCAN_RADIUS_BLOCKS = 8;
+const SCAN_VIEWS = Object.freeze([0, -Math.PI / 4, Math.PI / 4].flatMap((pitch) =>
+  Array.from({ length: 8 }, (_, index) => Object.freeze({ yaw: index * Math.PI / 4, pitch }))));
 const MAX_NAVIGATION_LEGS = 128;
 const MAX_PATH_THINK_MS = 1_000;
 const MAX_PATH_SLICE_PER_CLIENT_MS = 3;
@@ -109,7 +107,9 @@ interface EngagementView {
 
 type BoundedPathfinder = Bot['pathfinder'] & { searchRadius: number };
 type PathfinderGoal = import('mineflayer-pathfinder').goals.Goal;
-type SkillIntent = ArenaSkillIntent | CivIntent;
+type ScanView = typeof SCAN_VIEWS[number];
+type ScheduledScanIntent = Readonly<{ kind: 'scheduledScan'; view: ScanView }>;
+type SkillIntent = ArenaSkillIntent | CivIntent | ScheduledScanIntent;
 
 interface WindowItemsPacket {
   readonly windowId?: unknown;
@@ -137,14 +137,8 @@ type NavigationArrival =
   | { readonly kind: 'withinRange'; readonly range: number }
   | { readonly kind: 'exactBlock' }
   | { readonly kind: 'pickupReach' }
-  | { readonly kind: 'meleeReach'; readonly target: Bot['entity'] };
+  | { readonly kind: 'meleeReach'; readonly target: CombatBody };
 type NavigationPosition = Readonly<{ x: number; y: number; z: number }>;
-type TravelSight =
-  | { readonly kind: 'visible' }
-  | { readonly kind: 'blocked'; readonly step: NavigationPosition; readonly drop: boolean }
-  | { readonly kind: 'exhausted' }
-  | { readonly kind: 'clear' };
-type SightStep = { readonly step: NavigationPosition; readonly drop: boolean };
 
 
 interface AStarContext {
@@ -180,6 +174,13 @@ interface PathSearchRegistration {
   beginNavigation(signal: AbortSignal, deadline: number): (completion: PathSearchCompletion) => void;
   close(): void;
 }
+
+export interface ClientMechanicsReceipt {
+  readonly kind: 'shieldBlockingTransition';
+  readonly blocking: boolean;
+}
+
+export type ClientMechanicsReceiptSink = (receipt: ClientMechanicsReceipt) => void;
 
 // The pathfinder mutates and consumes returned Move objects while AStar still owns partial-route nodes.
 function snapshotPathResult(result: PartiallyComputedPath): PartiallyComputedPath {
@@ -513,8 +514,11 @@ export class SkillOwner {
   readonly #onHealth: () => void;
   readonly #onPhysicsTick: () => void;
   readonly #funnel: ActionFunnelSink | null;
+  readonly #clientMechanics: ClientMechanicsReceiptSink | null;
   readonly #pathSearchRegistration: PathSearchRegistration;
   #physicsTicks = 0;
+  #scanIndex = 0;
+  #scanPending = false;
   #lastSwingTick: number | null = null;
   #active: ActiveSkill | null = null;
   #transition: Promise<void> = Promise.resolve();
@@ -527,13 +531,16 @@ export class SkillOwner {
     observer: MineflayerObserver,
     civilizationObserver: MineflayerCivilizationObserver | null = null,
     funnel: ActionFunnelSink | null = null,
+    clientMechanics: ClientMechanicsReceiptSink | null = null,
   ) {
     this.#bot = bot;
     this.#observer = observer;
     this.#civilizationObserver = civilizationObserver;
     this.#funnel = funnel;
+    this.#clientMechanics = clientMechanics;
     this.#onPhysicsTick = () => {
       this.#physicsTicks += 1;
+      if (this.#physicsTicks % SCAN_INTERVAL_TICKS === 0) this.#scheduleScan();
     };
     this.#onHealth = () => {
       if (this.#bot.health !== 0) return;
@@ -566,6 +573,20 @@ export class SkillOwner {
     return this.#start(intent);
   }
 
+  #scheduleScan(): void {
+    if (this.#closed || this.#active !== null || this.#scanPending) return;
+    const view = SCAN_VIEWS[this.#scanIndex]!;
+    this.#scanIndex = (this.#scanIndex + 1) % SCAN_VIEWS.length;
+    this.#scanPending = true;
+    void this.#start({ kind: 'scheduledScan', view }).then((outcome) => {
+      this.#scanPending = false;
+      if (outcome.kind === 'failed') this.#bot.emit('error', new Error(`scheduled scan failed: ${outcome.cause}`));
+    }, (error: unknown) => {
+      this.#scanPending = false;
+      this.#bot.emit('error', error instanceof Error ? error : new Error(String(error)));
+    });
+  }
+
   #start(intent: SkillIntent): Promise<SkillOutcome> {
     const started = this.#enqueue(async () => {
       if (this.#closed) throw new Error('Mineflayer skill owner is closed');
@@ -578,8 +599,7 @@ export class SkillOwner {
         resources: {
           navigationActive: false,
           digging: null,
-          eating: false,
-          itemInUse: false,
+          itemUse: 'none',
           inventoryTouched: false,
           window: null,
           quickBarSlotToRestore: this.#bot.quickBarSlot,
@@ -635,7 +655,7 @@ export class SkillOwner {
     const active = this.#active;
     if (active === null) return;
     active.cancellation ??= reason;
-    if ((active.resources.eating || active.resources.itemInUse) && this.#bot.usingHeldItem) this.#bot.deactivateItem();
+    this.#deactivateHeldItem(active);
     if (active.resources.digging !== null) {
       try {
         await this.#stopActiveDigging(active);
@@ -734,6 +754,9 @@ export class SkillOwner {
         return;
       case 'hold':
         return;
+      case 'scheduledScan':
+        await this.#scan(intent.view, active);
+        return;
       case 'navigate':
         await this.#navigateTo(intent.target, 2, active);
         return;
@@ -766,6 +789,21 @@ export class SkillOwner {
     }
   }
 
+  async #scan(view: ScanView, active: ActiveSkill): Promise<void> {
+    const entity = this.#bot.entity as MineflayerEntity & { readonly eyeHeight?: number };
+    if (typeof entity.eyeHeight !== 'number' || !Number.isFinite(entity.eyeHeight)) {
+      throw new TypeError('Mineflayer player entity has no finite eye height');
+    }
+    const vertical = Math.sin(view.pitch) * SCAN_RADIUS_BLOCKS;
+    const horizontal = Math.cos(view.pitch) * SCAN_RADIUS_BLOCKS;
+    const point = entity.position.offset(
+      -Math.sin(view.yaw) * horizontal,
+      entity.eyeHeight + vertical,
+      -Math.cos(view.yaw) * horizontal,
+    );
+    await this.#lookAt(active, 'scan for visible entities', point);
+  }
+
   #civilizationHost(): CivilizationSkillHost {
     const civilizationObserver = this.#civilizationObserver;
     if (civilizationObserver === null) throw new Error('civilization skills require a civilization observer');
@@ -793,64 +831,8 @@ export class SkillOwner {
     await this.#navigate(position, { kind: 'exactBlock' }, active);
   }
 
-  #inMeleeReach(target: MineflayerEntity): boolean {
-    return isWithinMeleeReach(readCombatSelfBody(this.#bot.entity), readCombatBody(target));
-  }
-
-  async #sweepTravelSight(
-    goal: NavigationPosition,
-    active: ActiveSkill,
-    signal: AbortSignal,
-    rejectedSightSteps: ReadonlySet<string>,
-  ): Promise<TravelSight> {
-    let blockedStep: SightStep | null = null;
-    let exhausted = false;
-    for (let quarterTurn = 0; quarterTurn < 4; quarterTurn += 1) {
-      throwIfInterrupted(signal);
-      await this.#lookAt(active, 'look down the path', travelSightPoint(this.#bot, goal, quarterTurn));
-      const sight = this.#travelSight(rejectedSightSteps);
-      if (sight.kind === 'visible') return sight;
-      if (sight.kind === 'blocked' && blockedStep === null) blockedStep = sight;
-      if (sight.kind === 'exhausted') exhausted = true;
-    }
-    if (blockedStep !== null) return { kind: 'blocked', step: blockedStep.step, drop: blockedStep.drop };
-    if (exhausted) return { kind: 'exhausted' };
-    return { kind: 'clear' };
-  }
-
-  #travelSight(rejectedSightSteps: ReadonlySet<string>): TravelSight {
-    const selfId = this.#bot.entity.id;
-    let blockedStep: SightStep | null = null;
-    let sawBlockedPlayer = false;
-    let repeatedFailure = false;
-    for (const entity of Object.values(this.#bot.entities)) {
-      if (entity === undefined || entity.id === selfId || !isTargetablePlayer(this.#bot, entity)) continue;
-      const visibility = classifyEntityVisibility(this.#bot, entity);
-      if (visibility === 'visible') return { kind: 'visible' };
-      if (visibility !== 'blocked') continue;
-      sawBlockedPlayer = true;
-      const step = this.#blockedSightStep(entity);
-      if (step === null) continue;
-      if (rejectedSightSteps.has(navigationKey(step.step))) {
-        repeatedFailure = true;
-        continue;
-      }
-      if (blockedStep === null) blockedStep = step;
-    }
-    if (blockedStep !== null) return { kind: 'blocked', step: blockedStep.step, drop: blockedStep.drop };
-    if (sawBlockedPlayer && repeatedFailure) return { kind: 'exhausted' };
-    return { kind: 'clear' };
-  }
-
-  #blockedSightStep(entity: MineflayerEntity): SightStep | null {
-    const current = this.#bot.entity.position;
-    const playerBlock = toBlockPosition(entity.position);
-    const step = horizontalStepToward(current, playerBlock);
-    if (step === null) return null;
-    if (isStandableAtFloor(this.#bot, step)) return { step, drop: false };
-    const landing = columnDropLanding(this.#bot, step, playerBlock);
-    if (landing !== null) return { step: landing, drop: true };
-    return { step: edgeOfCurrentBlock(current, playerBlock), drop: false };
+  #inMeleeReach(target: CombatBody): boolean {
+    return isWithinMeleeReach(readCombatSelfBody(this.#bot.entity), target);
   }
 
   async #navigate(
@@ -861,10 +843,6 @@ export class SkillOwner {
   ): Promise<void> {
     const deadline = performance.now() + (arrival.kind === 'meleeReach' ? PURSUIT_LEG_MS : PATH_TIMEOUT_MS);
     const travelLeg = arrival.kind === 'withinRange' || arrival.kind === 'exactBlock';
-    const travelGoal = position;
-    const rejectedSightSteps = new Set<string>();
-    let stepOntoSightBlock = false;
-    let dropTowardSight = false;
     for (let leg = 0; leg < MAX_NAVIGATION_LEGS; leg += 1) {
       throwIfInterrupted(signal);
       const border = this.#observer.currentBorder();
@@ -874,11 +852,9 @@ export class SkillOwner {
       }
 
       const current = this.#bot.entity.position;
-      const dropping = dropTowardSight;
-      dropTowardSight = false;
       const remainingDistance = distance(current, position);
       const arrived = arrival.kind === 'meleeReach' ? this.#inMeleeReach(arrival.target) : hasArrived(current, position, arrival);
-      if (arrived && !stepOntoSightBlock) return;
+      if (arrived) return;
       const remainingMs = deadline - performance.now();
       if (remainingMs <= 0) throw new SkillFault('timedOut', 'bounded navigation exceeded its deadline');
 
@@ -888,10 +864,8 @@ export class SkillOwner {
       const waypoint = remainingDistance <= MAX_PATH_LEG_BLOCKS + finalLegAllowance
         ? position
         : waypointToward(current, position, MAX_PATH_LEG_BLOCKS);
-      const goal = stepOntoSightBlock
-        ? new goals.GoalBlock(position.x, position.y, position.z)
-        : arrival.kind === 'meleeReach'
-        ? new goals.GoalFollow(arrival.target, PURSUIT_FOLLOW_RANGE_BLOCKS)
+      const goal = arrival.kind === 'meleeReach'
+        ? new goals.GoalNear(position.x, position.y, position.z, PURSUIT_FOLLOW_RANGE_BLOCKS)
         : waypoint === position && arrival.kind === 'exactBlock'
         ? new goals.GoalBlock(waypoint.x, waypoint.y, waypoint.z)
         : waypoint === position && arrival.kind === 'pickupReach'
@@ -911,28 +885,22 @@ export class SkillOwner {
       active.resources.navigationActive = true;
       recordPathDiagnostic(this.#bot, { kind: 'navigation', active: true });
       let legFault: SkillFault | null = null;
-      const movements = dropping ? this.#bot.pathfinder.movements : null;
-      const previousDropDown = movements === null ? null : movements.maxDropDown;
       try {
-        if (movements !== null && previousDropDown !== null) {
-          movements.maxDropDown = maxDropDownToSolid(current.y, position.y, previousDropDown);
-        }
         this.#bot.pathfinder.setGoal(goal, false);
         await Promise.race([reached, pathFailure]);
         throwIfInterrupted(signal);
         const arrivedAfterLeg = arrival.kind === 'meleeReach'
           ? this.#inMeleeReach(arrival.target)
           : hasArrived(this.#bot.entity.position, position, arrival);
-        if (arrivedAfterLeg && !stepOntoSightBlock) return;
+        if (arrivedAfterLeg) return;
+        if (arrival.kind === 'meleeReach') return;
         if (leg === MAX_NAVIGATION_LEGS - 1) {
           throw new SkillFault('noProgress', `navigation exceeded ${MAX_NAVIGATION_LEGS} bounded path segments`);
         }
       } catch (error) {
         if (!travelLeg || !(error instanceof SkillFault) || error.failure !== 'noProgress') throw error;
         legFault = error;
-        if (stepOntoSightBlock) rejectedSightSteps.add(navigationKey(position));
       } finally {
-        if (movements !== null && previousDropDown !== null) movements.maxDropDown = previousDropDown;
         signal.removeEventListener('abort', relayAbort);
         const completion: PathSearchCompletion = signal.aborted
           ? 'cancelled'
@@ -943,60 +911,9 @@ export class SkillOwner {
         active.resources.navigationActive = false;
         recordPathDiagnostic(this.#bot, { kind: 'navigation', active: false });
       }
-      if (travelLeg) {
-        const sight = await this.#sweepTravelSight(position, active, signal, rejectedSightSteps);
-        if (sight.kind === 'visible') return;
-        if (sight.kind === 'blocked' && !isExactBlockStep(sight.step)) {
-          rejectedSightSteps.add(navigationKey(sight.step));
-          await this.#walkToSightEdge(sight.step, active, signal);
-          const afterNudge = await this.#sweepTravelSight(travelGoal, active, signal, rejectedSightSteps);
-          if (afterNudge.kind === 'visible') return;
-          if (afterNudge.kind === 'blocked' && isExactBlockStep(afterNudge.step) && leg + 1 < MAX_NAVIGATION_LEGS) {
-            position = afterNudge.step;
-            stepOntoSightBlock = true;
-            dropTowardSight = afterNudge.drop;
-            continue;
-          }
-          position = travelGoal;
-          stepOntoSightBlock = false;
-          continue;
-        }
-        if (sight.kind === 'blocked' && leg + 1 < MAX_NAVIGATION_LEGS) {
-          position = sight.step;
-          stepOntoSightBlock = true;
-          dropTowardSight = sight.drop;
-          continue;
-        }
-        if (sight.kind === 'exhausted' && stepOntoSightBlock) {
-          position = travelGoal;
-          stepOntoSightBlock = false;
-          continue;
-        }
-      }
-      stepOntoSightBlock = false;
       if (legFault !== null) throw legFault;
     }
     throw new Error('bounded navigation loop exited unexpectedly');
-  }
-
-  async #walkToSightEdge(edge: NavigationPosition, active: ActiveSkill, signal: AbortSignal): Promise<void> {
-    const position = this.#bot.entity.position;
-    await this.#lookAt(
-      active,
-      'face the sight edge',
-      position.offset(edge.x - position.x, edge.y - position.y, edge.z - position.z),
-    );
-    if (horizontalDistance(this.#bot.entity.position, edge) <= SIGHT_EDGE_TOLERANCE_BLOCKS) return;
-    try {
-      this.#bot.setControlState('forward', true);
-      for (let tick = 0; tick < SIGHT_EDGE_WALK_TICKS; tick += 1) {
-        await waitForPhysicsTicks(this.#bot, 1, signal);
-        if (horizontalDistance(this.#bot.entity.position, edge) <= SIGHT_EDGE_TOLERANCE_BLOCKS) return;
-      }
-    } finally {
-      this.#bot.setControlState('forward', false);
-      this.#bot.clearControlStates();
-    }
   }
 
   async #engage(objective: EngageObjective, targetId: number, active: ActiveSkill): Promise<void> {
@@ -1080,7 +997,12 @@ export class SkillOwner {
         }
         replans += 1;
         try {
-          await this.#navigate(view.entity.position, { kind: 'meleeReach', target: view.entity }, active);
+          const targetPosition = {
+            x: view.entity.position.x,
+            y: view.entity.position.y,
+            z: view.entity.position.z,
+          };
+          await this.#navigate(targetPosition, { kind: 'meleeReach', target: view.target }, active);
         } catch (error) {
           if (!(error instanceof SkillFault) || error.failure !== 'timedOut') throw error;
         }
@@ -1226,7 +1148,7 @@ export class SkillOwner {
     const samples: Point3[] = [];
     this.#engagementView(targetId, progress);
     this.#bot.activateItem();
-    active.resources.itemInUse = true;
+    active.resources.itemUse = 'bow';
     for (let tickIndex = 0; tickIndex < BOW_DRAW_TICKS; tickIndex += 1) {
       await waitForPhysicsTicks(this.#bot, 1, signal);
       const entity = this.#visibleOpponent(targetId);
@@ -1261,7 +1183,7 @@ export class SkillOwner {
     const response = waitForAttackResponse(this.#bot, targetId, signal, ARROW_FLIGHT_RESPONSE_TICKS, 'shotMissed');
     response.catch(() => undefined);
     this.#bot.deactivateItem();
-    active.resources.itemInUse = false;
+    active.resources.itemUse = 'none';
     progress.lastPassed = 'issued';
     for (let waited = 0; this.#countArrows() >= arrowsBefore; waited += 1) {
       if (waited >= ARROW_ACCOUNTING_TICKS) {
@@ -1283,7 +1205,8 @@ export class SkillOwner {
     const offhand = this.#bot.inventory.slots[OFFHAND_SLOT];
     if (offhand !== null && offhand !== undefined && offhand.name === 'shield') {
       this.#bot.activateItem(true);
-      active.resources.itemInUse = true;
+      active.resources.itemUse = 'shield';
+      this.#clientMechanics?.({ kind: 'shieldBlockingTransition', blocking: true });
     }
     const blockedTicks = { count: 0 };
     try {
@@ -1299,10 +1222,7 @@ export class SkillOwner {
       }
       throw error;
     } finally {
-      if (active.resources.itemInUse) {
-        active.resources.itemInUse = false;
-        if (this.#bot.usingHeldItem) this.#bot.deactivateItem();
-      }
+      this.#deactivateHeldItem(active);
     }
   }
 
@@ -1560,7 +1480,7 @@ export class SkillOwner {
     return false;
   }
 
-  async #consumeUnlessThreatened(healthAtStart: number): Promise<void> {
+  async #consumeUnlessThreatened(healthAtStart: number, active: ActiveSkill): Promise<void> {
     let stopWatching = (): void => undefined;
     const threatened = new Promise<never>((_resolve, reject) => {
       const check = () => {
@@ -1585,7 +1505,7 @@ export class SkillOwner {
     try {
       await Promise.race([consumption, threatened]);
     } catch (error) {
-      if (error instanceof SkillFault && error.miss === 'abortedUnderThreat') this.#bot.deactivateItem();
+      if (error instanceof SkillFault && error.miss === 'abortedUnderThreat') this.#deactivateHeldItem(active);
       throw error;
     } finally {
       stopWatching();
@@ -1619,13 +1539,13 @@ export class SkillOwner {
       throw new SkillFault('noProgress', `food from inventory slot ${slot} was not equipped in hand`);
     }
     const heldSlot = heldItem.slot;
-    active.resources.eating = true;
+    active.resources.itemUse = 'food';
     progress.lastPassed = 'issued';
     try {
       await this.#awaitInventoryOperation(
         active,
         'consume held food',
-        () => this.#consumeUnlessThreatened(healthAtStart),
+        () => this.#consumeUnlessThreatened(healthAtStart, active),
         ACTION_TIMEOUT_MS,
         null,
       );
@@ -1634,7 +1554,7 @@ export class SkillOwner {
       if (error instanceof SkillFault) throw error;
       throw new SkillFault('serverRejected', errorMessage(error));
     } finally {
-      active.resources.eating = false;
+      active.resources.itemUse = 'none';
     }
     throwIfInterrupted(active.controller.signal);
     // Mineflayer allows golden apples at full hunger, when eating cannot raise the food level.
@@ -1766,8 +1686,7 @@ export class SkillOwner {
       }
     }
     try {
-      if (active.resources.itemInUse && this.#bot.usingHeldItem) this.#bot.deactivateItem();
-      active.resources.itemInUse = false;
+      this.#deactivateHeldItem(active);
       if (this.#cleanupFailure === null
         && active.resources.quickBarSlotToRestore !== null
         && this.#bot.quickBarSlot !== active.resources.quickBarSlotToRestore) {
@@ -1780,6 +1699,15 @@ export class SkillOwner {
     }
     if (failures.length === 1) throw failures[0];
     if (failures.length > 1) throw new AggregateError(failures, 'Mineflayer skill cleanup failed');
+  }
+
+  #deactivateHeldItem(active: ActiveSkill): void {
+    const itemUse = active.resources.itemUse;
+    if (itemUse !== 'none' && this.#bot.usingHeldItem) {
+      this.#bot.deactivateItem();
+      if (itemUse === 'shield') this.#clientMechanics?.({ kind: 'shieldBlockingTransition', blocking: false });
+    }
+    active.resources.itemUse = 'none';
   }
 
   async #restoreCursor(active: ActiveSkill, window: MineflayerWindow | null): Promise<void> {
@@ -2293,116 +2221,6 @@ function hasArrived(
   return Math.floor(current.x) === Math.floor(target.x)
     && Math.floor(current.y) === Math.floor(target.y)
     && Math.floor(current.z) === Math.floor(target.z);
-}
-
-function travelSightPoint(bot: Bot, goal: NavigationPosition, quarterTurn: number): Bot['entity']['position'] {
-  const position = bot.entity.position;
-  const eyeHeight = (bot.entity as MineflayerEntity & { readonly eyeHeight?: number }).eyeHeight;
-  if (typeof eyeHeight !== 'number' || !Number.isFinite(eyeHeight)) {
-    throw new TypeError('Mineflayer player entity has no eye height');
-  }
-  const dx = goal.x - position.x;
-  const dz = goal.z - position.z;
-  const horizontal = Math.hypot(dx, dz);
-  const scale = horizontal === 0 ? 0 : TRAVEL_SIGHT_AHEAD_BLOCKS / horizontal;
-  let aheadX = dx * scale;
-  let aheadZ = dz * scale;
-  if (quarterTurn === 1) {
-    const rotatedX = -aheadZ;
-    aheadZ = aheadX;
-    aheadX = rotatedX;
-  } else if (quarterTurn === 2) {
-    aheadX = -aheadX;
-    aheadZ = -aheadZ;
-  } else if (quarterTurn === 3) {
-    const rotatedX = aheadZ;
-    aheadZ = -aheadX;
-    aheadX = rotatedX;
-  }
-  return position.offset(aheadX, eyeHeight - TRAVEL_SIGHT_BELOW_EYE_BLOCKS, aheadZ);
-}
-
-function horizontalDistance(left: NavigationPosition, right: NavigationPosition): number {
-  return Math.hypot(left.x - right.x, left.z - right.z);
-}
-
-function isExactBlockStep(position: NavigationPosition): boolean {
-  return Number.isInteger(position.x) && Number.isInteger(position.y) && Number.isInteger(position.z);
-}
-
-function navigationKey(position: NavigationPosition): string {
-  return `${position.x.toFixed(4)},${position.y.toFixed(4)},${position.z.toFixed(4)}`;
-}
-
-function columnDropLanding(bot: Bot, step: BlockPosition, playerBlock: BlockPosition): BlockPosition | null {
-  if (playerBlock.y >= step.y) return null;
-  const feet = blockAtColumn(bot, step.x, step.y, step.z);
-  const head = blockAtColumn(bot, step.x, step.y + 1, step.z);
-  if (feet === null || head === null || feet.boundingBox !== 'empty' || head.boundingBox !== 'empty') return null;
-  const ground = blockAtColumn(bot, step.x, step.y - 1, step.z);
-  if (ground !== null && ground.boundingBox === 'block') return null;
-  const playerFloor = blockPosition(step.x, playerBlock.y, step.z);
-  if (isStandableAtFloor(bot, playerFloor)) return playerFloor;
-  const lowest = step.y - MAX_BLOCKED_DROP_DOWN;
-  for (let y = step.y - 1; y >= lowest; y -= 1) {
-    const candidate = blockPosition(step.x, y, step.z);
-    if (isStandableAtFloor(bot, candidate)) return candidate;
-  }
-  return null;
-}
-
-function maxDropDownToSolid(fromY: number, landingY: number, installed: number): number {
-  const solidY = landingY - 1;
-  const needed = Math.floor(fromY) - solidY;
-  return Math.min(MAX_BLOCKED_DROP_DOWN, Math.max(installed, needed));
-}
-
-function isStandableAtFloor(bot: Bot, step: BlockPosition): boolean {
-  const below = blockAtColumn(bot, step.x, step.y - 1, step.z);
-  const feet = blockAtColumn(bot, step.x, step.y, step.z);
-  const head = blockAtColumn(bot, step.x, step.y + 1, step.z);
-  return below !== null && below.boundingBox === 'block'
-    && feet !== null && feet.boundingBox === 'empty'
-    && head !== null && head.boundingBox === 'empty';
-}
-
-function blockAtColumn(bot: Bot, x: number, y: number, z: number): ReturnType<Bot['blockAt']> {
-  const origin = bot.entity.position;
-  return bot.blockAt(origin.offset(x + 0.5 - origin.x, y + 0.5 - origin.y, z + 0.5 - origin.z));
-}
-
-function edgeOfCurrentBlock(
-  current: { readonly x: number; readonly y: number; readonly z: number },
-  playerBlock: BlockPosition,
-): NavigationPosition {
-  return {
-    x: insetTowardPlayer(Math.floor(current.x), playerBlock.x + 0.5),
-    y: Math.floor(current.y),
-    z: insetTowardPlayer(Math.floor(current.z), playerBlock.z + 0.5),
-  };
-}
-
-function insetTowardPlayer(floor: number, target: number): number {
-  const inner = floor + SIGHT_EDGE_INSET_BLOCKS;
-  const outer = floor + 1 - SIGHT_EDGE_INSET_BLOCKS;
-  if (target < floor) return inner;
-  if (target >= floor + 1) return outer;
-  return Math.min(outer, Math.max(inner, target));
-}
-
-function horizontalStepToward(
-  current: { readonly x: number; readonly y: number; readonly z: number },
-  playerBlock: BlockPosition,
-): BlockPosition | null {
-  const dx = playerBlock.x + 0.5 - current.x;
-  const dz = playerBlock.z + 0.5 - current.z;
-  const horizontal = Math.hypot(dx, dz);
-  if (horizontal === 0) return null;
-  const x = Math.round(current.x + dx / horizontal);
-  const y = Math.floor(current.y);
-  const z = Math.round(current.z + dz / horizontal);
-  if (x === Math.floor(current.x) && z === Math.floor(current.z)) return null;
-  return blockPosition(x, y, z);
 }
 
 function waypointToward(

@@ -68,14 +68,17 @@ export {
   knownRangedWeapon,
   legacyAgentObservation,
   MAX_TERRAIN_CHANGES,
+  activeEffect,
   ObservationValidationError,
   agentObservation,
   agentState,
+  combatStatus,
   currentKnowledge,
   emptyEquipment,
   entityId,
   equipmentUpgrade,
   foodStack,
+  identifiedFoodStack,
   inventorySlot,
   knownArmor,
   knownFood,
@@ -91,10 +94,12 @@ export {
   visibleOpponent,
 } from './observation.js';
 export type {
+  ActiveEffect,
   AgentObservation,
   AgentObservationInput,
   AgentState,
   AgentStateInput,
+  CombatStatus,
   ArmorSlot,
   DirectionSupport,
   EntityId,
@@ -102,6 +107,7 @@ export type {
   EquipmentSnapshot,
   EquipmentUpgrade,
   FoodStack,
+  FoodItemKind,
   InventorySlot,
   Knowledge,
   KnownItem,
@@ -167,8 +173,10 @@ export {
   PolicyReplayInputError,
   normalizeOpeningPolicyReplayInput,
   normalizeOpeningPolicyReplayInputV4,
+  normalizeOpeningPolicyReplayInputV5,
   normalizePolicyReplayInput,
   normalizePolicyReplayInputV4,
+  normalizePolicyReplayInputV5,
   rehydratePolicyReplayInput,
 } from './replay.js';
 export type {
@@ -179,11 +187,13 @@ export type {
   PolicyReplayInputV2,
   PolicyReplayInputV3,
   PolicyReplayInputV4,
+  PolicyReplayInputV5,
   RehydratedPolicyReplayInput,
   RehydratedPolicyReplayInputV1,
   RehydratedPolicyReplayInputV2,
   RehydratedPolicyReplayInputV3,
   RehydratedPolicyReplayInputV4,
+  RehydratedPolicyReplayInputV5,
 } from './replay.js';
 
 export { skillProgress } from './outcome.js';
@@ -302,8 +312,14 @@ export type {
 } from './candidates.js';
 export {
   DUEL_POOL_IDS,
+  DUEL_POOL_REQUIRED_RECEIPTS,
+  DUEL_POOL_SCORING_CANDIDATES,
+  DUEL_POOL_SHIELD_HEAL_HEALTH_HALF_HEARTS,
   DUEL_POOL_SHIELD_RETREAT_HEALTH_HALF_HEARTS,
   DUEL_POOL_VERSION,
+  duelPoolQualificationReport,
+  duelPoolRequiredReceipts,
+  duelPoolScoringMembers,
   decideDuelPool,
   decideDuelPoolOpening,
   duelPoolMember,
@@ -311,7 +327,15 @@ export {
   explainDuelPool,
   isDuelPoolId,
 } from './duel-pool.js';
-export type { DuelPoolId, DuelPoolMember } from './duel-pool.js';
+export type {
+  DuelPoolId,
+  DuelPoolMember,
+  DuelPoolPromotionId,
+  DuelPoolQualification,
+  DuelPoolReceipt,
+  DuelPoolReceiptAction,
+  DuelPoolReceiptStatus,
+} from './duel-pool.js';
 export { FRONTIER_GOALS, frontierBelief, frontierDecisionExplanation, stepAgent } from './policy-v6.js';
 export type {
   AgentStep,

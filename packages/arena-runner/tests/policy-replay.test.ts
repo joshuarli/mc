@@ -10,6 +10,12 @@ import {
   decide,
   decidePolicyReplayV1,
   decideOpening,
+  compileCandidate,
+  activeEffect,
+  combatStatus,
+  identifiedFoodStack,
+  DUEL_POOL_VERSION,
+  duelPoolMember,
   type PolicyReplayInputV1,
   DeterministicRandom,
   emptyEquipment,
@@ -17,6 +23,7 @@ import {
   entityId,
   normalizePolicyReplayInput,
   normalizeOpeningPolicyReplayInputV4,
+  normalizePolicyReplayInputV5,
   openingPolicyState,
   openingStyleForSeat,
   type OpeningStyleCycle,
@@ -29,8 +36,9 @@ import {
   visibleOpponent,
   worldBorder,
 } from '@arena/core';
-import { makePolicyEffectRecord, makePolicyReplayRecord, makePolicyReplayRecordV4, replayPolicyJson } from '../src/policy-replay.js';
+import { makePolicyEffectRecord, makePolicyReplayRecord, makePolicyReplayRecordV4, makePolicyReplayRecordV6, replayPolicyJson } from '../src/policy-replay.js';
 import { canonicalJson, sha256Json } from '../src/canonical.js';
+import { decideRuntimeDuelPool } from '../src/runtime/policy-decision.js';
 import { runCli } from '../src/index.js';
 import { TraceError, type TraceRecord } from '../src/trace.js';
 import type { Evidence } from '../src/evidence.js';
@@ -113,6 +121,96 @@ function openingPolicyRecord(sequence = 1n) {
   return makePolicyReplayRecordV4({ sequence, seat, input, decision, openingStateAfter: openingState,
     rngStateAfter: random.snapshotState(), disposition: { kind: 'start', action_sequence: sequence.toString() } });
 }
+
+test('frontier task replay verifies task input, transition, and next-step continuity', () => {
+  const candidate = compileCandidate('frontier-v1');
+  const observation = agentObservation({
+    tick: tick(10), sequence: observationSequence(1),
+    agent: currentKnowledge(agentState({ position: blockPosition(0, 64, 0), healthHalfHearts: 40,
+      hungerPoints: 20, foodStacks: [], equipped: emptyEquipment(), upgrades: [] })),
+    border: currentKnowledge(worldBorder(0, 0, 100)), opponents: currentKnowledge([]), loot: unknownKnowledge(),
+  });
+  const values = candidate.params;
+  const params = PolicyParams.create({ version: 1,
+    eatAtHungerOrBelow: values.eatAtHungerOrBelow,
+    retreatAtHealthHalfHeartsOrBelow: values.retreatAtHealthHalfHeartsOrBelow,
+    borderMarginBlocks: values.borderMarginBlocks,
+    fightRangeBlocks: values.fightRangeBlocks,
+    opponentMemoryTicks: values.opponentMemoryTicks,
+    lootHysteresisBlocks: values.lootHysteresisBlocks,
+    searchRadiusBlocks: values.searchRadiusBlocks,
+  });
+  const random = DeterministicRandom.fromState(19n);
+  const input = normalizePolicyReplayInputV5({ observation, memory: emptyPolicyMemory(), feedback: [], params, random });
+  const step = candidate.step({ observation, memory: emptyPolicyMemory(), feedback: [], random, task: null });
+  const record = makePolicyReplayRecordV6({ sequence: 1n, seat: 0, input, decision: step.decision,
+    taskBefore: null, taskAfter: step.task, openingStateAfter: null, rngStateAfter: random.snapshotState(),
+    disposition: step.decision.intent.kind === 'hold' ? { kind: 'hold' } : { kind: 'start', action_sequence: '1' } });
+  const seatPolicy = { schema: 'seat-policy-v1', seat: 0, candidate: candidate.id, version: candidate.version,
+    implementation: candidate.implementation, semantic_id: candidate.semanticId, params: { ...candidate.params } };
+  assert.equal(replayPolicyJson(evidence([seatPolicy, record])).verified, true);
+  assert.throws(() => replayPolicyJson(evidence([seatPolicy, { ...record, task_after: null }])),
+    (error: unknown) => error instanceof TraceError && error.source.kind === 'policy_task_mismatch');
+});
+
+test('resume-v2 seeds the first replay task in a resumed trace epoch', () => {
+  const candidate = compileCandidate('frontier-v1');
+  const observation = agentObservation({ tick: tick(11), sequence: observationSequence(2),
+    agent: currentKnowledge(agentState({ position: blockPosition(0, 64, 0), healthHalfHearts: 40,
+      hungerPoints: 20, foodStacks: [], equipped: emptyEquipment(), upgrades: [] })),
+    border: currentKnowledge(worldBorder(0, 0, 100)), opponents: currentKnowledge([]), loot: unknownKnowledge(),
+  });
+  const values = candidate.params;
+  const params = PolicyParams.create({ version: 1,
+    eatAtHungerOrBelow: values.eatAtHungerOrBelow,
+    retreatAtHealthHalfHeartsOrBelow: values.retreatAtHealthHalfHeartsOrBelow,
+    borderMarginBlocks: values.borderMarginBlocks,
+    fightRangeBlocks: values.fightRangeBlocks,
+    opponentMemoryTicks: values.opponentMemoryTicks,
+    lootHysteresisBlocks: values.lootHysteresisBlocks,
+    searchRadiusBlocks: values.searchRadiusBlocks,
+  });
+  const task = candidate.step({ observation, memory: emptyPolicyMemory(), feedback: [],
+    random: DeterministicRandom.fromState(19n), task: null }).task;
+  assert.ok(task !== null);
+  const random = DeterministicRandom.fromState(29n);
+  const input = normalizePolicyReplayInputV5({ observation, memory: emptyPolicyMemory(), feedback: [], params, random });
+  const step = candidate.step({ observation, memory: emptyPolicyMemory(), feedback: [], random, task });
+  const record = makePolicyReplayRecordV6({ sequence: 1n, seat: 0, input, decision: step.decision,
+    taskBefore: task, taskAfter: step.task, openingStateAfter: null, rngStateAfter: random.snapshotState(),
+    disposition: step.decision.intent.kind === 'hold' ? { kind: 'hold' } : { kind: 'start', action_sequence: '1' } });
+  const note = { schema: 'resume-v2', checkpoint_id: 'checkpoint-1', digest: 'a'.repeat(64), epoch: 1,
+    match_tick: '10', eliminated_seats: [], frontier_tasks: [{ seat: 0, task }] };
+  const candidateNote = { schema: 'seat-policy-v1', seat: 0, candidate: candidate.id, version: candidate.version,
+    implementation: candidate.implementation, semantic_id: candidate.semanticId, params: { ...candidate.params } };
+  assert.equal(replayPolicyJson(evidence([candidateNote, note, record])).verified, true);
+  assert.throws(() => replayPolicyJson(evidence([candidateNote, record])), (error: unknown) =>
+    error instanceof TraceError && error.source.kind === 'policy_task_chain_mismatch');
+});
+
+test('pool candidate replay keeps S2 food and combat observations in policy-input-v5', () => {
+  const observation = agentObservation({
+    tick: tick(10), sequence: observationSequence(1),
+    agent: currentKnowledge(agentState({ position: blockPosition(0, 64, 0), healthHalfHearts: 32,
+      hungerPoints: 14, foodStacks: [identifiedFoodStack(1, 1, 'goldenApple')], equipped: emptyEquipment(), upgrades: [],
+      combatStatus: combatStatus(4, [activeEffect(5, 1, 80)]) })),
+    border: currentKnowledge(worldBorder(0, 0, 100)), opponents: currentKnowledge([]), loot: unknownKnowledge(),
+  });
+  const random = DeterministicRandom.fromState(23n);
+  const result = decideRuntimeDuelPool('aggressive-rusher', observation, emptyPolicyMemory(), PolicyParams.baseline(), random, []);
+  assert.equal(result.input.schema, 'policy-input-v5');
+  const currentAgent = result.input.observation.agent;
+  if (currentAgent.kind !== 'current') throw new Error('expected current agent observation');
+  assert.equal(currentAgent.value.foodStacks[0]?.itemKind, 'goldenApple');
+  assert.deepEqual(currentAgent.value.combatStatus, { absorptionHalfHearts: 4, effects: [{ effectId: 5, amplifier: 1, durationTicks: 80 }] });
+  const member = duelPoolMember('aggressive-rusher');
+  const note = { schema: 'seat-policy-v1', seat: 0, candidate: member.id, version: DUEL_POOL_VERSION,
+    implementation: 'duel-pool-v2', semantic_id: member.semanticId, params: {} };
+  const record = makePolicyReplayRecordV6({ sequence: 1n, seat: 0, input: result.input, decision: result.decision,
+    taskBefore: null, taskAfter: null, openingStateAfter: null, rngStateAfter: result.rngStateAfter,
+    disposition: result.decision.intent.kind === 'hold' ? { kind: 'hold' } : { kind: 'start', action_sequence: '1' } });
+  assert.equal(replayPolicyJson(evidence([note, record])).verified, true);
+});
 
 test('replays exact core decisions and verifies full-u64 policy sequences and RNG states', () => {
   const frame = policyRecord(MAX_U64, MAX_U64);

@@ -244,6 +244,20 @@ test('search proposals are deterministic, bounded, valid and never move the froz
   throws(() => randomSearchProposals('baseline', 1n, 4), InvalidCandidateError);
 });
 
+test('policy-v6 search proposals leave tactical-only parameters unchanged', () => {
+  const start = candidateDefaults('frontier-v1');
+  const proposals = [
+    ...coordinateSearchProposals('frontier-v1', start, 500_001n, 0, 12),
+    ...randomSearchProposals('frontier-v1', 500_001n, 12),
+  ];
+  ok(proposals.length > 0);
+  for (const proposal of proposals) {
+    equal(proposal.lootFirstRangeBlocks, start.lootFirstRangeBlocks);
+    equal(proposal.kiteRangeBlocks, start.kiteRangeBlocks);
+    deepStrictEqual(proposal, compileCandidate('frontier-v1', proposal).params);
+  }
+});
+
 test('baseline@1 decisions on every recorded scenario match the committed golden record', () => {
   const golden = JSON.parse(readFileSync(
     resolve(process.cwd(), 'fixtures/policy-curriculum/baseline-v1-golden.json'),

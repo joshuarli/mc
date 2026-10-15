@@ -1,11 +1,12 @@
 import {
   decide,
   decideOpening,
-  normalizeOpeningPolicyReplayInputV4,
-  normalizePolicyReplayInputV4,
+  normalizeOpeningPolicyReplayInputV5,
+  normalizePolicyReplayInputV5,
   PolicyParams as CorePolicyParams,
   type AgentObservation,
   type CompiledCandidate,
+  type CompiledFrontierCandidate,
   compileCandidate,
   DeterministicRandom as CoreDeterministicRandom,
   type DecisionExplanation,
@@ -17,24 +18,32 @@ import {
   type OpeningStyleCycle as CoreOpeningStyleCycle,
   type PolicyMemory,
   type PolicyParams,
-  type PolicyReplayInputV4,
+  type PolicyReplayInputV5,
+  type FrontierTask,
+  frontierDecisionExplanation,
   type PolicyFeedbackBatch,
   explainDuelPool,
   type DuelPoolId,
 } from '@arena/core';
 
 export interface RuntimePolicyDecision {
-  readonly input: PolicyReplayInputV4;
+  readonly input: PolicyReplayInputV5;
   readonly decision: Decision;
   readonly rngStateAfter: bigint;
+  readonly taskBefore?: FrontierTask | null;
+  readonly taskAfter?: FrontierTask | null;
+  readonly openingStateAfter?: OpeningPolicyState | null;
   explanation(): DecisionExplanation;
 }
 
 export interface RuntimeOpeningPolicyDecision {
-  readonly input: PolicyReplayInputV4;
+  readonly input: PolicyReplayInputV5;
   readonly decision: Decision;
   readonly openingState: OpeningPolicyState;
   readonly rngStateAfter: bigint;
+  readonly taskBefore?: FrontierTask | null;
+  readonly taskAfter?: FrontierTask | null;
+  readonly openingStateAfter?: OpeningPolicyState | null;
   explanation(): DecisionExplanation;
 }
 
@@ -55,7 +64,7 @@ export function decideRuntimePolicy(
   random: DeterministicRandom,
   feedback: PolicyFeedbackBatch = [],
 ): RuntimePolicyDecision {
-  const input = normalizePolicyReplayInputV4({ observation, memory, params, random, feedback });
+  const input = normalizePolicyReplayInputV5({ observation, memory, params, random, feedback });
   const before = random.snapshotState();
   const decision = decide(observation, memory, params, random, feedback);
   return Object.freeze({
@@ -79,13 +88,14 @@ export function decideRuntimeOpeningPolicy(
   }>,
 ): RuntimeOpeningPolicyDecision {
   const opening: OpeningPolicyContext = { style: assignment.style, state: assignment.state };
-  const input = normalizeOpeningPolicyReplayInputV4({ observation, memory, feedback, params, random,
+  const input = normalizeOpeningPolicyReplayInputV5({ observation, memory, feedback, params, random,
     opening: { seed: assignment.seed, style: assignment.style, cycle: assignment.cycle, state: assignment.state } });
   const before = random.snapshotState();
   const result = decideOpening(observation, memory, params, random, feedback, opening);
   const { openingState, ...decision } = result;
   return Object.freeze({
     input, decision, openingState, rngStateAfter: random.snapshotState(),
+    openingStateAfter: openingState,
     explanation: () => baselineCandidate().explainOpening(observation, memory, CoreDeterministicRandom.fromState(before),
       feedback, opening).explanation,
   });
@@ -119,7 +129,7 @@ export function decideRuntimeCandidatePolicy(
   random: DeterministicRandom,
   feedback: PolicyFeedbackBatch = [],
 ): RuntimePolicyDecision {
-  const input = normalizePolicyReplayInputV4({
+  const input = normalizePolicyReplayInputV5({
     observation, memory, params: candidatePolicyParams(candidate), random, feedback,
   });
   const { decision, explanation } = candidate.explain(observation, memory, random, feedback);
@@ -134,7 +144,7 @@ export function decideRuntimeDuelPool(
   random: DeterministicRandom,
   feedback: PolicyFeedbackBatch = [],
 ): RuntimePolicyDecision {
-  const input = normalizePolicyReplayInputV4({ observation, memory, params, random, feedback });
+  const input = normalizePolicyReplayInputV5({ observation, memory, params, random, feedback });
   const explained = explainDuelPool(id, observation, memory, random, feedback);
   return Object.freeze({
     input, decision: explained.decision, rngStateAfter: random.snapshotState(), explanation: () => explained.explanation,
@@ -156,13 +166,14 @@ export function decideRuntimeDuelPoolOpening(
     readonly state: OpeningPolicyState;
   }>,
 ): RuntimeOpeningPolicyDecision {
-  const input = normalizeOpeningPolicyReplayInputV4({
+  const input = normalizeOpeningPolicyReplayInputV5({
     observation, memory, feedback, params, random,
     opening: { seed: assignment.seed, style: assignment.style, cycle: assignment.cycle, state: assignment.state },
   });
   const explained = explainDuelPool(id, observation, memory, random, feedback);
   return Object.freeze({
     input, decision: explained.decision, openingState: assignment.state, rngStateAfter: random.snapshotState(),
+    openingStateAfter: assignment.state,
     explanation: () => explained.explanation,
   });
 }
@@ -181,7 +192,7 @@ export function decideRuntimeCandidateOpening(
     readonly state: OpeningPolicyState;
   }>,
 ): RuntimeOpeningPolicyDecision {
-  const input = normalizeOpeningPolicyReplayInputV4({
+  const input = normalizeOpeningPolicyReplayInputV5({
     observation, memory, feedback, params: candidatePolicyParams(candidate), random,
     opening: { seed: assignment.seed, style: assignment.style, cycle: assignment.cycle, state: assignment.state },
   });
@@ -190,5 +201,55 @@ export function decideRuntimeCandidateOpening(
   const { openingState, ...decision } = explained.decision;
   return Object.freeze({
     input, decision, openingState, rngStateAfter: random.snapshotState(), explanation: () => explained.explanation,
+    openingStateAfter: openingState,
   });
+}
+
+export interface RuntimeFrontierPolicyDecision {
+  readonly input: PolicyReplayInputV5;
+  readonly decision: Decision;
+  readonly rngStateAfter: bigint;
+  readonly taskBefore: FrontierTask | null;
+  readonly taskAfter: FrontierTask | null;
+  readonly openingStateAfter: OpeningPolicyState | null;
+  explanation(): DecisionExplanation;
+}
+
+export function decideRuntimeFrontierPolicy(
+  candidate: CompiledFrontierCandidate,
+  observation: AgentObservation,
+  memory: PolicyMemory,
+  random: DeterministicRandom,
+  feedback: PolicyFeedbackBatch,
+  task: FrontierTask | null,
+): RuntimeFrontierPolicyDecision {
+  const input = normalizePolicyReplayInputV5({ observation, memory, params: candidatePolicyParams(candidate), random, feedback });
+  const step = candidate.step({ observation, memory, random, feedback, task });
+  const explanation = frontierDecisionExplanation(step);
+  return Object.freeze({ input, decision: step.decision, rngStateAfter: random.snapshotState(),
+    taskBefore: task, taskAfter: step.task, openingStateAfter: null, explanation: () => explanation });
+}
+
+export function decideRuntimeFrontierOpening(
+  candidate: CompiledFrontierCandidate,
+  observation: AgentObservation,
+  memory: PolicyMemory,
+  random: DeterministicRandom,
+  feedback: PolicyFeedbackBatch,
+  assignment: Readonly<{
+    readonly seed: bigint;
+    readonly seat: number;
+    readonly style: CoreOpeningStyle;
+    readonly cycle: CoreOpeningStyleCycle;
+    readonly state: OpeningPolicyState;
+  }>,
+  task: FrontierTask | null,
+): RuntimeFrontierPolicyDecision {
+  const input = normalizeOpeningPolicyReplayInputV5({ observation, memory, feedback, params: candidatePolicyParams(candidate), random,
+    opening: { seed: assignment.seed, style: assignment.style, cycle: assignment.cycle, state: assignment.state } });
+  const step = candidate.stepOpening({ observation, memory, random, feedback, task,
+    style: assignment.style, openingState: assignment.state });
+  const explanation = frontierDecisionExplanation(step);
+  return Object.freeze({ input, decision: step.decision, rngStateAfter: random.snapshotState(),
+    taskBefore: task, taskAfter: step.task, openingStateAfter: step.openingState, explanation: () => explanation });
 }

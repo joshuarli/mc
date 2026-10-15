@@ -60,6 +60,8 @@ export const CANDIDATE_TUNABLES = [
 export type CandidateTunable = typeof CANDIDATE_TUNABLES[number];
 export type CandidateParamValues = Readonly<Record<CandidateTunable, number>>;
 
+const TACTICAL_ONLY_TUNABLES: ReadonlySet<CandidateTunable> = new Set(['lootFirstRangeBlocks', 'kiteRangeBlocks']);
+
 export const CANDIDATE_PARAMETER_RANGES: Readonly<Record<CandidateTunable, { readonly min: number; readonly max: number }>> =
   Object.freeze({
     eatAtHungerOrBelow: Object.freeze({ min: 1, max: 20 }),
@@ -278,8 +280,12 @@ export function validateCandidateParams(
       if (merged[name] !== entry.defaults[name]) throw new InvalidCandidateError('frozen-candidate', name);
     }
   }
-  if (entry.implementation !== 'tactical-v1' && (merged.lootFirstRangeBlocks !== 0 || merged.kiteRangeBlocks !== 0)) {
-    throw new InvalidCandidateError('frozen-candidate', `${entry.implementation} has no tactical knobs`);
+  if (entry.implementation !== 'tactical-v1') {
+    for (const name of TACTICAL_ONLY_TUNABLES) {
+      if (merged[name] !== entry.defaults[name]) {
+        throw new InvalidCandidateError('frozen-candidate', `${entry.implementation} has no tactical knobs`);
+      }
+    }
   }
   return Object.freeze(merged);
 }
@@ -552,7 +558,7 @@ export function coordinateSearchProposals(
   }
   const random = DeterministicRandom.forStream(seed, RandomStream.setup());
   for (let skip = 0; skip < round * 7; skip += 1) random.nextU64();
-  const order = shuffled(CANDIDATE_TUNABLES, random);
+  const order = shuffled(searchableTunables(id), random);
   const seen = new Set<string>([candidateSemanticId(id, current)]);
   const proposals: CandidateParamValues[] = [];
   for (const name of order) {
@@ -582,14 +588,19 @@ export function randomSearchProposals(
   const random = DeterministicRandom.forStream(seed, RandomStream.setup());
   const proposals: CandidateParamValues[] = [];
   for (let index = 0; index < count; index += 1) {
-    const sampled: Record<string, number> = {};
-    for (const name of CANDIDATE_TUNABLES) {
+    const sampled: Partial<Record<CandidateTunable, number>> = {};
+    for (const name of searchableTunables(id)) {
       const range = CANDIDATE_PARAMETER_RANGES[name];
       sampled[name] = range.min + Number(random.nextU64() % BigInt(range.max - range.min + 1));
     }
     proposals.push(validateCandidateParams(id, sampled));
   }
   return Object.freeze(proposals);
+}
+
+function searchableTunables(id: CandidateId): readonly CandidateTunable[] {
+  if (definition(id).implementation === 'tactical-v1') return CANDIDATE_TUNABLES;
+  return CANDIDATE_TUNABLES.filter((name) => !TACTICAL_ONLY_TUNABLES.has(name));
 }
 
 function shuffled<T>(values: readonly T[], random: DeterministicRandom): T[] {

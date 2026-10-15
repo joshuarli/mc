@@ -31,6 +31,7 @@ import org.bukkit.block.Chest;
 import org.bukkit.entity.Player;
 import org.bukkit.entity.Projectile;
 import org.bukkit.entity.Entity;
+import org.bukkit.entity.Arrow;
 import org.bukkit.entity.Item;
 import org.bukkit.event.block.BlockBreakEvent;
 import org.bukkit.event.block.BlockPlaceEvent;
@@ -39,6 +40,7 @@ import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.entity.EntityDamageEvent;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
+import org.bukkit.event.entity.ProjectileLaunchEvent;
 import org.bukkit.event.entity.EntityPickupItemEvent;
 import org.bukkit.event.entity.PlayerDeathEvent;
 import org.bukkit.event.inventory.InventoryClickEvent;
@@ -105,6 +107,13 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
     private final Set<MapPlan.Position> placedOakPlankPositions = new HashSet<>();
     private final Map<Integer, UUID> playersBySeat = new HashMap<>();
     private final Map<UUID, Integer> seatsByPlayer = new HashMap<>();
+    private final Map<Integer, Double> lateralBlocksBySeat = new HashMap<>();
+    private final Map<Integer, Boolean> shieldBlockingBySeat = new HashMap<>();
+    private final Map<Integer, Set<String>> emittedMechanicsBySeat = new HashMap<>();
+    private final Map<Integer, Integer> distanceTicksBySeat = new HashMap<>();
+    private final Map<Integer, Double> distanceMinimumBySeat = new HashMap<>();
+    private final Map<Integer, Double> distanceMaximumBySeat = new HashMap<>();
+    private final List<ControlProtocol.MechanicsReceipt> pendingMechanicsReceipts = new ArrayList<>();
     private FrontierEdits frontierEdits;
     private ControlProtocol.SquadsRules squadRules;
     private final List<MatchController.Elimination> pendingEliminations = new ArrayList<>();
@@ -280,6 +289,7 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
             while ((command = controlSession.poll()) != null) {
                 handleControlCommand(command);
             }
+            collectMechanicsTickReceipts();
             advanceMatchAtTickEnd();
             if (pendingCheckpoint != null) {
                 completeCheckpoint();
@@ -695,6 +705,7 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
         civilizationCountdownEliminations.clear();
         playersBySeat.clear();
         seatsByPlayer.clear();
+        clearMechanicsReceipts();
         frontierEdits = null;
         squadRules = null;
         if (preparedMatch.rules().isPresent()) {
@@ -1110,6 +1121,97 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
         }
         applyCurrentBorder();
         publishClock();
+    }
+
+    private void collectMechanicsTickReceipts() {
+        if (!isUhcMechanicsMatch()) {
+            pendingMechanicsReceipts.clear();
+            return;
+        }
+        for (int seat : matchController.aliveSeats()) {
+            UUID playerId = playersBySeat.get(seat);
+            Player player = playerId == null ? null : Bukkit.getPlayer(playerId);
+            if (player == null) {
+                continue;
+            }
+            boolean blocking = player.isBlocking();
+            Boolean previousBlocking = shieldBlockingBySeat.put(seat, blocking);
+            if (previousBlocking != null && previousBlocking != blocking) {
+                queueMechanicsReceipt(seat, "shield_blocking_transition",
+                        new ControlProtocol.ShieldBlockingTransitionReceipt(seat, blocking));
+            } else if (previousBlocking == null && blocking) {
+                queueMechanicsReceipt(seat, "shield_blocking_transition",
+                        new ControlProtocol.ShieldBlockingTransitionReceipt(seat, true));
+            }
+
+            double nearestOpponent = Double.POSITIVE_INFINITY;
+            for (int opponentSeat : matchController.aliveSeats()) {
+                if (opponentSeat == seat) {
+                    continue;
+                }
+                UUID opponentId = playersBySeat.get(opponentSeat);
+                Player opponent = opponentId == null ? null : Bukkit.getPlayer(opponentId);
+                if (opponent != null && opponent.getWorld().equals(player.getWorld())) {
+                    nearestOpponent = Math.min(nearestOpponent, player.getLocation().distance(opponent.getLocation()));
+                }
+            }
+            if (!hasMechanicsReceipt(seat, "distance_maintained") && nearestOpponent > 4.0 && nearestOpponent <= 40.0) {
+                int duration = distanceTicksBySeat.getOrDefault(seat, 0) + 1;
+                distanceTicksBySeat.put(seat, duration);
+                distanceMinimumBySeat.merge(seat, nearestOpponent, Math::min);
+                distanceMaximumBySeat.merge(seat, nearestOpponent, Math::max);
+                if (duration >= 10) {
+                    queueMechanicsReceipt(seat, "distance_maintained",
+                            new ControlProtocol.DistanceMaintainedReceipt(seat, 10,
+                                    distanceMinimumBySeat.get(seat), distanceMaximumBySeat.get(seat)));
+                }
+            } else {
+                distanceTicksBySeat.remove(seat);
+                distanceMinimumBySeat.remove(seat);
+                distanceMaximumBySeat.remove(seat);
+            }
+        }
+        if (!pendingMechanicsReceipts.isEmpty()) {
+            controlSession.sendEvent(ControlProtocol.Type.MECHANICS_RECEIPT,
+                    new ControlProtocol.MechanicsReceiptPayload(
+                            new ControlProtocol.Tick(ControlProtocol.TickDomain.MATCH,
+                                    matchController.matchTick().orElseThrow()),
+                            List.copyOf(pendingMechanicsReceipts)));
+            pendingMechanicsReceipts.clear();
+        }
+    }
+
+    private boolean isUhcMechanicsMatch() {
+        return startupMode == StartupMode.PLAN && preparedMatch != null
+                && preparedMatch.rules().orElse(null) instanceof ControlProtocol.UhcDuelRules
+                && matchController != null && !outcomeEmitted && !quiesced && !resumeAwaitingStart
+                && (matchController.phase() == MatchController.Phase.GRACE
+                        || matchController.phase() == MatchController.Phase.ACTIVE);
+    }
+
+    private void queueMechanicsReceipt(int seat, String action, ControlProtocol.MechanicsReceipt receipt) {
+        Set<String> actions = emittedMechanicsBySeat.computeIfAbsent(seat, ignored -> new HashSet<>());
+        String identity = action;
+        if (receipt instanceof ControlProtocol.ShieldBlockingTransitionReceipt shield) {
+            identity += ":" + shield.blocking();
+        }
+        if (actions.add(identity)) {
+            pendingMechanicsReceipts.add(receipt);
+        }
+    }
+
+    private boolean hasMechanicsReceipt(int seat, String action) {
+        return emittedMechanicsBySeat.getOrDefault(seat, Set.of()).contains(action);
+    }
+
+    private void clearMechanicsReceipts() {
+        lateralBlocksBySeat.clear();
+        shieldBlockingBySeat.clear();
+        emittedMechanicsBySeat.clear();
+        distanceTicksBySeat.clear();
+        distanceMinimumBySeat.clear();
+        distanceMaximumBySeat.clear();
+        pendingMechanicsReceipts.clear();
     }
 
     private void publishClock() {
@@ -1800,8 +1902,56 @@ public final class ArenaFoundationPlugin extends JavaPlugin implements Listener 
         if (samePosition(source, destination)) {
             return;
         }
+        Integer seat = seatsByPlayer.get(player.getUniqueId());
+        if (seat != null && isUhcMechanicsMatch() && matchController.aliveSeats().contains(seat)
+                && !hasMechanicsReceipt(seat, "lateral_movement")) {
+            double deltaX = destination.getX() - source.getX();
+            double deltaZ = destination.getZ() - source.getZ();
+            double horizontalDistance = Math.hypot(deltaX, deltaZ);
+            if (horizontalDistance <= 1.5) {
+                double yaw = Math.toRadians(source.getYaw());
+                double lateral = Math.abs(deltaX * Math.cos(yaw) + deltaZ * Math.sin(yaw));
+                double accumulated = lateralBlocksBySeat.getOrDefault(seat, 0.0) + lateral;
+                lateralBlocksBySeat.put(seat, accumulated);
+                if (accumulated >= 1.0) {
+                    queueMechanicsReceipt(seat, "lateral_movement",
+                            new ControlProtocol.LateralMovementReceipt(seat, accumulated));
+                }
+            }
+        }
         if (reportedMovement.add(player.getUniqueId())) {
             getLogger().info("ARENA_MOVE|" + player.getName());
+        }
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onCompetitorProjectileLaunch(ProjectileLaunchEvent event) {
+        if (!isUhcMechanicsMatch() || !(event.getEntity() instanceof Arrow arrow)
+                || !(arrow.getShooter() instanceof Player shooter)) {
+            return;
+        }
+        Integer seat = seatsByPlayer.get(shooter.getUniqueId());
+        if (seat != null && matchController.aliveSeats().contains(seat)) {
+            queueMechanicsReceipt(seat, "ranged_projectile_release",
+                    new ControlProtocol.RangedProjectileReleaseReceipt(seat));
+        }
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onCompetitorGoldenAppleConsume(PlayerItemConsumeEvent event) {
+        if (!isUhcMechanicsMatch()) {
+            return;
+        }
+        Integer seat = seatsByPlayer.get(event.getPlayer().getUniqueId());
+        if (seat == null || !matchController.aliveSeats().contains(seat)) {
+            return;
+        }
+        if (event.getItem().getType() == Material.GOLDEN_APPLE) {
+            queueMechanicsReceipt(seat, "golden_apple_consume",
+                    new ControlProtocol.GoldenAppleConsumeReceipt(seat, false));
+        } else if (event.getItem().getType() == Material.ENCHANTED_GOLDEN_APPLE) {
+            queueMechanicsReceipt(seat, "golden_apple_consume",
+                    new ControlProtocol.GoldenAppleConsumeReceipt(seat, true));
         }
     }
 

@@ -6,4 +6,6 @@ Self state stays unknown until the client has spawned, received health, and rece
 
 Core `navigate` keeps its two-block arrival radius. Bot-owned `navigateToBlock` uses Pathfinder's exact block goal and confirms that the local player position is inside the requested block before reporting success.
 
+When no client skill owns the controls, the adapter schedules fixed yaw and pitch views from its physics ticks. The scan headings do not depend on entity-map coordinates. Navigation follows the connected pathfinder route and leaves its four-block drop limit unchanged; when a route reports no path, the skill abandons that goal. Melee pursuit may use a target position from the last observation that passed the same view and voxel checks, then rechecks visibility before another action.
+
 The fractional combat view of an opponent is read from the same entity the visibility filter admitted: its own client's position, velocity, orientation and player bounding box. Only opponents that passed the field-of-view and line-of-sight filter carry a view, a view is never extrapolated past the last received sample, and no evaluator or plugin value enters it. Melee admission uses the client's own eye position and the received target box, rechecked at the swing, and a target behind an obstacle is searched for, never attacked as visible.

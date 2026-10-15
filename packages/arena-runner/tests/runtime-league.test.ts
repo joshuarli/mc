@@ -20,7 +20,7 @@ import {
 } from '../src/league/manifest.js';
 import { seededScenarioFileName, seededScenarioSource } from '../src/league/live-runner.js';
 import { parseTomlSubset } from '../src/league/toml-subset.js';
-import { makePolicyReplayRecordV4, replayPolicyJson } from '../src/policy-replay.js';
+import { makePolicyReplayRecordV6, replayPolicyJson } from '../src/policy-replay.js';
 import { decideRuntimeCandidatePolicy, decideRuntimePolicy } from '../src/runtime/policy-decision.js';
 import type { Evidence } from '../src/evidence.js';
 import type { TraceRecord } from '../src/trace.js';
@@ -338,8 +338,8 @@ test('candidate decisions replay only with their seat-policy note', () => {
   const candidate = compileCandidate('equipment-skirmisher');
   const step = decideRuntimeCandidatePolicy(candidate, observation, emptyPolicyMemory(), DeterministicRandom.fromState(9n), []);
   const plain = decideRuntimePolicy(observation, emptyPolicyMemory(), PolicyParams.baseline(), DeterministicRandom.fromState(9n), []);
-  const record = makePolicyReplayRecordV4({
-    sequence: 1n, seat: 0, input: step.input, decision: step.decision, openingStateAfter: null,
+  const record = makePolicyReplayRecordV6({
+    sequence: 1n, seat: 0, input: step.input, decision: step.decision, taskBefore: null, taskAfter: null, openingStateAfter: null,
     rngStateAfter: step.rngStateAfter,
     disposition: step.decision.intent.kind === 'hold' ? { kind: 'hold' } : { kind: 'start', action_sequence: '1' },
   });

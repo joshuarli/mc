@@ -1,6 +1,6 @@
 import { createBot, type Bot } from 'mineflayer';
 import type { PartiallyComputedPath } from 'mineflayer-pathfinder';
-import { createMineflayerArenaClient, type CivilizationRosterMember, type MineflayerArenaClient } from '@arena/bots';
+import { createMineflayerArenaClient, type CivilizationRosterMember, type ClientMechanicsReceiptSink, type MineflayerArenaClient } from '@arena/bots';
 import { performance } from 'node:perf_hooks';
 import { RunnerError } from '../errors.js';
 import { createCivilizationRuntimeGameplayAdapter } from './civilization-adapter.js';
@@ -32,6 +32,7 @@ export interface RuntimeClientOptions {
   readonly publicRoster: readonly CivilizationRosterMember[];
   readonly funnel?: ActionFunnelSink;
   readonly diagnostic?: ClientDiagnosticSink;
+  readonly clientMechanics?: ClientMechanicsReceiptSink;
 }
 
 export class RuntimeCompetitorClient implements RuntimeCompetitorHandle {
@@ -375,6 +376,7 @@ async function connectRuntimeBot(
             ? {
               ...(options.funnel === undefined ? {} : { funnel: options.funnel }),
               ...(options.diagnostic === undefined ? {} : { diagnostic: options.diagnostic }),
+              ...(options.clientMechanics === undefined ? {} : { clientMechanics: options.clientMechanics }),
             }
             : undefined,
         );

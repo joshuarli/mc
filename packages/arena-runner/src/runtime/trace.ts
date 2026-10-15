@@ -256,10 +256,14 @@ export class RuntimeTraceBuilder {
       }
       if (record.schema !== 'policy-replay-v1' && record.schema !== 'policy-replay-v2'
           && record.schema !== 'policy-replay-v3' && record.schema !== 'policy-replay-v4'
+          && record.schema !== 'policy-replay-v6'
           && record.schema !== 'civilization-policy-replay-v1') {
         throw new RunnerError('runtime_failure', 'run trace', { kind: 'invalid_policy_decision' });
       }
       if (record.schema === 'policy-replay-v4' && this.#schemaVersion !== FUNNEL_TRACE_SCHEMA_VERSION) {
+        throw new RunnerError('runtime_failure', 'run trace', { kind: 'policy_schema_requires_trace_schema_4' });
+      }
+      if (record.schema === 'policy-replay-v6' && this.#schemaVersion !== FUNNEL_TRACE_SCHEMA_VERSION) {
         throw new RunnerError('runtime_failure', 'run trace', { kind: 'policy_schema_requires_trace_schema_4' });
       }
       if ((record.schema === 'civilization-policy-replay-v1') !== (this.#mode === 'civilization')) {

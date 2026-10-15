@@ -59,6 +59,51 @@ test('own materials stay unknown until this client receives a full inventory sna
   assert.equal(bot.listenerCount('end'), 0);
 });
 
+test('base observer preserves food identity and received combat effects', () => {
+  const bot = makeBot(true);
+  const metadata: unknown[] = [];
+  const absorptionIndex = pinnedRegistry.entitiesByName.player?.metadataKeys?.indexOf('player_absorption') ?? -1;
+  metadata[absorptionIndex] = 4;
+  Object.assign(bot, {
+    entity: {
+      id: 1,
+      position: vector(0, 64, 0),
+      yaw: 0,
+      pitch: 0,
+      eyeHeight: 1.62,
+      height: 1.8,
+      width: 0.6,
+      velocity: { x: 0, y: 0, z: 0 },
+      metadata,
+      effects: { 10: { id: 10, amplifier: 1, duration: 80 } },
+    },
+    health: 14,
+    food: 20,
+    heldItem: null,
+    getEquipmentDestSlot: () => 0,
+  });
+  Object.assign(bot.inventory, { inventoryStart: 9, inventoryEnd: 45 });
+  bot.inventory.slots[9] = { name: 'bread', type: pinnedRegistry.itemsByName.bread?.id ?? 0, metadata: 0, count: 3, slot: 9 };
+  bot.inventory.slots[10] = { name: 'golden_apple', type: pinnedRegistry.itemsByName.golden_apple?.id ?? 0, metadata: 0, count: 1, slot: 10 };
+  const base = new MineflayerObserver(bot as unknown as Bot);
+  bot.emit('spawn');
+  bot.emit('health');
+  bot._client.emit('window_items', { windowId: 0 });
+
+  try {
+    const observation = base.observe(1);
+    assert.equal(observation.agent.kind, 'current');
+    if (observation.agent.kind !== 'current') return;
+    assert.deepEqual(observation.agent.value.foodStacks.map(({ itemKind }) => itemKind), ['hungerFood', 'goldenApple']);
+    assert.deepEqual(observation.agent.value.combatStatus, {
+      absorptionHalfHearts: 4,
+      effects: [{ effectId: 10, amplifier: 1, durationTicks: 80 }],
+    });
+  } finally {
+    base.close();
+  }
+});
+
 test('own material knowledge becomes stale across respawn until a new full snapshot', () => {
   const bot = makeBot();
   const base = new MineflayerObserver(bot as unknown as Bot);

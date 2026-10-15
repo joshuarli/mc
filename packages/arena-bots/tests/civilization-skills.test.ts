@@ -745,6 +745,7 @@ function makeHarness() {
     blocks: {},
     itemsByName: { oak_log: { id: 10 }, oak_planks: { id: 11 }, dirt: { id: 12 }, cobblestone: { id: 13 } },
     foodsByName: {},
+    entitiesByName: { player: { metadataKeys: ['player_absorption'] } },
   };
   const slots = new Array(46).fill(null) as (ReturnType<typeof item> | null)[];
   const inventory = {
@@ -776,6 +777,7 @@ function makeHarness() {
     pitch: 0,
     eyeHeight: 1.62,
     height: 1.8, width: 0.6, velocity: { x: 0, y: 0, z: 0 },
+    metadata: [], effects: {},
   };
   Object.assign(emitter, {
     _client: client,

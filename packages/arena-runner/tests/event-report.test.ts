@@ -82,6 +82,19 @@ function elimination(
   };
 }
 
+function mechanicsReceipt(sequence: bigint, value: bigint): ControlMessage {
+  return {
+    protocol: 1,
+    run_id: runId,
+    sequence,
+    type: 'mechanics_receipt',
+    payload: {
+      at: { domain: 'match', value },
+      receipts: [{ seat: 0, kind: 'ranged_projectile_release' }],
+    },
+  };
+}
+
 test('report reconstructs a winner and counts only resolved elimination causes', () => {
   const result = reconstructEventResult(runId, prepare(), [
     clock(3n, 'active', 0n),
@@ -109,6 +122,27 @@ test('report reconstructs a winner and counts only resolved elimination causes',
       survivor_seats: [0],
     },
   });
+});
+
+test('report ignores evaluator mechanics receipts during authoritative outcome reconstruction', () => {
+  const result = reconstructEventResult(runId, prepare(), [
+    clock(3n, 'active', 0n),
+    state(4n, 0n, [0, 1]),
+    elimination(5n, 8n, [{ seat: 1, cause: 'death' }]),
+    mechanicsReceipt(6n, 8n),
+    state(7n, 8n, [0]),
+    clock(8n, 'finished', 8n),
+    {
+      protocol: 1,
+      run_id: runId,
+      sequence: 9n,
+      type: 'outcome',
+      payload: { kind: 'winner', winner_seat: 0, survivors: [0], at: { domain: 'match', value: 8n } },
+    },
+  ]);
+
+  assert.equal(result.statistics.elimination_count, 1);
+  assert.deepEqual(result.statistics.survivor_seats, [0]);
 });
 
 test('report accepts a same-tick zero-survivor draw and retains the emitted causes', () => {

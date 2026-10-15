@@ -35,7 +35,7 @@ function clientWorld(position = new Vec3(8, 1, 8), height = 16, minY = 0): {
     _client: new EventEmitter(), registry, version: '26.1.2',
     supportFeature: registry.supportFeature.bind(registry),
     game: { minY, height }, world,
-    entity: { id: 1, position, eyeHeight: 1.62, height: 1.8, width: 0.6, velocity: { x: 0, y: 0, z: 0 }, yaw: 0, pitch: 0 },
+    entity: { id: 1, position, eyeHeight: 1.62, height: 1.8, width: 0.6, velocity: { x: 0, y: 0, z: 0 }, yaw: 0, pitch: 0, metadata: [], effects: {} },
     entities: {}, players: {}, health: 20, food: 20, heldItem: null,
     inventory: { slots: [], inventoryStart: 0, inventoryEnd: 0 },
     getEquipmentDestSlot: () => 0,
@@ -146,6 +146,37 @@ test('observer quantization preserves every integer policy health threshold', ()
         );
       }
     }
+  } finally {
+    client.observer.close();
+  }
+});
+
+test('observer only admits a player after the received view points toward them', () => {
+  const client = clientWorld();
+  const opponent = Object.assign(new EventEmitter(), {
+    id: 2,
+    type: 'player',
+    position: new Vec3(14, 1, 8),
+    yaw: 0,
+    pitch: 0,
+    height: 1.8,
+    width: 0.6,
+    velocity: { x: 0, y: 0, z: 0 },
+    getDroppedItem: () => null,
+  }) as unknown as Bot['entity'];
+  Object.assign(client.bot.entities, { 2: opponent });
+  Object.assign(client.bot.players, { Rival: { entity: opponent, gamemode: 0 } });
+
+  try {
+    const unseen = client.observer.observe(0).opponents;
+    assert.deepEqual(unseen, { kind: 'current', value: [] });
+
+    client.bot.entity.yaw = -Math.PI / 2;
+    const seen = client.observer.observe(1).opponents;
+    assert.equal(seen.kind, 'current');
+    if (seen.kind !== 'current') throw new Error('opponent observation should be current');
+    assert.equal(seen.value.length, 1);
+    assert.equal(seen.value[0]?.id, 2);
   } finally {
     client.observer.close();
   }

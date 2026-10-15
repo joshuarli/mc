@@ -14,6 +14,9 @@ import {
 import { MineflayerObserver } from './observer.js';
 import type { ArenaSkillIntent } from './skill-intent.js';
 import { SkillOwner } from './skills.js';
+import type { ClientMechanicsReceiptSink } from './skills.js';
+
+export type { ClientMechanicsReceipt, ClientMechanicsReceiptSink } from './skills.js';
 
 export type { ArenaSkillIntent } from './skill-intent.js';
 export { PathDiagnosticRing } from './path-diagnostics.js';
@@ -52,6 +55,7 @@ export function attachActionFunnelSink(client: MineflayerArenaClient, sink: Acti
 export interface MineflayerArenaClientOptions {
   readonly funnel?: ActionFunnelSink;
   readonly diagnostic?: ClientDiagnosticSink;
+  readonly clientMechanics?: ClientMechanicsReceiptSink;
 }
 
 /** Connects one Mineflayer client's received state to the arena observation and skill contracts. */
@@ -64,7 +68,7 @@ export function createMineflayerArenaClient(bot: Bot, options: MineflayerArenaCl
   let skills: SkillOwner;
   try {
     disposeVelocityUnits = bindProtocol775VelocityUnits(bot);
-    skills = new SkillOwner(bot, observer, null, (record) => funnelHolder.current?.(record));
+    skills = new SkillOwner(bot, observer, null, (record) => funnelHolder.current?.(record), options.clientMechanics ?? null);
   } catch (error) {
     disposeVelocityUnits();
     observer.close();

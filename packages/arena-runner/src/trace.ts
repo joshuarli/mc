@@ -136,7 +136,7 @@ export function parseSegment(input: string | Uint8Array): TraceSegment {
     || RUN_NOTE_SCHEMAS.includes(record.schema as string))) {
     throw traceFailure('unsupported_funnel_schema');
   }
-  if (root.schema !== FUNNEL_TRACE_SCHEMA_VERSION && records.some((record) => record.schema === 'policy-replay-v4')) {
+  if (root.schema !== FUNNEL_TRACE_SCHEMA_VERSION && records.some((record) => record.schema === 'policy-replay-v4' || record.schema === 'policy-replay-v6')) {
     throw traceFailure('unsupported_policy_schema');
   }
   if (typeof root.sha256 !== 'string') throw traceFailure('invalid_sha256');

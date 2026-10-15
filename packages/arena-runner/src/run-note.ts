@@ -1,4 +1,5 @@
 import type { AlternativeCondition, AlternativeKind, BorderUnknownReason, DecisionReason } from '@arena/core';
+import type { FrontierTask } from '@arena/core';
 
 export type RunNoteRecord =
   | Readonly<{
@@ -16,7 +17,8 @@ export type RunNoteRecord =
   }>
   | SeatPolicyNote
   | DecisionExplainNote
-  | ResumeNote
+  | ResumeNoteV1
+  | ResumeNoteV2
   | Readonly<{
     schema: 'client-diagnostic-v1';
     seat: number;
@@ -24,6 +26,13 @@ export type RunNoteRecord =
     diagnostic: 'borderUnknown';
     reason: BorderUnknownReason;
     consecutive_observations: number;
+  }>
+  | Readonly<{
+    schema: 'client-mechanics-v1';
+    seat: number;
+    tick: number | null;
+    kind: 'shield_blocking_transition';
+    blocking: boolean;
   }>;
 
 export interface SeatPolicyNote {
@@ -51,7 +60,7 @@ export interface DecisionExplainNote {
   readonly armed: boolean | null;
 }
 
-export interface ResumeNote {
+export interface ResumeNoteV1 {
   readonly schema: 'resume-v1';
   readonly checkpoint_id: string;
   readonly digest: string;
@@ -60,6 +69,16 @@ export interface ResumeNote {
   readonly eliminated_seats: readonly number[];
 }
 
+export interface ResumeNoteV2 {
+  readonly schema: 'resume-v2';
+  readonly checkpoint_id: string;
+  readonly digest: string;
+  readonly epoch: number;
+  readonly match_tick: string;
+  readonly eliminated_seats: readonly number[];
+  readonly frontier_tasks: readonly Readonly<{ seat: number; task: FrontierTask | null }> [];
+}
+
 export const RUN_NOTE_SCHEMAS: readonly string[] = [
-  'worker-topology-v1', 'worker-loss-v1', 'client-diagnostic-v1', 'seat-policy-v1', 'resume-v1', 'decision-explain-v1',
+  'worker-topology-v1', 'worker-loss-v1', 'client-diagnostic-v1', 'client-mechanics-v1', 'seat-policy-v1', 'resume-v1', 'resume-v2', 'decision-explain-v1',
 ];

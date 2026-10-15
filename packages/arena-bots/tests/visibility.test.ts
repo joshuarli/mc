@@ -46,7 +46,7 @@ test('accepts targets above and below when aligned with Mineflayer lookAt pitch'
   assert.equal(isInsidePerceptionCone({ ...viewer, pitch: -belowPitch }, below), false);
 });
 
-test('a level look misses a player nine blocks away and nineteen below while the downward path look includes them', () => {
+test('a level view misses a deep target while an aligned downward view includes it', () => {
   const eyeHeight = 1.62;
   const viewer = {
     position: { x: 0, y: 62, z: 0 },

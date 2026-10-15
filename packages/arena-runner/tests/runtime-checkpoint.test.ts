@@ -12,6 +12,7 @@ import type { MineflayerArenaClient } from '@arena/bots';
 import { decodeCheckpoint } from '../src/control/checkpoint.js';
 import { RunnerError } from '../src/errors.js';
 import { persistCheckpoint, loadCheckpoint } from '../src/checkpoint/persist.js';
+import { restoredPolicyState } from '../src/checkpoint/policy-state.js';
 import { parseCheckpointManifest, sha256Hex } from '../src/checkpoint/manifest.js';
 import { publishSaveResult, readSaveRequest, readSaveResult, requestSave } from '../src/checkpoint/save-request.js';
 import { LivePolicyLoop } from '../src/runtime/live-policy-loop.js';
@@ -79,6 +80,24 @@ test('a checkpoint is persisted with the manifest last and loads back with verif
   assert.equal(await readFile(join(root, '.work/arena/checkpoints', decoded.record.checkpoint_id, 'world/level.dat'), 'utf8'), 'level');
   await assert.rejects(persistCheckpoint(options), (error: unknown) =>
     error instanceof RunnerError && error.source.kind === 'checkpoint_exists');
+});
+
+test('checkpoint policy state restores frontier intention and rejects malformed nested tasks', () => {
+  const frontierTask = {
+    goal: 'explore', mode: { kind: 'exploring', target: { x: 2, y: 64, z: 3 } },
+    startedAtTick: 10, commitUntilTick: 20, attempt: 0, fingerprint: 'belief', cooldowns: [],
+  };
+  const botState = { schema: 2, seats: [{ seat: 0, memory: {}, rng_state: '1', opening_state: null, frontier_task: frontierTask }] };
+  assert.deepEqual(restoredPolicyState(botState).get(0)?.frontier_task, frontierTask);
+  assert.throws(() => restoredPolicyState({
+    ...botState,
+    seats: [{ ...botState.seats[0]!, frontier_task: { ...frontierTask, mode: { ...frontierTask.mode, extra: true } } }],
+  }));
+  assert.throws(() => restoredPolicyState({
+    ...botState,
+    seats: [{ ...botState.seats[0]!, frontier_task: { ...frontierTask,
+      cooldowns: [{ goal: 'explore', key: 'explore', untilTick: 30, extra: true }] } }],
+  }));
 });
 
 test('a checkpoint with a wrong digest, truncated record, or stale epoch is refused before anything is published', async (t) => {

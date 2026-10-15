@@ -418,12 +418,12 @@ test('live runtime persists exact decision watermarks with a pending effect and 
   const readSegment = async (index: number) => parseSegment(await readOwnedFile({ helperPath, ownedRoot,
     relativePath: Buffer.from(`run/trace-v2-${String(index).padStart(6, '0')}.json`), maxBytes: 1024 * 1024 }));
   const first = await readSegment(1);
-  assert.equal(first.records.filter((record) => record.schema === 'policy-replay-v4').length, 200);
+  assert.equal(first.records.filter((record) => record.schema === 'policy-replay-v6').length, 200);
   assert.equal(first.records.some((record) => record.schema === 'policy-effect-v1'), false);
   for (let value = 34; value < 68; value += 1) loop.onTick(value);
   await flush(8n);
   const second = await readSegment(2);
-  assert.equal(second.records.filter((record) => record.schema === 'policy-replay-v4').length, 200);
+  assert.equal(second.records.filter((record) => record.schema === 'policy-replay-v6').length, 200);
   assert.equal(second.records.some((record) => record.schema === 'policy-effect-v1' && record.decision_sequence === '1'), false);
   loop.stopLaunching();
   await endOneSeatRun(trace, session, client, messages, 9n, [0, 1, 2, 3, 4, 5]);

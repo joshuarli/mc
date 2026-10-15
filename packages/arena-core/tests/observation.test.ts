@@ -1,14 +1,17 @@
-import { deepStrictEqual, throws } from 'node:assert/strict';
+import { deepStrictEqual, equal, throws } from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
   agentObservation,
   agentState,
+  activeEffect,
   blockPosition,
   currentKnowledge,
+  combatStatus,
   entityId,
   emptyEquipment,
   foodStack,
+  identifiedFoodStack,
   ObservationValidationError,
   observationSequence,
   staleKnowledge,
@@ -98,6 +101,28 @@ test('confirmed armor remains represented by independent equipment slots', () =>
     leggings: 3,
     boots: null,
   });
+});
+
+test('food identity, absorption, and active effect duration remain separate', () => {
+  const state = agentState({
+    position: blockPosition(0, 64, 0),
+    healthHalfHearts: 30,
+    combatStatus: combatStatus(4, [activeEffect(10, 0, 100)]),
+    hungerPoints: 20,
+    foodStacks: [
+      identifiedFoodStack(4, 2, 'hungerFood', 8),
+      identifiedFoodStack(7, 1, 'goldenApple', 4),
+    ],
+    equipped: emptyEquipment(),
+    upgrades: [],
+  });
+
+  equal(state.combatStatus?.absorptionHalfHearts, 4);
+  deepStrictEqual(state.combatStatus?.effects, [{ effectId: 10, amplifier: 0, durationTicks: 100 }]);
+  deepStrictEqual(state.foodStacks.map((stack) => [stack.itemKind, stack.restores]), [
+    ['hungerFood', 8],
+    ['goldenApple', 4],
+  ]);
 });
 
 test('confirmed food stacks retain inventory slot and count', () => {

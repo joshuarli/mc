@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { candidateSemanticId, validateCandidateParams } from '@arena/core';
+import { candidateSemanticId, validateCandidateParams, type DuelPoolReceipt } from '@arena/core';
 import { mapBounded } from '../bounded.js';
 import { canonicalJson } from '../canonical.js';
 import { RunnerError } from '../errors.js';
@@ -37,10 +37,11 @@ export type MatchObservation =
     disconnects: number;
     degraded: boolean;
     attacks: Readonly<Record<number, Readonly<{ engaged: number; issued: number }>>>;
+    poolReceipts?: readonly DuelPoolReceipt[];
     quality?: MatchQuality | null;
     runId: string;
   }>
-  | Readonly<{ status: 'failed'; reason: string; runId: string; quality?: MatchQuality | null }>;
+  | Readonly<{ status: 'failed'; reason: string; runId: string; poolReceipts?: readonly DuelPoolReceipt[]; quality?: MatchQuality | null }>;
 
 export interface MatchRunner {
   run(plan: MatchPlan, signal: AbortSignal): Promise<MatchObservation>;

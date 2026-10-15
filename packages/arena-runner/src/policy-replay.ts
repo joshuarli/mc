@@ -12,6 +12,8 @@ import {
   compileCandidate,
   type CandidateId,
   type CompiledCandidate,
+  type CompiledFrontierCandidate,
+  type FrontierTask,
   openingPolicyState,
   openingStyleForSeat,
   normalizePolicyReplayInput,
@@ -25,6 +27,7 @@ import {
   type PolicyReplayInputSource,
   type PolicyReplayInputV3,
   type PolicyReplayInputV4,
+  type PolicyReplayInputV5,
   type OpeningPolicyState,
   decide,
   decideDuelPool,
@@ -92,6 +95,14 @@ export interface PolicyReplayRecordV4 extends Omit<PolicyReplayRecordV2, 'schema
   readonly opening_state_after: OpeningPolicyState | null;
 }
 
+export interface PolicyReplayRecordV6 extends Omit<PolicyReplayRecordV2, 'schema' | 'input'> {
+  readonly schema: 'policy-replay-v6';
+  readonly input: PolicyReplayInputV5;
+  readonly task_before: FrontierTask | null;
+  readonly task_after: FrontierTask | null;
+  readonly opening_state_after: OpeningPolicyState | null;
+}
+
 export interface CivilizationPolicyReplayInputV1 {
   readonly schema: 'civilization-policy-input-v1';
   readonly context: CivilizationPolicyContextInput;
@@ -108,7 +119,7 @@ export interface CivilizationPolicyReplayRecordV1 extends Omit<PolicyReplayRecor
   readonly decision: CivilizationDecision;
 }
 
-export type PolicyReplayRecord = PolicyReplayRecordV1 | PolicyReplayRecordV2 | PolicyReplayRecordV3 | PolicyReplayRecordV4
+export type PolicyReplayRecord = PolicyReplayRecordV1 | PolicyReplayRecordV2 | PolicyReplayRecordV3 | PolicyReplayRecordV4 | PolicyReplayRecordV6
   | CivilizationPolicyReplayRecordV1;
 
 interface OpeningPolicyReplayTransition {
@@ -356,6 +367,43 @@ export function makePolicyReplayRecordV4(options: Readonly<{
     opening_state_after: options.openingStateAfter === null ? null : openingPolicyState(options.openingStateAfter) });
 }
 
+export function makePolicyReplayRecordV6(options: Readonly<{
+  sequence: bigint;
+  seat: number;
+  input: PolicyReplayInputV5;
+  decision: Decision;
+  taskBefore: FrontierTask | null;
+  taskAfter: FrontierTask | null;
+  openingStateAfter: OpeningPolicyState | null;
+  rngStateAfter: bigint;
+  disposition: PolicyDisposition;
+}>): PolicyReplayRecordV6 {
+  const { sequence, seat, input, decision, taskBefore, taskAfter, openingStateAfter, rngStateAfter, disposition } = options;
+  assertSequence(sequence, 'sequence');
+  assertSeat(seat);
+  assertU64(rngStateAfter, 'rng_state_after');
+  if (input.schema !== 'policy-input-v5') throw new TypeError('policy replay v6 requires a policy-input-v5 input');
+  if (input.opening === null ? openingStateAfter !== null : openingStateAfter === null) {
+    throw new TypeError('policy opening state must match the opening replay input');
+  }
+  if (input.opening !== null && openingStyleForSeat(BigInt(input.opening.seed), seat, input.opening.cycle) !== input.opening.style) {
+    throw new TypeError('opening style assignment must match the replay seed, seat, and cycle');
+  }
+  let validated: PolicyDisposition;
+  try { validated = readDisposition(disposition, undefined); }
+  catch (error) { throw new TypeError('invalid policy action disposition', { cause: error }); }
+  if ((validated.kind === 'hold') !== (decision.intent.kind === 'hold') && validated.kind !== 'defer') {
+    throw new TypeError('policy hold disposition must describe a hold intent');
+  }
+  if ((validated.kind === 'start' || validated.kind === 'replace') && validated.action_sequence !== sequence.toString()) {
+    throw new TypeError('action identity must match its initiating decision');
+  }
+  return Object.freeze({ schema: 'policy-replay-v6', sequence: sequence.toString(), seat, input, decision,
+    rng_state_after: rngStateAfter.toString(), disposition: Object.freeze(validated),
+    task_before: taskBefore, task_after: taskAfter,
+    opening_state_after: openingStateAfter === null ? null : openingPolicyState(openingStateAfter) });
+}
+
 export function makePolicyEffectRecord(
   decisionSequence: bigint,
   skill: SkillOutcome,
@@ -387,12 +435,14 @@ export function replayPolicyJson(evidence: Evidence): PolicyReplaySummary {
   const effects = new Set<string>();
   const openingEvidence = new Map<number, MutableOpeningEvidence>();
   const openingStates = new Map<number, OpeningPolicyState>();
+  const frontierTasks = new Map<number, FrontierTask | null>();
+  let resumeNoteSeen = false;
   let terminalOutcomeSeen = false;
 
   for (const [index, record] of evidence.records.entries()) {
     if (record.direction === 'plugin' && record.type === 'outcome') terminalOutcomeSeen = true;
     if (record.schema === 'policy-replay-v1' || record.schema === 'policy-replay-v2'
-        || record.schema === 'policy-replay-v3' || record.schema === 'policy-replay-v4'
+        || record.schema === 'policy-replay-v3' || record.schema === 'policy-replay-v4' || record.schema === 'policy-replay-v6'
         || record.schema === 'civilization-policy-replay-v1') {
       const decision = readPolicyDecision(record, index + 1);
       if (decision.schema === 'civilization-policy-replay-v1' && terminalOutcomeSeen) {
@@ -410,6 +460,13 @@ export function replayPolicyJson(evidence: Evidence): PolicyReplaySummary {
       firstSequence ??= decision.sequence;
       lastSequence = decision.sequence;
       const openingTransition = replayDecision(decision, index + 1, prepared?.seed, seatCandidates.get(decision.seat));
+      if (decision.schema === 'policy-replay-v6') {
+        const expectedTask = frontierTasks.has(decision.seat) ? frontierTasks.get(decision.seat)! : null;
+        if (canonicalJson(decision.task_before) !== canonicalJson(expectedTask)) {
+          throw replayFailure('policy_task_chain_mismatch', index + 1, 'task_before');
+        }
+        frontierTasks.set(decision.seat, decision.task_after);
+      }
       if (hasOpeningInput(decision)) {
         if (openingTransition === undefined) throw replayFailure('policy_opening_state_chain_mismatch', index + 1);
         const expectedState = openingStates.get(decision.seat) ?? openingPolicyState({ cacheTakenAt: null });
@@ -425,6 +482,28 @@ export function replayPolicyJson(evidence: Evidence): PolicyReplaySummary {
         actionOwners.set(decision.sequence, decision.seat);
       }
       decisions.set(decision.sequence, decision);
+    } else if (record.schema === 'resume-v2') {
+      const note = strictObject(record);
+      const fields = ['schema', 'checkpoint_id', 'digest', 'epoch', 'match_tick', 'eliminated_seats', 'frontier_tasks'];
+      if (note === undefined || !hasExactFields(note, fields) || typeof note.checkpoint_id !== 'string'
+          || typeof note.digest !== 'string' || !/^[0-9a-f]{64}$/.test(note.digest)
+          || !Number.isSafeInteger(note.epoch) || typeof note.match_tick !== 'string'
+          || !Array.isArray(note.eliminated_seats) || !Array.isArray(note.frontier_tasks)) {
+        throw replayFailure('invalid_resume_note', index + 1);
+      }
+      if (resumeNoteSeen || previousSequence > 0n) throw replayFailure('duplicate_resume_note', index + 1);
+      resumeNoteSeen = true;
+      const seenSeats = new Set<number>();
+      for (const entry of note.frontier_tasks) {
+        const taskState = strictObject(entry);
+        if (taskState === undefined || !hasExactFields(taskState, ['seat', 'task'])
+            || typeof taskState.seat !== 'number' || !Number.isSafeInteger(taskState.seat)
+            || taskState.seat < 0 || taskState.seat > 255 || seenSeats.has(taskState.seat)) {
+          throw replayFailure('invalid_resume_note', index + 1, 'frontier_tasks');
+        }
+        seenSeats.add(taskState.seat);
+        frontierTasks.set(taskState.seat, readFrontierTask(taskState.task, index + 1, 'frontier_tasks.task'));
+      }
     } else if (record.schema === 'policy-effect-v1' || record.schema === 'civilization-policy-effect-v1') {
       const effect = readPolicyEffect(record, index + 1);
       if (!decisions.has(effect.decision_sequence)) {
@@ -497,9 +576,11 @@ function readSeatCandidates(evidence: Evidence): ReadonlyMap<number, ReplaySeatP
       candidates.set(record.seat, { duelPoolId: record.candidate });
       continue;
     }
-    let compiled: CompiledCandidate;
+    let compiled: CompiledCandidate | CompiledFrontierCandidate;
     try {
-      compiled = compileCandidate(record.candidate as CandidateId, params as Record<string, number>);
+      compiled = record.candidate === 'frontier-v1'
+        ? compileCandidate('frontier-v1', params as Record<string, number>)
+        : compileCandidate(record.candidate as CandidateId, params as Record<string, number>);
     } catch {
       throw replayFailure('invalid_seat_policy', index + 1, 'candidate');
     }
@@ -689,6 +770,83 @@ function replayDecision(
     if (state !== parseU64Decimal(record.rng_state_after, recordNumber)) throw replayFailure('policy_rng_state_mismatch', recordNumber, 'rng_state_after');
     return;
   }
+  if (record.schema === 'policy-replay-v6') {
+    let restored: ReturnType<typeof rehydratePolicyReplayInput>;
+    try { restored = rehydratePolicyReplayInput(record.input); }
+    catch (error) {
+      if (error instanceof TypeError && 'field' in error && typeof error.field === 'string') {
+        throw replayFailure('invalid_policy_input', recordNumber, error.field);
+      }
+      throw error;
+    }
+    if (restored.schema !== 'policy-input-v5') throw replayFailure('invalid_policy_input_schema', recordNumber, 'input.schema');
+    if (restored.opening !== null) {
+      if (preparedSeed !== undefined && restored.opening.seed !== preparedSeed) {
+        throw replayFailure('policy_opening_seed_mismatch', recordNumber, 'input.opening.seed');
+      }
+      if (openingStyleForSeat(restored.opening.seed, record.seat, restored.opening.cycle) !== restored.opening.style) {
+        throw replayFailure('policy_opening_style_mismatch', recordNumber, 'input.opening.style');
+      }
+    }
+    const frontierCandidate = candidate !== undefined && !isDuelPoolReplay(candidate) && candidate.id === 'frontier-v1'
+      ? candidate as CompiledFrontierCandidate : undefined;
+    let actualDecision: Decision;
+    let nextTask: FrontierTask | null = null;
+    let nextOpeningState: OpeningPolicyState | null = null;
+    try {
+      if (frontierCandidate !== undefined) {
+        const step = restored.opening === null
+          ? frontierCandidate.step({ observation: restored.observation, memory: restored.memory, random: restored.random,
+            feedback: restored.feedback, task: record.task_before })
+          : frontierCandidate.stepOpening({ observation: restored.observation, memory: restored.memory, random: restored.random,
+            feedback: restored.feedback, task: record.task_before,
+            style: restored.opening.style, openingState: restored.opening.state });
+        actualDecision = step.decision;
+        nextTask = step.task;
+        nextOpeningState = step.openingState;
+      } else {
+        if (record.task_before !== null || record.task_after !== null) {
+          throw replayFailure('invalid_policy_input', recordNumber, 'task_before');
+        }
+        if (restored.opening === null) {
+          actualDecision = isDuelPoolReplay(candidate)
+            ? decideDuelPool(candidate.duelPoolId, restored.observation, restored.memory, restored.random, restored.feedback)
+            : candidate === undefined
+            ? decide(restored.observation, restored.memory, restored.params, restored.random, restored.feedback)
+            : candidate.decide(restored.observation, restored.memory, restored.random, restored.feedback);
+        } else {
+          const actual = isDuelPoolReplay(candidate)
+            ? decideDuelPoolOpening(candidate.duelPoolId, restored.observation, restored.memory, restored.random, restored.feedback,
+              { style: restored.opening.style, state: restored.opening.state })
+            : candidate === undefined
+            ? decideOpening(restored.observation, restored.memory, restored.params, restored.random, restored.feedback,
+              { style: restored.opening.style, state: restored.opening.state })
+            : candidate.decideOpening(restored.observation, restored.memory, restored.random, restored.feedback,
+              { style: restored.opening.style, state: restored.opening.state });
+          const { openingState, ...decision } = actual;
+          actualDecision = decision;
+          nextOpeningState = openingState;
+        }
+      }
+    } catch {
+      throw replayFailure('invalid_policy_input', recordNumber, 'task_before');
+    }
+    if (canonicalJson(actualDecision) !== canonicalJson(record.decision)) throw replayFailure('policy_decision_mismatch', recordNumber, 'decision');
+    if (canonicalJson(nextTask) !== canonicalJson(record.task_after)) throw replayFailure('policy_task_mismatch', recordNumber, 'task_after');
+    if (restored.opening !== null && record.opening_state_after === null) {
+      throw replayFailure('policy_opening_state_mismatch', recordNumber, 'opening_state_after');
+    }
+    if (restored.opening !== null) {
+      const expectedOpening = openingPolicyState(record.opening_state_after!);
+      if (canonicalJson(nextOpeningState) !== canonicalJson(expectedOpening)) {
+        throw replayFailure('policy_opening_state_mismatch', recordNumber, 'opening_state_after');
+      }
+    }
+    if (restored.random.snapshotState() !== parseU64Decimal(record.rng_state_after, recordNumber)) {
+      throw replayFailure('policy_rng_state_mismatch', recordNumber, 'rng_state_after');
+    }
+    return restored.opening === null ? undefined : Object.freeze({ stateBefore: restored.opening.state, stateAfter: nextOpeningState! });
+  }
   if (record.schema === 'policy-replay-v4') {
     let restored: ReturnType<typeof rehydratePolicyReplayInput>;
     try {
@@ -819,16 +977,18 @@ function replayDecision(
   return undefined;
 }
 
-function hasOpeningInput(record: PolicyReplayRecord): record is PolicyReplayRecordV3 | PolicyReplayRecordV4 {
+function hasOpeningInput(record: PolicyReplayRecord): record is PolicyReplayRecordV3 | PolicyReplayRecordV4 | PolicyReplayRecordV6 {
   return record.schema === 'policy-replay-v3'
-    || (record.schema === 'policy-replay-v4' && record.input.opening !== null);
+    || ((record.schema === 'policy-replay-v4' || record.schema === 'policy-replay-v6') && record.input.opening !== null);
 }
 
 function readPolicyDecision(record: TraceRecord, recordNumber: number): PolicyReplayRecord {
   const isV2 = record.schema === 'policy-replay-v2' || record.schema === 'civilization-policy-replay-v1';
   const isV3 = record.schema === 'policy-replay-v3';
   const isV4 = record.schema === 'policy-replay-v4';
-  const expected = isV3 || isV4 ? [...POLICY_DECISION_FIELDS, 'disposition', 'opening_state_after']
+  const isV6 = record.schema === 'policy-replay-v6';
+  const expected = isV6 ? [...POLICY_DECISION_FIELDS, 'disposition', 'opening_state_after', 'task_before', 'task_after']
+    : isV3 || isV4 ? [...POLICY_DECISION_FIELDS, 'disposition', 'opening_state_after']
     : isV2 ? [...POLICY_DECISION_FIELDS, 'disposition'] : POLICY_DECISION_FIELDS;
   assertExactFields(record, expected, recordNumber);
   const sequence = parseSequence(record.sequence, 'sequence', recordNumber).toString(10);
@@ -856,6 +1016,13 @@ function readPolicyDecision(record: TraceRecord, recordNumber: number): PolicyRe
       decision: record.decision as unknown as Decision, disposition: readDisposition(record.disposition, recordNumber),
       opening_state_after: record.opening_state_after as unknown as OpeningPolicyState | null };
   }
+  if (isV6) {
+    return { ...base, schema: 'policy-replay-v6', input: record.input as unknown as PolicyReplayInputV5,
+      decision: record.decision as unknown as Decision, disposition: readDisposition(record.disposition, recordNumber),
+      opening_state_after: record.opening_state_after as unknown as OpeningPolicyState | null,
+      task_before: readFrontierTask(record.task_before, recordNumber, 'task_before'),
+      task_after: readFrontierTask(record.task_after, recordNumber, 'task_after') };
+  }
   if (isV3) {
     return { ...base, schema: 'policy-replay-v3', input: record.input as unknown as PolicyReplayInputV3,
       decision: record.decision as unknown as Decision, disposition: readDisposition(record.disposition, recordNumber),
@@ -864,8 +1031,72 @@ function readPolicyDecision(record: TraceRecord, recordNumber: number): PolicyRe
   return isV2 ? { ...base, input: record.input as unknown as PolicyReplayInputV2, decision: record.decision as unknown as Decision, schema: 'policy-replay-v2', disposition: readDisposition(record.disposition, recordNumber) } : base;
 }
 
+function readFrontierTask(value: unknown, recordNumber: number, field: string): FrontierTask | null {
+  if (value === null) return null;
+  const task = strictObject(value);
+  const taskFields = ['goal', 'mode', 'startedAtTick', 'commitUntilTick', 'attempt', 'fingerprint', 'cooldowns'];
+  if (task === undefined || !hasExactFields(task, taskFields) || !Number.isSafeInteger(task.startedAtTick)
+      || !Number.isSafeInteger(task.commitUntilTick) || !Number.isSafeInteger(task.attempt)
+      || typeof task.fingerprint !== 'string' || !Array.isArray(task.cooldowns)) {
+    throw replayFailure('invalid_policy_input', recordNumber, field);
+  }
+  const mode = strictObject(task.mode);
+  if (mode === undefined || typeof mode.kind !== 'string') throw replayFailure('invalid_policy_input', recordNumber, `${field}.mode`);
+  const modeFields: Readonly<Record<string, readonly string[]>> = {
+    escaping: ['kind'], healing: ['kind', 'inventorySlot'], looting: ['kind', 'target'],
+    engaging: ['kind', 'target', 'side'], exploring: ['kind', 'target'],
+  };
+  const expectedModeFields = modeFields[mode.kind];
+  if (expectedModeFields === undefined || !hasExactFields(mode, expectedModeFields)) {
+    throw replayFailure('invalid_policy_input', recordNumber, `${field}.mode`);
+  }
+  const goalForMode: Readonly<Record<string, string>> = {
+    escaping: 'escapeBorder', healing: 'heal', looting: 'loot', engaging: 'engage', exploring: 'explore',
+  };
+  if (task.goal !== goalForMode[mode.kind]) throw replayFailure('invalid_policy_input', recordNumber, `${field}.goal`);
+  if (mode.kind === 'healing' && (!Number.isSafeInteger(mode.inventorySlot) || (mode.inventorySlot as number) < 0)) {
+    throw replayFailure('invalid_policy_input', recordNumber, `${field}.mode.inventorySlot`);
+  }
+  if (mode.kind === 'engaging' && (!Number.isSafeInteger(mode.target) || (mode.target as number) <= 0
+      || (mode.side !== 'press' && mode.side !== 'evade'))) {
+    throw replayFailure('invalid_policy_input', recordNumber, `${field}.mode`);
+  }
+  if (mode.kind === 'looting') {
+    const target = strictObject(mode.target);
+    if (target === undefined || typeof target.kind !== 'string') throw replayFailure('invalid_policy_input', recordNumber, `${field}.mode.target`);
+    if (target.kind === 'drop') {
+      if (!hasExactFields(target, ['kind', 'entityId']) || !Number.isSafeInteger(target.entityId) || (target.entityId as number) <= 0) {
+        throw replayFailure('invalid_policy_input', recordNumber, `${field}.mode.target`);
+      }
+    } else if (target.kind === 'container') {
+      if (!hasExactFields(target, ['kind', 'position'])) throw replayFailure('invalid_policy_input', recordNumber, `${field}.mode.target`);
+      readFrontierPosition(target.position, recordNumber, `${field}.mode.target.position`);
+    } else throw replayFailure('invalid_policy_input', recordNumber, `${field}.mode.target`);
+  }
+  if (mode.kind === 'exploring') readFrontierPosition(mode.target, recordNumber, `${field}.mode.target`);
+  if (task.cooldowns.some((entry: unknown) => {
+    const cooldown = strictObject(entry);
+    return cooldown === undefined || !hasExactFields(cooldown, ['goal', 'key', 'untilTick'])
+      || !['escapeBorder', 'heal', 'loot', 'engage', 'explore'].includes(String(cooldown.goal))
+      || typeof cooldown.key !== 'string' || !Number.isSafeInteger(cooldown.untilTick);
+  })) throw replayFailure('invalid_policy_input', recordNumber, `${field}.cooldowns`);
+  return value as FrontierTask;
+}
+
+function readFrontierPosition(value: unknown, recordNumber: number, field: string): void {
+  const position = strictObject(value);
+  if (position === undefined || !hasExactFields(position, ['x', 'y', 'z'])
+      || !Number.isSafeInteger(position.x) || !Number.isSafeInteger(position.y) || !Number.isSafeInteger(position.z)) {
+    throw replayFailure('invalid_policy_input', recordNumber, field);
+  }
+}
+
+function hasExactFields(value: Record<string, unknown>, fields: readonly string[]): boolean {
+  return Object.keys(value).length === fields.length && fields.every((field) => Object.hasOwn(value, field));
+}
+
 function validateActionDecision(
-  record: PolicyReplayRecordV2 | PolicyReplayRecordV3 | PolicyReplayRecordV4 | CivilizationPolicyReplayRecordV1,
+  record: PolicyReplayRecordV2 | PolicyReplayRecordV3 | PolicyReplayRecordV4 | PolicyReplayRecordV6 | CivilizationPolicyReplayRecordV1,
   active: Map<number, string>,
   owners: Map<string, number>,
   effects: ReadonlySet<string>,

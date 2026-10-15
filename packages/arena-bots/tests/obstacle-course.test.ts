@@ -6,6 +6,7 @@ import type { Bot } from 'mineflayer';
 import { createCombatArena, Vec3 } from './combat-arena.js';
 
 const require = createRequire(import.meta.url);
+const mineflayerRequire = createRequire(require.resolve('mineflayer'));
 const { goals } = require('mineflayer-pathfinder') as typeof import('mineflayer-pathfinder');
 type Movements = import('mineflayer-pathfinder').Movements;
 const AStar = require('mineflayer-pathfinder/lib/astar') as new (
@@ -43,6 +44,12 @@ function buildCourse(bot: Bot): void {
       setBlock(bot, 'water', x, FLOOR_Y, z);
     }
   }
+  for (let x = 22; x <= 24; x += 1) {
+    for (let z = -2; z <= 2; z += 1) {
+      setBlock(bot, 'stone', x, FLOOR_Y - 1, z);
+      setBlock(bot, 'lava', x, FLOOR_Y, z);
+    }
+  }
 }
 
 function search(bot: Bot, from: { x: number; y: number; z: number }, to: { x: number; y: number; z: number }) {
@@ -56,7 +63,7 @@ function search(bot: Bot, from: { x: number; y: number; z: number }, to: { x: nu
   return result;
 }
 
-test('curriculum 11: the arena movement policy crosses rises, partial blocks, foliage and shallow water', () => {
+test('curriculum 11: navigation crosses rises, partial blocks and water, and routes around lava', () => {
   const arena = createCombatArena({ self: { x: 0.5, y: FLOOR_Y + 1, z: 0.5 }, opponents: [] });
   try {
     buildCourse(arena.bot);
@@ -64,6 +71,7 @@ test('curriculum 11: the arena movement policy crosses rises, partial blocks, fo
     assert.equal(result.status, 'success');
     assert.ok(result.path.every((node) => node.toBreak.length === 0 && node.toPlace.length === 0));
     assert.ok(result.path.some((node) => node.x > 20));
+    assert.ok(result.path.some((node) => node.x >= 22 && node.x <= 24 && Math.abs(node.z) >= 3));
   } finally {
     void arena.close();
   }
@@ -82,6 +90,45 @@ test('curriculum 11: a three-block fall is a safe descent and a four-block fall 
     assert.equal(safe.status, 'success');
     const unsafe = search(arena.bot, { x: 10, y: 5, z: 0 }, { x: 18, y: 1, z: 0 });
     assert.notEqual(unsafe.status, 'success');
+  } finally {
+    void arena.close();
+  }
+});
+
+test('a deep pit has no exit when every route would require the forbidden drop', () => {
+  const arena = createCombatArena({ self: { x: 0.5, y: 24, z: 0.5 }, opponents: [] });
+  try {
+    const Chunk = mineflayerRequire('prismarine-chunk')(arena.bot.registry) as new (options: {
+      minY: number;
+      worldHeight: number;
+    }) => NonNullable<ReturnType<Bot['world']['getColumn']>>;
+    const world = arena.bot.world as unknown as {
+      setColumn(chunkX: number, chunkZ: number, column: NonNullable<ReturnType<Bot['world']['getColumn']>>): void;
+    };
+    for (let chunkZ = -1; chunkZ <= 0; chunkZ += 1) {
+      world.setColumn(0, chunkZ, new Chunk({ minY: 0, worldHeight: 32 }));
+    }
+    Object.assign(arena.bot.game, { height: 32 });
+    arena.bot.entity.position.set(0.5, 24, 0.5);
+    for (let x = -2; x <= 12; x += 1) {
+      for (let z = -5; z <= 5; z += 1) {
+        if (x >= 4 && x <= 5 && z >= -3 && z <= 3) continue;
+        setBlock(arena.bot, 'stone', x, 23, z);
+      }
+    }
+    for (let x = 4; x <= 5; x += 1) {
+      for (let z = -3; z <= 3; z += 1) setBlock(arena.bot, 'stone', x, 2, z);
+    }
+
+    const movements = (arena.bot.pathfinder as unknown as { readonly movements: Movements }).movements;
+    assert.equal(movements.maxDropDown, 4);
+    const surfaceRoute = search(arena.bot, { x: 0, y: 24, z: 0 }, { x: 8, y: 24, z: 0 });
+    assert.equal(surfaceRoute.status, 'success');
+    assert.ok(surfaceRoute.path.some((node) => node.x >= 4 && node.x <= 5 && Math.abs(node.z) >= 4));
+    assert.ok(surfaceRoute.path.every((node) => node.y >= 24));
+
+    const pitExit = search(arena.bot, { x: 4, y: 3, z: 0 }, { x: 8, y: 24, z: 0 });
+    assert.equal(pitExit.status, 'noPath');
   } finally {
     void arena.close();
   }

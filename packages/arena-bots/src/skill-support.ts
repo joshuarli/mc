@@ -13,8 +13,7 @@ export type MineflayerEntity = Bot['entity'];
 export interface SkillResources {
   navigationActive: boolean;
   digging: { readonly settlement: Promise<void>; stopRequested: boolean } | null;
-  eating: boolean;
-  itemInUse: boolean;
+  itemUse: 'none' | 'food' | 'bow' | 'shield';
   inventoryTouched: boolean;
   window: MineflayerChest | null;
   quickBarSlotToRestore: number | null;

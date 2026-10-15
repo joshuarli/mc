@@ -108,13 +108,13 @@ export function reconstructRunEvidence(evidence: Evidence): ReconstructedRunEvid
   const lastSequence = new Map<'runner' | 'plugin', bigint>();
   const events: ControlMessage[] = [];
 
-  const resumeNote = evidence.records.find((record) => record.schema === 'resume-v1');
+  const resumeNote = evidence.records.find((record) => record.schema === 'resume-v1' || record.schema === 'resume-v2');
   const preEliminated = Array.isArray(resumeNote?.eliminated_seats)
     ? (resumeNote.eliminated_seats as number[]) : [];
 
   for (const [index, record] of evidence.records.entries()) {
     const recordNumber = index + 1;
-    if (record.schema === 'policy-replay-v1' || record.schema === 'policy-replay-v2' || record.schema === 'policy-replay-v3' || record.schema === 'policy-replay-v4' || record.schema === 'policy-effect-v1' || record.schema === 'civilization-policy-replay-v1'
+    if (record.schema === 'policy-replay-v1' || record.schema === 'policy-replay-v2' || record.schema === 'policy-replay-v3' || record.schema === 'policy-replay-v4' || record.schema === 'policy-replay-v6' || record.schema === 'policy-effect-v1' || record.schema === 'civilization-policy-replay-v1'
         || record.schema === 'civilization-policy-effect-v1' || record.schema === 'action-funnel-v1'
         || RUN_NOTE_SCHEMAS.includes(record.schema as string)) continue;
     const direction = record.direction;
@@ -216,6 +216,10 @@ export function reconstructRunEvidence(evidence: Evidence): ReconstructedRunEvid
       continue;
     }
     if (message.type === 'damage') {
+      if (!startSeen) throw eventRecordFailure('event_before_start', recordNumber);
+      continue;
+    }
+    if (message.type === 'mechanics_receipt') {
       if (!startSeen) throw eventRecordFailure('event_before_start', recordNumber);
       continue;
     }

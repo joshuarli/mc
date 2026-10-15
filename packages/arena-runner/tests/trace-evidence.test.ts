@@ -74,6 +74,15 @@ test('reads historical trace-v2 and current trace-v3 while keeping v2 policy rec
   assert.throws(() => parseSegment(unsupported), rejectsEvidence('unsupported_schema'));
 });
 
+test('accepts policy-replay-v6 only in trace-v4 and preserves its task fields', () => {
+  const record = { schema: 'policy-replay-v6', sequence: '1', seat: 0, task_before: null, task_after: null };
+  const segment = (schema: number) => parseSegment(canonicalJson({ schema, run_id: 'frontier', first_sequence: '1',
+    last_sequence: '1', records: [record], sha256: sha256Json([record]), trailer: { complete: true } }));
+  assert.throws(() => segment(3), rejectsEvidence('unsupported_policy_schema'));
+  const current = segment(4);
+  assert.equal(canonicalJson(current.records[0]), canonicalJson(record));
+});
+
 test('hashes nested records with the TypeScript canonical key ordering', () => {
   const records = '[{"z":0,"a":{"y":2,"x":1}}]';
   const canonicalRecords = '[{"a":{"x":1,"y":2},"z":0}]';

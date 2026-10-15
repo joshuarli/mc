@@ -3,6 +3,7 @@ import type { CandidateId, DuelPoolId } from '@arena/core';
 import type { ResourceReference } from '@arena/spec';
 import { RunnerError } from '../errors.js';
 import { actionFunnelReport } from '../funnel-report.js';
+import { duelPoolReceiptsFromEvidence } from './pool-receipts.js';
 import { matchQuality, type MatchQuality } from '../seat-quality.js';
 import { createOwnedDirectory, OwnedFilesError, readOwnedFile, stageOwnedFile } from '../owned-files/index.js';
 import { prepareRun, resolveScenarioResource } from '../prepare.js';
@@ -118,6 +119,12 @@ export class LiveMatchRunner implements MatchRunner {
     const outcome = completed.outcome.kind === 'winner'
       ? { kind: 'winner' as const, seat: completed.outcome.winner_seat }
       : { kind: 'draw' as const };
+    const poolReceipts = plan.opponent.poolPartner === undefined ? undefined : duelPoolReceiptsFromEvidence(
+      evidence,
+      plan.opponent.poolPartner,
+      plan.opponentSeats[0]!,
+      plan.matchId,
+    );
     return Object.freeze({
       status: 'completed' as const,
       outcome,
@@ -125,6 +132,7 @@ export class LiveMatchRunner implements MatchRunner {
       disconnects,
       degraded: completed.degraded !== undefined,
       attacks,
+      ...(poolReceipts === undefined ? {} : { poolReceipts }),
       quality: matchQuality(evidence),
       runId: completed.runId,
     });

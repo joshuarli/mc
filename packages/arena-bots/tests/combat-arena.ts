@@ -138,6 +138,8 @@ export function createCombatArena(options: CombatArenaOptions): CombatArena {
     width: PLAYER_WIDTH,
     yaw: self.yaw,
     pitch: 0,
+    metadata: [],
+    effects: {},
     getDroppedItem: () => null,
   } as unknown as Bot['entity'];
 
@@ -232,6 +234,7 @@ export function createCombatArena(options: CombatArenaOptions): CombatArena {
     },
     consume: () => new Promise<void>((resolve, reject) => {
       itemUse.push('consume');
+      (bot as unknown as { usingHeldItem: boolean }).usingHeldItem = true;
       pendingConsume = { reject };
       let waited = 0;
       const onTick = () => {

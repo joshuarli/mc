@@ -8,8 +8,7 @@ import type { Bot } from 'mineflayer';
 import { PathDiagnosticRing } from '../src/index.js';
 import { MineflayerObserver } from '../src/observer.js';
 import { isVisibleEntity } from '../src/perception.js';
-import { SkillOwner } from '../src/skills.js';
-import { isInsidePerceptionCone } from '../src/visibility.js';
+import { SkillOwner, type ClientMechanicsReceipt } from '../src/skills.js';
 
 const { goals, Movements } = createRequire(import.meta.url)('mineflayer-pathfinder') as typeof import('mineflayer-pathfinder');
 const AStar = createRequire(import.meta.url)('mineflayer-pathfinder/lib/astar') as {
@@ -96,377 +95,117 @@ test('navigate succeeds when the pathfinder ends on the cell its goal range acce
   }
 });
 
-test('travel navigation looks down between legs and melee pursuit does not', async () => {
-  const eyeHeight = 1.62;
-  const sightY = 64 + eyeHeight - 12;
-  const headings = [
-    { x: 8, z: 0 },
-    { x: 0, z: 8 },
-    { x: -8, z: 0 },
-    { x: 0, z: -8 },
-  ];
+test('idle client scans fixed headings on a physics tick schedule', async () => {
   const harness = makeHarness();
-  const events: string[] = [];
-  const looks: Array<{ x: number; y: number; z: number }> = [];
-  const setGoal = harness.pathfinder.setGoal;
-  harness.pathfinder.setGoal = (goal) => {
-    if (goal !== null) assert.equal(harness.pathfinder.movements.maxDropDown, 4);
-    setGoal(goal);
-    if (goal !== null) events.push('goal');
-  };
-  Object.assign(harness.bot, {
-    entity: {
-      id: 1,
-      position: new TestPosition(0, 64, 0),
-      eyeHeight,
-    },
-    lookAt: async (point: { x: number; y: number; z: number }) => {
-      events.push('look');
-      looks.push({ x: point.x, y: point.y, z: point.z });
-    },
+  const eyeHeight = 1.62;
+  const looks: Array<{ readonly x: number; readonly y: number; readonly z: number }> = [];
+  Object.assign(harness.bot.entity, {
+    position: new TestPosition(0, 64, 0),
+    eyeHeight,
+    yaw: 0,
+    pitch: 0,
   });
+  harness.bot.lookAt = async (point) => {
+    looks.push({ x: point.x, y: point.y, z: point.z });
+    const delta = point.minus(harness.bot.entity.position.offset(0, eyeHeight, 0));
+    harness.bot.entity.yaw = Math.atan2(-delta.x, -delta.z);
+    harness.bot.entity.pitch = Math.atan2(delta.y, Math.hypot(delta.x, delta.z));
+  };
 
   try {
-    const running = harness.owner.run({ kind: 'navigate', target: blockPosition(16, 64, 0) });
-    await waitUntil(() => events.length >= 1);
-    assert.deepEqual(events, ['goal']);
-    harness.bot.emit('goal_reached', harness.pathfinder.goal as never);
-    await waitUntil(() => events.length >= 6);
-    assert.deepEqual(events, ['goal', 'look', 'look', 'look', 'look', 'goal']);
-    assert.equal(looks.length, 4);
-    for (const [index, heading] of headings.entries()) {
-      const look = looks[index];
-      assert.ok(look);
-      assert.ok(Math.abs(look.x - heading.x) < 1e-9);
-      assert.ok(Math.abs(look.y - sightY) < 1e-9);
-      assert.ok(Math.abs(look.z - heading.z) < 1e-9);
+    for (let interval = 0; interval < 24; interval += 1) {
+      for (let tick = 0; tick < 10; tick += 1) harness.bot.emit('physicsTick');
+      await waitUntil(() => looks.length > interval);
     }
-    const cancellation = harness.owner.cancel('shutdown');
-    assert.deepEqual(await running, { kind: 'cancelled', reason: 'shutdown' });
-    await cancellation;
+
+    assert.equal(looks.length, 24);
+    for (let index = 0; index < looks.length; index += 1) {
+      const target = looks[index];
+      if (target === undefined) throw new Error('missing scheduled scan target');
+      const yaw = (index % 8) * Math.PI / 4;
+      const pitch = [0, -Math.PI / 4, Math.PI / 4][Math.floor(index / 8)];
+      if (pitch === undefined) throw new Error('missing scheduled scan pitch');
+      const horizontal = Math.cos(pitch) * 8;
+      assert.ok(Math.abs(target.x - -Math.sin(yaw) * horizontal) < 1e-9);
+      assert.ok(Math.abs(target.y - (64 + eyeHeight + Math.sin(pitch) * 8)) < 1e-9);
+      assert.ok(Math.abs(target.z - -Math.cos(yaw) * horizontal) < 1e-9);
+    }
   } finally {
     await harness.owner.close();
     harness.observer.close();
   }
+});
 
-  const seen = makeHarness();
-  const seenEvents: string[] = [];
-  const seenLooks: Array<{ x: number; y: number; z: number }> = [];
-  const seenAfterLook: boolean[] = [];
-  const seenSetGoal = seen.pathfinder.setGoal;
-  seen.pathfinder.setGoal = (goal) => {
-    seenSetGoal(goal);
-    if (goal !== null) seenEvents.push('goal');
+test('navigation abandons a no-path route without probing or falling', async () => {
+  const harness = makeHarness();
+  const goalsIssued: unknown[] = [];
+  const setGoal = harness.pathfinder.setGoal;
+  let blockReads = 0;
+  let looks = 0;
+  const initial = { x: harness.bot.entity.position.x, y: harness.bot.entity.position.y, z: harness.bot.entity.position.z };
+  harness.pathfinder.setGoal = (goal) => {
+    setGoal(goal);
+    if (goal !== null) goalsIssued.push(goal);
   };
-  const rivalHeight = 1.8;
-  const sideOffset = 6;
-  const belowEye = 20;
-  const rivalFeetY = 64 + eyeHeight - belowEye - rivalHeight / 2;
-  const rivalPosition = new TestPosition(0, rivalFeetY, sideOffset);
+  harness.bot.blockAt = (() => {
+    blockReads += 1;
+    return null;
+  }) as Bot['blockAt'];
+  harness.bot.lookAt = async () => { looks += 1; };
+
+  try {
+    const running = harness.owner.run({ kind: 'navigate', target: blockPosition(16, 64, 0) });
+    await waitUntil(() => goalsIssued.length === 1);
+    assert.ok(goalsIssued[0] instanceof goals.GoalNear);
+    assert.equal(harness.pathfinder.movements.maxDropDown, 4);
+    for (let tick = 0; tick < 10; tick += 1) harness.bot.emit('physicsTick');
+    assert.equal(looks, 0);
+    harness.bot.emit('path_update', { status: 'noPath' } as never);
+    assert.deepEqual(await running, { kind: 'failed', cause: 'noProgress' });
+    assert.equal(goalsIssued.length, 1);
+    assert.equal(blockReads, 0);
+    assert.equal(looks, 0);
+    assert.deepEqual(
+      { x: harness.bot.entity.position.x, y: harness.bot.entity.position.y, z: harness.bot.entity.position.z },
+      initial,
+    );
+    assert.equal(harness.pathfinder.movements.maxDropDown, 4);
+  } finally {
+    await harness.owner.close();
+    harness.observer.close();
+  }
+});
+
+test('navigation rechecks the received border before starting its next route segment', async () => {
+  const harness = makeHarness();
+  const goalsIssued: unknown[] = [];
+  const setGoal = harness.pathfinder.setGoal;
+  harness.pathfinder.setGoal = (goal) => {
+    setGoal(goal);
+    if (goal !== null) goalsIssued.push(goal);
+  };
+
+  try {
+    const running = harness.owner.run({ kind: 'navigate', target: blockPosition(20, 64, 0) });
+    await waitUntil(() => goalsIssued.length === 1);
+    assert.ok(goalsIssued[0] instanceof goals.GoalNear);
+    harness.bot._client.emit('world_border_size', { diameter: 10 });
+    harness.bot.emit('goal_reached', goalsIssued[0] as never);
+    assert.deepEqual(await running, { kind: 'failed', cause: 'preconditionsNotMet' });
+    assert.equal(goalsIssued.length, 1);
+  } finally {
+    await harness.owner.close();
+    harness.observer.close();
+  }
+});
+
+test('melee pursuit paths only toward the last visible opponent position', async () => {
+  const harness = makeHarness();
+  const position = new TestPosition(0, 64, -6);
   const rival = {
     id: 2,
     type: 'player',
-    position: rivalPosition,
-    velocity: new TestPosition(0, 0, 0),
-    yaw: 0,
-    pitch: 0,
-    width: 0.6,
-    height: rivalHeight,
-    getDroppedItem: () => null,
-  } as Bot['entity'];
-  Object.assign(seen.bot, {
-    entity: {
-      id: 1,
-      position: new TestPosition(0, 64, 0),
-      eyeHeight,
-      yaw: Math.atan2(-1, 0),
-      pitch: 0,
-      width: 0.6,
-      height: 1.8,
-    },
-    entities: { 2: rival },
-    players: { rival: { entity: rival, gamemode: 0 } },
-    blockAt: () => ({ name: 'air' }),
-    lookAt: async (point: Bot['entity']['position']) => {
-      seenEvents.push('look');
-      seenLooks.push({ x: point.x, y: point.y, z: point.z });
-      const delta = point.minus(seen.bot.entity.position.offset(0, eyeHeight, 0));
-      seen.bot.entity.yaw = Math.atan2(-delta.x, -delta.z);
-      seen.bot.entity.pitch = Math.atan2(delta.y, Math.hypot(delta.x, delta.z));
-      seenAfterLook.push(isVisibleEntity(seen.bot, rival));
-    },
-  });
-
-  try {
-    assert.equal(isVisibleEntity(seen.bot, rival), false);
-    const running = seen.owner.run({ kind: 'navigate', target: blockPosition(16, 64, 0) });
-    await waitUntil(() => seenEvents.length >= 1);
-    assert.deepEqual(seenEvents, ['goal']);
-    seen.bot.emit('goal_reached', seen.pathfinder.goal as never);
-    assert.deepEqual(await running, { kind: 'succeeded' });
-    assert.deepEqual(seenEvents, ['goal', 'look', 'look']);
-    assert.deepEqual(seenAfterLook, [false, true]);
-    const alongGoal = seenLooks[0];
-    const sawPlayer = seenLooks[1];
-    const goalHeading = headings[0];
-    const sideHeading = headings[1];
-    if (alongGoal === undefined || sawPlayer === undefined || goalHeading === undefined || sideHeading === undefined) {
-      throw new Error('missing travel look');
-    }
-    assert.ok(Math.abs(alongGoal.x - goalHeading.x) < 1e-9);
-    assert.ok(Math.abs(alongGoal.y - sightY) < 1e-9);
-    assert.ok(Math.abs(alongGoal.z - goalHeading.z) < 1e-9);
-    assert.ok(Math.abs(sawPlayer.x - sideHeading.x) < 1e-9);
-    assert.ok(Math.abs(sawPlayer.y - sightY) < 1e-9);
-    assert.ok(Math.abs(sawPlayer.z - sideHeading.z) < 1e-9);
-    assert.equal(isVisibleEntity(seen.bot, rival), true);
-    assert.equal(seen.pathfinder.goal, null);
-    assert.equal(seenEvents.filter((event) => event === 'goal').length, 1);
-  } finally {
-    await seen.owner.close();
-    seen.observer.close();
-  }
-
-  const blocked = openRivalTravel({ solid: true });
-  try {
-    assert.equal(isVisibleEntity(blocked.bot, blocked.rival), false);
-    const running = blocked.owner.run({ kind: 'navigate', target: blockPosition(16, 64, 0) });
-    await waitUntil(() => blocked.events.includes('goal'));
-    blocked.bot.emit('goal_reached', blocked.pathfinder.goal as never);
-    await waitUntil(() => blocked.events.filter((event) => event === 'goal').length >= 2);
-    assert.deepEqual(blocked.events, ['goal', 'look', 'look', 'look', 'look', 'goal']);
-    const sideLook = blocked.insideCone[1];
-    const sideVisible = blocked.visibleAfterLook[1];
-    if (sideLook === undefined || sideVisible === undefined) throw new Error('missing blocked travel look');
-    assert.equal(sideLook, true);
-    assert.equal(sideVisible, false);
-    assert.equal(isVisibleEntity(blocked.bot, blocked.rival), false);
-    const nextGoal = blocked.pathfinder.goal;
-    assert.ok(nextGoal instanceof goals.GoalBlock);
-    assert.equal(nextGoal.x, 0);
-    assert.equal(nextGoal.y, 64);
-    assert.equal(nextGoal.z, 1);
-    const cancellation = blocked.owner.cancel('shutdown');
-    assert.deepEqual(await running, { kind: 'cancelled', reason: 'shutdown' });
-    await cancellation;
-  } finally {
-    await blocked.owner.close();
-    blocked.observer.close();
-  }
-
-  const hole = openRivalTravel({ solid: true, standableStep: false });
-  const nudgeGoals: Array<{ readonly x: number; readonly y: number; readonly z: number }> = [];
-  const holeSetGoal = hole.pathfinder.setGoal.bind(hole.pathfinder);
-  hole.pathfinder.setGoal = (goal) => {
-    holeSetGoal(goal);
-    if (goal === null || typeof goal !== 'object') return;
-    const goalRecord = goal as { readonly x?: unknown; readonly y?: unknown; readonly z?: unknown };
-    const x = goalRecord.x;
-    const y = goalRecord.y;
-    const z = goalRecord.z;
-    if (typeof x !== 'number' || typeof y !== 'number' || typeof z !== 'number') return;
-    nudgeGoals.push({ x, y, z });
-  };
-  let walkingForward = false;
-  const holeSetControl = hole.bot.setControlState.bind(hole.bot);
-  hole.bot.setControlState = (control, state) => {
-    holeSetControl(control, state);
-    if (control === 'forward') walkingForward = state;
-  };
-  const holeClearControls = hole.bot.clearControlStates.bind(hole.bot);
-  hole.bot.clearControlStates = () => {
-    walkingForward = false;
-    holeClearControls();
-  };
-  const walkStep = 0.22;
-  hole.bot.on('physicsTick', () => {
-    if (!walkingForward) return;
-    const yaw = hole.bot.entity.yaw;
-    hole.bot.entity.position.x += -Math.sin(yaw) * walkStep;
-    hole.bot.entity.position.z += -Math.cos(yaw) * walkStep;
-  });
-  try {
-    const support = hole.bot.blockAt(new TestPosition(0.5, 63.5, 0.5));
-    const feet = hole.bot.blockAt(new TestPosition(0.5, 64.5, 0.5));
-    const head = hole.bot.blockAt(new TestPosition(0.5, 65.5, 0.5));
-    const stepFeet = hole.bot.blockAt(new TestPosition(0.5, 64.5, 1.5));
-    assert.equal(support?.boundingBox, 'block');
-    assert.equal(feet?.boundingBox, 'empty');
-    assert.equal(head?.boundingBox, 'empty');
-    assert.equal(stepFeet?.name, 'air');
-    const inset = 0.3;
-    const nearEdgeX = 0.5;
-    const nearEdgeZ = 1 - inset;
-    const running = hole.owner.run({ kind: 'navigate', target: blockPosition(16, 64, 0) });
-    await waitUntil(() => hole.events.includes('goal'));
-    hole.bot.emit('goal_reached', hole.pathfinder.goal as never);
-    let reachedEdge = false;
-    for (let tick = 0; tick < 40; tick += 1) {
-      await new Promise<void>((resolve) => setImmediate(resolve));
-      hole.bot.emit('physicsTick');
-      const movedX = hole.bot.entity.position.x;
-      const movedZ = hole.bot.entity.position.z;
-      if (Math.hypot(movedX - nearEdgeX, movedZ - nearEdgeZ) <= 0.05) {
-        reachedEdge = true;
-        break;
-      }
-    }
-    assert.equal(reachedEdge, true);
-    const arrivedX = hole.bot.entity.position.x;
-    const arrivedZ = hole.bot.entity.position.z;
-    assert.ok(Math.hypot(arrivedX - nearEdgeX, arrivedZ - nearEdgeZ) <= 0.05);
-    assert.equal(nudgeGoals.length, 1);
-    const travelGoal = nudgeGoals[0];
-    if (travelGoal === undefined) throw new Error('missing travel goal');
-    assert.ok(travelGoal.z !== 1);
-    const cancellation = hole.owner.cancel('shutdown');
-    assert.deepEqual(await running, { kind: 'cancelled', reason: 'shutdown' });
-    await cancellation;
-  } finally {
-    await hole.owner.close();
-    hole.observer.close();
-  }
-
-  const repeated = openRivalTravel({ solid: true });
-  const repeatedGoals: Array<{ readonly x: number; readonly y: number; readonly z: number }> = [];
-  const repeatedSetGoal = repeated.pathfinder.setGoal.bind(repeated.pathfinder);
-  repeated.pathfinder.setGoal = (goal) => {
-    repeatedSetGoal(goal);
-    if (goal === null || typeof goal !== 'object') return;
-    const goalRecord = goal as { readonly x?: unknown; readonly y?: unknown; readonly z?: unknown };
-    const x = goalRecord.x;
-    const y = goalRecord.y;
-    const z = goalRecord.z;
-    if (typeof x !== 'number' || typeof y !== 'number' || typeof z !== 'number') return;
-    repeatedGoals.push({ x, y, z });
-  };
-  try {
-    const running = repeated.owner.run({ kind: 'navigate', target: blockPosition(16, 64, 0) });
-    await waitUntil(() => repeatedGoals.length >= 1);
-    repeated.bot.emit('path_update', { status: 'noPath' } as never);
-    await waitUntil(() => repeatedGoals.length >= 2);
-    repeated.bot.emit('path_update', { status: 'noPath' } as never);
-    await waitUntil(() => repeatedGoals.length >= 3);
-    const originalGoal = repeatedGoals[0];
-    const failedStep = repeatedGoals[1];
-    const continuedGoal = repeatedGoals[2];
-    if (originalGoal === undefined || failedStep === undefined || continuedGoal === undefined) {
-      throw new Error('missing repeated travel goal');
-    }
-    assert.equal(failedStep.x, 0);
-    assert.equal(failedStep.y, 64);
-    assert.equal(failedStep.z, 1);
-    assert.equal(continuedGoal.x, originalGoal.x);
-    assert.equal(continuedGoal.y, originalGoal.y);
-    assert.equal(continuedGoal.z, originalGoal.z);
-    assert.ok(continuedGoal.x !== failedStep.x || continuedGoal.y !== failedStep.y || continuedGoal.z !== failedStep.z);
-    const cancellation = repeated.owner.cancel('shutdown');
-    assert.deepEqual(await running, { kind: 'cancelled', reason: 'shutdown' });
-    await cancellation;
-  } finally {
-    await repeated.owner.close();
-    repeated.observer.close();
-  }
-
-  const trapped = openRivalTravel({ solid: false });
-  try {
-    const running = trapped.owner.run({ kind: 'navigate', target: blockPosition(16, 64, 0) });
-    await waitUntil(() => trapped.events.includes('goal'));
-    trapped.bot.emit('path_update', { status: 'noPath' } as never);
-    assert.deepEqual(await running, { kind: 'succeeded' });
-    assert.deepEqual(trapped.events, ['goal', 'look', 'look']);
-    assert.deepEqual(trapped.visibleAfterLook, [false, true]);
-    assert.equal(trapped.events.filter((event) => event === 'goal').length, 1);
-    assert.equal(isVisibleEntity(trapped.bot, trapped.rival), true);
-  } finally {
-    await trapped.owner.close();
-    trapped.observer.close();
-  }
-
-  const landingY = 44;
-  const rivalDistance = 5;
-  const descent = openRivalTravel({ solid: true, standableStep: false });
-  descent.rival.position.y = landingY;
-  descent.rival.position.z = rivalDistance;
-  const solidFloorY = landingY - 1;
-  descent.bot.blockAt = ((point: Bot['entity']['position']) => {
-    const x = Math.floor(point.x);
-    const y = Math.floor(point.y);
-    const z = Math.floor(point.z);
-    const air = { name: 'air', boundingBox: 'empty' as const, position: point };
-    const stone = { name: 'stone', boundingBox: 'block' as const, position: point };
-    if (x === 0 && z === 0 && y === 63) return stone;
-    if (x === 0 && z === 0 && (y === 64 || y === 65)) return air;
-    if (x === 0 && z === 1 && y === solidFloorY) return stone;
-    if (x === 0 && z === 1) return air;
-    return stone;
-  }) as Bot['blockAt'];
-  const descentGoals: Array<{
-    readonly x: number;
-    readonly y: number;
-    readonly z: number;
-    readonly maxDropDown: number;
-    readonly goal: unknown;
-  }> = [];
-  const descentSetGoal = descent.pathfinder.setGoal.bind(descent.pathfinder);
-  descent.pathfinder.setGoal = (goal) => {
-    const maxDropDown = descent.pathfinder.movements.maxDropDown;
-    descentSetGoal(goal);
-    if (goal === null || typeof goal !== 'object') return;
-    const goalRecord = goal as { readonly x?: unknown; readonly y?: unknown; readonly z?: unknown };
-    const x = goalRecord.x;
-    const y = goalRecord.y;
-    const z = goalRecord.z;
-    if (typeof x !== 'number' || typeof y !== 'number' || typeof z !== 'number') return;
-    descentGoals.push({ x, y, z, maxDropDown, goal });
-  };
-  try {
-    const running = descent.owner.run({ kind: 'navigate', target: blockPosition(16, 64, 0) });
-    await waitUntil(() => descentGoals.length >= 1);
-    descent.bot.emit('goal_reached', descent.pathfinder.goal as never);
-    await waitUntil(() => descentGoals.length >= 2);
-    descent.bot.emit('path_update', { status: 'noPath' } as never);
-    await waitUntil(() => descentGoals.length >= 3);
-    const ordinaryGoal = descentGoals[0];
-    const dropGoal = descentGoals[1];
-    const continuedGoal = descentGoals[2];
-    if (ordinaryGoal === undefined || dropGoal === undefined || continuedGoal === undefined) {
-      throw new Error('missing drop travel goal');
-    }
-    assert.equal(ordinaryGoal.maxDropDown, 4);
-    assert.ok(dropGoal.goal instanceof goals.GoalBlock);
-    assert.equal(dropGoal.x, 0);
-    assert.equal(dropGoal.y, landingY);
-    assert.equal(dropGoal.z, 1);
-    assert.ok(dropGoal.maxDropDown >= 20);
-    assert.ok(dropGoal.maxDropDown <= 24);
-    assert.equal(descent.pathfinder.movements.maxDropDown, 4);
-    assert.equal(continuedGoal.maxDropDown, 4);
-    assert.equal(continuedGoal.x, ordinaryGoal.x);
-    assert.equal(continuedGoal.y, ordinaryGoal.y);
-    assert.equal(continuedGoal.z, ordinaryGoal.z);
-    assert.equal(descentGoals.filter((goal) => goal.y === landingY).length, 1);
-    const cancellation = descent.owner.cancel('shutdown');
-    assert.deepEqual(await running, { kind: 'cancelled', reason: 'shutdown' });
-    await cancellation;
-  } finally {
-    await descent.owner.close();
-    descent.observer.close();
-  }
-
-  const melee = makeHarness();
-  const meleeGoals: unknown[] = [];
-  let meleeLooks = 0;
-  const meleeSetGoal = melee.pathfinder.setGoal;
-  melee.pathfinder.setGoal = (goal) => {
-    meleeSetGoal(goal);
-    if (goal !== null) meleeGoals.push(goal);
-  };
-  const opponentPosition = new TestPosition(0, 64, -6);
-  const opponent = {
-    id: 2,
-    type: 'player',
-    position: opponentPosition,
+    position,
     velocity: new TestPosition(0, 0, 0),
     yaw: 0,
     pitch: 0,
@@ -474,37 +213,48 @@ test('travel navigation looks down between legs and melee pursuit does not', asy
     height: 1.8,
     getDroppedItem: () => null,
   } as Bot['entity'];
-  Object.assign(melee.bot, {
+  const goalsIssued: unknown[] = [];
+  const setGoal = harness.pathfinder.setGoal;
+  harness.pathfinder.setGoal = (goal) => {
+    setGoal(goal);
+    if (goal !== null) goalsIssued.push(goal);
+  };
+  Object.assign(harness.bot, {
     entity: {
       id: 1,
       position: new TestPosition(0, 64, 0),
       velocity: new TestPosition(0, 0, 0),
-      eyeHeight,
+      eyeHeight: 1.62,
       width: 0.6,
       height: 1.8,
       yaw: 0,
       pitch: 0,
     },
-    entities: { 2: opponent },
-    players: { rival: { entity: opponent, gamemode: 0 } },
-    blockAt: () => ({ name: 'stone', position: opponentPosition }),
-    lookAt: async () => { meleeLooks += 1; },
+    entities: { 2: rival },
+    players: { rival: { entity: rival, gamemode: 0 } },
+    blockAt: (point: Bot['entity']['position']) => ({ name: 'air', boundingBox: 'empty', position: point }),
   });
 
   try {
-    const running = melee.owner.run({ kind: 'approach', target: entityId(2) });
-    await waitUntil(() => meleeGoals.length >= 1);
-    assert.equal(meleeLooks, 0);
-    melee.bot.emit('goal_reached', melee.pathfinder.goal as never);
-    await waitUntil(() => meleeGoals.length >= 2);
-    assert.equal(meleeLooks, 0);
-    assert.equal(melee.pathfinder.movements.maxDropDown, 4);
-    const cancellation = melee.owner.cancel('shutdown');
-    assert.deepEqual(await running, { kind: 'cancelled', reason: 'shutdown' });
-    await cancellation;
+    assert.equal(isVisibleEntity(harness.bot, rival), true);
+    const running = harness.owner.run({ kind: 'approach', target: entityId(2) });
+    await waitUntil(() => goalsIssued.length === 1);
+    const goal = goalsIssued[0];
+    assert.ok(goal instanceof goals.GoalNear);
+    assert.equal(goal.x, 0);
+    assert.equal(goal.y, 64);
+    assert.equal(goal.z, -6);
+    assert.equal(goal.rangeSq, 4);
+    rival.position.x = 100;
+    rival.position.z = 100;
+    harness.bot.emit('goal_reached', goal as never);
+    const outcome = await running;
+    assert.equal(outcome.kind, 'failed');
+    assert.equal(goalsIssued.length, 1);
+    assert.equal(harness.pathfinder.goal, null);
   } finally {
-    await melee.owner.close();
-    melee.observer.close();
+    await harness.owner.close();
+    harness.observer.close();
   }
 });
 
@@ -1522,6 +1272,75 @@ test('attack waits for tick-driven non-forced look before launching', async () =
   }
 });
 
+test('attack records client shield raise and lower transitions during weapon cooldown', async () => {
+  const receipts: ClientMechanicsReceipt[] = [];
+  const harness = makeHarness(() => undefined, () => undefined, false, (receipt) => receipts.push(receipt));
+  const targetPosition = new TestPosition(0, 64, -2);
+  const opponent = {
+    id: 2,
+    type: 'player',
+    position: targetPosition,
+    velocity: new TestPosition(0, 0, 0),
+    yaw: 0,
+    pitch: 0,
+    width: 0.6,
+    height: 1.8,
+    getDroppedItem: () => null,
+  } as Bot['entity'];
+  harness.bot.inventory.slots[45] = { name: 'shield' } as NonNullable<Bot['inventory']['slots'][number]>;
+  let lookCalls = 0;
+  let attackCalls = 0;
+  Object.assign(harness.bot, {
+    entity: {
+      id: 1,
+      position: new TestPosition(0, 64, 0),
+      velocity: new TestPosition(0, 0, 0),
+      eyeHeight: 1.62,
+      width: 0.6,
+      height: 1.8,
+      yaw: 0,
+      pitch: 0,
+    },
+    entities: { 2: opponent },
+    players: { rival: { entity: opponent, gamemode: 0 } },
+    blockAt: () => ({ name: 'stone', position: targetPosition }),
+    lookAt: async () => {
+      lookCalls += 1;
+      await new Promise<void>((resolve) => harness.bot.once('physicsTick', resolve));
+    },
+    activateItem: () => Object.assign(harness.bot, { usingHeldItem: true }),
+    attack: (target: typeof opponent) => {
+      attackCalls += 1;
+      harness.bot.emit('entityHurt', target, harness.bot.entity);
+    },
+  });
+
+  try {
+    const first = harness.owner.run({ kind: 'attack', target: entityId(2) });
+    await waitUntil(() => lookCalls === 1);
+    harness.bot.emit('physicsTick');
+    assert.deepEqual(await first, { kind: 'succeeded' });
+
+    const second = harness.owner.run({ kind: 'attack', target: entityId(2) });
+    let settled = false;
+    void second.then(() => { settled = true; });
+    await waitUntil(() => receipts.some((receipt) => receipt.blocking));
+    for (let tick = 0; tick < 30 && !settled; tick += 1) {
+      harness.bot.emit('physicsTick');
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    assert.deepEqual(await second, { kind: 'succeeded' });
+    assert.deepEqual(receipts, [
+      { kind: 'shieldBlockingTransition', blocking: true },
+      { kind: 'shieldBlockingTransition', blocking: false },
+    ]);
+    assert.equal(attackCalls, 2);
+  } finally {
+    await harness.owner.close();
+    harness.observer.close();
+  }
+});
+
 test('cancellation quarantines a look operation that never settles', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   let now = 0;
@@ -2026,88 +1845,11 @@ function prepareEating(name = 'bread', food = 10) {
   };
 }
 
-function openRivalTravel(options: { readonly solid: boolean; readonly standableStep?: boolean }) {
-  const eyeHeight = 1.62;
-  const harness = makeHarness();
-  const events: string[] = [];
-  const insideCone: boolean[] = [];
-  const visibleAfterLook: boolean[] = [];
-  const setGoal = harness.pathfinder.setGoal;
-  harness.pathfinder.setGoal = (goal) => {
-    setGoal(goal);
-    if (goal !== null) events.push('goal');
-  };
-  const rivalHeight = 1.8;
-  const rivalFeetY = 64 + eyeHeight - 20 - rivalHeight / 2;
-  const rivalPosition = new TestPosition(0, rivalFeetY, 6);
-  const rival = {
-    id: 2,
-    type: 'player',
-    position: rivalPosition,
-    velocity: new TestPosition(0, 0, 0),
-    yaw: 0,
-    pitch: 0,
-    width: 0.6,
-    height: rivalHeight,
-    getDroppedItem: () => null,
-  } as Bot['entity'];
-  const solid = {
-    name: 'stone',
-    position: new TestPosition(0, 64, 1),
-  } as NonNullable<ReturnType<Bot['blockAt']>>;
-  Object.assign(harness.bot, {
-    entity: {
-      id: 1,
-      position: new TestPosition(0, 64, 0),
-      eyeHeight,
-      yaw: Math.atan2(-1, 0),
-      pitch: 0,
-      width: 0.6,
-      height: 1.8,
-    },
-    entities: { 2: rival },
-    players: { rival: { entity: rival, gamemode: 0 } },
-    blockAt: (point: Bot['entity']['position']) => {
-      const air = { name: 'air', boundingBox: 'empty' as const, position: point };
-      const stone = { name: 'stone', boundingBox: 'block' as const, position: point };
-      if (!options.solid) return air;
-      const x = Math.floor(point.x);
-      const y = Math.floor(point.y);
-      const z = Math.floor(point.z);
-      if (options.standableStep === false) {
-        if (x === 0 && z === 0 && y === 63) return stone;
-        if (x === 0 && z === 0 && (y === 64 || y === 65)) return air;
-        if (x === 0 && z === 1) return air;
-        return stone;
-      }
-      if (x === 0 && z === 1 && (y === 64 || y === 65)) return air;
-      return stone;
-    },
-    lookAt: async (point: Bot['entity']['position']) => {
-      events.push('look');
-      const eye = harness.bot.entity.position.offset(0, eyeHeight, 0);
-      const delta = point.minus(eye);
-      harness.bot.entity.yaw = Math.atan2(-delta.x, -delta.z);
-      harness.bot.entity.pitch = Math.atan2(delta.y, Math.hypot(delta.x, delta.z));
-      insideCone.push(isInsidePerceptionCone({
-        position: harness.bot.entity.position,
-        eyeHeight,
-        yaw: harness.bot.entity.yaw,
-        pitch: harness.bot.entity.pitch,
-      }, rival));
-      visibleAfterLook.push(isVisibleEntity(harness.bot, rival));
-    },
-  });
-  if (options.solid) {
-    harness.bot.world.raycast = (() => solid) as unknown as Bot['world']['raycast'];
-  }
-  return { ...harness, events, insideCone, visibleAfterLook, rival };
-}
-
 function makeHarness(
   onPathStarted: () => void = () => undefined,
   onPathStopped: () => void = () => undefined,
   useRealPathfinder = false,
+  clientMechanics?: (receipt: ClientMechanicsReceipt) => void,
 ) {
   const botEmitter = new EventEmitter();
   const client = new EventEmitter();
@@ -2190,6 +1932,7 @@ function makeHarness(
       if (controlState !== undefined) controlState[control] = state;
     },
     setQuickBarSlot: (slot: number) => Object.assign(botEmitter, { quickBarSlot: slot }),
+    activateItem: () => Object.assign(botEmitter, { usingHeldItem: true }),
     clearControlStates: () => {
       controlsCleared += 1;
       const controlState = (botEmitter as unknown as { controlState?: Record<string, boolean> }).controlState;
@@ -2235,7 +1978,7 @@ function makeHarness(
     newDiameter: 100,
     speed: 0,
   });
-  const owner = new SkillOwner(bot, observer);
+  const owner = new SkillOwner(bot, observer, null, null, clientMechanics ?? null);
   return { bot, observer, owner, pathfinder: bot.pathfinder, controlsCleared: () => controlsCleared };
 }
 

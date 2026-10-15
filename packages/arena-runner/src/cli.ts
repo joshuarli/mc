@@ -1124,7 +1124,7 @@ function helpJson(): object {
       'resume --checkpoint <id> --accept-minecraft-eula [--run-id <id>] [--join-timeout-seconds <n>]': 'Resume a saved match in a new run at the next epoch.',
       'league --manifest <path> --accept-minecraft-eula [--concurrency <1-4>]': 'Run or resume a league of candidate policies against frozen opponents and report the paired analysis, per-seat quality, and quality gates.',
       'quality --scenario <path> --seeds <a,b,c> --accept-minecraft-eula [--candidate <id>] [--concurrency <1-4>]': 'Run one Hunger Games match per seed, concurrently on ephemeral ports, and report the per-seat quality table and quality gates.',
-      'duel --scenario <path> --candidate <id> --opponent <id|pool> --seeds <a,b,c> --rounds <1-3> --accept-minecraft-eula [--concurrency <1-4>]': 'Run both seat assignments of a two-competitor Hunger Games duel for each seed and round, and report the paired score. --opponent pool plans pool version 1 once per sparring partner.',
+      'duel --scenario <path> --candidate <id> --opponent <id|pool> --seeds <a,b,c> --rounds <1-3> --accept-minecraft-eula [--concurrency <1-4>]': 'Run both seat assignments of a two-competitor Hunger Games duel for each seed and round, and report the paired score. --opponent pool plans pool version 2 once per sparring partner.',
       'prepare --scenario <path> --run-id <id>': 'Compile a scenario and stage its world plan in a new run directory.',
       'validate --scenario <path>': 'Compile the scenario, map, and policy without staging a run.',
       'run --scenario <path> --accept-minecraft-eula [--run-id <id>] [--reserve-external-spectator-slot] [--wait-for-external-player] [--join-timeout-seconds <n>] [--workers <n>]': 'Run a match and report its stopped result.',

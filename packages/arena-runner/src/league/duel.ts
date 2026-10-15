@@ -9,7 +9,15 @@ import {
   planDigest,
   type MatchObservation, type MatchPlan, type MatchRunner, type StoredMatch,
 } from './harness.js';
-import { DUEL_POOL_IDS, type DuelPoolId } from '@arena/core';
+import {
+  duelPoolQualificationReport,
+  duelPoolScoringMembers,
+  DUEL_POOL_IDS,
+  DUEL_POOL_VERSION,
+  type DuelPoolId,
+  type DuelPoolPromotionId,
+  type DuelPoolQualification,
+} from '@arena/core';
 import { opponentLabel, type CandidateSpec, type OpponentSpec } from './manifest.js';
 
 export const DUEL_MAX_ROUNDS = 3;
@@ -119,10 +127,6 @@ function plannedOpponents(request: DuelRunRequest): readonly OpponentSpec[] {
 }
 
 function poolOpponent(id: DuelPoolId): OpponentSpec {
-  if (id === 'baseline') {
-    const spec = Object.freeze({ id: 'baseline' as const, params: Object.freeze({}) });
-    return Object.freeze({ ...spec, label: opponentLabel(spec) });
-  }
   return Object.freeze({ id: 'baseline', params: Object.freeze({}), label: id, poolPartner: id });
 }
 
@@ -224,7 +228,7 @@ interface DuelRoundEngagement {
 }
 
 export interface DuelReport {
-  readonly schema: 2;
+  readonly schema: 3;
   readonly kind: 'duel';
   readonly scenario: string;
   readonly candidate: string;
@@ -233,7 +237,13 @@ export interface DuelReport {
   readonly rounds: number;
   readonly concurrency: number;
   readonly timing_sensitive: boolean;
-  readonly pool_version?: 1;
+  readonly pool_version?: typeof DUEL_POOL_VERSION;
+  readonly pool_qualification?: Readonly<{
+    members: readonly DuelPoolQualification[];
+    scoring_members: readonly DuelPoolPromotionId[];
+    promotion_scoring_applied: boolean;
+    scoring_matches: Readonly<{ planned: number; completed: number; failed: number }>;
+  }>;
   readonly analysis: Readonly<{ method: 'tInterval'; confidence: 0.95; grouping: 'world_seed' }>;
   readonly denominators: Readonly<{
     planned: number;
@@ -275,6 +285,18 @@ function duelReport(
   let wins = 0;
   let losses = 0;
   let draws = 0;
+  const allPoolReceipts = stored.flatMap((entry) => entry.observation.poolReceipts ?? []);
+  const poolQualifications = request.opponent.kind === 'candidate'
+    ? undefined : duelPoolQualificationReport(allPoolReceipts);
+  const qualifiedPoolMembers = poolQualifications === undefined ? [] : duelPoolScoringMembers(poolQualifications);
+  const promotionScoringApplied = request.opponent.kind === 'pool';
+  const scoringPlans = promotionScoringApplied
+    ? plans.filter((planned) => planned.plan.opponent.poolPartner !== undefined
+      && qualifiedPoolMembers.includes(planned.plan.opponent.poolPartner as DuelPoolPromotionId))
+    : plans;
+  const scoringMatchIds = new Set(scoringPlans.map((planned) => planned.plan.matchId));
+  let scoringCompleted = 0;
+  let scoringFailed = 0;
   const scored: ScoredMatch[] = [];
   let scoredSum = 0;
   const matches = plans.map((planned) => {
@@ -285,6 +307,7 @@ function duelReport(
     const engagement = duelEngagement(plan, observation?.quality);
     if (observation === undefined || observation.status === 'failed') {
       failed += 1;
+      if (scoringMatchIds.has(plan.matchId)) scoringFailed += 1;
       const reason = observation === undefined ? 'not_run' : observation.reason;
       failures[reason] = (failures[reason] ?? 0) + 1;
     } else {
@@ -294,8 +317,11 @@ function duelReport(
       if (score === 1) wins += 1;
       else if (score === 0) losses += 1;
       else draws += 1;
-      scored.push({ worldSeed: plan.worldSeed, score: score! });
-      scoredSum += score!;
+      if (scoringMatchIds.has(plan.matchId)) {
+        scored.push({ worldSeed: plan.worldSeed, score: score! });
+        scoredSum += score!;
+        scoringCompleted += 1;
+      }
     }
     const base = {
       match_id: plan.matchId,
@@ -313,6 +339,14 @@ function duelReport(
       ...contactFields(classifyMatch(observation, score)),
       engagement,
       quality: observation?.quality ?? null,
+      ...(observation?.poolReceipts === undefined ? {} : {
+        pool_receipts: observation.poolReceipts.map((receipt) => ({
+          match_id: receipt.matchId,
+          member: receipt.member,
+          action: receipt.action,
+          status: receipt.status,
+        })),
+      }),
     };
     if (observation === undefined) return { ...base, status: 'not_run' };
     if (observation.status === 'failed') return { ...base, status: 'failed', reason: observation.reason };
@@ -327,7 +361,8 @@ function duelReport(
   });
   const bySeed = request.seeds.map((worldSeed) => {
     const rows = plans.filter((planned) => planned.plan.worldSeed === worldSeed);
-    const scores = rows.map((planned) => scoreDuelMatch(planned.plan, byId.get(planned.plan.matchId)?.observation));
+    const scores = rows.map((planned) => scoringMatchIds.has(planned.plan.matchId)
+      ? scoreDuelMatch(planned.plan, byId.get(planned.plan.matchId)?.observation) : null);
     const present = scores.filter((score): score is 0 | 0.5 | 1 => score !== null);
     return Object.freeze({
       world_seed: worldSeed,
@@ -338,7 +373,7 @@ function duelReport(
   const estimate = estimateMean(scored, 'tInterval', 0, 0);
   const roundLog = roundEntries(plans, byId);
   const report: DuelReport = {
-    schema: 2 as const,
+    schema: 3 as const,
     kind: 'duel' as const,
     scenario: request.scenario,
     candidate: request.candidate.id,
@@ -365,15 +400,23 @@ function duelReport(
       standard_deviation: estimate.standardDeviation,
       effect_size_vs_even: estimate.effectSize,
       clusters: estimate.clusters,
-      mean_if_censored_lost: plans.length === 0 ? null : scoredSum / plans.length,
+      mean_if_censored_lost: scoringPlans.length === 0 ? null : scoredSum / scoringPlans.length,
     },
     by_seed: bySeed,
     engagement_omitted: DUEL_ENGAGEMENT_OMITTED,
     matches,
     round_log: roundLog,
+    ...(poolQualifications === undefined ? {} : {
+      pool_qualification: {
+        members: poolQualifications,
+        scoring_members: qualifiedPoolMembers,
+        promotion_scoring_applied: promotionScoringApplied,
+        scoring_matches: { planned: scoringPlans.length, completed: scoringCompleted, failed: scoringFailed },
+      },
+    }),
   };
-  if (request.opponent.kind !== 'pool') return report;
-  return { ...report, pool_version: 1 as const };
+  if (request.opponent.kind === 'candidate') return report;
+  return { ...report, pool_version: DUEL_POOL_VERSION };
 }
 
 function classifyMatch(observation: MatchObservation | undefined, score: 0 | 0.5 | 1 | null): ContactAssessment {
@@ -500,6 +543,14 @@ function renderDuel(plans: readonly DuelPlannedMatch[], stored: readonly DuelSto
     `grouped by world seed across both seat assignments${report.timing_sensitive ? ' (timing-sensitive outcomes: matches ran concurrently)' : ''}`,
     `engagement omitted: ${DUEL_ENGAGEMENT_OMITTED.map((entry) => `${entry.field} (${entry.reason})`).join('; ')}`,
   ];
+  if (report.pool_qualification !== undefined) {
+    lines.push(`pool scoring ${report.pool_qualification.promotion_scoring_applied ? 'enabled' : 'diagnostic only'}: `
+      + `${report.pool_qualification.scoring_matches.completed}/${report.pool_qualification.scoring_matches.planned} matches`
+      + ` across ${report.pool_qualification.scoring_members.join(', ') || 'no qualified members'}`);
+    for (const member of report.pool_qualification.members) {
+      lines.push(`pool member ${member.member}: ${member.status}${member.reason === null ? '' : ` (${member.reason})`}`);
+    }
+  }
   for (const round of report.round_log) {
     const entry = round as {
       round: number; world_seed: number;

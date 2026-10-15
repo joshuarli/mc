@@ -1,13 +1,13 @@
-import { DeterministicRandom, RandomStream, emptyPolicyMemory, openingStyleForSeat, seatId, type PolicyMemory, type Decision, type OpeningPolicyState, type SkillCancellation, type SkillOutcome, createPolicyFeedback, policyFeedbackBatch, type PolicyFeedbackBatch, type AgentObservation, decideCivilization, type CivilizationDecision, type PolicyFeedbackSource, CIVILIZATION_TEAM_MESSAGE_MAX_BYTES, CIVILIZATION_TEAM_MESSAGE_MIN_INTERVAL_TICKS, type CivilizationObservation, type CivilizationPolicyMemory, type CivilizationPolicyFeedbackBatch, type CivilizationGoal, type CivilizationActionIntent, emptyCivilizationPolicyMemory, civilizationPolicyFeedbackBatch, tick } from '@arena/core';
+import { DeterministicRandom, RandomStream, emptyPolicyMemory, openingStyleForSeat, seatId, type PolicyMemory, type Decision, type OpeningPolicyState, type SkillCancellation, type SkillOutcome, createPolicyFeedback, policyFeedbackBatch, type PolicyFeedbackBatch, type AgentObservation, decideCivilization, type CivilizationDecision, type PolicyFeedbackSource, CIVILIZATION_TEAM_MESSAGE_MAX_BYTES, CIVILIZATION_TEAM_MESSAGE_MIN_INTERVAL_TICKS, type CivilizationObservation, type CivilizationPolicyMemory, type CivilizationPolicyFeedbackBatch, type CivilizationGoal, type CivilizationActionIntent, emptyCivilizationPolicyMemory, civilizationPolicyFeedbackBatch, tick, type FrontierTask, type PolicyReplayInputV5, type CompiledFrontierCandidate } from '@arena/core';
 import type { OpeningStyleCycle, compilePolicy } from '@arena/spec';
 import type { PartiallyComputedPath } from 'mineflayer-pathfinder';
 import { RunnerError } from '../errors.js';
-import { makeCivilizationPolicyEffectRecord, makeCivilizationPolicyReplayRecord, normalizeCivilizationPolicyReplayInput, makePolicyEffectRecord, makePolicyReplayRecordV4, type PolicyPathUpdate, type PolicyDisposition } from '../policy-replay.js';
+import { makeCivilizationPolicyEffectRecord, makeCivilizationPolicyReplayRecord, normalizeCivilizationPolicyReplayInput, makePolicyEffectRecord, makePolicyReplayRecordV6, type PolicyPathUpdate, type PolicyDisposition } from '../policy-replay.js';
 import { canonicalJson } from '../canonical.js';
 import type { RuntimeTraceBuilder } from './trace.js';
 import { mapRuntimeFailure } from './failures.js';
 import {
-  decideRuntimeCandidateOpening, decideRuntimeCandidatePolicy, decideRuntimeDuelPool, decideRuntimeDuelPoolOpening,
+  decideRuntimeCandidateOpening, decideRuntimeCandidatePolicy, decideRuntimeFrontierOpening, decideRuntimeFrontierPolicy, decideRuntimeDuelPool, decideRuntimeDuelPoolOpening,
   decideRuntimeOpeningPolicy, decideRuntimePolicy,
   isStrategyDecisionTick,
 } from './policy-decision.js';
@@ -42,7 +42,7 @@ interface OwnedAction {
   readonly barrier: Promise<void>;
   readonly cancellation: ReturnType<typeof deferred<SkillCancellation>>;
   task: Promise<void>;
-  state: 'reserved' | 'running' | 'settled';
+  state: 'reserved' | 'running' | 'settled' | 'effectRecording';
   priority: number;
   cancelTask?: Promise<void>;
   startedAtNs: bigint | null;
@@ -53,6 +53,7 @@ export interface SeatPolicyState {
   readonly memory: unknown;
   readonly rng_state: string;
   readonly opening_state: OpeningPolicyState | null;
+  readonly frontier_task?: FrontierTask | null;
 }
 
 export class LivePolicyLoop {
@@ -70,6 +71,7 @@ export class LivePolicyLoop {
   readonly #poolPartners: ReadonlyMap<number, DuelPoolId> | undefined;
   readonly #memories = new Map<number, PolicyMemory>();
   readonly #openingStates = new Map<number, OpeningPolicyState>();
+  readonly #frontierTasks = new Map<number, FrontierTask>();
   readonly #feedback = new Map<number, PolicyFeedbackBatch>();
   readonly #civilizationMemories = new Map<number, CivilizationPolicyMemory>();
   readonly #civilizationFeedback = new Map<number, CivilizationPolicyFeedbackBatch>();
@@ -119,6 +121,7 @@ export class LivePolicyLoop {
       this.#memories.set(seat, policyMemory(state.memory as PolicyMemoryInput));
       this.#randoms.set(seat, DeterministicRandom.fromState(BigInt(state.rng_state)));
       if (state.opening_state !== null) this.#openingStates.set(seat, openingPolicyState(state.opening_state));
+      if (state.frontier_task !== null && state.frontier_task !== undefined) this.#frontierTasks.set(seat, state.frontier_task);
     }
   }
 
@@ -135,6 +138,7 @@ export class LivePolicyLoop {
         memory: JSON.parse(JSON.stringify(memory, (_key, value: unknown) => typeof value === 'bigint' ? value.toString() : value)),
         rng_state: random.snapshotState().toString(),
         opening_state: this.#openingStates.get(seat) ?? null,
+        frontier_task: this.#frontierTasks.get(seat) ?? null,
       }));
     }
     return states;
@@ -206,7 +210,14 @@ export class LivePolicyLoop {
           return { mode: 'hunger_games' as const, observation: inputObservation, ...result };
         }
         const candidate = this.#candidates?.get(seat);
+        const frontierTask = this.#frontierTasks.get(seat) ?? null;
         if (this.#openingStyleCycle === undefined) {
+          if (candidate?.id === 'frontier-v1') {
+            const result = decideRuntimeFrontierPolicy(candidate as CompiledFrontierCandidate,
+              inputObservation, memory, random, feedback, frontierTask);
+            this.#storeFrontierTask(seat, result.taskAfter);
+            return { mode: 'hunger_games' as const, observation: inputObservation, ...result };
+          }
           const result = candidate === undefined
             ? decideRuntimePolicy(inputObservation, memory, this.#params, random, feedback)
             : decideRuntimeCandidatePolicy(candidate, inputObservation, memory, random, feedback);
@@ -215,6 +226,14 @@ export class LivePolicyLoop {
         const style = openingStyleForSeat(this.#seed, seat, this.#openingStyleCycle);
         const openingState = this.#openingStates.get(seat) ?? Object.freeze({ cacheTakenAt: null });
         const assignment = { seed: this.#seed, seat, style, cycle: this.#openingStyleCycle, state: openingState };
+        if (candidate?.id === 'frontier-v1') {
+          const result = decideRuntimeFrontierOpening(candidate as CompiledFrontierCandidate,
+            inputObservation, memory, random, feedback, assignment, frontierTask);
+          this.#openingStates.set(seat, result.openingStateAfter!);
+          this.#storeFrontierTask(seat, result.taskAfter);
+          return { mode: 'hunger_games' as const, observation: inputObservation, ...result,
+            openingState: result.openingStateAfter! };
+        }
         const result = candidate === undefined
           ? decideRuntimeOpeningPolicy(inputObservation, memory, this.#params, random, feedback, assignment)
           : decideRuntimeCandidateOpening(candidate, inputObservation, memory, random, feedback, assignment);
@@ -250,10 +269,11 @@ export class LivePolicyLoop {
     });
     let recorded = Promise.resolve();
     if (this.#recordPolicy) {
-      let record: ReturnType<typeof makePolicyReplayRecordV4> | ReturnType<typeof makeCivilizationPolicyReplayRecord>;
+      let record: ReturnType<typeof makePolicyReplayRecordV6> | ReturnType<typeof makeCivilizationPolicyReplayRecord>;
       if (step.mode === 'hunger_games') {
-        record = makePolicyReplayRecordV4({ sequence, seat, input: step.input, decision: step.decision,
-          openingStateAfter: step.input.opening === null ? null : this.#openingStates.get(seat) ?? null,
+        record = makePolicyReplayRecordV6({ sequence, seat, input: step.input as PolicyReplayInputV5, decision: step.decision,
+          taskBefore: step.taskBefore ?? null, taskAfter: step.taskAfter ?? null,
+          openingStateAfter: step.input.opening === null ? null : step.openingStateAfter ?? this.#openingStates.get(seat) ?? null,
           rngStateAfter: step.rngStateAfter, disposition });
       } else {
         record = makeCivilizationPolicyReplayRecord({ sequence, seat, input: step.input, decision: step.decision,
@@ -319,24 +339,25 @@ export class LivePolicyLoop {
 
   #disposition(previous: OwnedAction | undefined, decision: GameplayDecision, tick: number, sequence: bigint): PolicyDisposition {
     const action_sequence = sequence.toString();
-    if (previous === undefined) return decision.intent.kind === 'hold' ? { kind: 'hold' } : { kind: 'start', action_sequence };
-    const activeSequence = previous.sequence.toString();
-    const same = canonicalJson(previous.decision.intent) === canonicalJson(decision.intent);
+    const active = previous?.state === 'effectRecording' ? undefined : previous;
+    if (active === undefined) return decision.intent.kind === 'hold' ? { kind: 'hold' } : { kind: 'start', action_sequence };
+    const activeSequence = active.sequence.toString();
+    const same = canonicalJson(active.decision.intent) === canonicalJson(decision.intent);
     const priority = goalPriority(decision);
-    const previousPriority = previous.priority;
+    const previousPriority = active.priority;
     if (same) {
-      previous.priority = Math.max(previousPriority, priority);
-      return previous.state === 'running'
+      active.priority = Math.max(previousPriority, priority);
+      return active.state === 'running'
         ? { kind: 'continue', action_sequence: activeSequence }
         : { kind: 'defer', action_sequence: activeSequence, reason: 'cleanupPending' };
     }
     if (decision.intent.kind === 'hold' || priority < previousPriority) return { kind: 'defer', action_sequence: activeSequence, reason: 'lowerPriority' };
     if (priority === previousPriority) {
-      if (previous.state === 'reserved') return { kind: 'defer', action_sequence: activeSequence, reason: 'cleanupPending' };
-      if (previous.decision.goal.kind === 'explore' && decision.goal.kind === 'explore') {
+      if (active.state === 'reserved') return { kind: 'defer', action_sequence: activeSequence, reason: 'cleanupPending' };
+      if (active.decision.goal.kind === 'explore' && decision.goal.kind === 'explore') {
         return { kind: 'defer', action_sequence: activeSequence, reason: 'goalPersistence' };
       }
-      if (BigInt(tick - previous.acceptedTick) < this.#strategyIntervalTicks * 2n) return { kind: 'defer', action_sequence: activeSequence, reason: 'hysteresis' };
+      if (BigInt(tick - active.acceptedTick) < this.#strategyIntervalTicks * 2n) return { kind: 'defer', action_sequence: activeSequence, reason: 'hysteresis' };
     }
     return { kind: 'replace', action_sequence, replaces_action_sequence: activeSequence,
       reason: priority > previousPriority ? 'higherPriority' : 'targetChanged' };
@@ -379,7 +400,6 @@ export class LivePolicyLoop {
       if (outcome.kind === 'pending' || (outcome.kind === 'progress'
           && (action.competitor.gameplay.mode !== 'civilization' || !isMaterialAction(action.decision)))) throw new RunnerError('runtime_failure', 'policy skill', { kind: 'nonterminal_skill_outcome' });
       action.state = 'settled';
-      if (this.#actions.get(action.competitor.seat) === action) this.#actions.delete(action.competitor.seat);
       const source = outcome.kind === 'progress' ? null : sharedFeedbackSource(action, outcome);
       const feedback = source === null ? null : createPolicyFeedback(source);
       const seat = action.competitor.seat;
@@ -414,8 +434,11 @@ export class LivePolicyLoop {
           funnel: funnelRecord,
         }));
       }
-      if (this.#recordPolicy) await this.#trace.recordPolicyEffect(action.competitor.gameplay.mode === 'civilization'
-        ? makeCivilizationPolicyEffectRecord(action.sequence, outcome, pathUpdates) : makePolicyEffectRecord(action.sequence, outcome, pathUpdates));
+      if (this.#recordPolicy) {
+        action.state = 'effectRecording';
+        await this.#trace.recordPolicyEffect(action.competitor.gameplay.mode === 'civilization'
+          ? makeCivilizationPolicyEffectRecord(action.sequence, outcome, pathUpdates) : makePolicyEffectRecord(action.sequence, outcome, pathUpdates));
+      }
       effectRecorded = true;
       deliveringActivity = true;
       this.#onActivity?.({ kind: 'action', seat: action.competitor.seat, actionSequence: action.sequence.toString(),
@@ -455,6 +478,11 @@ export class LivePolicyLoop {
     const target = actionTarget(action.decision.intent);
     if (target === null || this.#funnel === undefined) return null;
     return this.#funnel.seatForUsername(action.competitor.bot.entities[target]?.username);
+  }
+
+  #storeFrontierTask(seat: number, task: FrontierTask | null): void {
+    if (task === null) this.#frontierTasks.delete(seat);
+    else this.#frontierTasks.set(seat, task);
   }
 
   #cancel(action: OwnedAction, reason: SkillCancellation): Promise<void> {

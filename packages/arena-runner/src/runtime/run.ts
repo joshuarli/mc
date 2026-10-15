@@ -40,6 +40,7 @@ import { ActionFunnelCollector, flushDiagnosticRings } from './funnel.js';
 import { launchWorkerProcess, WorkerCohort, type WorkerLauncher } from '../workers/cohort.js';
 import { parseWorkerCount } from '../workers/assignment.js';
 import { persistCheckpoint, type LoadedCheckpoint } from '../checkpoint/persist.js';
+import { restoredPolicyState } from '../checkpoint/policy-state.js';
 import { publishSaveResult, readSaveRequest } from '../checkpoint/save-request.js';
 import type { ExternalSeatRequest } from '../effective-scenario.js';
 import type { CheckpointWrittenPayload } from '../control/types.js';
@@ -88,11 +89,15 @@ function requiredControlCapabilities(
   scenario: PreparedRun['scenario'],
 ): readonly ControlCapability[] {
   switch (scenario.mode) {
-    case 'hunger_games': return scenario.schemaVersion === 3
-      || (scenario.schemaVersion === 4 && scenario.rules.kind === 'uhc_duel')
-      || externalSeats(scenario).length > 0
-      ? ['hunger_games_v1', 'hunger_games_roster_v2']
-      : ['hunger_games_v1'];
+    case 'hunger_games': {
+      if ((scenario.schemaVersion === 3 && scenario.rules?.kind === 'uhc_duel')
+          || (scenario.schemaVersion === 4 && scenario.rules.kind === 'uhc_duel')) {
+        return ['hunger_games_v1', 'hunger_games_roster_v2', 'damage_events_v1', 'duel_mechanics_v1'];
+      }
+      return scenario.schemaVersion === 3 || (scenario.schemaVersion === 4 && scenario.rules.kind === 'uhc_duel')
+        || externalSeats(scenario).length > 0
+        ? ['hunger_games_v1', 'hunger_games_roster_v2'] : ['hunger_games_v1'];
+    }
     case 'civilization': return ['civilization_v1'];
   }
 }
@@ -234,7 +239,7 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
         const member = duelPoolMember(request.id);
         poolPartners.set(seat, request.id);
         assignedPolicies.push({
-          seat, id: member.id, version: DUEL_POOL_VERSION, implementation: 'duel-pool-v1',
+          seat, id: member.id, version: DUEL_POOL_VERSION, implementation: 'duel-pool-v2',
           semanticId: member.semanticId, params: {},
         });
         continue;
@@ -430,6 +435,7 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
       ...(funnel === undefined ? {} : { funnel }),
       ...(seatCandidates.size === 0 ? {} : { candidates: seatCandidates }),
       ...(poolPartners.size === 0 ? {} : { poolPartners }),
+      ...(resume === undefined ? {} : { restore: restoredPolicyState(resume.botState) }),
     });
     if (workerCount > 1) {
       cohort = new WorkerCohort({
@@ -465,13 +471,16 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
       throw new RunnerError('runtime_failure', 'prepare command', { kind: 'invalid_prepare_envelope' });
     }
     if (resume !== undefined && recordsActionFunnel) {
+      const frontierTasks = [...coordinator.exportPolicyState().entries()].sort(([left], [right]) => left - right)
+        .map(([seat, state]) => ({ seat, task: state.frontier_task ?? null }));
       await runtimeTrace.recordRunNote({
-        schema: 'resume-v1',
+        schema: 'resume-v2',
         checkpoint_id: resume.manifest.checkpoint_id,
         digest: resume.manifest.record.digest,
         epoch,
         match_tick: resume.manifest.match_tick,
         eliminated_seats: resume.record.seats.filter((entry) => !entry.alive).map((entry) => entry.seat),
+        frontier_tasks: frontierTasks,
       });
     }
     if (assignedPolicies.length > 0) {
@@ -493,6 +502,15 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
       roster.competitorIdentities[competitor.seat]!,
       funnel === undefined ? clientOptions : {
         ...clientOptions, funnel: funnel.sink(competitor.seat), diagnostic: funnel.diagnosticSink(competitor.seat),
+        ...(!(scenario.mode === 'hunger_games'
+          && ((scenario.schemaVersion === 3 && scenario.rules?.kind === 'uhc_duel')
+            || (scenario.schemaVersion === 4 && scenario.rules.kind === 'uhc_duel'))) ? {} : {
+          clientMechanics: (receipt: import('@arena/bots').ClientMechanicsReceipt) => {
+            void runtimeTrace.recordRunNote({ schema: 'client-mechanics-v1', seat: competitor.seat,
+              tick: coordinator?.lastMatchTick ?? null, kind: 'shield_blocking_transition', blocking: receipt.blocking,
+            }).catch((error: unknown) => coordinator?.reportFailure(error));
+          },
+        }),
       },
     ));
     spectators = roster.spectators.map((identity) => new RuntimeSpectatorClient(identity));
@@ -695,7 +713,7 @@ export async function runPreparedRun(options: RunPreparedRunOptions): Promise<Co
           checkpointId: savedCheckpoint.checkpointId,
           epoch,
           written: savedCheckpoint.written,
-          botState: { schema: 1, seats: [...savedCheckpoint.botState.entries()].sort(([a], [b]) => a - b)
+          botState: { schema: 2, seats: [...savedCheckpoint.botState.entries()].sort(([a], [b]) => a - b)
             .map(([seat, state]) => ({ seat, ...state })) },
           scenario: {
             path: options.preparedRun.scenarioPath.toString('utf8'),
@@ -1058,7 +1076,8 @@ class ControlCoordinator {
           this.#events.push(message);
           if (message.type === 'outcome') {
             try {
-              reconstructEventResult(this.#runId, this.#prepare, this.#events.filter((event) => event.type !== 'damage'));
+              reconstructEventResult(this.#runId, this.#prepare,
+                this.#events.filter((event) => event.type !== 'damage' && event.type !== 'mechanics_receipt'));
             } catch (error) {
               throw new RunnerError('corrupt_evidence', 'authoritative match events', {
                 kind: traceFailureKind(error),
@@ -1371,7 +1390,8 @@ async function cleanupOwnedRun(options: Readonly<{
 
 function isAuthorityEvent(message: ControlMessage): message is RuntimeAuthorityEvent {
   return message.type === 'public_clock' || message.type === 'public_state' || message.type === 'civilization_state'
-    || message.type === 'elimination' || message.type === 'outcome' || message.type === 'damage';
+    || message.type === 'elimination' || message.type === 'outcome' || message.type === 'damage'
+    || message.type === 'mechanics_receipt';
 }
 
 async function processExitObserved(process: OwnedServerProcess): Promise<boolean> {
@@ -1517,23 +1537,4 @@ interface SaveCapture {
 function resumeCapable(scenario: PreparedRun['scenario']): boolean {
   return scenario.mode === 'hunger_games' && (scenario.schemaVersion === 3
     || scenario.roster.seats.some(({ controller }) => controller.kind === 'external'));
-}
-
-function restoredPolicyState(botState: unknown): ReadonlyMap<number, SeatPolicyState> {
-  const states = new Map<number, SeatPolicyState>();
-  const value = botState as { schema?: unknown; seats?: unknown };
-  if (value.schema !== 1 || !Array.isArray(value.seats)) {
-    throw new RunnerError('corrupt_evidence', 'checkpoint', { kind: 'invalid_bot_state' });
-  }
-  for (const entry of value.seats as Array<{ seat?: unknown; memory?: unknown; rng_state?: unknown; opening_state?: unknown }>) {
-    if (typeof entry.seat !== 'number' || typeof entry.rng_state !== 'string' || !/^[0-9]{1,20}$/.test(entry.rng_state)) {
-      throw new RunnerError('corrupt_evidence', 'checkpoint', { kind: 'invalid_bot_state' });
-    }
-    states.set(entry.seat, Object.freeze({
-      memory: entry.memory,
-      rng_state: entry.rng_state,
-      opening_state: (entry.opening_state ?? null) as SeatPolicyState['opening_state'],
-    }));
-  }
-  return states;
 }
