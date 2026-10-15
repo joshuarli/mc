@@ -1,14 +1,37 @@
 # Arena Frontier: from a six-bot experiment to competitive worlds
 
-**Status:** winding down 2026-10-14. Integration branch `campaign/frontier`, at the commit that contains this status. No new item starts. The live order is Steering order below. The wave is steering S0 (runner reports), steering S1 (planned UHC lab schema), and steering S3 (pure `frontier-v1`, no `skills.ts`). The one-leg drop (`7e93161`) is merged offline and was not live-checked. The owner stopped that duel before a match result. That run has no score. Next work, when resumed, is S0, then S1. S3 may run beside them only as a pure `arena-core` module that does not edit `skills.ts`. Seed 260114 stays a navigation and perception red. Its 0.75 score is a match outcome and is excluded from combat-skill qualification. Do not grind that seed with more look or path patches. Written against `master` at `f479b16` (2026-10-14). This document supersedes the earlier agent campaign plans, which G0 deleted.
+**Status:** paused 2026-10-14. Integration branch `campaign/frontier`, at the commit that contains this status. No new item starts until the owner says resume.
+
+## Handoff (paused 2026-10-14)
+
+**Resume.** Prompt: `Execute docs/minecraft-arena-frontier-campaign.md from Steering order on branch campaign/frontier. S0, the pure S3 module, and the S1 lab damage proof are merged. Start at S2. Do not edit skills.ts to chase seed 260114. Do not extend the rejected search and drop commits. Finish every deliverable. Never push.` First command: `git switch campaign/frontier && git status --porcelain && test -f scenarios/uhc-melee.toml && test -f scenarios/uhc-bow.toml && test -f scenarios/uhc-cover.toml && test -f scenarios/uhc-elevation.toml && test -f scenarios/uhc-duel.toml`. Then `./arena build --package all` before editing. Recreate a lane with `git worktree add .work/wt/frontier-<lane> -b campaign/frontier-<lane> campaign/frontier`, then `pnpm install --frozen-lockfile --offline --store-dir /Users/josh/d/mc/.work/arena/pnpm-store` and `git checkout -- pnpm-lock.yaml`. Set `TMPDIR` to `/Users/josh/d/mc/.work/tmp`.
+
+**State.** Branch `campaign/frontier`. Not pushed. This session merged duel report schema 2 (`52116ed`), scenario schema 4 and the four planned labs (`fa07f06`), schema-4 UHC prepare (`85ba049`), `frontier-v1` (`4ae4b07`, profile `b0ed10c`), the floored planned border center (`77a32c0`), and a per-scenario duel seed file (`5d67c66`). Known red on that tip: seed 260114 is still no combat and its 0.75 score is excluded from combat qualification; six-seed quality still fails loot 0.556, self-inflicted 0.268, and unexplained idle 1288; `92a09ea`, `eea8169`, `6accccf`, and `7e93161` remain in `skills.ts` and are a rejected method; `compileCandidate('frontier-v1')` still calls `stepAgent` with `task: null`; `bow-kiter` does not shoot and `shield-user` does not raise a shield; a duel process can exit 0 when every match fails.
+
+**Open lanes.** None.
+
+**Retained worktrees.** No registered worktree besides `/Users/josh/d/mc` on `campaign/frontier`. These directories are not registered worktrees and are left in place because earlier campaign text says not to reuse their names: `.work/wt/civ-acceptance-prep`, `civ-client-align`, `civ-feedback`, `civ-independent`, `civ-integration`, `civ-java-live`, `civ-runtime-live`, `civ-wire-evidence`, `natural-map-config`, `natural-world-runtime`, `opening-style-evidence`. `codex-campaign-closeout.py allow` does not apply to them.
+
+**Not started.**
+1. S2. The pool members must perform the named action, with a client and server receipt. Unqualified members stay out of promotion.
+2. Pass the `frontier-v1` task through the runner. A live match must not call `stepAgent` with `task: null`.
+3. S4, then S5. Do not drop a seat about 20 blocks to force a duel. Do not aim a step from an entity the visibility ray has not admitted.
+4. S6 and S7 only after a passing slice of S2 through S5. No quality-diversity archive. Do not rerun seed 260114 as a combat gate.
+5. S8, then S9: C0, C1 through C5, R1 and R1c with a headless surrogate, hunger-24, S12, M4, the H items, O1, Z1.
+
+**Owner decisions owed.** None blocking. Logged calls to review: `[rules]` table in scenario 3; squads outcome last-survivor by seat; `hunger-six` on scenario schema 3; v5 ships as candidate `improved`, and baseline stays frozen until a league verdict.
+
+**Verified.** `git worktree prune` and `git worktree list` show only the main checkout. `git branch --no-merged campaign/frontier` is empty. `git status --porcelain` is clean at the winddown commit. No campaign process, live lock, or scheduled wakeup remains. `.work/` is in `.git/info/exclude` and is on `/dev/disk3s5`, not a tmpfs; `df -T` is absent on this Mac. The resume command above was run with `env -i HOME=$HOME PATH=$PATH` and printed `rehearsal-ok`. `./arena build --package all` was not re-run at winddown. The Codex `/hooks` trust step was not run; this session is Grok, and `codex-campaign-closeout.py begin` reported closeout already active.
 
 ## Steering order (2026-10-14, owner)
+
+Written against `master` at `f479b16` (2026-10-14). This document supersedes the earlier agent campaign plans, which G0 deleted.
 
 This order replaces the Priority override sequence and the pit-search method in `92a09ea`, `eea8169`, `6accccf`, and `7e93161`. Those commits stay on the branch. Do not extend them, and do not build `frontier-v1` on them. The four-heading sweep (`6a2d5dd`) may stay while every heading is fixed and independent of entity coordinates.
 
 These stay in force: completion gates, world generation, ordinary mechanics, fairness, plugin-owned outcomes, fault tests, civilization, human admission, hunger-24, frontier-war-64, capacity, checkpoint and resume, and delivery. Keep `baseline@1` frozen. Keep historical trace readers. A changed meaning gets a new schema version. Keep an accepted commit that a review snapshot omitted.
 
-On resume the executor runs from S0 through S9 without asking. Competitive-seat tests use a headless surrogate. No owner playtest. No LLM, GPU, or paid cloud. No push. No new runtime dependency. Keep Paper 26.1.2 build 74, protocol 775, Java 25, Node.js 26.11.1, pnpm, TypeScript 7, Mineflayer 4.39.0, and mineflayer-pathfinder 2.4.5. Do not add Azalea, SoulFire, Python, XState, an ECS, GOAP, or a behavior-tree library.
+On resume the executor runs the remaining items from S2 through S9 without asking. S0, the S1 lab damage proof, and the pure S3 module are merged. The runner still calls `stepAgent` with `task: null`. Competitive-seat tests use a headless surrogate. No owner playtest. No LLM, GPU, or paid cloud. No push. No new runtime dependency. Keep Paper 26.1.2 build 74, protocol 775, Java 25, Node.js 26.11.1, pnpm, TypeScript 7, Mineflayer 4.39.0, and mineflayer-pathfinder 2.4.5. Do not add Azalea, SoulFire, Python, XState, an ECS, GOAP, or a behavior-tree library.
 
 ### Evidence that sets this order
 
@@ -106,18 +129,18 @@ Quality gates fixed now are the Hunger-24 gates row in Decisions plus: self-infl
 
 ## Item status (2026-10-14)
 
-Merged means on `campaign/frontier` and verified at least offline. Partial and parked items carry their next step in the Handoff. The S ids in this table are section 4 scenario items, not the steering sequence S0 through S9.
+Merged means on `campaign/frontier` and verified at least offline. Partial and parked items carry their next step in the paused Handoff. The S ids in this table are section 4 scenario items, not the steering sequence S0 through S9. Steering S0, the S1 labs, and the pure S3 module are merged. What remains starts at S2 in that Handoff.
 
 | State | Items |
 |---|---|
 | Merged and live-verified | G0, G1, G2 (baseline recorded), S1, S2, M0, M1 (melee curriculum), M2 (ranged curriculum), K1 plugin and runner (`checkpoint-resume` live), Q0, Q-loop |
 | Merged, offline only or partly live | R1b (rules sent by the runner; no live run uses a rule mode), S3/S3a, S4–S7, S8/S8b, S9, S10, S11, S13, M3, M3a, L1a, R2, R3, L1, B1, Q1 (v5 set), `steadyMeleeEngagement`, Q-trapped, D-ladder (`./arena duel`), D-pool (pool version 1; `bow-kiter` does not shoot; `shield-user` does not raise a shield), D-skills (`improved` eats under pressure, then disengages with no food; outside melee with arrows it shoots; no shield policy, strafe, or fall avoidance), D-rules (`uhc_duel` v1; natural terrain; one live smoke won), Q-engage (led strike; `curriculum-melee` passed; six-seed quality fails the 5% rejection gate at 0.268), Q-resilience (one quarantined client; `--workers 1` marks the run degraded; `--workers` greater than 1 does not) |
 | Partial / parked | C0 (craft defect), M4 (`curriculum-survival` unrun, calibration unmeasured), R1/R1c (`external-seat` row 1), S12 (seed matrix incomplete), Q1 (live comparison mixed) |
-| Not started | S0 through S9 (Steering order). Still open inside that order: a shield raise and strafe that the pool actually performs, fall avoidance that does not drop into the pit, D-train, Q2, C1–C5, H-SRV/MECH/RUN/CIV, O1, L2, Z1 |
+| Not started | Steering S2, the runner task for `frontier-v1`, then S4 through S9. Still open: a shield raise and strafe that the pool actually performs, fall avoidance that does not drop into the pit, D-train, Q2, C1–C5, H-SRV/MECH/RUN/CIV, O1, L2, Z1 |
 
-## Handoff (resumed 2026-10-14)
+## Stop record (resumed 2026-10-14, superseded)
 
-**Resume.** Prompt: `Execute docs/minecraft-arena-frontier-campaign.md from Steering order on branch campaign/frontier. Start at S0, then S1. S3 may run beside them only as a pure arena-core module that does not edit skills.ts. Finish every deliverable. Never push. Do not grind seed 260114. Do not extend the rejected search and drop commits.` First commands: `git switch campaign/frontier && ./arena build --package all`. No lane worktrees exist; recreate under `.work/wt/frontier-<lane>` with `git worktree add .work/wt/frontier-<lane> -b campaign/frontier-<lane> campaign/frontier`, then `pnpm install --frozen-lockfile --offline --store-dir <repo>/.work/arena/pnpm-store` and `git checkout pnpm-lock.yaml` (pnpm adds `@pnpm/exe`; never commit it). Lanes that run live need `.work/arena/{toolchains,downloads,gradle}` cloned with `cp -cR`.
+This section is the stop before steering S0. It does not restart the campaign. Resume from `## Handoff (paused 2026-10-14)` under the status line. Start at S2.
 
 **State.** Branch `campaign/frontier` at the commit that contains this handoff; `master` untouched. Everything from the first pause (see Decision and Campaign logs) plus this sprint is merged: runner wiring of per-seat candidates, `baseline@1` frozen with `improved` (policy-v5) and `decisionDiff`/`explain` introspection, `./arena quality` (ephemeral ports, `--concurrency 1-4`, per-seat quality table, reason histograms, gates), `decision-diff`, seat timelines in `explain`, S8b duplicate-login fix, S9 tick metrics, S10/S11/S13 spawn and cache search with reachability and whole-formation translation (`world-search-v6`), `steadyMeleeEngagement`, observed-support travel targets, feedback-contract fix, combat-arena latency options for tests.
 
@@ -135,15 +158,7 @@ Merged means on `campaign/frontier` and verified at least offline. Partial and p
 - `external-seat` row 1 (surrogate loots/damages/wins) fails with a bare AssertionError; the other 7 rows pass. `curriculum-survival` never ran; calibration constants not measured.
 - S12 seed matrix incomplete: hunger-six resolves at 481516..481521; `hunger-12` at 481516/481518 failed before the ranked-translation commit (not rerun); hunger-24, development 500001..500012 and held-out 600001..600024 never probed.
 
-**Open lanes.** Steering S1 `campaign/frontier-s1` in `.work/wt/frontier-s1`, wiring schema-4 prepare so the kit and `NATURAL_REGENERATION` apply. No live match. S0 and S3 are merged; their worktrees are removed. **Retained worktrees.** The eleven unregistered `.work/wt/civ-*`, `natural-*`, and `opening-style-evidence` directories stay untouched.
-
-**Not started (in order).**
-1. S0 evaluation honesty. No behavior tuning. Split the six-seed 5% denominator before treating 0.268 as an aim failure. Mark the finished 260114 duels `no combat demonstrated`.
-2. S1, a symmetric reachable UHC arena. Keep `scenarios/uhc-duel.toml` as the transfer case. Schema 3 needs a versioned extension for a planned flat arena.
-3. S3, beside S0 and S1, only as pure `arena-core`. Four goals. That lane does not edit `skills.ts`.
-4. S2 real pool mechanics, then S4 and S5.
-5. S6 and S7 after a passing slice of S0 through S5. D-train and Q2 live here, against a qualified pool. Do not start a quality-diversity archive first. Do not rerun seed 260114 as a combat gate.
-6. S8, the earlier backlog: C0 craft fix and C1–C5, R1 and R1c with a headless surrogate, hunger-24, S12, M4, hardening, the bench matrix (O1), Z1. Then S9.
+**Open lanes at that stop.** None remain. S0, S1, and the pure S3 module merged after this record. The eleven unregistered `.work/wt/civ-*`, `natural-*`, and `opening-style-evidence` directories stay untouched.
 
 Q-engage, D-rules, D-pool, D-ladder, and the eat, retreat, and bow slices of D-skills are merged. See the campaign log. Q-resilience (`d917f87`) and Q-trapped (`7707b16`) are merged offline. `baselineExplanation` is already exported. Duel engagement summaries still omit swings, time in reach, heals, bow shots, bow hits, and first strike. The six-seed table is recorded and fails loot, self-inflicted rejections, and unexplained idle. Held-out 600001..600024 is unconsumed.
 
@@ -155,7 +170,7 @@ Q-engage, D-rules, D-pool, D-ladder, and the eat, retreat, and bow slices of D-s
 
 ## 1. Charter
 
-The executor has this document and the repo. On a resume it runs from Steering order item S0 through S9, then any original item still open, without asking anything. Steering order wins when it conflicts with the Priority override sequence or with section 4.
+The executor has this document and the repo. On a resume it runs from Steering order item S2 through S9, then any original item still open, without asking anything. S0, the S1 lab damage proof, and the pure S3 module are merged. Steering order wins when it conflicts with the Priority override sequence or with section 4.
 
 - **Decide, log, continue.** Make the smallest reversible choice inside the bounds below and append one line to the decision log. Never ask, never wait for approval, send no check-ins. Run until every deliverable is met or every remaining item is parked.
 - **Hard stops** park the item and nothing else: an irreversible action, anything outside the repo and `.work/`, a boundary this document forbids, a loop that cannot check the item. Pushing is always forbidden. Park by committing the item's checkpoint on its branch, writing a reproducer in the campaign log, and moving to the next item that does not depend on it.
@@ -613,10 +628,11 @@ Do not spend a research phase rediscovering launchers, server replacements, bot 
 - 2026-10-14 bow, cover, and elevation on seed 710114 failed before Paper with `seeded_scenario_changed`. Every duel shares league id `duel`, and the melee run had already staged that seed. The process still exited 0. The staged file name now includes a hash of the scenario path, so one seed can name two scenarios. Those three labs are not results.
 - 2026-10-14 steering S0 merged at `52116ed`. Duel report schema 2. Zero attacks and zero PvP hits are `perception_failure` and `no_combat_demonstrated`. The score stays in the mean. `valid_draw` is only an otherwise valid 0.5.
 - 2026-10-14 steering S3 merged at `4ae4b07`. `frontier-v1` selects from scored proposals in `policy-v6.ts`. `policies/candidates/frontier-v1.toml` matches the registry defaults. A live match still passes `task: null` into `stepAgent`, so the task does not persist until the runner arm lands.
+- 2026-10-14 paused. Bow, cover, and elevation on seed 710114, `improved` against `baseline`, one round, both assignments, after `5d67c66`. Score means 0.5, 0, and 0.5. Every match is `combat_demonstrated` and `combat_skill_qualified`. The quality report records one melee PvP elimination in each match. Bow `d1772a8`: scores 1 and 0, opportunities 17 and 6, PvP hits 10 and 11, end ticks 556 and 416. Cover `df4b457`: scores 0 and 0, opportunities 10 and 13, hits 9 and 10, end ticks 377 and 356. Elevation `ddb4753`: scores 0 and 1, opportunities 31 and 3, hits 14 and 9, end ticks 920 and 584. `improved` is not promoted. No start-to-first-contact distribution was published. Next item is S2. No lanes are open.
 
 ## 13. For the owner afterwards
 
-While the campaign is open, resume from the Handoff prompt. After it finishes, read the reports below. Do not start again from G0.
+While the campaign is paused, resume from `## Handoff (paused 2026-10-14)`. After it finishes, read the reports below. Do not start again from G0.
 
 - Read `docs/acceptance-report.md`, the league report, the capacity summaries and the list of parked items in the campaign log.
 - Cherry-pick from `campaign/frontier`; nothing is pushed.
