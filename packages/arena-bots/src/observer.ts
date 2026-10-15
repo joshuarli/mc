@@ -6,12 +6,14 @@ import {
   MAX_ARROW_COUNT,
   MAX_TERRAIN_CHANGES,
   agentState,
+  activeEffect,
   blockPosition,
+  combatStatus,
   currentKnowledge,
   emptyEquipment,
   entityId,
   equipmentUpgrade,
-  foodStack,
+  identifiedFoodStack,
   observationSequence,
   staleKnowledge,
   tick,
@@ -23,6 +25,7 @@ import {
   type AgentState,
   type BlockPosition,
   type ClientDiagnosticSink,
+  type CombatStatus,
   type DirectionSupport,
   type Knowledge,
   type LootOpportunity,
@@ -285,6 +288,7 @@ export class MineflayerObserver {
     // Mineflayer already reports half-hearts; ceiling preserves integer policy thresholds and living health.
     const healthHalfHearts = Math.ceil(this.#bot.health);
     if (!Number.isSafeInteger(healthHalfHearts) || !Number.isSafeInteger(this.#bot.food)) return null;
+    const receivedCombatStatus = readCombatStatus(this.#bot, entity);
 
     const inventory = this.#bot.inventory;
     const equipped = {
@@ -325,7 +329,10 @@ export class MineflayerObserver {
         const restores = typeof points === 'number' && Number.isSafeInteger(points) && points >= 1 && points <= 20
           ? points
           : undefined;
-        foods.push(foodStack(slot, item.count, restores));
+        const itemKind = item.name === 'golden_apple' || item.name === 'enchanted_golden_apple'
+          ? 'goldenApple'
+          : 'hungerFood';
+        foods.push(identifiedFoodStack(slot, item.count, itemKind, restores));
       } else {
         const equipmentSlot = known.kind === 'weapon' ? 'weapon' : known.equipmentSlot;
         upgrades.push(equipmentUpgrade(slot, equipmentSlot, known.rating));
@@ -342,6 +349,7 @@ export class MineflayerObserver {
       directions,
       ...(terrainChanges === undefined ? {} : { terrainChanges }),
       healthHalfHearts,
+      combatStatus: receivedCombatStatus,
       hungerPoints: this.#bot.food,
       foodStacks: foods,
       equipped,
@@ -463,6 +471,20 @@ export class MineflayerObserver {
   #assertOpen(): void {
     if (this.#closed) throw new Error('Mineflayer observer is closed');
   }
+}
+
+function readCombatStatus(bot: Bot, entity: NonNullable<Bot['entity']>): CombatStatus {
+  const playerMetadata = bot.registry.entitiesByName.player as { readonly metadataKeys?: readonly string[] } | undefined;
+  const absorptionIndex = playerMetadata?.metadataKeys?.indexOf('player_absorption') ?? -1;
+  let absorptionValue: number | null = null;
+  const absorption = entity.metadata[absorptionIndex];
+  if (absorptionIndex >= 0 && typeof absorption === 'number' && Number.isFinite(absorption)
+      && absorption >= 0 && absorption <= 4096) {
+    absorptionValue = Math.round(absorption);
+  }
+  const effects = Object.values(entity.effects).map((effect) => activeEffect(effect.id, effect.amplifier, effect.duration));
+  effects.sort((left, right) => left.effectId - right.effectId);
+  return combatStatus(absorptionValue, effects);
 }
 
 function prepareLootSearchPalettes(bot: Bot): void {

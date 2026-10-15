@@ -23,7 +23,7 @@ import { baselineExplanation } from './policy-v5.js';
 import { DeterministicRandom, RandomStream } from './random.js';
 import { compileCandidate } from './candidates.js';
 
-export const DUEL_POOL_VERSION = 1;
+export const DUEL_POOL_VERSION = 2;
 
 export const DUEL_POOL_IDS = [
   'stationary-dummy',
@@ -34,11 +34,82 @@ export const DUEL_POOL_IDS = [
   'baseline',
 ] as const;
 
+export const DUEL_POOL_SCORING_CANDIDATES = [
+  'strafer',
+  'aggressive-rusher',
+  'bow-kiter',
+  'shield-user',
+  'baseline',
+] as const;
+
 export type DuelPoolId = typeof DUEL_POOL_IDS[number];
+export type DuelPoolPromotionId = typeof DUEL_POOL_SCORING_CANDIDATES[number];
+
+export type DuelPoolReceiptAction =
+  | 'lateralMovement'
+  | 'contactStarted'
+  | 'distanceMaintained'
+  | 'arrowReleased'
+  | 'shieldRaised'
+  | 'shieldLowered'
+  | 'healedWithPermittedItem';
+
+export interface DuelPoolReceipt {
+  readonly member: DuelPoolId;
+  readonly action: DuelPoolReceiptAction;
+  readonly client: boolean;
+  readonly server: boolean;
+}
+
+export interface DuelPoolQualification {
+  readonly member: DuelPoolId;
+  readonly status: 'qualified' | 'unqualified' | 'diagnostic';
+  readonly reason: string | null;
+}
+
+const REQUIRED_RECEIPTS: Readonly<Partial<Record<DuelPoolId, readonly DuelPoolReceiptAction[]>>> = Object.freeze({
+  'strafer': ['lateralMovement'],
+  'aggressive-rusher': ['contactStarted'],
+  'bow-kiter': ['arrowReleased', 'distanceMaintained'],
+  'shield-user': ['shieldRaised', 'shieldLowered', 'healedWithPermittedItem'],
+  baseline: ['contactStarted'],
+});
+
+const DIAGNOSTIC_IDS: readonly DuelPoolId[] = Object.freeze(['stationary-dummy']);
+
+export function duelPoolQualificationReport(receipts: readonly DuelPoolReceipt[]): readonly DuelPoolQualification[] {
+  return Object.freeze(DUEL_POOL_IDS.map((member) => {
+    if (DIAGNOSTIC_IDS.includes(member)) {
+      return Object.freeze({ member, status: 'diagnostic', reason: 'diagnostic opponent; excluded from promotion scoring' });
+    }
+    const required = REQUIRED_RECEIPTS[member] ?? [];
+    for (const action of required) {
+      const clientReceipt = receipts.some((receipt) => receipt.member === member && receipt.action === action && receipt.client);
+      const serverReceipt = receipts.some((receipt) => receipt.member === member && receipt.action === action && receipt.server);
+      if (!clientReceipt) {
+        return Object.freeze({ member, status: 'unqualified', reason: `missing client receipt: ${action}` });
+      }
+      if (!serverReceipt) {
+        return Object.freeze({ member, status: 'unqualified', reason: `missing server receipt: ${action}` });
+      }
+    }
+    return Object.freeze({ member, status: 'qualified', reason: null });
+  }));
+}
+
+export function duelPoolScoringMembers(
+  qualifications: readonly DuelPoolQualification[],
+): readonly DuelPoolPromotionId[] {
+  return Object.freeze(DUEL_POOL_SCORING_CANDIDATES.filter((member) =>
+    qualifications.some((qualification) => qualification.member === member && qualification.status === 'qualified')));
+}
 
 export const DUEL_POOL_SHIELD_RETREAT_HEALTH_HALF_HEARTS = 10;
+export const DUEL_POOL_SHIELD_HEAL_HEALTH_HALF_HEARTS = 28;
 
 const MELEE_LIMIT = BigInt(MELEE_REACH_BLOCKS) * BigInt(MELEE_REACH_BLOCKS);
+const KITE_DISTANCE_BLOCKS = 9;
+const KITE_LIMIT = BigInt(KITE_DISTANCE_BLOCKS) * BigInt(KITE_DISTANCE_BLOCKS);
 
 export interface DuelPoolMember {
   readonly id: DuelPoolId;
@@ -144,8 +215,16 @@ function scriptedIntent(id: ScriptedDuelPoolId, observation: AgentObservation): 
       return approach(opponent.id);
     case 'bow-kiter':
       if (opponent === null) return navigate(here);
-      return navigate(kiteBlock(self.position, opponent.position));
+      if (squaredDistance(self.position, opponent.position) <= KITE_LIMIT) {
+        return navigate(kiteBlock(self.position, opponent.position));
+      }
+      if (squaredDistance(self.position, opponent.position) <= 18n * 18n) return shoot(opponent.id);
+      return approach(opponent.id);
     case 'shield-user':
+      if (self.healthHalfHearts <= DUEL_POOL_SHIELD_HEAL_HEALTH_HALF_HEARTS) {
+        const apple = self.foodStacks.find((stack) => stack.itemKind === 'goldenApple');
+        if (apple !== undefined) return Object.freeze({ kind: 'eat', inventorySlot: apple.inventorySlot });
+      }
       if (opponent === null) return navigate(here);
       if (self.healthHalfHearts <= DUEL_POOL_SHIELD_RETREAT_HEALTH_HALF_HEARTS) {
         return navigate(away(self.position, opponent.position, 1));
@@ -156,7 +235,8 @@ function scriptedIntent(id: ScriptedDuelPoolId, observation: AgentObservation): 
 
 function goalFor(id: ScriptedDuelPoolId, intent: Intent, observation: AgentObservation): Goal {
   if (intent.kind === 'hold') return Object.freeze({ kind: 'wait', reason: intent.reason });
-  if (intent.kind === 'attack' || intent.kind === 'approach') {
+  if (intent.kind === 'eat') return Object.freeze({ kind: 'recoverHunger' });
+  if (intent.kind === 'attack' || intent.kind === 'approach' || intent.kind === 'shoot') {
     return Object.freeze({ kind: 'engageVisibleOpponent', target: intent.target });
   }
   if (intent.kind !== 'navigate') throw new TypeError(`duel pool partner emitted ${intent.kind}`);
@@ -225,7 +305,7 @@ function perpendicular(dx: number, dz: number): { readonly x: number; readonly z
 }
 
 function kiteBlock(agent: BlockPosition, opponent: BlockPosition): BlockPosition {
-  if (squaredDistance(agent, opponent) > MELEE_LIMIT) return agent;
+  if (squaredDistance(agent, opponent) > KITE_LIMIT) return agent;
   return away(agent, opponent, MELEE_REACH_BLOCKS + 1);
 }
 
@@ -257,6 +337,10 @@ function navigate(target: BlockPosition): Intent {
 
 function attack(target: EntityId): Intent {
   return Object.freeze({ kind: 'attack', target });
+}
+
+function shoot(target: EntityId): Intent {
+  return Object.freeze({ kind: 'shoot', target });
 }
 
 function approach(target: EntityId): Intent {

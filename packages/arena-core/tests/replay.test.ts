@@ -4,18 +4,22 @@ import { test } from 'node:test';
 import {
   agentObservation,
   agentState,
+  activeEffect,
   blockPosition,
+  combatStatus,
   currentKnowledge,
   decide,
   decidePolicyReplayV1,
   DeterministicRandom,
   emptyEquipment,
+  identifiedFoodStack,
   emptyPolicyMemory,
   PolicyParams,
   PolicyReplayInputError,
   normalizeOpeningPolicyReplayInput,
   normalizeOpeningPolicyReplayInputV4,
   normalizePolicyReplayInputV4,
+  normalizePolicyReplayInputV5,
   normalizePolicyReplayInput,
   openingPolicyState,
   openingStyleForSeat,
@@ -167,9 +171,58 @@ test('policy-input-v3 preserves opening assignment and rejects unknown styles an
     && error.code === 'invalid-opening' && error.field === 'opening.style');
 
   const unknownVersion = serializedOpeningInput();
-  unknownVersion.schema = 'policy-input-v5';
+  unknownVersion.schema = 'policy-input-v6';
   throws(() => rehydratePolicyReplayInput(unknownVersion), (error) => error instanceof PolicyReplayInputError
     && error.code === 'unsupported-schema');
+});
+
+test('policy-input-v5 carries item identity and distinct combat status fields', () => {
+  const observation = agentObservation({
+    tick: tick(10),
+    sequence: observationSequence(1),
+    agent: currentKnowledge(agentState({
+      position: blockPosition(0, 64, 0),
+      healthHalfHearts: 30,
+      combatStatus: combatStatus(4, [activeEffect(10, 0, 100)]),
+      hungerPoints: 20,
+      foodStacks: [identifiedFoodStack(3, 2, 'hungerFood', 8), identifiedFoodStack(4, 1, 'goldenApple', 4)],
+      equipped: emptyEquipment(),
+      upgrades: [],
+    })),
+    border: currentKnowledge(worldBorder(0, 0, 100)),
+    opponents: currentKnowledge([]),
+    loot: unknownKnowledge(),
+  });
+  const source = {
+    observation,
+    memory: emptyPolicyMemory(),
+    feedback: [],
+    params: PolicyParams.baseline(),
+    random: DeterministicRandom.fromState(1n),
+  };
+  const v5 = normalizePolicyReplayInputV5(source);
+  const restored = rehydratePolicyReplayInput(JSON.parse(JSON.stringify(v5)) as unknown);
+  if (restored.schema !== 'policy-input-v5') throw new Error('new input must stay policy-input-v5');
+  const agent = restored.observation.agent;
+  if (agent.kind !== 'current') throw new Error('current agent state lost');
+  equal(agent.value.combatStatus?.absorptionHalfHearts, 4);
+  deepStrictEqual(agent.value.combatStatus?.effects, [{ effectId: 10, amplifier: 0, durationTicks: 100 }]);
+  deepStrictEqual(agent.value.foodStacks.map((stack) => stack.itemKind), ['hungerFood', 'goldenApple']);
+
+  const missingKind = JSON.parse(JSON.stringify(v5)) as Record<string, unknown>;
+  const missingObservation = missingKind.observation as Record<string, unknown>;
+  const knowledge = missingObservation.agent as { value: { foodStacks: Array<Record<string, unknown>> } };
+  delete knowledge.value.foodStacks[0]!.itemKind;
+  throws(() => rehydratePolicyReplayInput(missingKind), (error) => error instanceof PolicyReplayInputError
+    && error.code === 'invalid-observation');
+
+  const oldWire = JSON.parse(JSON.stringify(normalizePolicyReplayInputV4(source))) as Record<string, unknown>;
+  const oldObservation = oldWire.observation as Record<string, unknown>;
+  const oldAgent = oldObservation.agent as { value: Record<string, unknown> };
+  equal(Object.hasOwn(oldAgent.value, 'combatStatus'), false);
+  oldAgent.value.combatStatus = null;
+  throws(() => rehydratePolicyReplayInput(oldWire), (error) => error instanceof PolicyReplayInputError
+    && error.code === 'invalid-observation');
 });
 
 test('policy-input-v1 preserves historical memory and decision semantics', () => {

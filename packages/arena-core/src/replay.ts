@@ -4,6 +4,8 @@ import {
   legacyAgentObservation,
   type AgentObservation,
   type AgentObservationInput,
+  type AgentState,
+  type Knowledge,
 } from './observation.js';
 import {
   PolicyParams,
@@ -69,6 +71,10 @@ export interface PolicyReplayInputV4 {
   readonly rng_state: string;
 }
 
+export interface PolicyReplayInputV5 extends Omit<PolicyReplayInputV4, 'schema'> {
+  readonly schema: 'policy-input-v5';
+}
+
 export interface RehydratedPolicyReplayInputV4 {
   readonly schema: 'policy-input-v4';
   readonly observation: AgentObservation;
@@ -77,6 +83,10 @@ export interface RehydratedPolicyReplayInputV4 {
   readonly params: PolicyParams;
   readonly opening: RehydratedPolicyReplayInputV3['opening'] | null;
   readonly random: DeterministicRandom;
+}
+
+export interface RehydratedPolicyReplayInputV5 extends Omit<RehydratedPolicyReplayInputV4, 'schema'> {
+  readonly schema: 'policy-input-v5';
 }
 
 export interface RehydratedPolicyReplayInputV1 {
@@ -115,7 +125,8 @@ export type RehydratedPolicyReplayInput =
   | RehydratedPolicyReplayInputV1
   | RehydratedPolicyReplayInputV2
   | RehydratedPolicyReplayInputV3
-  | RehydratedPolicyReplayInputV4;
+  | RehydratedPolicyReplayInputV4
+  | RehydratedPolicyReplayInputV5;
 
 export type PolicyReplayInputErrorCode =
   | 'invalid-shape'
@@ -165,14 +176,7 @@ export interface OpeningPolicyReplayInputSource extends PolicyReplayInputSource 
 /** Captures v2 decision inputs with the RNG state from before the decision. */
 export function normalizePolicyReplayInput(source: PolicyReplayInputSource): PolicyReplayInputV2 {
   assertValidatedAgentObservation(source.observation);
-  const observation: AgentObservationInput = Object.freeze({
-    tick: source.observation.tick,
-    sequence: source.observation.sequence,
-    agent: source.observation.agent,
-    border: source.observation.border,
-    opponents: source.observation.opponents,
-    loot: source.observation.loot,
-  });
+  const observation = stripS2ObservationFields(source.observation);
   const memory = policyMemory(source.memory);
   const params = PolicyParams.create(source.params.values).values;
 
@@ -212,6 +216,24 @@ export function normalizeOpeningPolicyReplayInputV4(source: OpeningPolicyReplayI
   });
 }
 
+export function normalizePolicyReplayInputV5(source: PolicyReplayInputSource): PolicyReplayInputV5 {
+  const base = normalizePolicyReplayInputV4(source);
+  return Object.freeze({
+    ...base,
+    schema: 'policy-input-v5',
+    observation: addS2ObservationFields(source.observation),
+  });
+}
+
+export function normalizeOpeningPolicyReplayInputV5(source: OpeningPolicyReplayInputSource): PolicyReplayInputV5 {
+  const base = normalizeOpeningPolicyReplayInputV4(source);
+  return Object.freeze({
+    ...base,
+    schema: 'policy-input-v5',
+    observation: addS2ObservationFields(source.observation),
+  });
+}
+
 export function normalizeOpeningPolicyReplayInput(source: OpeningPolicyReplayInputSource): PolicyReplayInputV3 {
   const base = normalizePolicyReplayInput(source);
   const opening = parseSection('invalid-opening', 'opening', () => normalizeOpening(source.opening));
@@ -235,18 +257,21 @@ export function rehydratePolicyReplayInput(value: unknown): RehydratedPolicyRepl
     assertExactFields(input, ['schema', 'observation', 'memory', 'params', 'rng_state'], 'input');
   } else if (schema === 'policy-input-v2') {
     assertExactFields(input, ['schema', 'observation', 'memory', 'feedback', 'params', 'rng_state'], 'input');
-  } else if (schema === 'policy-input-v3' || schema === 'policy-input-v4') {
+  } else if (schema === 'policy-input-v3' || schema === 'policy-input-v4' || schema === 'policy-input-v5') {
     assertExactFields(input, ['schema', 'observation', 'memory', 'feedback', 'params', 'opening', 'rng_state'], 'input');
   } else {
     throw new PolicyReplayInputError('unsupported-schema', 'input.schema');
   }
 
   const observation = parseSection('invalid-observation', 'observation', () => (
-    schema === 'policy-input-v4'
-      ? agentObservation(input.observation as AgentObservationInput)
+    schema === 'policy-input-v5'
+      ? parseS2Observation(input.observation)
+      : schema === 'policy-input-v4'
+      ? parsePreS2Observation(input.observation)
       : legacyAgentObservation(input.observation as AgentObservationInput)
   ));
-  if (schema !== 'policy-input-v4' && Object.hasOwn(readRecord(input.memory, 'memory'), 'knowledge')) {
+  if (schema !== 'policy-input-v4' && schema !== 'policy-input-v5'
+      && Object.hasOwn(readRecord(input.memory, 'memory'), 'knowledge')) {
     throw new PolicyReplayInputError('invalid-memory', 'memory.knowledge');
   }
   const memory = schema === 'policy-input-v1'
@@ -266,13 +291,96 @@ export function rehydratePolicyReplayInput(value: unknown): RehydratedPolicyRepl
   if (schema === 'policy-input-v2') {
     return Object.freeze({ schema, observation, memory: memory as PolicyMemory, feedback, params, random });
   }
-  if (schema === 'policy-input-v4' && input.opening === null) {
+  if ((schema === 'policy-input-v4' || schema === 'policy-input-v5') && input.opening === null) {
     return Object.freeze({
       schema, observation, memory: memory as PolicyMemory, feedback, params, opening: null, random,
     });
   }
   const opening = parseSection('invalid-opening', 'opening', () => parseOpening(input.opening));
   return Object.freeze({ schema, observation, memory: memory as PolicyMemory, feedback, params, opening, random });
+}
+
+function addS2ObservationFields(source: AgentObservation): AgentObservationInput {
+  const agent = mapKnowledge(source.agent, (state) => ({
+    ...state,
+    combatStatus: state.combatStatus ?? null,
+    foodStacks: state.foodStacks.map((stack) => ({ ...stack, itemKind: stack.itemKind ?? 'unknown' })),
+  }));
+  return Object.freeze({
+    tick: source.tick,
+    sequence: source.sequence,
+    agent,
+    border: source.border,
+    opponents: source.opponents,
+    loot: source.loot,
+  });
+}
+
+function stripS2ObservationFields(source: AgentObservation): AgentObservationInput {
+  const agent = mapKnowledge(source.agent, (state) => {
+    const { combatStatus: _combatStatus, ...legacyState } = state;
+    return {
+      ...legacyState,
+      foodStacks: state.foodStacks.map((stack) => {
+        const { itemKind: _itemKind, ...legacyStack } = stack;
+        return legacyStack;
+      }),
+    };
+  });
+  return Object.freeze({
+    tick: source.tick,
+    sequence: source.sequence,
+    agent,
+    border: source.border,
+    opponents: source.opponents,
+    loot: source.loot,
+  });
+}
+
+function mapKnowledge(
+  knowledge: Knowledge<AgentState>,
+  map: (state: AgentState) => AgentState,
+): Knowledge<AgentState> {
+  if (knowledge.kind === 'unknown') return knowledge;
+  if (knowledge.kind === 'current') return Object.freeze({ kind: 'current', value: map(knowledge.value) });
+  return Object.freeze({ kind: 'stale', value: map(knowledge.value), observedAt: knowledge.observedAt });
+}
+
+function parseS2Observation(value: unknown): AgentObservation {
+  const input = readRecord(value, 'observation');
+  assertExactFields(input, ['tick', 'sequence', 'agent', 'border', 'opponents', 'loot'], 'observation');
+  const knowledge = readRecord(input.agent, 'observation.agent');
+  if (knowledge.kind !== 'unknown') {
+    const state = readRecord(knowledge.value, 'observation.agent.value');
+    if (!Object.hasOwn(state, 'combatStatus')) throw new PolicyReplayInputError('invalid-observation', 'observation.agent.value.combatStatus');
+    if (Array.isArray(state.foodStacks)) {
+      for (const [index, entry] of state.foodStacks.entries()) {
+        if (!Object.hasOwn(readRecord(entry, `observation.agent.value.foodStacks.${index}`), 'itemKind')) {
+          throw new PolicyReplayInputError('invalid-observation', `observation.agent.value.foodStacks.${index}.itemKind`);
+        }
+      }
+    }
+  }
+  return parseSection('invalid-observation', 'observation', () => agentObservation(value as AgentObservationInput));
+}
+
+function parsePreS2Observation(value: unknown): AgentObservation {
+  const input = readRecord(value, 'observation');
+  const agent = readRecord(input.agent, 'observation.agent');
+  if (agent.kind !== 'unknown') {
+    const state = readRecord(agent.value, 'observation.agent.value');
+    if (Object.hasOwn(state, 'combatStatus')) {
+      throw new PolicyReplayInputError('invalid-observation', 'observation.agent.value.combatStatus');
+    }
+    if (Array.isArray(state.foodStacks)) {
+      for (const [index, entry] of state.foodStacks.entries()) {
+        if (Object.hasOwn(readRecord(entry, `observation.agent.value.foodStacks.${index}`), 'itemKind')) {
+          throw new PolicyReplayInputError('invalid-observation', `observation.agent.value.foodStacks.${index}.itemKind`);
+        }
+      }
+    }
+  }
+  return parseSection('invalid-observation', 'observation', () => agentObservation(value as AgentObservationInput));
 }
 
 function normalizeOpening(input: OpeningPolicyReplayInputSource['opening']): PolicyReplayInputV3['opening'] {

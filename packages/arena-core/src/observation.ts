@@ -105,7 +105,21 @@ export function emptyEquipment(): EquipmentSnapshot {
 export interface FoodStack {
   readonly inventorySlot: InventorySlot;
   readonly count: number;
+  readonly itemKind?: FoodItemKind;
   readonly restores?: number;
+}
+
+export type FoodItemKind = 'hungerFood' | 'goldenApple' | 'unknown';
+
+export interface ActiveEffect {
+  readonly effectId: number;
+  readonly amplifier: number;
+  readonly durationTicks: number;
+}
+
+export interface CombatStatus {
+  readonly absorptionHalfHearts: number | null;
+  readonly effects: readonly ActiveEffect[];
 }
 
 export function foodStack(slot: number, count: number, restores?: number): FoodStack {
@@ -121,6 +135,32 @@ export function foodStack(slot: number, count: number, restores?: number): FoodS
     count,
     ...(restores === undefined ? {} : { restores }),
   });
+}
+
+export function identifiedFoodStack(
+  slot: number,
+  count: number,
+  itemKind: Exclude<FoodItemKind, 'unknown'>,
+  restores?: number,
+): FoodStack {
+  const stack = foodStack(slot, count, restores);
+  return Object.freeze({ ...stack, itemKind });
+}
+
+export function activeEffect(effectId: number, amplifier: number, durationTicks: number): ActiveEffect {
+  if (!Number.isSafeInteger(effectId) || effectId < 0) throw new RangeError('effect ID must be nonnegative');
+  if (!Number.isSafeInteger(amplifier) || amplifier < 0 || amplifier > 255) throw new RangeError('effect amplifier is invalid');
+  if (!Number.isSafeInteger(durationTicks) || durationTicks < 0) throw new RangeError('effect duration must be nonnegative');
+  return Object.freeze({ effectId, amplifier, durationTicks });
+}
+
+export function combatStatus(absorptionHalfHearts: number | null, effects: readonly ActiveEffect[]): CombatStatus {
+  if (absorptionHalfHearts !== null
+      && (!Number.isSafeInteger(absorptionHalfHearts) || absorptionHalfHearts < 0 || absorptionHalfHearts > 4096)) {
+    throw new RangeError('absorption must be between 0 and 4096 half-hearts');
+  }
+  const clonedEffects = effects.map((effect) => activeEffect(effect.effectId, effect.amplifier, effect.durationTicks));
+  return Object.freeze({ absorptionHalfHearts, effects: Object.freeze(clonedEffects) });
 }
 
 export interface EquipmentUpgrade {
@@ -162,6 +202,7 @@ export interface AgentState {
   readonly terrainChanges?: readonly BlockPosition[];
   readonly directions?: readonly DirectionSupport[];
   readonly healthHalfHearts: number;
+  readonly combatStatus?: CombatStatus | null;
   readonly hungerPoints: number;
   readonly foodStacks: readonly FoodStack[];
   readonly equipped: EquipmentSnapshot;
@@ -175,6 +216,7 @@ export interface AgentStateInput {
   readonly terrainChanges?: readonly BlockPosition[];
   readonly directions?: readonly DirectionSupport[];
   readonly healthHalfHearts: number;
+  readonly combatStatus?: CombatStatus | null;
   readonly hungerPoints: number;
   readonly foodStacks: readonly FoodStack[];
   readonly equipped: EquipmentSnapshot;
@@ -189,7 +231,7 @@ export function agentState(input: AgentStateInput): AgentState {
     'foodStacks',
     'equipped',
     'upgrades',
-  ], 'agent state', ['combat', 'ranged', 'terrainChanges', 'directions']);
+  ], 'agent state', ['combat', 'ranged', 'terrainChanges', 'directions', 'combatStatus']);
 
   if (!Number.isSafeInteger(input.healthHalfHearts) || input.healthHalfHearts < 0 || input.healthHalfHearts > 40) {
     throw new RangeError(`health must be between 0 and 40 half-hearts, received ${input.healthHalfHearts}`);
@@ -204,6 +246,9 @@ export function agentState(input: AgentStateInput): AgentState {
   const ranged = input.ranged === undefined ? undefined : cloneRangedLoadout(input.ranged);
   const terrainChanges = input.terrainChanges === undefined ? undefined : cloneTerrainChanges(input.terrainChanges);
   const directions = input.directions === undefined ? undefined : cloneDirections(input.directions);
+  const status = input.combatStatus === undefined || input.combatStatus === null
+    ? input.combatStatus
+    : cloneCombatStatus(input.combatStatus);
   const equipped = cloneEquipmentSnapshot(input.equipped);
   const foodStacks = input.foodStacks.map(cloneFoodStack);
   const upgrades = input.upgrades.map(cloneEquipmentUpgrade);
@@ -228,6 +273,7 @@ export function agentState(input: AgentStateInput): AgentState {
     ...(terrainChanges === undefined ? {} : { terrainChanges }),
     ...(directions === undefined ? {} : { directions }),
     healthHalfHearts: input.healthHalfHearts,
+    ...(status === undefined ? {} : { combatStatus: status }),
     hungerPoints: input.hungerPoints,
     foodStacks: Object.freeze(foodStacks),
     equipped,
@@ -384,11 +430,13 @@ function assertLegacyObservationShape(observation: {
   };
   if (observation.agent.kind !== 'unknown') {
     const agent = observation.agent.value;
+    if (agent.combatStatus !== undefined) reject('combat status');
     if (agent.combat !== undefined) reject('a combat view');
     if (agent.ranged !== undefined) reject('a ranged loadout');
     if (agent.terrainChanges !== undefined) reject('terrain changes');
     if (agent.directions !== undefined) reject('direction support');
     if (agent.foodStacks.some((stack) => stack.restores !== undefined)) reject('food restoration');
+    if (agent.foodStacks.some((stack) => stack.itemKind !== undefined)) reject('food item identity');
   }
   if (observation.opponents.kind !== 'unknown' && observation.opponents.value.some((value) => value.combat !== undefined)) {
     reject('an opponent combat view');
@@ -525,8 +573,22 @@ function cloneEquipmentSnapshot(value: EquipmentSnapshot): EquipmentSnapshot {
 }
 
 function cloneFoodStack(value: FoodStack): FoodStack {
-  assertObjectKeys(value, ['inventorySlot', 'count'], 'food stack', ['restores']);
-  return foodStack(value.inventorySlot, value.count, value.restores);
+  assertObjectKeys(value, ['inventorySlot', 'count'], 'food stack', ['restores', 'itemKind']);
+  const stack = foodStack(value.inventorySlot, value.count, value.restores);
+  if (value.itemKind === undefined) return stack;
+  if (!['hungerFood', 'goldenApple', 'unknown'].includes(value.itemKind)) {
+    throw new TypeError(`unknown food item kind: ${String(value.itemKind)}`);
+  }
+  return Object.freeze({ ...stack, itemKind: value.itemKind });
+}
+
+function cloneCombatStatus(value: CombatStatus): CombatStatus {
+  assertObjectKeys(value, ['absorptionHalfHearts', 'effects'], 'combat status');
+  const effects = value.effects.map((effect) => {
+    assertObjectKeys(effect, ['effectId', 'amplifier', 'durationTicks'], 'active effect');
+    return activeEffect(effect.effectId, effect.amplifier, effect.durationTicks);
+  });
+  return combatStatus(value.absorptionHalfHearts, effects);
 }
 
 function cloneEquipmentUpgrade(value: EquipmentUpgrade): EquipmentUpgrade {
