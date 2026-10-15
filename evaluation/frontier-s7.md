@@ -41,5 +41,14 @@ The candidate's reason histogram included `travelToBorderCenter`, `lootBeforeUna
 - `frontier-v1` completed 19/24 matches: 9 candidate wins, 3 draws, and 7 opponent wins. Mean score was 0.575 and the 95% lower bound was 0.325. The verdict is `keep_baseline` because the set had five failures, two degraded matches, disconnects, only 10 world seeds, and an interval below the threshold. Failures: three `conflict` results for run directories left by the interrupted league, and two seed-500010 `plugin_rejected_command` / `invalid_world` failures.
 - League quality gates over all 48 plans: termination 0.833 (fail), looting 0.483 (fail), PvP eliminations 0.487 (pass), self-inflicted rejections 0.429 (fail), issued illegal swings 0 (pass), and longest unexplained idle 1,412 ticks (fail).
 - Policy replay verified all 40 completed league traces. The reused improved trace failure is preserved and was not replayable as a completed match. No new `unmatched_policy_action` occurred after the lifecycle fix.
-- Qualified-pool duels on seeds `510001..510012`: pending for both candidates.
 - No candidate passed the development quality gates. Held-out seeds `600001..600024` remain untouched.
+
+## Qualified-pool duel results
+
+Only `improved` ran against pool version 2. `frontier-v1` and held-out seeds were not started. Each completed report used concurrency 3 and was timing-sensitive. Pool qualification changed between batches, so do not combine their scores.
+
+- Seeds `510001..510004`: all 48 matches completed. Outcomes were 16 wins, 32 losses, and no draws. Promotion scoring used 32 matches against `strafer`, `bow-kiter`, `shield-user`, and `baseline`. The mean was 0.28125, with a 95% world-seed t interval of `[-0.0171, 0.5796]`. `aggressive-rusher` lacked a client receipt for `contactStarted`.
+- Seeds `510005..510008`: all 48 matches completed. Outcomes were 32 wins, 15 losses, and one draw. Promotion scoring used 24 matches against `aggressive-rusher`, `shield-user`, and `baseline`. The mean was 0.6042, with a 95% world-seed t interval of `[0.2083, 1.0001]`. `strafer` and `bow-kiter` lacked same-match client and server receipt pairs for required actions.
+- Seeds `510009..510012`: winddown stopped the batch after 44 of 48 matches started. Thirty-nine completed, three failed with a Mineflayer client `client_error`, and two were interrupted. This batch has no valid pool score. Its log contains a Paper watchdog dump while `NaturalWorldSetup.resolveTerrainSurface` waited for a chunk at seed `510011`; the dump does not establish the cause of the client failures.
+
+Neither completed batch met the promotion threshold. An earlier 144-match attempt stopped after `ENOSPC` and is not included in these results.
